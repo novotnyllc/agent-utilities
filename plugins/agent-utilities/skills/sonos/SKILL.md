@@ -3,6 +3,9 @@ name: sonos
 description: "Sonos control: search, queue, playlists, rooms/groups, volume, YouTube."
 metadata:
   short-description: Sonos music and YouTube playback
+  requires:
+    bins:
+      - sonos
 ---
 
 # Sonos
@@ -11,6 +14,7 @@ Use for Sonos music, playback, queue, room/group, and YouTube workflows.
 
 ## Rules
 
+- Preferred CLI: `sonos`, provided by the npm package `sonos-cli`.
 - Prefer existing local Sonos tooling in the current repo before inventing shell/API calls.
 - Do not change speaker groups, queues, or playback unless the user asks for it.
 - Confirm target room/group when ambiguous.
@@ -20,19 +24,37 @@ Use for Sonos music, playback, queue, room/group, and YouTube workflows.
 
 ## Workflow
 
-1. Discover repo commands:
+1. Discover available Sonos tooling:
+   - `command -v sonos || command -v sonos-cli`
+   - if missing, tell the user the expected package is `sonos-cli`
+2. Discover repo commands:
    - `rg --files`
    - package scripts or CLI help
-2. Identify target:
+3. Identify target:
    - room/group
    - service/source
    - query, URL, playlist, album, artist, or track
-3. Dry-read current state when useful:
+4. Dry-read current state when useful:
    - rooms/groups
    - now playing
    - queue
-4. Execute the requested playback action.
-5. Verify by reading current state again.
+5. Execute the requested playback action.
+6. Verify by reading current state again.
+
+## CLI
+
+`sonos-cli` is the expected local CLI:
+
+```bash
+npm install -g sonos-cli
+sonos discover
+sonos status --name "Room"
+sonos play --name "Room"
+sonos pause --name "Room"
+sonos volume set --name "Room" 25
+```
+
+Do not install it automatically unless the user asks. If `sonos` is missing, report that dependency.
 
 ## Common Tasks
 

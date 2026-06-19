@@ -3,8 +3,14 @@
 The initial skill copies came from:
 
 - Repository: `https://github.com/steipete/agent-scripts`
-- Commit: `6e512e6fe0546471dfce5f48c9896c6ddce669cd`
+- Initial commit: `6e512e6fe0546471dfce5f48c9896c6ddce669cd`
 - License: MIT
+
+The `oracle` skill was refreshed from:
+
+- Repository: `https://github.com/steipete/oracle`
+- Commit: `bfa8f1de42669f151933afe9fe5843ecdf9933d2`
+- Path: `skills/oracle`
 
 ## Copied Skills
 
