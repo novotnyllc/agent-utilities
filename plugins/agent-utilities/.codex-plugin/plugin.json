@@ -1,0 +1,45 @@
+{
+  "name": "agent-utilities",
+  "version": "0.1.0",
+  "description": "Agent utility skills for browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "author": {
+    "name": "Claire Novotny LLC",
+    "url": "https://github.com/novotnyllc"
+  },
+  "homepage": "https://github.com/novotnyllc/agent-utilities",
+  "repository": "https://github.com/novotnyllc/agent-utilities",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "browser",
+    "ssh",
+    "1password",
+    "macos",
+    "profiling",
+    "cli",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "agent-utilities",
+    "shortDescription": "Browser, SSH, 1Password, Oracle, Mac profiling, and CLI utility skills",
+    "longDescription": "Agent Utilities bundles Claire-adapted operational skills for browser use, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "developerName": "Claire Novotny LLC",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/novotnyllc/agent-utilities",
+    "privacyPolicyURL": "https://github.com/novotnyllc/agent-utilities",
+    "termsOfServiceURL": "https://github.com/novotnyllc/agent-utilities",
+    "defaultPrompt": [
+      "Use agent utilities to inspect browser state and continue the task.",
+      "Diagnose SSH or remote Mac connectivity safely.",
+      "Profile this native app with Instruments/xctrace and summarize hotspots."
+    ],
+    "brandColor": "#0F766E"
+  }
+}
