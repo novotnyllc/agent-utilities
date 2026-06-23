@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,34 @@ def sample_copilot_review(**overrides):
     }
     review.update(overrides)
     return review
+
+
+def test_parse_args_watch_defaults_to_quiet(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["gh_pr_watch.py", "--watch"])
+
+    args = gh_pr_watch.parse_args()
+
+    assert args.watch is True
+    assert args.full_watch is False
+    assert args.once is False
+
+
+def test_parse_args_quiet_watch_implies_watch(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["gh_pr_watch.py", "--quiet-watch"])
+
+    args = gh_pr_watch.parse_args()
+
+    assert args.watch is True
+    assert args.quiet_watch is True
+    assert args.full_watch is False
+    assert args.once is False
+
+
+def test_parse_args_rejects_quiet_and_full_watch(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["gh_pr_watch.py", "--quiet-watch", "--full-watch"])
+
+    with pytest.raises(SystemExit):
+        gh_pr_watch.parse_args()
 
 
 def test_collect_snapshot_fetches_review_items_before_ci(monkeypatch, tmp_path):
@@ -328,6 +357,33 @@ def test_request_copilot_review_allows_retry_after_transient_error(monkeypatch):
     assert state["copilot_review"]["request_retry_after"] == 1300
 
 
+def test_request_copilot_review_treats_admin_rights_as_unavailable(monkeypatch):
+    pr = sample_pr()
+    state = {}
+
+    monkeypatch.setattr(gh_pr_watch.time, "time", lambda: 1000)
+
+    def fake_gh_text(args, repo=None):
+        raise gh_pr_watch.GhCommandError("HTTP 403: Must have admin rights to Repository. " + ("x" * 2000))
+
+    monkeypatch.setattr(gh_pr_watch, "gh_text", fake_gh_text)
+
+    status = gh_pr_watch.request_copilot_review_if_possible(
+        pr,
+        state,
+        {"users": [], "teams": []},
+    )
+
+    assert status["request_attempted"] is True
+    assert status["request_succeeded"] is False
+    assert status["request_unavailable"] is True
+    assert status["request_retryable"] is False
+    assert status["request_retry_after"] is None
+    assert "Must have admin rights" in status["request_error"]
+    assert len(status["request_error"]) <= gh_pr_watch.MAX_ERROR_CHARS
+    assert state["copilot_review"]["request_attempted"] is True
+
+
 def test_request_copilot_review_defers_retry_until_retry_after(monkeypatch):
     pr = sample_pr()
     state = {
@@ -540,6 +596,45 @@ def test_fetch_new_review_items_ignores_untrusted_non_allowlisted_automation(mon
     assert state["seen_review_ids"] == []
 
 
+def test_fetch_new_review_items_bounds_long_review_payloads(monkeypatch):
+    long_body = "please inspect this\n" + ("details " * 1000)
+    issue_payload = [
+        {
+            "id": 456,
+            "user": {"login": "octocat"},
+            "author_association": "MEMBER",
+            "created_at": "2026-04-23T14:00:00Z",
+            "body": long_body,
+            "html_url": "https://github.com/openai/codex/pull/123#issuecomment-456",
+        }
+    ]
+
+    def fake_list(endpoint, **kwargs):
+        if endpoint.endswith("/issues/123/comments"):
+            return issue_payload
+        return []
+
+    monkeypatch.setattr(gh_pr_watch, "gh_api_list_paginated", fake_list)
+
+    state = {
+        "seen_issue_comment_ids": [],
+        "seen_review_comment_ids": [],
+        "seen_review_ids": [],
+    }
+    new_items = gh_pr_watch.fetch_new_review_items(
+        sample_pr(),
+        state,
+        fresh_state=True,
+        authenticated_login="octocat",
+    )
+
+    assert len(new_items) == 1
+    assert new_items[0]["body_truncated"] is True
+    assert len(new_items[0]["body"]) <= gh_pr_watch.MAX_REVIEW_BODY_CHARS
+    assert new_items[0]["body"].endswith("[truncated]")
+    assert state["seen_issue_comment_ids"] == ["456"]
+
+
 def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
     sleeps = []
     events = []
@@ -578,10 +673,228 @@ def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
     monkeypatch.setattr(gh_pr_watch.time, "sleep", fake_sleep)
 
     with pytest.raises(StopWatch):
-        gh_pr_watch.run_watch(argparse.Namespace(poll_seconds=30))
+        gh_pr_watch.run_watch(argparse.Namespace(poll_seconds=30, full_watch=True))
 
     assert sleeps == [30, 30]
     assert [event for event, _ in events] == ["snapshot", "snapshot"]
+
+
+def test_run_watch_quiet_mode_suppresses_unchanged_snapshots(monkeypatch):
+    sleeps = []
+    events = []
+    current_time = [1000]
+    snapshot = {
+        "pr": sample_pr(),
+        "checks": sample_checks(pending_count=1, all_terminal=False),
+        "failed_runs": [],
+        "failed_jobs": [],
+        "new_review_items": [],
+        "actions": ["idle"],
+        "retry_state": {
+            "current_sha_retries_used": 0,
+            "max_flaky_retries": 3,
+        },
+    }
+
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "collect_snapshot",
+        lambda args: (snapshot, Path("/tmp/codex-babysit-pr-state.json")),
+    )
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "print_event",
+        lambda event, payload: events.append((event, payload)),
+    )
+    monkeypatch.setattr(gh_pr_watch.time, "time", lambda: current_time[0])
+
+    class StopWatch(Exception):
+        pass
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        current_time[0] += seconds
+        if len(sleeps) >= 2:
+            raise StopWatch
+
+    monkeypatch.setattr(gh_pr_watch.time, "sleep", fake_sleep)
+
+    with pytest.raises(StopWatch):
+        gh_pr_watch.run_watch(
+            argparse.Namespace(
+                poll_seconds=30,
+                watch_heartbeat_seconds=300,
+            )
+        )
+
+    assert sleeps == [30, 30]
+    assert [event for event, _ in events] == ["snapshot"]
+
+
+def test_run_watch_quiet_mode_emits_compact_heartbeat(monkeypatch):
+    sleeps = []
+    events = []
+    current_time = [1000]
+    snapshot = {
+        "pr": sample_pr(),
+        "checks": sample_checks(pending_count=1, all_terminal=False),
+        "failed_runs": [],
+        "failed_jobs": [
+            {
+                "workflow_name": "CI",
+                "job_name": "Build and Test",
+                "status": "completed",
+                "conclusion": "failure",
+                "html_url": "https://github.com/openai/codex/actions/runs/99/job/555",
+            }
+        ],
+        "new_review_items": [],
+        "actions": ["diagnose_ci_failure"],
+        "retry_state": {
+            "current_sha_retries_used": 0,
+            "max_flaky_retries": 3,
+        },
+    }
+
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "collect_snapshot",
+        lambda args: (snapshot, Path("/tmp/codex-babysit-pr-state.json")),
+    )
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "print_event",
+        lambda event, payload: events.append((event, payload)),
+    )
+    monkeypatch.setattr(gh_pr_watch.time, "time", lambda: current_time[0])
+
+    class StopWatch(Exception):
+        pass
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        current_time[0] += seconds
+        if len(sleeps) >= 2:
+            raise StopWatch
+
+    monkeypatch.setattr(gh_pr_watch.time, "sleep", fake_sleep)
+
+    with pytest.raises(StopWatch):
+        gh_pr_watch.run_watch(
+            argparse.Namespace(
+                poll_seconds=60,
+                watch_heartbeat_seconds=60,
+                heartbeat_format="summary",
+            )
+        )
+
+    assert sleeps == [60, 60]
+    assert [event for event, _ in events] == ["snapshot", "heartbeat"]
+    assert events[1][1]["reason"] == "ci_failure"
+    assert events[1][1]["requires_attention"] is True
+    assert "snapshot" not in events[1][1]
+    assert events[1][1]["summary"]["reason"] == "ci_failure"
+    assert events[1][1]["summary"]["requires_attention"] is True
+    assert events[1][1]["summary"]["pr"]["head_sha"] == "abc123"
+    assert events[1][1]["summary"]["failed_jobs"] == [
+        {
+            "workflow_name": "CI",
+            "job_name": "Build and Test",
+            "status": "completed",
+            "conclusion": "failure",
+            "html_url": "https://github.com/openai/codex/actions/runs/99/job/555",
+        }
+    ]
+    assert events[1][1]["unchanged_seconds"] == 60
+
+
+def test_run_watch_minimal_heartbeat_format_omits_detail_lists(monkeypatch):
+    sleeps = []
+    events = []
+    current_time = [1000]
+    snapshot = {
+        "pr": sample_pr(),
+        "checks": sample_checks(pending_count=1, all_terminal=False),
+        "failed_runs": [],
+        "failed_jobs": [
+            {
+                "workflow_name": "CI",
+                "job_name": "Build and Test",
+                "status": "completed",
+                "conclusion": "failure",
+            }
+        ],
+        "new_review_items": [],
+        "actions": ["diagnose_ci_failure"],
+        "retry_state": {
+            "current_sha_retries_used": 0,
+            "max_flaky_retries": 3,
+        },
+    }
+
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "collect_snapshot",
+        lambda args: (snapshot, Path("/tmp/codex-babysit-pr-state.json")),
+    )
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "print_event",
+        lambda event, payload: events.append((event, payload)),
+    )
+    monkeypatch.setattr(gh_pr_watch.time, "time", lambda: current_time[0])
+
+    class StopWatch(Exception):
+        pass
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        current_time[0] += seconds
+        if len(sleeps) >= 2:
+            raise StopWatch
+
+    monkeypatch.setattr(gh_pr_watch.time, "sleep", fake_sleep)
+
+    with pytest.raises(StopWatch):
+        gh_pr_watch.run_watch(
+            argparse.Namespace(
+                poll_seconds=60,
+                watch_heartbeat_seconds=60,
+                heartbeat_format="minimal",
+            )
+        )
+
+    assert [event for event, _ in events] == ["snapshot", "heartbeat"]
+    assert events[1][1]["summary"]["reason"] == "ci_failure"
+    assert events[1][1]["summary"]["requires_attention"] is True
+    assert "failed_jobs" not in events[1][1]["summary"]
+
+
+def test_snapshot_change_key_tracks_individual_check_swaps():
+    base = {
+        "pr": sample_pr(),
+        "checks": sample_checks(passed_count=1, pending_count=1, all_terminal=False),
+        "check_runs": [
+            {"name": "Build", "workflow": "CI", "state": "COMPLETED", "bucket": "pass"},
+            {"name": "Test", "workflow": "CI", "state": "IN_PROGRESS", "bucket": "pending"},
+        ],
+        "new_review_items": [],
+        "failed_jobs": [],
+        "actions": ["idle"],
+    }
+    swapped = {
+        "pr": sample_pr(),
+        "checks": sample_checks(passed_count=1, pending_count=1, all_terminal=False),
+        "check_runs": [
+            {"name": "Build", "workflow": "CI", "state": "IN_PROGRESS", "bucket": "pending"},
+            {"name": "Test", "workflow": "CI", "state": "COMPLETED", "bucket": "pass"},
+        ],
+        "new_review_items": [],
+        "failed_jobs": [],
+        "actions": ["idle"],
+    }
+
+    assert gh_pr_watch.snapshot_change_key(base) != gh_pr_watch.snapshot_change_key(swapped)
 
 
 def test_failed_jobs_include_direct_logs_endpoint(monkeypatch):

@@ -49,6 +49,8 @@ COPILOT_REVIEWER_LOGINS = {
 COPILOT_REVIEW_REQUEST_RETRY_SECONDS = 300
 PERMANENT_COPILOT_REVIEW_REQUEST_ERROR_KEYWORDS = {
     "could not resolve to a user",
+    "forbidden",
+    "must have admin rights",
     "not a collaborator",
     "review cannot be requested",
     "reviewer not found",
@@ -68,6 +70,10 @@ MERGE_CONFLICT_OR_BLOCKING_STATES = {
     "DRAFT",
     "UNKNOWN",
 }
+MAX_REVIEW_BODY_CHARS = 1200
+MAX_REVIEW_URL_CHARS = 500
+MAX_ERROR_CHARS = 800
+MAX_SUMMARY_CHECK_RUNS = 50
 
 
 class GhCommandError(RuntimeError):
@@ -92,7 +98,33 @@ def parse_args():
     )
     parser.add_argument("--state-file", help="Path to state JSON file")
     parser.add_argument("--once", action="store_true", help="Emit one snapshot and exit")
-    parser.add_argument("--watch", action="store_true", help="Continuously emit JSONL snapshots")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Continuously emit low-noise JSONL snapshots; use --full-watch for every poll",
+    )
+    parser.add_argument(
+        "--quiet-watch",
+        action="store_true",
+        help="Alias for --watch; watch mode is quiet by default",
+    )
+    parser.add_argument(
+        "--full-watch",
+        action="store_true",
+        help="With --watch, emit a full snapshot every poll instead of compact unchanged heartbeats",
+    )
+    parser.add_argument(
+        "--watch-heartbeat-seconds",
+        type=int,
+        default=300,
+        help="Minimum seconds between compact heartbeat events in default quiet watch mode",
+    )
+    parser.add_argument(
+        "--heartbeat-format",
+        choices=("minimal", "summary"),
+        default="summary",
+        help="Heartbeat payload detail level for quiet watch mode",
+    )
     parser.add_argument(
         "--retry-failed-now",
         action="store_true",
@@ -109,6 +141,16 @@ def parse_args():
         parser.error("--poll-seconds must be > 0")
     if args.max_flaky_retries < 0:
         parser.error("--max-flaky-retries must be >= 0")
+    if args.watch_heartbeat_seconds <= 0:
+        parser.error("--watch-heartbeat-seconds must be > 0")
+    if args.quiet_watch and args.full_watch:
+        parser.error("--quiet-watch cannot be combined with --full-watch")
+    if args.quiet_watch or args.full_watch:
+        if args.once or args.retry_failed_now:
+            parser.error("--quiet-watch and --full-watch can only be used with watch mode")
+        args.watch = True
+    if args.watch and args.once:
+        parser.error("--watch cannot be combined with --once")
     if args.watch and args.retry_failed_now:
         parser.error("--watch cannot be combined with --retry-failed-now")
     if not args.once and not args.watch and not args.retry_failed_now:
@@ -152,6 +194,24 @@ def gh_json(args, repo=None):
         return json.loads(raw)
     except json.JSONDecodeError as err:
         raise GhCommandError(f"Failed to parse JSON from gh output for {' '.join(args)}") from err
+
+
+def bounded_text(value, limit):
+    text = str(value or "")
+    if len(text) <= limit:
+        return text, False
+    suffix = "\n[truncated]"
+    if limit <= len(suffix):
+        return text[:limit], True
+    return text[: limit - len(suffix)] + suffix, True
+
+
+def bounded_string(value, limit):
+    return bounded_text(value, limit)[0]
+
+
+def bounded_error(value):
+    return bounded_string(value, MAX_ERROR_CHARS)
 
 
 def parse_pr_spec(pr_spec):
@@ -474,6 +534,7 @@ def normalize_issue_comments(items):
     for item in items:
         if not isinstance(item, dict):
             continue
+        body, body_truncated = bounded_text(item.get("body"), MAX_REVIEW_BODY_CHARS)
         out.append(
             {
                 "kind": "issue_comment",
@@ -481,10 +542,11 @@ def normalize_issue_comments(items):
                 "author": extract_login(item.get("user")),
                 "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("created_at") or ""),
-                "body": str(item.get("body") or ""),
+                "body": body,
+                "body_truncated": body_truncated,
                 "path": None,
                 "line": None,
-                "url": str(item.get("html_url") or ""),
+                "url": bounded_string(item.get("html_url"), MAX_REVIEW_URL_CHARS),
             }
         )
     return out
@@ -501,6 +563,7 @@ def normalize_review_comments(items, review_states):
         line = item.get("line")
         if line is None:
             line = item.get("original_line")
+        body, body_truncated = bounded_text(item.get("body"), MAX_REVIEW_BODY_CHARS)
         out.append(
             {
                 "kind": "review_comment",
@@ -508,10 +571,11 @@ def normalize_review_comments(items, review_states):
                 "author": extract_login(item.get("user")),
                 "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("created_at") or ""),
-                "body": str(item.get("body") or ""),
+                "body": body,
+                "body_truncated": body_truncated,
                 "path": item.get("path"),
                 "line": line,
-                "url": str(item.get("html_url") or ""),
+                "url": bounded_string(item.get("html_url"), MAX_REVIEW_URL_CHARS),
             }
         )
     return out
@@ -524,6 +588,7 @@ def normalize_reviews(items):
             continue
         if str(item.get("state") or "").upper() == "PENDING":
             continue
+        body, body_truncated = bounded_text(item.get("body"), MAX_REVIEW_BODY_CHARS)
         out.append(
             {
                 "kind": "review",
@@ -531,10 +596,11 @@ def normalize_reviews(items):
                 "author": extract_login(item.get("user")),
                 "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("submitted_at") or item.get("created_at") or ""),
-                "body": str(item.get("body") or ""),
+                "body": body,
+                "body_truncated": body_truncated,
                 "path": None,
                 "line": None,
-                "url": str(item.get("html_url") or ""),
+                "url": bounded_string(item.get("html_url"), MAX_REVIEW_URL_CHARS),
             }
         )
     return out
@@ -636,7 +702,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
         "request_succeeded": bool(existing.get("request_succeeded")),
         "request_unavailable": bool(existing.get("request_unavailable")),
         "request_retryable": bool(existing.get("request_retryable")),
-        "request_error": existing.get("request_error"),
+        "request_error": bounded_error(existing.get("request_error")) if existing.get("request_error") else None,
         "last_request_attempt_at": existing.get("last_request_attempt_at"),
         "request_retry_after": existing.get("request_retry_after"),
         "requested_reviewers_confirmed": False,
@@ -693,6 +759,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
             repo=pr["repo"],
         )
     except GhCommandError as err:
+        request_error = bounded_error(str(err))
         permanent_failure = is_permanent_copilot_request_error(str(err))
         _set_copilot_review_state(
             state,
@@ -701,7 +768,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
             request_succeeded=False,
             request_unavailable=permanent_failure,
             request_retryable=not permanent_failure,
-            request_error=str(err),
+            request_error=request_error,
             last_request_attempt_at=attempted_at,
             request_retry_after=(
                 None
@@ -715,7 +782,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
                 "request_succeeded": False,
                 "request_unavailable": permanent_failure,
                 "request_retryable": not permanent_failure,
-                "request_error": str(err),
+                "request_error": request_error,
                 "last_request_attempt_at": attempted_at,
                 "request_retry_after": (
                     None
@@ -730,6 +797,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
     try:
         updated_requested_reviewers = get_requested_reviewers(pr["repo"], pr["number"])
     except GhCommandError as err:
+        request_error = bounded_error(str(err))
         _set_copilot_review_state(
             state,
             head_sha,
@@ -737,7 +805,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
             request_succeeded=True,
             request_unavailable=False,
             request_retryable=False,
-            request_error=str(err),
+            request_error=request_error,
             last_request_attempt_at=attempted_at,
             request_retry_after=None,
         )
@@ -747,7 +815,7 @@ def request_copilot_review_if_possible(pr, state, requested_reviewers):
                 "request_succeeded": True,
                 "request_unavailable": False,
                 "request_retryable": False,
-                "request_error": str(err),
+                "request_error": request_error,
                 "last_request_attempt_at": attempted_at,
                 "request_retry_after": None,
                 "pending": False,
@@ -1007,6 +1075,7 @@ def collect_snapshot(args):
     # After resolving `--pr auto`, reuse the concrete PR number.
     checks = get_pr_checks(str(pr["number"]), repo=pr["repo"])
     checks_summary = summarize_checks(checks)
+    check_runs = compact_check_runs(checks)
     workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
     failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
     failed_jobs = failed_jobs_from_workflow_runs(pr["repo"], workflow_runs, pr["head_sha"])
@@ -1031,6 +1100,7 @@ def collect_snapshot(args):
     snapshot = {
         "pr": pr,
         "checks": checks_summary,
+        "check_runs": check_runs,
         "copilot_review": copilot_review,
         "failed_runs": failed_runs,
         "failed_jobs": failed_jobs,
@@ -1041,6 +1111,8 @@ def collect_snapshot(args):
             "max_flaky_retries": args.max_flaky_retries,
         },
     }
+    snapshot["watch_reason"] = watch_reason(snapshot)
+    snapshot["requires_attention"] = requires_attention(snapshot)
     return snapshot, state_path
 
 
@@ -1108,6 +1180,143 @@ def print_event(event, payload):
     print_json({"event": event, "payload": payload})
 
 
+def short_sha(value):
+    value = str(value or "")
+    return value[:7] if value else ""
+
+
+def compact_failed_jobs(failed_jobs, limit=5):
+    out = []
+    for item in failed_jobs[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "workflow_name": str(item.get("workflow_name") or ""),
+                "job_name": str(item.get("job_name") or ""),
+                "status": str(item.get("status") or ""),
+                "conclusion": str(item.get("conclusion") or ""),
+                "html_url": str(item.get("html_url") or ""),
+            }
+        )
+    return out
+
+
+def compact_check_runs(checks, limit=MAX_SUMMARY_CHECK_RUNS):
+    out = []
+    for item in checks[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "name": str(item.get("name") or ""),
+                "state": str(item.get("state") or ""),
+                "bucket": str(item.get("bucket") or ""),
+                "workflow": str(item.get("workflow") or ""),
+                "event": str(item.get("event") or ""),
+            }
+        )
+    return out
+
+
+def watch_reason(snapshot):
+    actions = set(snapshot.get("actions") or [])
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    failed_jobs = snapshot.get("failed_jobs") or []
+
+    if "stop_pr_closed" in actions or pr.get("closed") or pr.get("merged"):
+        return "pr_closed"
+    if "stop_exhausted_retries" in actions:
+        return "retry_budget_exhausted"
+    if "process_review_comment" in actions:
+        return "review_feedback"
+    if "diagnose_ci_failure" in actions:
+        if "retry_failed_checks" in actions:
+            return "ci_failure_retry_available"
+        return "ci_failure"
+    if "wait_for_copilot_review" in actions:
+        return "copilot_pending"
+    if "ready_to_merge" in actions:
+        return "ready_to_merge"
+    if int(checks.get("failed_count") or 0) > 0 or failed_jobs:
+        return "ci_failure"
+    if int(checks.get("pending_count") or 0) > 0 or not bool(checks.get("all_terminal")):
+        return "waiting_on_ci"
+    if str(pr.get("merge_state_status") or "") in MERGE_CONFLICT_OR_BLOCKING_STATES:
+        return "merge_blocked"
+    if str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS:
+        return "blocked_on_review"
+    return "watching_pr"
+
+
+def requires_attention(snapshot):
+    return watch_reason(snapshot) in {
+        "ci_failure",
+        "ci_failure_retry_available",
+        "retry_budget_exhausted",
+        "review_feedback",
+    }
+
+
+def minimal_watch_summary(snapshot):
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    return {
+        "reason": watch_reason(snapshot),
+        "requires_attention": requires_attention(snapshot),
+        "pr": {
+            "repo": str(pr.get("repo") or ""),
+            "number": pr.get("number"),
+            "head_sha": short_sha(pr.get("head_sha")),
+        },
+        "checks": {
+            "passed_count": int(checks.get("passed_count") or 0),
+            "pending_count": int(checks.get("pending_count") or 0),
+            "failed_count": int(checks.get("failed_count") or 0),
+        },
+        "actions": list(snapshot.get("actions") or []),
+    }
+
+
+def compact_watch_summary(snapshot):
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    check_runs = snapshot.get("check_runs") or []
+    copilot_review = snapshot.get("copilot_review") or {}
+    failed_jobs = snapshot.get("failed_jobs") or []
+    new_review_items = snapshot.get("new_review_items") or []
+    return {
+        "reason": watch_reason(snapshot),
+        "requires_attention": requires_attention(snapshot),
+        "pr": {
+            "repo": str(pr.get("repo") or ""),
+            "number": pr.get("number"),
+            "state": str(pr.get("state") or ""),
+            "head_sha": short_sha(pr.get("head_sha")),
+            "mergeable": str(pr.get("mergeable") or ""),
+            "merge_state_status": str(pr.get("merge_state_status") or ""),
+            "review_decision": str(pr.get("review_decision") or ""),
+        },
+        "checks": {
+            "passed_count": int(checks.get("passed_count") or 0),
+            "pending_count": int(checks.get("pending_count") or 0),
+            "failed_count": int(checks.get("failed_count") or 0),
+            "all_terminal": bool(checks.get("all_terminal")),
+        },
+        "check_runs": check_runs[:MAX_SUMMARY_CHECK_RUNS],
+        "copilot_review": {
+            "pending": bool(copilot_review.get("pending")),
+            "pending_unknown": bool(copilot_review.get("pending_unknown")),
+            "request_unavailable": bool(copilot_review.get("request_unavailable")),
+            "request_retryable": bool(copilot_review.get("request_retryable")),
+        },
+        "failed_jobs": compact_failed_jobs(failed_jobs),
+        "new_review_item_count": len(new_review_items),
+        "actions": list(snapshot.get("actions") or []),
+    }
+
+
 def is_ci_green(snapshot):
     checks = snapshot.get("checks") or {}
     return (
@@ -1120,7 +1329,9 @@ def is_ci_green(snapshot):
 def snapshot_change_key(snapshot):
     pr = snapshot.get("pr") or {}
     checks = snapshot.get("checks") or {}
+    check_runs = snapshot.get("check_runs") or []
     review_items = snapshot.get("new_review_items") or []
+    failed_jobs = snapshot.get("failed_jobs") or []
     copilot_review = snapshot.get("copilot_review") or {}
     return (
         str(pr.get("head_sha") or ""),
@@ -1131,6 +1342,18 @@ def snapshot_change_key(snapshot):
         int(checks.get("passed_count") or 0),
         int(checks.get("failed_count") or 0),
         int(checks.get("pending_count") or 0),
+        tuple(
+            sorted(
+                (
+                    str(check.get("name") or ""),
+                    str(check.get("workflow") or ""),
+                    str(check.get("state") or ""),
+                    str(check.get("bucket") or ""),
+                )
+                for check in check_runs
+                if isinstance(check, dict)
+            )
+        ),
         bool(copilot_review.get("pending")),
         bool(copilot_review.get("request_succeeded")),
         bool(copilot_review.get("request_unavailable")),
@@ -1139,6 +1362,19 @@ def snapshot_change_key(snapshot):
             for item in review_items
             if isinstance(item, dict)
         ),
+        tuple(
+            sorted(
+                (
+                    str(job.get("run_id") or ""),
+                    str(job.get("job_id") or ""),
+                    str(job.get("job_name") or ""),
+                    str(job.get("status") or ""),
+                    str(job.get("conclusion") or ""),
+                )
+                for job in failed_jobs
+                if isinstance(job, dict)
+            )
+        ),
         tuple(snapshot.get("actions") or []),
     )
 
@@ -1146,16 +1382,48 @@ def snapshot_change_key(snapshot):
 def run_watch(args):
     poll_seconds = args.poll_seconds
     last_change_key = None
+    last_change_at = None
+    last_heartbeat_at = None
+    quiet_watch = not bool(getattr(args, "full_watch", False))
+    heartbeat_seconds = int(getattr(args, "watch_heartbeat_seconds", 300))
+    heartbeat_format = str(getattr(args, "heartbeat_format", "summary"))
     while True:
         snapshot, state_path = collect_snapshot(args)
-        print_event(
-            "snapshot",
-            {
-                "snapshot": snapshot,
-                "state_file": str(state_path),
-                "next_poll_seconds": poll_seconds,
-            },
-        )
+        current_change_key = snapshot_change_key(snapshot)
+        changed = current_change_key != last_change_key
+        now = int(time.time())
+
+        if changed or last_change_at is None:
+            last_change_at = now
+
+        if not quiet_watch or changed or last_change_key is None:
+            print_event(
+                "snapshot",
+                {
+                    "snapshot": snapshot,
+                    "state_file": str(state_path),
+                    "next_poll_seconds": poll_seconds,
+                },
+            )
+            last_heartbeat_at = now
+        elif last_heartbeat_at is None or now - last_heartbeat_at >= heartbeat_seconds:
+            if heartbeat_format == "minimal":
+                summary = minimal_watch_summary(snapshot)
+            else:
+                summary = compact_watch_summary(snapshot)
+            print_event(
+                "heartbeat",
+                {
+                    "reason": watch_reason(snapshot),
+                    "requires_attention": requires_attention(snapshot),
+                    "summary": summary,
+                    "state_file": str(state_path),
+                    "next_poll_seconds": poll_seconds,
+                    "unchanged_seconds": now - last_change_at,
+                },
+            )
+            last_heartbeat_at = now
+
         actions = set(snapshot.get("actions") or [])
         if (
             "stop_pr_closed" in actions
@@ -1164,8 +1432,6 @@ def run_watch(args):
             print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
             return 0
 
-        current_change_key = snapshot_change_key(snapshot)
-        changed = current_change_key != last_change_key
         green = is_ci_green(snapshot)
         pr = snapshot.get("pr") or {}
         pr_open = not bool(pr.get("closed")) and not bool(pr.get("merged"))

@@ -23,9 +23,9 @@ Accept any of the following:
 
 ## Core Workflow
 
-1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot.
-2. Run the watcher script to snapshot PR/review/CI state (or consume each streamed snapshot from `--watch`).
-3. Let the watcher request a Copilot review with GitHub CLI's `@copilot` reviewer value when GitHub accepts it. Copilot may be unavailable for the repo/user; that is non-fatal and should not block the PR by itself. Transient request failures are retried after the watcher-provided retry delay.
+1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot. Watch mode is quiet by default.
+2. Run the watcher script to snapshot PR/review/CI state. In default watch mode, consume full `snapshot` events for the first poll, state changes, and attention-required states, plus compact `heartbeat` events during unchanged stretches.
+3. Let the watcher request a Copilot review with GitHub CLI's `@copilot` reviewer value when GitHub accepts it. Copilot may be unavailable for the repo/user/PR; that is non-fatal and should not block the PR by itself. If the watcher marks Copilot `request_unavailable`, treat that as remembered for the PR head SHA and do not keep trying manually.
 4. If `wait_for_copilot_review` is present, do not merge yet. Continue polling until the Copilot requested reviewer is gone, then inspect any newly surfaced Copilot feedback before proceeding.
 5. Inspect the `actions` list in the JSON response.
 6. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
@@ -54,6 +54,8 @@ python3 scripts/gh_pr_watch.py --pr auto --once
 ```bash
 python3 scripts/gh_pr_watch.py --pr auto --watch
 ```
+
+Watch mode is quiet by default: it emits a full `snapshot` JSONL event on the first poll, whenever state changes, and at stop conditions. During unchanged periods it emits occasional compact `heartbeat` events with `reason` and `requires_attention`; when those indicate work is needed, inspect the latest full snapshot or run a one-shot detail command. Use `--full-watch` only for debugging the watcher itself. Avoid long-running `gh run watch` for babysitting loops; it repeatedly prints full job tables and annotations. If you need CI detail, use one-shot `gh run view --json ...`, the Actions job API, or the watcher's `failed_jobs` log endpoints.
 
 ### Trigger flaky retry cycle (only when watcher indicates)
 
@@ -101,7 +103,7 @@ be eligible to surface after the reviewer submits the review.
 It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
 For safety, the watcher only auto-surfaces trusted human review authors (for example repo OWNER/MEMBER/COLLABORATOR, plus the authenticated operator) and approved review bots such as Codex.
 On a fresh watcher state file, existing unaddressed published review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
-The watcher also makes one best-effort Copilot review request per PR head SHA. If GitHub reports a Copilot requested reviewer (for example `Copilot` or `copilot-pull-request-reviewer[bot]`, including casing variations), treat that as an in-progress Copilot review and keep polling until it completes. After completion, inspect surfaced Copilot review comments/reviews before calling the PR ready to merge.
+The watcher also makes one best-effort Copilot review request per PR head SHA. If GitHub reports a Copilot requested reviewer (for example `Copilot` or `copilot-pull-request-reviewer[bot]`, including casing variations), treat that as an in-progress Copilot review and keep polling until it completes. If GitHub says Copilot cannot be requested or the requester lacks permission, the watcher records `request_unavailable`; do not keep retrying Copilot manually for that head SHA. After completion, inspect surfaced Copilot review comments/reviews before calling the PR ready to merge.
 
 When you agree with a comment and it is actionable:
 
@@ -110,7 +112,7 @@ When you agree with a comment and it is actionable:
 3. Push to the PR head branch.
 4. After the push succeeds, resolve every associated GitHub review thread/comment that the commit addressed, but only when allowed by the GitHub state mutation policy below.
 5. Resume watching on the new SHA immediately (do not stop after reporting the push).
-6. If monitoring was running in `--watch` mode, restart `--watch` immediately after the push in the same turn; do not wait for the user to ask again.
+6. If monitoring was running in watch mode, restart `--watch` immediately after the push in the same turn; do not wait for the user to ask again.
 
 Do not post replies to human-authored GitHub review comments/threads automatically. If you disagree with a human comment, believe it is non-actionable/already addressed, or need to answer a question, report the item to the user with a suggested response and wait for explicit confirmation before posting anything on GitHub. If the user approves a response, prefix it with `[codex]` so it is clear the response is automated and not from the human user.
 If the watcher later surfaces your own approved reply because the authenticated operator is treated as a trusted review author, treat that self-authored item as already handled and do not reply again.
@@ -176,7 +178,7 @@ Use this loop in a live Codex session:
 13. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
 14. Otherwise sleep according to the polling cadence below and repeat.
 
-When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
+When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one low-noise command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
 Do not hand control back to the user after a review-fix push just because a new SHA was created; restarting the watcher and re-entering the poll loop is part of the same babysitting task.
 If a `--watch` process is still running and no strict stop condition has been reached, the babysitting task is still in progress; keep streaming/consuming watcher output instead of ending the turn.
