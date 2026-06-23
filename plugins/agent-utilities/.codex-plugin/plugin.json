@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.0",
-  "description": "Agent utility skills for browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.3.1",
+  "description": "Agent utility skills for browser control, PR babysitting, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -13,6 +13,8 @@
     "codex",
     "claude-code",
     "browser",
+    "github",
+    "pull-requests",
     "ssh",
     "1password",
     "macos",
@@ -22,9 +24,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "agent-utilities",
-    "shortDescription": "Browser, SSH, 1Password, Oracle, Mac profiling, and CLI utility skills",
-    "longDescription": "Agent Utilities bundles Claire-adapted operational skills for browser use, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "displayName": "Agent Utilities",
+    "shortDescription": "Browser, PR babysitting, SSH, 1Password, Oracle, Mac profiling, and CLI utility skills",
+    "longDescription": "Agent Utilities bundles Claire-adapted operational skills for browser use, PR babysitting, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
@@ -37,6 +39,7 @@
     "termsOfServiceURL": "https://github.com/novotnyllc/agent-utilities",
     "defaultPrompt": [
       "Use agent utilities to inspect browser state and continue the task.",
+      "Babysit this PR for CI failures, review feedback, and mergeability changes.",
       "Diagnose SSH or remote Mac connectivity safely.",
       "Profile this native app with Instruments/xctrace and summarize hotspots."
     ],

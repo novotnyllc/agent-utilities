@@ -2,13 +2,16 @@
 
 Agent utility skills for Codex and Claude Code.
 
-This plugin bundles Claire-adapted utility skills originally copied from
-`steipete/agent-scripts`. The adapted copies avoid Peter-specific machine names,
-home paths, vault names, and package paths so they can be used from Claire's
-Codex and Claude Code environments.
+This plugin bundles Claire-adapted utility skills for Codex and Claude Code.
+Most began as copies from `steipete/agent-scripts`; `babysit-pr` is copied from
+the local PR babysitter plugin and refreshed from the Codex skill checkout.
+Adapted copies avoid Peter-specific machine names, home paths, vault names, and
+package paths so they can be used from Claire's Codex and Claude Code
+environments.
 
 ## Skills
 
+- `babysit-pr`
 - `browser-use`
 - `create-cli`
 - `frontend-design`

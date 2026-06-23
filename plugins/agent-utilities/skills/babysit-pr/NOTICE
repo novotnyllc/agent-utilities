@@ -1,0 +1,14 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This package contains modified files derived from the `babysit-pr` skill in
+the OpenAI Codex repository:
+
+  https://github.com/openai/codex
+  .codex/skills/babysit-pr
+
+The upstream skill was copied at commit
+70ac0f123c4b1869c9069d5b34e367b96c28bfad and modified for standalone use.
+
+Standalone plugin packaging and local modifications:
+Copyright 2026 Claire Novotny LLC

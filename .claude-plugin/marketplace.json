@@ -7,15 +7,15 @@
     "url": "https://github.com/novotnyllc"
   },
   "metadata": {
-    "description": "Agent utility skills for browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
-    "version": "0.3.0"
+    "description": "Agent utility skills for browser control, PR babysitting, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+    "version": "0.3.1"
   },
   "plugins": [
     {
       "name": "agent-utilities",
       "source": "./plugins/agent-utilities",
       "description": "Agent utility skills for Codex and Claude Code.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Claire Novotny LLC",
         "url": "https://github.com/novotnyllc"
@@ -27,6 +27,8 @@
         "codex",
         "claude-code",
         "browser",
+        "github",
+        "pull-requests",
         "ssh",
         "1password",
         "macos",

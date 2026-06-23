@@ -12,10 +12,17 @@ The `oracle` skill was refreshed from:
 - Commit: `bfa8f1de42669f151933afe9fe5843ecdf9933d2`
 - Path: `skills/oracle`
 
+The `babysit-pr` skill was copied from:
+
+- Repository: `/Users/claire/dev/babysit-pr`
+- Latest local refresh source: `/Users/claire/dev/codex/.codex/skills/babysit-pr`
+- License: Apache-2.0
+
 ## Copied Skills
 
 | Local skill | Upstream path |
 | --- | --- |
+| `babysit-pr` | `.codex/skills/babysit-pr` |
 | `browser-use` | `skills/browser-use` |
 | `create-cli` | `skills/create-cli` |
 | `frontend-design` | `skills/frontend-design` |
