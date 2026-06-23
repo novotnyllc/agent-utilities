@@ -1,4 +1,38 @@
 interface:
   display_name: "PR Babysitter"
   short_description: "Watch PR review comments, CI, and merge conflicts"
-  default_prompt: "Babysit the current PR: monitor published reviewer comments, CI, Copilot review state, and merge-conflict status (prefer the watcher’s --watch mode for live monitoring; it is quiet by default); let the watcher request a Copilot review when available and honor wait_for_copilot_review until it completes. If the watcher marks Copilot request_unavailable for the PR head SHA, do not keep retrying Copilot manually. Ignore unpublished comments in pending GitHub reviews; surface new published review feedback before acting on CI or mergeability work, fix valid issues, push updates, and resolve eligible GitHub review threads/comments that the pushed commit addresses. Do not resolve threads with other human participants unless the user explicitly asks. Rerun flaky failures up to 3 times. Do not post replies to human-authored review comments unless the user explicitly confirms the exact response. Do not patch unrelated flaky tests, CI infrastructure, dependency outages, runner issues, or other failures that are not caused by the branch. Avoid long-running gh run watch loops because they repeatedly print full job tables and annotations; use quiet watcher snapshots, compact heartbeats, or one-shot gh run view/API calls for details. Keep exactly one watcher session active for the PR (do not leave duplicate --watch terminals running). If you pause monitoring to patch review/CI feedback, restart --watch yourself immediately after the push in the same turn. If a watcher is still running and no strict stop condition has been reached, the task is still in progress: keep consuming watcher output and sending progress updates instead of ending the turn. Do not treat a green + mergeable PR as a terminal stop while it is still open; continue polling autonomously after any push/rerun so newly posted review comments are surfaced until a strict terminal stop condition is reached or the user interrupts."
+  default_prompt: >-
+    Babysit the current PR: monitor published reviewer comments, CI, Copilot
+    review state, and merge-conflict status. Prefer the watcher’s --watch mode
+    for live monitoring; it is quiet by default and emits full snapshots only
+    for state changes or attention-required states, plus rare minimal heartbeats.
+    Treat unchanged heartbeats and unchanged polls as internal liveness signals:
+    do not send chat updates that merely say still running, still pending,
+    continuing, no watcher output, no change, or checking again. Report only
+    watcher start, real state changes, attention-required events, actions taken,
+    blockers, terminal stop conditions, rare long-wait reassurance, and the
+    one-time all-green transition. Let the watcher request a Copilot review
+    when available and honor wait_for_copilot_review until it completes. If the
+    watcher marks Copilot request_unavailable for the PR head SHA, do not keep
+    retrying Copilot manually and mention that unavailable state at most once
+    for that SHA. Ignore unpublished comments in pending GitHub reviews; surface
+    new published review feedback before acting on CI or mergeability work, fix
+    valid issues, push updates, and resolve eligible GitHub review
+    threads/comments that the pushed commit addresses. Do not resolve threads
+    with other human participants unless the user explicitly asks. Rerun flaky
+    failures up to 3 times. Do not post replies to human-authored review comments
+    unless the user explicitly confirms the exact response. Do not patch
+    unrelated flaky tests, CI infrastructure, dependency outages, runner issues,
+    or other failures that are not caused by the branch. Avoid long-running gh
+    run watch loops because they repeatedly print full job tables and
+    annotations; use quiet watcher snapshots, compact heartbeats, or one-shot gh
+    run view/API calls for details. Keep exactly one watcher session active for
+    the PR; do not leave duplicate --watch terminals running. If you pause
+    monitoring to patch review/CI feedback, restart --watch yourself immediately
+    after the push in the same turn. If a watcher is still running and no strict
+    stop condition has been reached, the task is still in progress: keep
+    consuming watcher output quietly instead of ending the turn. Do not treat a
+    green + mergeable PR as a terminal stop while it is still open; continue
+    polling autonomously after any push/rerun so newly posted review comments are
+    surfaced until a strict terminal stop condition is reached or the user
+    interrupts.

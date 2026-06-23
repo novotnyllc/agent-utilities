@@ -24,7 +24,7 @@ Accept any of the following:
 ## Core Workflow
 
 1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot. Watch mode is quiet by default.
-2. Run the watcher script to snapshot PR/review/CI state. In default watch mode, consume full `snapshot` events for the first poll, state changes, and attention-required states, plus compact `heartbeat` events during unchanged stretches.
+2. Run the watcher script to snapshot PR/review/CI state. In default watch mode, consume full `snapshot` events for the first poll, state changes, and attention-required states, plus rare compact `heartbeat` events during unchanged stretches. Treat non-attention heartbeats as internal liveness signals; do not turn them into user-facing chat updates.
 3. Let the watcher request a Copilot review with GitHub CLI's `@copilot` reviewer value when GitHub accepts it. Copilot may be unavailable for the repo/user/PR; that is non-fatal and should not block the PR by itself. If the watcher marks Copilot `request_unavailable`, treat that as remembered for the PR head SHA and do not keep trying manually.
 4. If `wait_for_copilot_review` is present, do not merge yet. Continue polling until the Copilot requested reviewer is gone, then inspect any newly surfaced Copilot feedback before proceeding.
 5. Inspect the `actions` list in the JSON response.
@@ -55,7 +55,7 @@ python3 scripts/gh_pr_watch.py --pr auto --once
 python3 scripts/gh_pr_watch.py --pr auto --watch
 ```
 
-Watch mode is quiet by default: it emits a full `snapshot` JSONL event on the first poll, whenever state changes, and at stop conditions. During unchanged periods it emits occasional compact `heartbeat` events with `reason` and `requires_attention`; when those indicate work is needed, inspect the latest full snapshot or run a one-shot detail command. Use `--full-watch` only for debugging the watcher itself. Avoid long-running `gh run watch` for babysitting loops; it repeatedly prints full job tables and annotations. If you need CI detail, use one-shot `gh run view --json ...`, the Actions job API, or the watcher's `failed_jobs` log endpoints.
+Watch mode is quiet by default: it polls every minute, emits a full `snapshot` JSONL event on the first poll, whenever state changes, and at stop conditions, and emits minimal unchanged heartbeats no more than every 15 minutes. Treat unchanged heartbeats with `requires_attention: false` as internal; do not summarize them to the user. When a heartbeat or snapshot indicates work is needed, inspect the latest full snapshot or run a one-shot detail command. Use `--full-watch` only for debugging the watcher itself. Avoid long-running `gh run watch` for babysitting loops; it repeatedly prints full job tables and annotations. If you need CI detail, use one-shot `gh run view --json ...`, the Actions job API, or the watcher's `failed_jobs` log endpoints.
 
 ### Trigger flaky retry cycle (only when watcher indicates)
 
@@ -181,16 +181,18 @@ Use this loop in a live Codex session:
 When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one low-noise command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
 Do not hand control back to the user after a review-fix push just because a new SHA was created; restarting the watcher and re-entering the poll loop is part of the same babysitting task.
-If a `--watch` process is still running and no strict stop condition has been reached, the babysitting task is still in progress; keep streaming/consuming watcher output instead of ending the turn.
+If a `--watch` process is still running and no strict stop condition has been reached, the babysitting task is still in progress; keep consuming watcher output instead of ending the turn, but stay silent in chat during unchanged periods.
 
-## Polling Cadence
-Keep review polling aggressive and continue monitoring even after CI turns green:
+## Polling and Reporting Cadence
+Keep review polling responsive while keeping user-facing output sparse:
 
 - While CI is not green (pending/running/queued or failing): poll every 1 minute.
 - After CI turns green: keep polling at the base cadence while the PR remains open so newly posted review comments are surfaced promptly instead of waiting on a long green-state backoff.
 - Reset the cadence immediately whenever anything changes (new commit/SHA, check status changes, new review comments, mergeability changes, review decision changes).
 - If CI stops being green again (new commit, rerun, or regression): stay on the base polling cadence.
 - If any poll shows the PR is merged or otherwise closed: stop polling immediately and report the terminal state.
+- Polling cadence is not reporting cadence. Do not send chat updates for unchanged polls, quiet watcher heartbeats, sleeps, or "still running" intervals.
+- User-facing unchanged-status reassurance should be rare: at most once every 15 minutes, one sentence, and only when it meaningfully helps the user understand that a long wait is expected.
 
 ## Stop Conditions (Strict)
 Stop only when one of the following is true:
@@ -209,14 +211,18 @@ Keep polling when:
 - The PR is green but blocked on review approval (`REVIEW_REQUIRED` / similar); continue polling at the base cadence and surface any new review comments without asking for confirmation to keep watching.
 
 ## Output Expectations
-Provide concise progress updates while monitoring and a final summary that includes:
+Use a quiet-by-default reporting policy while monitoring:
 
-- During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
-- Treat push confirmations, intermediate CI snapshots, ready-to-merge snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
+- Send user-facing progress only for: initial watcher start, real state changes, attention-required snapshots/heartbeats, actions you take (patch, commit, push, rerun, resolve), blockers, terminal stop conditions, and the one-time all-green transition.
+- Do not send chat messages whose only content is "still pending", "still running", "continuing", "waiting", "no watcher output", "no change", "checking again", or "sleeping before the next poll".
+- Treat quiet watcher heartbeats with `requires_attention: false` as internal liveness signals. Consume them silently.
+- If you temporarily fall back to direct `gh` polling because the watcher exited or GitHub had a transient network error, use the same reporting policy: poll internally and report only changes, attention, blockers, and rare long-wait reassurance.
+- Mention Copilot `request_unavailable` once per PR head SHA at most. Do not repeat the same Copilot permission/unavailability message on every poll.
+- Treat push confirmations, meaningful CI transitions, ready-to-merge snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
 - A user request to "monitor" is not satisfied by a couple of sample polls; remain in the loop until a strict stop condition or an explicit user interruption.
-- A review-fix commit + push is not a completion event; immediately resume live monitoring (`--watch`) in the same turn and continue reporting progress updates.
+- A review-fix commit + push is not a completion event; immediately resume live monitoring (`--watch`) in the same turn and continue with quiet monitoring.
 - When CI first transitions to all green for the current SHA, emit a one-time celebratory progress update (do not repeat it on every green poll). Preferred style: `🚀 CI is all green! 33/33 passed. Still on watch for review approval.`
-- Do not send the final summary while a watcher terminal is still running unless the watcher has emitted/confirmed a strict stop condition; otherwise continue with progress updates.
+- Do not send the final summary while a watcher terminal is still running unless the watcher has emitted/confirmed a strict stop condition; otherwise keep monitoring quietly.
 
 - Final PR SHA
 - CI status summary

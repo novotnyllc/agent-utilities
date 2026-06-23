@@ -65,6 +65,9 @@ def test_parse_args_watch_defaults_to_quiet(monkeypatch):
     assert args.watch is True
     assert args.full_watch is False
     assert args.once is False
+    assert args.poll_seconds == 60
+    assert args.watch_heartbeat_seconds == 900
+    assert args.heartbeat_format == "minimal"
 
 
 def test_parse_args_quiet_watch_implies_watch(monkeypatch):

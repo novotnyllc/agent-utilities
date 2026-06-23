@@ -89,7 +89,7 @@ def parse_args():
     )
     parser.add_argument("--pr", default="auto", help="auto, PR number, or PR URL")
     parser.add_argument("--repo", help="Optional OWNER/REPO override")
-    parser.add_argument("--poll-seconds", type=int, default=30, help="Watch poll interval")
+    parser.add_argument("--poll-seconds", type=int, default=60, help="Watch poll interval")
     parser.add_argument(
         "--max-flaky-retries",
         type=int,
@@ -116,13 +116,13 @@ def parse_args():
     parser.add_argument(
         "--watch-heartbeat-seconds",
         type=int,
-        default=300,
+        default=900,
         help="Minimum seconds between compact heartbeat events in default quiet watch mode",
     )
     parser.add_argument(
         "--heartbeat-format",
         choices=("minimal", "summary"),
-        default="summary",
+        default="minimal",
         help="Heartbeat payload detail level for quiet watch mode",
     )
     parser.add_argument(
@@ -1385,8 +1385,8 @@ def run_watch(args):
     last_change_at = None
     last_heartbeat_at = None
     quiet_watch = not bool(getattr(args, "full_watch", False))
-    heartbeat_seconds = int(getattr(args, "watch_heartbeat_seconds", 300))
-    heartbeat_format = str(getattr(args, "heartbeat_format", "summary"))
+    heartbeat_seconds = int(getattr(args, "watch_heartbeat_seconds", 900))
+    heartbeat_format = str(getattr(args, "heartbeat_format", "minimal"))
     while True:
         snapshot, state_path = collect_snapshot(args)
         current_change_key = snapshot_change_key(snapshot)
