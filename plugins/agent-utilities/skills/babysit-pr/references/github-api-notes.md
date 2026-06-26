@@ -43,9 +43,18 @@ Reruns only failed jobs (and dependencies) for a workflow run.
   - `gh api repos/{owner}/{repo}/pulls/<pr_number>/comments?per_page=100`
 - Review submissions:
   - `gh api repos/{owner}/{repo}/pulls/<pr_number>/reviews?per_page=100`
+- Review threads:
+  - `gh api graphql -f owner=<owner> -f name=<repo> -F number=<pr_number> -f query='<reviewThreads query>'`
+- Reply to an addressed review thread:
+  - `addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: <thread-id>, body: "[from Codex]: ..." })`
+- Mark an addressed review thread resolved:
+  - `resolveReviewThread(input: { threadId: <thread-id> })`
 
 Use each inline comment's `pull_request_review_id` to find its parent review. Ignore parent reviews
 whose `state` is `PENDING`, along with their inline comments, until the review is submitted.
+After pushing a commit that addresses inline review feedback, use the review-thread GraphQL helpers
+to list unresolved threads, post the Codex-prefixed resolution note, and resolve only the eligible
+threads addressed by that commit.
 
 ## JSON fields consumed by the watcher
 
@@ -83,3 +92,20 @@ whose `state` is `PENDING`, along with their inline comments, until the review i
 - `status`
 - `conclusion`
 - `html_url`
+
+### GraphQL review thread query
+
+- `id`
+- `isResolved`
+- `isOutdated`
+- `viewerCanResolve`
+- `comments.nodes.id`
+- `comments.nodes.databaseId`
+- `comments.nodes.author.login`
+- `comments.nodes.authorAssociation`
+- `comments.nodes.body`
+- `comments.nodes.path`
+- `comments.nodes.line`
+- `comments.nodes.originalLine`
+- `comments.nodes.url`
+- `comments.nodes.createdAt`

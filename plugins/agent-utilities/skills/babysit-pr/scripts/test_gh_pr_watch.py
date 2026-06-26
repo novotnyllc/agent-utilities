@@ -88,6 +88,23 @@ def test_parse_args_rejects_quiet_and_full_watch(monkeypatch):
         gh_pr_watch.parse_args()
 
 
+def test_parse_args_requires_codex_prefixed_resolution_comment(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gh_pr_watch.py",
+            "--resolve-review-thread",
+            "PRRT_kwDOExample",
+            "--resolution-comment",
+            "Fixed in abc123.",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        gh_pr_watch.parse_args()
+
+
 def test_collect_snapshot_fetches_review_items_before_ci(monkeypatch, tmp_path):
     call_order = []
     pr = sample_pr()
@@ -636,6 +653,110 @@ def test_fetch_new_review_items_bounds_long_review_payloads(monkeypatch):
     assert len(new_items[0]["body"]) <= gh_pr_watch.MAX_REVIEW_BODY_CHARS
     assert new_items[0]["body"].endswith("[truncated]")
     assert state["seen_issue_comment_ids"] == ["456"]
+
+
+def test_get_review_threads_normalizes_graphql_payload(monkeypatch):
+    calls = []
+
+    def fake_gh_json(args, repo=None):
+        calls.append((args, repo))
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_kwDOExample",
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "viewerCanResolve": True,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRRC_kwDOComment",
+                                                "databaseId": 20,
+                                                "author": {"login": "octocat"},
+                                                "authorAssociation": "MEMBER",
+                                                "body": "Please rename this.",
+                                                "path": "src/example.rs",
+                                                "line": None,
+                                                "originalLine": 7,
+                                                "url": "https://github.com/openai/codex/pull/123#discussion_r20",
+                                                "createdAt": "2026-06-08T10:00:00Z",
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(gh_pr_watch, "gh_json", fake_gh_json)
+
+    threads = gh_pr_watch.get_review_threads("openai/codex", 123)
+
+    assert calls[0][0][:2] == ["api", "graphql"]
+    assert "-F" in calls[0][0]
+    assert "number=123" in calls[0][0]
+    assert threads == [
+        {
+            "id": "PRRT_kwDOExample",
+            "is_resolved": False,
+            "is_outdated": False,
+            "viewer_can_resolve": True,
+            "participants": ["octocat"],
+            "comment_count": 1,
+            "comments": [
+                {
+                    "id": "PRRC_kwDOComment",
+                    "database_id": "20",
+                    "author": "octocat",
+                    "author_association": "MEMBER",
+                    "created_at": "2026-06-08T10:00:00Z",
+                    "body": "Please rename this.",
+                    "body_truncated": False,
+                    "path": "src/example.rs",
+                    "line": 7,
+                    "url": "https://github.com/openai/codex/pull/123#discussion_r20",
+                }
+            ],
+        }
+    ]
+
+
+def test_resolve_review_thread_with_comment_replies_before_resolving(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(gh_pr_watch, "resolve_pr", lambda *args, **kwargs: sample_pr())
+
+    def fake_gh_json(args, repo=None):
+        query_arg = next(arg for arg in args if arg.startswith("query="))
+        calls.append(query_arg)
+        if "addPullRequestReviewThreadReply" in query_arg:
+            return {"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "c1", "url": "https://example.test/c1"}}}}
+        if "resolveReviewThread" in query_arg:
+            return {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOExample", "isResolved": True}}}}
+        raise AssertionError(f"unexpected query: {query_arg}")
+
+    monkeypatch.setattr(gh_pr_watch, "gh_json", fake_gh_json)
+
+    result = gh_pr_watch.resolve_review_thread_with_comment(
+        argparse.Namespace(
+            pr="auto",
+            repo=None,
+            resolve_review_thread="PRRT_kwDOExample",
+            resolution_comment="[from Codex]: Addressed in abc123.",
+        )
+    )
+
+    assert "addPullRequestReviewThreadReply" in calls[0]
+    assert "resolveReviewThread" in calls[1]
+    assert result["comment_posted"] is True
+    assert result["resolved"] is True
 
 
 def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):

@@ -131,6 +131,20 @@ def parse_args():
         help="Rerun failed jobs for current failed workflow runs when policy allows",
     )
     parser.add_argument(
+        "--list-review-threads",
+        action="store_true",
+        help="List unresolved GitHub review threads so addressed feedback can be resolved",
+    )
+    parser.add_argument(
+        "--resolve-review-thread",
+        metavar="THREAD_ID",
+        help="Resolve one GitHub review thread node ID after addressed feedback is pushed",
+    )
+    parser.add_argument(
+        "--resolution-comment",
+        help="Resolution note to post before resolving; must start with '[from Codex]: '",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable output (default behavior for --once and --retry-failed-now)",
@@ -146,14 +160,33 @@ def parse_args():
     if args.quiet_watch and args.full_watch:
         parser.error("--quiet-watch cannot be combined with --full-watch")
     if args.quiet_watch or args.full_watch:
-        if args.once or args.retry_failed_now:
+        if (
+            args.once
+            or args.retry_failed_now
+            or args.list_review_threads
+            or args.resolve_review_thread
+        ):
             parser.error("--quiet-watch and --full-watch can only be used with watch mode")
         args.watch = True
-    if args.watch and args.once:
-        parser.error("--watch cannot be combined with --once")
-    if args.watch and args.retry_failed_now:
-        parser.error("--watch cannot be combined with --retry-failed-now")
-    if not args.once and not args.watch and not args.retry_failed_now:
+    modes = [
+        bool(args.once),
+        bool(args.watch),
+        bool(args.retry_failed_now),
+        bool(args.list_review_threads),
+        bool(args.resolve_review_thread),
+    ]
+    if sum(modes) > 1:
+        parser.error(
+            "choose only one mode: --once, --watch, --retry-failed-now, "
+            "--list-review-threads, or --resolve-review-thread"
+        )
+    if args.resolve_review_thread and not args.resolution_comment:
+        parser.error("--resolve-review-thread requires --resolution-comment")
+    if args.resolution_comment and not args.resolve_review_thread:
+        parser.error("--resolution-comment requires --resolve-review-thread")
+    if args.resolution_comment and not args.resolution_comment.startswith("[from Codex]: "):
+        parser.error("--resolution-comment must start with '[from Codex]: '")
+    if not any(modes):
         args.once = True
     return args
 
@@ -511,6 +544,13 @@ def comment_endpoints(repo, pr_number):
     }
 
 
+def split_repo(repo):
+    parts = str(repo or "").split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise GhCommandError(f"Expected OWNER/REPO, got: {repo}")
+    return parts[0], parts[1]
+
+
 def gh_api_list_paginated(endpoint, repo=None, per_page=100):
     items = []
     page = 1
@@ -604,6 +644,187 @@ def normalize_reviews(items):
             }
         )
     return out
+
+
+def review_threads_query():
+    return """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          viewerCanResolve
+          comments(first: 50) {
+            nodes {
+              id
+              databaseId
+              author { login }
+              authorAssociation
+              body
+              path
+              line
+              originalLine
+              url
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}
+""".strip()
+
+
+def normalize_review_thread_comment(item):
+    body, body_truncated = bounded_text(item.get("body"), MAX_REVIEW_BODY_CHARS)
+    line = item.get("line")
+    if line is None:
+        line = item.get("originalLine")
+    return {
+        "id": str(item.get("id") or ""),
+        "database_id": str(item.get("databaseId") or ""),
+        "author": extract_login(item.get("author")),
+        "author_association": str(item.get("authorAssociation") or ""),
+        "created_at": str(item.get("createdAt") or ""),
+        "body": body,
+        "body_truncated": body_truncated,
+        "path": item.get("path"),
+        "line": line,
+        "url": bounded_string(item.get("url"), MAX_REVIEW_URL_CHARS),
+    }
+
+
+def normalize_review_thread(node):
+    comments_node = node.get("comments") if isinstance(node.get("comments"), dict) else {}
+    raw_comments = comments_node.get("nodes") or []
+    comments = [
+        normalize_review_thread_comment(item)
+        for item in raw_comments
+        if isinstance(item, dict)
+    ]
+    participants = sorted({comment["author"] for comment in comments if comment.get("author")})
+    return {
+        "id": str(node.get("id") or ""),
+        "is_resolved": bool(node.get("isResolved")),
+        "is_outdated": bool(node.get("isOutdated")),
+        "viewer_can_resolve": bool(node.get("viewerCanResolve")),
+        "participants": participants,
+        "comment_count": len(comments),
+        "comments": comments,
+    }
+
+
+def get_review_threads(repo, pr_number):
+    owner, name = split_repo(repo)
+    data = gh_json(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={int(pr_number)}",
+            "-f",
+            f"query={review_threads_query()}",
+        ],
+        repo=repo,
+    )
+    try:
+        nodes = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    except (TypeError, KeyError) as err:
+        raise GhCommandError("Unexpected reviewThreads GraphQL payload from GitHub API") from err
+    if not isinstance(nodes, list):
+        raise GhCommandError("Unexpected reviewThreads nodes payload from GitHub API")
+    return [
+        normalize_review_thread(node)
+        for node in nodes
+        if isinstance(node, dict)
+    ]
+
+
+def list_review_threads(args):
+    pr = resolve_pr(args.pr, repo_override=args.repo)
+    threads = get_review_threads(pr["repo"], pr["number"])
+    unresolved = [thread for thread in threads if not thread["is_resolved"]]
+    return {
+        "pr": pr,
+        "unresolved_review_threads": unresolved,
+        "unresolved_review_thread_count": len(unresolved),
+        "resolved_review_thread_count": len(threads) - len(unresolved),
+    }
+
+
+def add_review_thread_reply(thread_id, body, repo=None):
+    query = """
+mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {
+    pullRequestReviewThreadId: $threadId,
+    body: $body
+  }) {
+    comment { id url }
+  }
+}
+""".strip()
+    return gh_json(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"threadId={thread_id}",
+            "-f",
+            f"body={body}",
+            "-f",
+            f"query={query}",
+        ],
+        repo=repo,
+    )
+
+
+def resolve_review_thread(thread_id, repo=None):
+    query = """
+mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread { id isResolved }
+  }
+}
+""".strip()
+    return gh_json(
+        [
+            "api",
+            "graphql",
+            "-f",
+            f"threadId={thread_id}",
+            "-f",
+            f"query={query}",
+        ],
+        repo=repo,
+    )
+
+
+def resolve_review_thread_with_comment(args):
+    pr = resolve_pr(args.pr, repo_override=args.repo)
+    thread_id = str(args.resolve_review_thread)
+    reply = add_review_thread_reply(thread_id, args.resolution_comment, repo=pr["repo"])
+    resolution = resolve_review_thread(thread_id, repo=pr["repo"])
+    resolved = False
+    try:
+        resolved = bool(resolution["data"]["resolveReviewThread"]["thread"]["isResolved"])
+    except (TypeError, KeyError):
+        resolved = False
+    return {
+        "pr": pr,
+        "thread_id": thread_id,
+        "comment_posted": True,
+        "reply": reply,
+        "resolved": resolved,
+        "resolution": resolution,
+    }
 
 
 def extract_login(user_obj):
@@ -1450,6 +1671,12 @@ def main():
     try:
         if args.retry_failed_now:
             print_json(retry_failed_now(args))
+            return 0
+        if args.list_review_threads:
+            print_json(list_review_threads(args))
+            return 0
+        if args.resolve_review_thread:
+            print_json(resolve_review_thread_with_comment(args))
             return 0
         if args.watch:
             return run_watch(args)

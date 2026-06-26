@@ -69,6 +69,25 @@ python3 scripts/gh_pr_watch.py --pr auto --retry-failed-now
 python3 scripts/gh_pr_watch.py --pr <number-or-url> --once
 ```
 
+### List unresolved review threads after a review-fix push
+
+```bash
+python3 scripts/gh_pr_watch.py --pr auto --list-review-threads
+```
+
+Use this immediately after pushing a commit that addresses PR review feedback. Resolve only the
+eligible threads that the commit actually addressed.
+
+### Resolve an addressed review thread
+
+```bash
+python3 scripts/gh_pr_watch.py --pr auto --resolve-review-thread <thread-id> --resolution-comment "[from Codex]: Addressed in <short-sha>: <brief change summary>."
+```
+
+This posts the required Codex-prefixed note to the GitHub review thread and then marks that thread
+resolved. Do not use it for issue comments, review summaries without a review-thread ID, unresolved
+threads involving other humans, or feedback that still needs a written answer.
+
 ## CI Failure Classification
 Use `gh` commands to inspect failed runs before deciding to rerun.
 
@@ -110,7 +129,7 @@ When you agree with a comment and it is actionable:
 1. Patch code locally.
 2. Commit with `codex: address PR review feedback (#<n>)`.
 3. Push to the PR head branch.
-4. After the push succeeds, resolve every associated GitHub review thread/comment that the commit addressed, but only when allowed by the GitHub state mutation policy below.
+4. After the push succeeds, run `--list-review-threads`, then resolve every associated eligible GitHub review thread that the commit addressed with `--resolve-review-thread`, but only when allowed by the GitHub state mutation policy below.
 5. Resume watching on the new SHA immediately (do not stop after reporting the push).
 6. If monitoring was running in watch mode, restart `--watch` immediately after the push in the same turn; do not wait for the user to ask again.
 
@@ -126,9 +145,11 @@ You can push PRs to update the code under review or to force CI re-runs as descr
 
 You can resolve review comment threads from the human who requested babysitting or from the Codex
 review bot. When a pushed commit addresses feedback in an eligible thread, resolve that thread after
-the push succeeds. When resolving, leave a comment prefixed with `[from Codex]: ` and explain what
-changes you made and which commit includes them. Don't touch review threads if other humans other
-than the user who requested babysitting have participated; report those threads to the user instead.
+the push succeeds. Use `--list-review-threads` to fetch current unresolved thread IDs and
+`--resolve-review-thread ... --resolution-comment "[from Codex]: ..."` to post the required note and
+resolve the thread. The note must explain what changed and which commit includes it. Don't touch
+review threads if other humans other than the user who requested babysitting have participated;
+report those threads to the user instead.
 
 Before making any changes, fetch the PR state yourself instead of relying on the PR watcher script's
 output.
