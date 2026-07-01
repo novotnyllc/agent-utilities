@@ -1,6 +1,6 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Agent utility skills for browser control, PR babysitting, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
