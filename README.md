@@ -50,7 +50,7 @@ directly.
 
 ## Upstream Refreshes
 
-Use `UPSTREAM.md` to compare these adapted copies with the original
-`steipete/agent-scripts` skills. Do not overwrite local adaptations blindly;
-refresh by diffing the upstream skill folder and reapplying the Claire-specific
-configuration changes.
+Use `UPSTREAM.md` and `upstreams.json` to compare adapted copies with their
+listed sources. Do not overwrite local adaptations blindly; refresh by diffing
+the upstream skill folder and reapplying the Claire-specific configuration
+changes.

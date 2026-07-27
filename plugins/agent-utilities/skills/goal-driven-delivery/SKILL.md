@@ -1,15 +1,16 @@
 ---
 name: goal-driven-delivery
-description: Orchestrate higher-quality first-pass software delivery with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR babysitting, and durable learnings. Use when starting a feature, bug fix, risky refactor, long-running implementation, existing PR cleanup, or any task where the goal is to reduce agent/CI/review churn and land a green PR.
+description: Orchestrate higher-quality first-pass software delivery with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR babysitting, and durable learnings. Use when starting a feature, bug fix, risky refactor, long-running implementation, existing PR cleanup, or any task where the goal is to reduce agent/CI/review churn and reach local or PR readiness.
 ---
 
 # Goal Driven Delivery
 
 Use this skill to choose the delivery route and invoke the right existing skills. Do not replace those skills with a long ad hoc prompt.
 
-This skill requires Compound Engineering with `ce-babysit-pr` available (v3.20.0
-or newer). If that skill is unavailable, stop and ask the user to update
-Compound Engineering. Do not fall back to a copied or hand-rolled watcher.
+PR monitoring routes require Compound Engineering with `ce-babysit-pr`
+available (v3.20.0 or newer). If that skill is unavailable, stop and ask the
+user to update Compound Engineering. Do not fall back to a copied or
+hand-rolled watcher.
 
 ## Skill Router
 
@@ -121,8 +122,8 @@ Pick one route.
 | --- | --- |
 | New scoped feature or bug fix with the user in the loop | `compound-engineering:ce-plan`, then `compound-engineering:ce-work mode:return-to-caller` |
 | Explicit autonomous ship-to-PR or LFG request | `compound-engineering:lfg` |
-| Large, risky, or historically churny feature | Goal + chunked hardening loop |
-| Unknown or historically missed code context | RP scout, then `ce-plan` + `ce-work` or chunked hardening |
+| Explicit request for Thermos review after each chunk | Goal + chunked hardening loop |
+| Unknown or historically missed code context | RP scout, then the standard or explicitly requested chunked route |
 | Explicit RepoPromptCE experiment | RP scout/oracle/agent route with bounded ownership, then normal CE/Thermos/CI gates |
 | Existing PR to drive toward merge readiness | `compound-engineering:ce-babysit-pr` |
 | One-shot review cleanup | `compound-engineering:ce-resolve-pr-feedback` |
@@ -134,9 +135,9 @@ Default to `ce-plan` then `ce-work mode:return-to-caller <plan-path>` for normal
 feature work so this skill retains ownership of the remaining local gates and
 does not silently push or open a PR. Use LFG only when the user explicitly asks
 for autonomous delivery through an open PR or invokes LFG. Use chunked
-hardening when the user asks for Thermos before each chunk, the work touches
-auth/data/migrations/providers, or previous PRs in the area churned on real
-review findings.
+hardening only when the user asks for Thermos before each chunk. Risky work
+otherwise uses the standard route with stronger targeted verification and a
+final Thermos gate.
 
 ## Route A: Standard Plan And Work
 
@@ -145,13 +146,13 @@ Use for normal in-the-loop feature and bug-fix work.
 Goal template:
 
 ```text
-/goal Deliver <FEATURE> as a green, review-ready PR.
+/goal Implement and locally verify <FEATURE>.
 
 Outcome: <measurable behavior>.
 Verification: <targeted tests/checks>, plus the repo final gate.
 Constraints: preserve <critical existing behavior/security/data boundaries>.
 
-If the right files or architecture are not obvious, first use RepoPromptCE context_builder to produce a curated context packet and feed that into planning. Invoke compound-engineering:ce-plan, then invoke compound-engineering:ce-work mode:return-to-caller with the resulting plan. Inspect its structured return and run the remaining local gates this route requires. If React/Next UI is touched, run the React Gate before final readiness and fix real findings. Do not push or open a PR unless the user requested that shipping step.
+If the right files or architecture are not obvious, first use RepoPromptCE context_builder to produce a curated context packet and feed that into planning. Invoke compound-engineering:ce-plan, then invoke compound-engineering:ce-work mode:return-to-caller with the resulting plan. Inspect its structured return. Run compound-engineering:ce-simplify-code unless the diff is docs-only or trivial, the React Gate when applicable, the Thermos Gate for risky work, compound-engineering:ce-code-review mode:agent with the plan path, and compound-engineering:ce-test-browser mode:pipeline when browser-visible behavior changed. Fix eligible findings and rerun affected checks. Stop with a locally verified, review-ready tree unless the user explicitly requested shipping. If shipping was requested, invoke compound-engineering:ce-commit-push-pr and then compound-engineering:ce-babysit-pr with the resulting PR URL.
 If the work produces a reusable lesson or fixes a repeated failure mode, invoke compound-engineering:ce-compound mode:headless depth:full before the final summary.
 If blocked: report the exact failing gate, evidence, and next human decision needed.
 ```
@@ -167,12 +168,13 @@ Route B.
 
 ## Route B: Chunked Hardening Goal
 
-Use when first-pass quality matters more than maximum autopilot: migrations, auth/RBAC, provider side effects, import/cutover work, large UI slices, or any area with recent CI/review churn.
+Use only when the user explicitly requests Thermos review after each
+implementation chunk.
 
 Goal template:
 
 ```text
-/goal Deliver <FEATURE> as a green, review-ready PR with chunk-level hardening.
+/goal Implement and locally verify <FEATURE> with chunk-level hardening.
 
 Outcome: <measurable behavior>.
 Verification: <targeted tests/checks>, plus the repo final gate.
@@ -182,58 +184,23 @@ Workflow:
 1. If context is uncertain or this area has churned before, run RepoPromptCE context_builder first and pass the exported context into planning.
 2. Invoke compound-engineering:ce-plan. Do not code until an implementation-ready plan exists.
 3. Implement one vertical chunk at a time using existing repo patterns and native host subagents only when useful. Use RP agents only when explicitly requested, with bounded ownership.
-4. After each non-trivial chunk, run the smallest relevant checks. If React/Next UI is involved, run the React Doctor gate before commit. Run the Thermos gate using the sibling Thermos skills, fix all real findings, inspect the diff, and commit explicit paths.
-5. Before PR, invoke compound-engineering:ce-simplify-code unless the diff is docs-only or trivial.
+4. After each non-trivial chunk, run the smallest relevant checks. If React/Next UI is involved, run the React Doctor gate. Run the Thermos gate using the sibling Thermos skills, fix all real findings, and inspect the diff. Commit explicit paths only when the user authorized commits.
+5. Before final review, invoke compound-engineering:ce-simplify-code unless the diff is docs-only or trivial.
 6. If the branch is UI-heavy, run the React Doctor gate again after simplify and before CE code review.
 7. For risky chunks, optionally use RepoPromptCE oracle_send mode:review on the selected diff/files before CE code review. Apply only findings that survive normal code/test inspection.
 8. Invoke compound-engineering:ce-code-review with mode:agent and the plan path. Apply all eligible findings.
 9. Invoke compound-engineering:ce-test-browser with mode:pipeline when UI/browser behavior changed.
-10. Invoke compound-engineering:ce-commit-push-pr.
-11. After PR creation, invoke compound-engineering:ce-babysit-pr with the PR URL. Let it own feedback, CI, branch currency, durable watch state, and the settled merge-readiness decision.
+10. Stop with a locally verified, review-ready tree unless the user explicitly requested shipping.
+11. If shipping was requested, invoke compound-engineering:ce-commit-push-pr, then invoke compound-engineering:ce-babysit-pr with the resulting PR URL. Let it own feedback, CI, branch currency, durable watch state, and the settled merge-readiness decision.
 12. Invoke compound-engineering:ce-compound mode:headless depth:full when the run discovers a reusable pattern, repeated failure mode, or durable project vocabulary.
 
-Complete only when CI is green and actionable PR feedback is resolved or durably recorded. If blocked, report the exact gate, evidence, and next human decision needed.
+Complete locally when the verification surfaces are green. When shipping was
+requested, complete only when CI is green and actionable PR feedback is
+resolved or durably recorded. If blocked, report the exact gate, evidence, and
+next human decision needed.
 ```
 
 The chunk loop is the churn reducer. It forces local review before the branch accumulates enough mistakes for CI and GitHub review to become the first real QA pass.
-
-## Route C: Existing PR Cleanup Goal
-
-Use when a PR already exists and the goal is merge readiness.
-
-```text
-/goal Make PR <NUMBER_OR_URL> merge-ready.
-
-Outcome: PR has green CI and no unresolved actionable review feedback.
-Verification: gh pr checks is green, reviewThreads have no unresolved actionable findings, and any required local checks for fixes pass.
-Workflow: invoke compound-engineering:ce-babysit-pr with the PR URL and let it own review feedback, CI repair, branch currency, and monitoring until the PR is merged/closed, looks ready, reaches its budget, or a true stop needs user help.
-Do not merge unless explicitly asked.
-If blocked: record the unresolved check/thread, URL, evidence, and needed human decision.
-```
-
-## Route D: RP-Assisted Goal
-
-Use when the user explicitly wants RP involved or the task has a history of missed context.
-
-```text
-/goal Deliver <FEATURE> as a green, review-ready PR using RP for context quality and CE/Thermos for delivery gates.
-
-Outcome: <measurable behavior>.
-Verification: <targeted tests/checks>, plus the repo final gate.
-Constraints: preserve <critical existing behavior/security/data boundaries>.
-
-Workflow:
-1. Use RepoPromptCE context_builder to discover the relevant files and produce a context packet. Export it if it will be handed to another agent.
-2. Reconcile the RP context with source-of-truth docs and repo guidance.
-3. Invoke compound-engineering:ce-plan using the RP context packet and the feature brief.
-4. Implement with native host subagents by default. Use RP agent_run only if explicitly requested, with one bounded slice per agent.
-5. After each non-trivial chunk, run targeted checks, React Doctor if React is involved, and the Thermos gate from the sibling Thermos skills. Fix all real findings before commit.
-6. Before PR, run ce-simplify-code, optional RP oracle review for risky areas, ce-code-review mode:agent, and ce-test-browser when UI changed.
-7. Open/update the PR, then invoke compound-engineering:ce-babysit-pr and let it own feedback, CI, branch currency, durable watch state, and the settled merge-readiness decision.
-8. Run compound-engineering:ce-compound mode:headless depth:full if the run reveals reusable learning.
-
-Do not let RP replace local tests, Thermos, CE code review, or CI. Complete only when the verification surfaces are green and actionable feedback is resolved or durably recorded.
-```
 
 ## When To Run Ce-Compound
 
