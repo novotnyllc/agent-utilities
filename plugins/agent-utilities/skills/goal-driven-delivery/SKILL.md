@@ -1,11 +1,15 @@
 ---
 name: goal-driven-delivery
-description: Orchestrate higher-quality first-pass software delivery with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR feedback resolution, CI watching, and durable learnings. Use when starting a feature, bug fix, risky refactor, long-running implementation, existing PR cleanup, or any task where the goal is to reduce agent/CI/review churn and land a green PR.
+description: Orchestrate higher-quality first-pass software delivery with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR babysitting, and durable learnings. Use when starting a feature, bug fix, risky refactor, long-running implementation, existing PR cleanup, or any task where the goal is to reduce agent/CI/review churn and land a green PR.
 ---
 
 # Goal Driven Delivery
 
 Use this skill to choose the delivery route and invoke the right existing skills. Do not replace those skills with a long ad hoc prompt.
+
+This skill requires Compound Engineering with `ce-babysit-pr` available (v3.20.0
+or newer). If that skill is unavailable, stop and ask the user to update
+Compound Engineering. Do not fall back to a copied or hand-rolled watcher.
 
 ## Skill Router
 
@@ -18,10 +22,10 @@ Resolve skill names against the host's available-skills list before invoking. Us
 - `compound-engineering:ce-code-review`: pre-PR or pre-rereview code review.
 - `compound-engineering:ce-test-browser`: browser/UI verification.
 - `compound-engineering:ce-commit-push-pr`: commit, push, and PR creation.
-- `compound-engineering:ce-resolve-pr-feedback`: active PR review feedback evaluation, fixes, replies, and thread resolution.
+- `compound-engineering:ce-babysit-pr`: continuous PR monitoring and repair across review feedback, CI, branch currency, and managed stacks.
+- `compound-engineering:ce-resolve-pr-feedback`: focused one-shot review cleanup when continuous monitoring was not requested.
+- `compound-engineering:ce-debug`: focused one-shot CI or code failure diagnosis.
 - `compound-engineering:ce-compound`: durable learning capture after a solved problem.
-- `agent-utilities:babysit-pr`: quiet PR monitoring after PR creation or after a fix push.
-- `github:gh-fix-ci`: focused GitHub Actions failure repair.
 - RepoPromptCE tools: context building, oracle review, and explicit RP-agent experiments when installed.
 
 Use native host subagents by default for implementation. Use RepoPromptCE deliberately for context quality, not accidentally as the worker pool.
@@ -93,11 +97,17 @@ Do not invent project scripts, do not assume a local package install, and do not
 
 ## PR Feedback And Monitoring
 
-Use `ce-resolve-pr-feedback` for active review cleanup. It fetches unresolved review threads, judges each item centrally, fixes valid issues, commits/pushes, replies, resolves eligible threads, and verifies the thread list.
+Use `compound-engineering:ce-babysit-pr` whenever the request is to watch,
+babysit, or drive an open GitHub PR toward merge readiness. It owns the watch
+loop and delegates feedback fixes to `ce-resolve-pr-feedback` and CI fixes to
+`ce-debug`; do not pre-run or duplicate those stages.
 
-Use `babysit-pr` for ongoing monitoring. It watches CI, review feedback, mergeability, Copilot/reviewer state, flaky retry opportunities, and late-arriving feedback after a PR exists or after a feedback-fix push.
+Use `mode:pipeline` when another workflow needs a bounded, non-interactive
+result. Use the default interactive mode when the user asks to keep watching
+through review. Babysitting never authorizes merging.
 
-Do not use the watcher as the primary review-feedback fixer when unresolved review threads already exist. Start with `ce-resolve-pr-feedback`, then hand the PR back to `babysit-pr` for quiet monitoring.
+Use `ce-resolve-pr-feedback` or `ce-debug` directly only for an explicitly
+one-shot cleanup or diagnosis that does not need continuous monitoring.
 
 ## Route Selection
 
@@ -105,20 +115,28 @@ Pick one route.
 
 | Situation | Route |
 | --- | --- |
-| New scoped feature or bug fix, one PR expected | Goal + `compound-engineering:lfg` |
+| New scoped feature or bug fix with the user in the loop | `compound-engineering:ce-plan`, then `compound-engineering:ce-work mode:return-to-caller` |
+| Explicit autonomous ship-to-PR or LFG request | `compound-engineering:lfg` |
 | Large, risky, or historically churny feature | Goal + chunked hardening loop |
-| Unknown or historically missed code context | RP scout, then Goal + LFG or chunked hardening |
+| Unknown or historically missed code context | RP scout, then `ce-plan` + `ce-work` or chunked hardening |
 | Explicit RepoPromptCE experiment | RP scout/oracle/agent route with bounded ownership, then normal CE/Thermos/CI gates |
-| Existing PR with review comments | `compound-engineering:ce-resolve-pr-feedback`, then `agent-utilities:babysit-pr` |
-| Existing PR with CI failures only | `github:gh-fix-ci` or `agent-utilities:babysit-pr` |
+| Existing PR to drive toward merge readiness | `compound-engineering:ce-babysit-pr` |
+| One-shot review cleanup | `compound-engineering:ce-resolve-pr-feedback` |
+| One-shot CI or code failure | `compound-engineering:ce-debug` |
 | Docs-only or tiny diff | Direct edit + targeted check, skip LFG and Thermos |
-| Recently solved issue with reusable lesson | `compound-engineering:ce-compound mode:headless` |
+| Recently solved issue with reusable lesson | `compound-engineering:ce-compound mode:headless depth:full` |
 
-Default to LFG for normal feature work. Use chunked hardening when the user asks for Thermos before each chunk, the work touches auth/data/migrations/providers, or previous PRs in the area churned on real review findings.
+Default to `ce-plan` then `ce-work mode:return-to-caller <plan-path>` for normal
+feature work so this skill retains ownership of the remaining local gates and
+does not silently push or open a PR. Use LFG only when the user explicitly asks
+for autonomous delivery through an open PR or invokes LFG. Use chunked
+hardening when the user asks for Thermos before each chunk, the work touches
+auth/data/migrations/providers, or previous PRs in the area churned on real
+review findings.
 
-## Route A: LFG Goal
+## Route A: Standard Plan And Work
 
-Use when the change can be one coherent PR and the built-in CE gates are enough.
+Use for normal in-the-loop feature and bug-fix work.
 
 Goal template:
 
@@ -129,12 +147,19 @@ Outcome: <measurable behavior>.
 Verification: <targeted tests/checks>, plus the repo final gate.
 Constraints: preserve <critical existing behavior/security/data boundaries>.
 
-If the right files or architecture are not obvious, first use RepoPromptCE context_builder to produce a curated context packet and feed that into planning. Then use compound-engineering:lfg with this feature brief. Let LFG run plan first, then work, simplify, CE code review, browser testing when applicable, commit/push/PR, and CI autofix. If React/Next UI is touched, run the React Gate before final commit/PR readiness and fix real findings.
-After the PR exists, monitor CI and review feedback until checks are green and actionable review feedback is resolved or durably recorded. If unresolved review threads appear, invoke compound-engineering:ce-resolve-pr-feedback. After active review cleanup, invoke agent-utilities:babysit-pr to monitor late review feedback and CI. If the work produces a reusable lesson or fixes a repeated failure mode, invoke compound-engineering:ce-compound mode:headless before the final summary.
+If the right files or architecture are not obvious, first use RepoPromptCE context_builder to produce a curated context packet and feed that into planning. Invoke compound-engineering:ce-plan, then invoke compound-engineering:ce-work mode:return-to-caller with the resulting plan. Inspect its structured return and run the remaining local gates this route requires. If React/Next UI is touched, run the React Gate before final readiness and fix real findings. Do not push or open a PR unless the user requested that shipping step.
+If the work produces a reusable lesson or fixes a repeated failure mode, invoke compound-engineering:ce-compound mode:headless depth:full before the final summary.
 If blocked: report the exact failing gate, evidence, and next human decision needed.
 ```
 
-Do not insert Thermos into LFG's internal step order. LFG has a fixed contract. If Thermos must run between chunks, use Route B.
+When the user explicitly requests autonomous delivery through an open PR,
+invoke `compound-engineering:lfg` directly with the feature brief. LFG owns its
+fixed plan, work, simplify, review, browser, commit/push/PR, and
+`ce-babysit-pr mode:pipeline` stages. Do not wrap it in `/goal`, insert Thermos
+into its internal order, or duplicate its pipeline monitoring. LFG stops at a
+CI-decided PR; if the requested outcome also includes settled merge readiness,
+continue with interactive `compound-engineering:ce-babysit-pr <pr-url>`.
+If Thermos must run between chunks, use Route B.
 
 ## Route B: Chunked Hardening Goal
 
@@ -160,8 +185,8 @@ Workflow:
 8. Invoke compound-engineering:ce-code-review with mode:agent and the plan path. Apply all eligible findings.
 9. Invoke compound-engineering:ce-test-browser with mode:pipeline when UI/browser behavior changed.
 10. Invoke compound-engineering:ce-commit-push-pr.
-11. After PR creation, run compound-engineering:ce-resolve-pr-feedback for unresolved review threads. Use github:gh-fix-ci for focused branch-related CI failures. Use agent-utilities:babysit-pr for quiet ongoing monitoring after active fixes.
-12. Invoke compound-engineering:ce-compound mode:headless when the run discovers a reusable pattern, repeated failure mode, or durable project vocabulary.
+11. After PR creation, invoke compound-engineering:ce-babysit-pr with the PR URL. Let it own feedback, CI, branch currency, durable watch state, and the settled merge-readiness decision.
+12. Invoke compound-engineering:ce-compound mode:headless depth:full when the run discovers a reusable pattern, repeated failure mode, or durable project vocabulary.
 
 Complete only when CI is green and actionable PR feedback is resolved or durably recorded. If blocked, report the exact gate, evidence, and next human decision needed.
 ```
@@ -177,7 +202,7 @@ Use when a PR already exists and the goal is merge readiness.
 
 Outcome: PR has green CI and no unresolved actionable review feedback.
 Verification: gh pr checks is green, reviewThreads have no unresolved actionable findings, and any required local checks for fixes pass.
-Workflow: invoke compound-engineering:ce-resolve-pr-feedback for review comments. Invoke github:gh-fix-ci for branch-related GitHub Actions failures. After active fixes are pushed, invoke agent-utilities:babysit-pr to keep watching until the PR is merged/closed or a real blocker needs user help.
+Workflow: invoke compound-engineering:ce-babysit-pr with the PR URL and let it own review feedback, CI repair, branch currency, and monitoring until the PR is merged/closed, looks ready, reaches its budget, or a true stop needs user help.
 Do not merge unless explicitly asked.
 If blocked: record the unresolved check/thread, URL, evidence, and needed human decision.
 ```
@@ -200,15 +225,19 @@ Workflow:
 4. Implement with native host subagents by default. Use RP agent_run only if explicitly requested, with one bounded slice per agent.
 5. After each non-trivial chunk, run targeted checks, React Doctor if React is involved, and the Thermos gate from the sibling Thermos skills. Fix all real findings before commit.
 6. Before PR, run ce-simplify-code, optional RP oracle review for risky areas, ce-code-review mode:agent, and ce-test-browser when UI changed.
-7. Open/update the PR, then use ce-resolve-pr-feedback, gh-fix-ci, and babysit-pr until CI and review are clean or a real blocker is durable.
-8. Run ce-compound mode:headless if the run reveals reusable learning.
+7. Open/update the PR, then invoke compound-engineering:ce-babysit-pr and let it own feedback, CI, branch currency, durable watch state, and the settled merge-readiness decision.
+8. Run compound-engineering:ce-compound mode:headless depth:full if the run reveals reusable learning.
 
 Do not let RP replace local tests, Thermos, CE code review, or CI. Complete only when the verification surfaces are green and actionable feedback is resolved or durably recorded.
 ```
 
 ## When To Run Ce-Compound
 
-Run `compound-engineering:ce-compound mode:headless <brief context>` after the work, before final summary, when any of these happened:
+Run `compound-engineering:ce-compound mode:headless depth:full <brief context>`
+after the work, before final summary. This keeps the full session-history probe,
+overlap research, and grounding validation without blocking the orchestration
+or editing instruction files without consent. Run it when any of these
+happened:
 
 - a review/CI failure found a real reusable mistake;
 - a new repo pattern or project vocabulary was established;

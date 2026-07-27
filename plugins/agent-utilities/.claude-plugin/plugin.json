@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.5",
-  "description": "Agent utility skills for browser control, PR babysitting, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.3.7",
+  "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -20,10 +20,10 @@
     "macos",
     "profiling",
     "cli",
+    "orchestration",
     "skills"
   ],
   "skills": [
-    "./skills/babysit-pr",
     "./skills/browser-use",
     "./skills/create-cli",
     "./skills/frontend-design",
@@ -31,6 +31,7 @@
     "./skills/instruments-profiling",
     "./skills/native-app-performance",
     "./skills/one-password",
+    "./skills/orchestrate",
     "./skills/oracle",
     "./skills/remote-mac",
     "./skills/skill-cleaner",

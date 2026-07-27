@@ -1,5 +1,14 @@
 # Upstream Sources
 
+`upstreams.json` is the authoritative machine-readable source ledger. This
+document records human-readable provenance and adaptation notes.
+
+The GitHub Agentic Workflow source in
+`.github/workflows/refresh-imported-skills.md` compiles to the adjacent
+`.lock.yml` workflow. It checks these pins weekly with the keyless GitHub
+Copilot engine, preserves local adaptations, and opens a draft pull request
+only when an imported path changes.
+
 The initial skill copies came from:
 
 - Repository: `https://github.com/steipete/agent-scripts`
@@ -12,23 +21,24 @@ The `oracle` skill was refreshed from:
 - Commit: `bfa8f1de42669f151933afe9fe5843ecdf9933d2`
 - Path: `skills/oracle`
 
-The `babysit-pr` skill was copied from:
+The `orchestrate` skill was copied and adapted from:
 
-- Repository: `/Users/claire/dev/babysit-pr`
-- Latest local refresh source: `/Users/claire/dev/codex/.codex/skills/babysit-pr`
-- License: Apache-2.0
+- Repository: `https://github.com/provencher/codex-skills`
+- Commit: `8aa6c42b73781c905c55f8a1253a18127079ac21`
+- Path: `orchestrate`
+- License: MIT
 
 ## Copied Skills
 
 | Local skill | Upstream path |
 | --- | --- |
-| `babysit-pr` | `.codex/skills/babysit-pr` |
 | `browser-use` | `skills/browser-use` |
 | `create-cli` | `skills/create-cli` |
 | `frontend-design` | `skills/frontend-design` |
 | `instruments-profiling` | `skills/instruments-profiling` |
 | `native-app-performance` | `skills/native-app-performance` |
 | `one-password` | `skills/one-password` |
+| `orchestrate` | `orchestrate` |
 | `oracle` | `skills/oracle` |
 | `remote-mac` | `skills/remote-mac` |
 | `skill-cleaner` | `skills/skill-cleaner` |
@@ -45,3 +55,5 @@ The `babysit-pr` skill was copied from:
   configuration knobs.
 - Updated `skill-cleaner` to discover the installed plugin root and common
   Claire project roots without depending on one `~/Projects` layout.
+- Added a Claude Code branch to `orchestrate` while preserving the upstream
+  Codex delegation settings.

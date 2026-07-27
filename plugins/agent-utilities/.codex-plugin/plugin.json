@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.5",
-  "description": "Agent utility skills for browser control, PR babysitting, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.3.7",
+  "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -20,13 +20,14 @@
     "macos",
     "profiling",
     "cli",
+    "orchestration",
     "skills"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Agent Utilities",
-    "shortDescription": "Browser, PR babysitting, SSH, 1Password, Oracle, Mac profiling, and CLI utility skills",
-    "longDescription": "Agent Utilities bundles Claire-adapted operational skills for browser use, PR babysitting, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "shortDescription": "Delivery, orchestration, browser, SSH, 1Password, Oracle, profiling, and CLI utility skills",
+    "longDescription": "Agent Utilities bundles Claire-adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
@@ -39,7 +40,7 @@
     "termsOfServiceURL": "https://github.com/novotnyllc/agent-utilities",
     "defaultPrompt": [
       "Use agent utilities to inspect browser state and continue the task.",
-      "Babysit this PR for CI failures, review feedback, and mergeability changes.",
+      "Use goal-driven delivery and Compound Engineering to move this PR toward merge readiness.",
       "Diagnose SSH or remote Mac connectivity safely.",
       "Profile this native app with Instruments/xctrace and summarize hotspots."
     ],
