@@ -109,6 +109,10 @@ through review. Babysitting never authorizes merging.
 Use `ce-resolve-pr-feedback` or `ce-debug` directly only for an explicitly
 one-shot cleanup or diagnosis that does not need continuous monitoring.
 
+On an LFG route, do not invoke `ce-babysit-pr` separately: LFG owns its
+pipeline invocation. Invoke `ce-babysit-pr` from this skill only on non-LFG
+routes that create or operate on a PR.
+
 ## Route Selection
 
 Pick one route.
@@ -156,10 +160,10 @@ When the user explicitly requests autonomous delivery through an open PR,
 invoke `compound-engineering:lfg` directly with the feature brief. LFG owns its
 fixed plan, work, simplify, review, browser, commit/push/PR, and
 `ce-babysit-pr mode:pipeline` stages. Do not wrap it in `/goal`, insert Thermos
-into its internal order, or duplicate its pipeline monitoring. LFG stops at a
-CI-decided PR; if the requested outcome also includes settled merge readiness,
-continue with interactive `compound-engineering:ce-babysit-pr <pr-url>`.
-If Thermos must run between chunks, use Route B.
+into its internal order, or start another babysitter automatically afterward.
+LFG may hand back an interactive watch invocation; a later explicit watch
+request is a new existing-PR route. If Thermos must run between chunks, use
+Route B.
 
 ## Route B: Chunked Hardening Goal
 
