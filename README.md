@@ -11,6 +11,7 @@ they can be used from Claire's Codex and Claude Code environments.
 
 - `browser-use`
 - `create-cli`
+- `delivery-director`
 - `frontend-design`
 - `goal-driven-delivery`
 - `instruments-profiling`
