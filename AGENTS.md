@@ -12,8 +12,8 @@ When changing the plugin version, update both:
 
 - `plugins/agent-utilities/.codex-plugin/plugin.json`
 - `plugins/agent-utilities/.claude-plugin/plugin.json`
-- `.claude-plugin/marketplace.json`
 - `<marketplace-repo>/.agents/plugins/plugin-versions.json`
+- `<marketplace-repo>/.claude-plugin/marketplace.json`
 
 If the plugin is newly added or renamed, also update:
 

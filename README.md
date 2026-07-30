@@ -19,13 +19,14 @@ they can be used across Codex and Claude Code environments.
 - `one-password`
 - `orchestrate`
 - `oracle`
-- `remote-mac`
 - `skill-cleaner`
 - `sonos`
-- `ssh-doctor`
 - `thermo-nuclear-code-quality-review`
 - `thermo-nuclear-review`
 - `thermos`
+
+Fleet-aware `remote-mac` and `ssh-doctor` skills now live in the
+`machine-utilities` plugin.
 
 ## Codex
 
@@ -41,9 +42,10 @@ plugins/agent-utilities/.codex-plugin/plugin.json
 Claude Code metadata lives at:
 
 ```text
-.claude-plugin/marketplace.json
 plugins/agent-utilities/.claude-plugin/plugin.json
 ```
+
+Marketplace catalogs live in the separate `novotnyllc/marketplace` repository.
 
 For local development, symlink the skill folders from `plugins/agent-utilities/skills`
 into `~/.claude/skills` if you want Claude Code to read the working checkout
