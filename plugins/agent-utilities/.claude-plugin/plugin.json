@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.9",
-  "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.4.0",
+  "description": "Agent utility skills for delivery orchestration, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -15,7 +15,6 @@
     "browser",
     "github",
     "pull-requests",
-    "ssh",
     "1password",
     "macos",
     "profiling",
@@ -34,10 +33,8 @@
     "./skills/one-password",
     "./skills/orchestrate",
     "./skills/oracle",
-    "./skills/remote-mac",
     "./skills/skill-cleaner",
     "./skills/sonos",
-    "./skills/ssh-doctor",
     "./skills/thermo-nuclear-code-quality-review",
     "./skills/thermo-nuclear-review",
     "./skills/thermos"

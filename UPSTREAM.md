@@ -40,10 +40,8 @@ The `orchestrate` skill was copied and adapted from:
 | `one-password` | `skills/one-password` |
 | `orchestrate` | `orchestrate` |
 | `oracle` | `skills/oracle` |
-| `remote-mac` | `skills/remote-mac` |
 | `skill-cleaner` | `skills/skill-cleaner` |
 | `sonos` | `skills/sonos` |
-| `ssh-doctor` | `skills/ssh-doctor` |
 
 ## Adaptation Notes
 

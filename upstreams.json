@@ -67,14 +67,6 @@
       "license": "MIT"
     },
     {
-      "name": "remote-mac",
-      "repository": "https://github.com/steipete/agent-scripts.git",
-      "path": "skills/remote-mac",
-      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
-      "track": "refs/heads/main",
-      "license": "MIT"
-    },
-    {
       "name": "skill-cleaner",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/skill-cleaner",
@@ -86,14 +78,6 @@
       "name": "sonos",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/sonos",
-      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
-      "track": "refs/heads/main",
-      "license": "MIT"
-    },
-    {
-      "name": "ssh-doctor",
-      "repository": "https://github.com/steipete/agent-scripts.git",
-      "path": "skills/ssh-doctor",
       "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
       "track": "refs/heads/main",
       "license": "MIT"

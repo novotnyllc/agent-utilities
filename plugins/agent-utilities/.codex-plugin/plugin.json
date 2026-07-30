@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.3.9",
-  "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.4.0",
+  "description": "Agent utility skills for delivery orchestration, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -15,7 +15,6 @@
     "browser",
     "github",
     "pull-requests",
-    "ssh",
     "1password",
     "macos",
     "profiling",
@@ -26,8 +25,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Agent Utilities",
-    "shortDescription": "Delivery, orchestration, browser, SSH, 1Password, Oracle, profiling, and CLI utility skills",
-    "longDescription": "Agent Utilities bundles adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, Sonos control, remote Mac work, SSH diagnostics, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "shortDescription": "Delivery, orchestration, browser, 1Password, Oracle, profiling, and CLI utility skills",
+    "longDescription": "Agent Utilities bundles adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, Sonos control, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
@@ -41,7 +40,6 @@
     "defaultPrompt": [
       "Use agent utilities to inspect browser state and continue the task.",
       "Use goal-driven delivery and Compound Engineering to move this PR toward merge readiness.",
-      "Diagnose SSH or remote Mac connectivity safely.",
       "Profile this native app with Instruments/xctrace and summarize hotspots."
     ],
     "brandColor": "#0F766E"
