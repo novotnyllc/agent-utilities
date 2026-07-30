@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "updatePolicy": "review-only",
+  "skills": [
+    {
+      "name": "browser-use",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/browser-use",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "create-cli",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/create-cli",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "frontend-design",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/frontend-design",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "instruments-profiling",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/instruments-profiling",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "native-app-performance",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/native-app-performance",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "one-password",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/one-password",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "oracle",
+      "repository": "https://github.com/steipete/oracle.git",
+      "path": "skills/oracle",
+      "commit": "bfa8f1de42669f151933afe9fe5843ecdf9933d2",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "orchestrate",
+      "repository": "https://github.com/provencher/codex-skills.git",
+      "path": "orchestrate",
+      "commit": "8aa6c42b73781c905c55f8a1253a18127079ac21",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "remote-mac",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/remote-mac",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "skill-cleaner",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/skill-cleaner",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "sonos",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/sonos",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "ssh-doctor",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/ssh-doctor",
+      "commit": "6e512e6fe0546471dfce5f48c9896c6ddce669cd",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    }
+  ]
+}

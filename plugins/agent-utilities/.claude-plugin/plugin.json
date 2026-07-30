@@ -1,0 +1,46 @@
+{
+  "name": "agent-utilities",
+  "version": "0.3.9",
+  "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+  "author": {
+    "name": "Claire Novotny LLC",
+    "url": "https://github.com/novotnyllc"
+  },
+  "homepage": "https://github.com/novotnyllc/agent-utilities",
+  "repository": "https://github.com/novotnyllc/agent-utilities",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "browser",
+    "github",
+    "pull-requests",
+    "ssh",
+    "1password",
+    "macos",
+    "profiling",
+    "cli",
+    "orchestration",
+    "skills"
+  ],
+  "skills": [
+    "./skills/browser-use",
+    "./skills/create-cli",
+    "./skills/delivery-director",
+    "./skills/frontend-design",
+    "./skills/goal-driven-delivery",
+    "./skills/instruments-profiling",
+    "./skills/native-app-performance",
+    "./skills/one-password",
+    "./skills/orchestrate",
+    "./skills/oracle",
+    "./skills/remote-mac",
+    "./skills/skill-cleaner",
+    "./skills/sonos",
+    "./skills/ssh-doctor",
+    "./skills/thermo-nuclear-code-quality-review",
+    "./skills/thermo-nuclear-review",
+    "./skills/thermos"
+  ],
+  "hooks": {}
+}

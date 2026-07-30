@@ -1,0 +1,41 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agent-utilities",
+  "description": "Marketplace metadata for the agent-utilities Claude Code plugin",
+  "owner": {
+    "name": "Claire Novotny LLC",
+    "url": "https://github.com/novotnyllc"
+  },
+  "metadata": {
+    "description": "Agent utility skills for delivery orchestration, browser control, remote Macs, 1Password, Oracle, native profiling, and CLI design.",
+    "version": "0.3.9"
+  },
+  "plugins": [
+    {
+      "name": "agent-utilities",
+      "source": "./plugins/agent-utilities",
+      "description": "Agent utility skills for Codex and Claude Code.",
+      "version": "0.3.9",
+      "author": {
+        "name": "Claire Novotny LLC",
+        "url": "https://github.com/novotnyllc"
+      },
+      "license": "MIT",
+      "category": "productivity",
+      "homepage": "https://github.com/novotnyllc/agent-utilities",
+      "keywords": [
+        "codex",
+        "claude-code",
+        "browser",
+        "github",
+        "pull-requests",
+        "ssh",
+        "1password",
+        "macos",
+        "profiling",
+        "cli",
+        "orchestration"
+      ]
+    }
+  ]
+}

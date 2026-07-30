@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Driven Delivery"
+  short_description: "Ship cleaner PRs with review gates."
+  default_prompt: "Use $goal-driven-delivery to drive this feature to a green review-ready PR."
