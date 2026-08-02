@@ -1,6 +1,6 @@
 {
   "name": "agent-utilities",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Agent utility skills for delivery orchestration, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
@@ -26,7 +26,7 @@
   "interface": {
     "displayName": "Agent Utilities",
     "shortDescription": "Delivery, orchestration, browser, 1Password, Oracle, profiling, and CLI utility skills",
-    "longDescription": "Agent Utilities bundles adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, Sonos control, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "longDescription": "Agent Utilities bundles adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [

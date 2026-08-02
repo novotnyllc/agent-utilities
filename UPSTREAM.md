@@ -41,7 +41,6 @@ The `orchestrate` skill was copied and adapted from:
 | `orchestrate` | `orchestrate` |
 | `oracle` | `skills/oracle` |
 | `skill-cleaner` | `skills/skill-cleaner` |
-| `sonos` | `skills/sonos` |
 
 ## Adaptation Notes
 

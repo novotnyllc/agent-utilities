@@ -22,7 +22,6 @@ they can be used across Codex and Claude Code environments.
 | `orchestrate` | Coordinate multiple agents on substantial work. |
 | `oracle` | Request a second-model review of selected prompts and files. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
-| `sonos` | Search, queue, group, and control Sonos playback. |
 | `thermo-nuclear-code-quality-review` | Perform a strict maintainability and structure review. |
 | `thermo-nuclear-review` | Perform a deep correctness and security review. |
 | `thermos` | Run and synthesize both thermo-nuclear reviews. |
@@ -40,8 +39,8 @@ claude plugin marketplace add novotnyllc/marketplace
 claude plugin install agent-utilities@novotnyllc
 ```
 
-Some skills have narrower requirements: 1Password needs `op` and `tmux`; Sonos
-needs its CLI; profiling skills require macOS or iOS tooling; and
+Some skills have narrower requirements: 1Password needs `op` and `tmux`;
+profiling skills require macOS or iOS tooling; and
 `goal-driven-delivery` requires Compound Engineering 3.20 or newer. Oracle
 sends only the files selected for its second-model review, whose output must
 still be verified.
