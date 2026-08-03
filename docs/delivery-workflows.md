@@ -4,8 +4,9 @@ The plugin has two delivery skills with different jobs:
 
 - `delivery-director` coordinates work across lanes or machines. It does not
   implement, test, commit, or push.
-- `goal-driven-delivery` executes and hardens one host-local change or pull
-  request through the appropriate planning, review, testing, and PR gates.
+- `goal-driven-delivery` routes and executes one host-local change or pull
+  request through the appropriate CE route. Generic implementation and bug
+  fixes enter LFG by default and continue through merge and post-merge proof.
 
 `orchestrate` is not a third workflow. Its useful delegation rules are now in
 `delivery-director`, so keeping it would add another name without adding a
@@ -28,37 +29,38 @@ combine working trees.
 
 | Situation | Use | What happens |
 | --- | --- | --- |
-| One feature, bug fix, refactor, or PR on the current host | `goal-driven-delivery` | It selects and runs the appropriate single-lane delivery route. |
-| Two or more independently resumable scopes or PRs, in one project or several | `delivery-director` | It creates owned lanes, tracks dependencies, and verifies terminal evidence. Each implementation lane may use `goal-driven-delivery`. |
+| Brainstorm, plan, diagnosis, review, or local-only request | `goal-driven-delivery` | It selects the matching CE route and stops at the requested artifact. |
+| One feature, bug fix, refactor, or ship request on the current host | `goal-driven-delivery` | It routes generic implementation to LFG, then owns authorized merge and post-merge proof. |
+| Existing PR to fix, drive, or deliver | `goal-driven-delivery` | It runs the applicable CE review or babysitting route, then owns authorized merge and post-merge proof. Review-only or watch-only requests stop earlier. |
+| Two or more independently resumable scopes or PRs, in one project or several | `delivery-director` | It creates owned lanes, propagates the lane policy, tracks dependencies, and verifies terminal evidence. Each implementation lane may use `goal-driven-delivery`. |
 | Work must run on another machine | `delivery-director` | It verifies that host, places a visible task there, and lets that task use host-local subagents and `goal-driven-delivery`. |
 | Fleet setup or reconciliation without software delivery | Machine Utilities | It inventories and, with separate approval, reconciles projects, agents, plugins, skills, or authentication. |
 | A tiny known-file or documentation edit | Direct edit and targeted check | Neither delivery skill is required unless durable tracking or remote placement adds value. |
 
 You normally invoke one skill. For a local single lane, invoke
-`goal-driven-delivery`. For multi-lane or cross-host work, invoke
-`delivery-director`; the director decides which workers should invoke
-`goal-driven-delivery`.
+`goal-driven-delivery`; it routes brainstorm, plan, diagnosis, review, and
+local-only requests to their narrower CE terminal state and generic
+implementation to LFG. For multi-lane or cross-host work, invoke
+`delivery-director`; the director propagates that policy and decides which
+workers should invoke `goal-driven-delivery`.
 
 ## How they fit together
 
 ```mermaid
 flowchart TD
-    request["Delivery request"] --> decision{"Multiple lanes or another host?"}
+    request["Delivery request"] --> decision{"Multiple lanes, projects, machines, or accounts?"}
     decision -- No --> gdd["Goal Driven Delivery"]
-    gdd --> local["Plan, implement, harden, and verify one host-local lane"]
-    decision -- Yes --> director["Delivery Director"]
-    director --> crosshost{"Cross-host placement?"}
-    crosshost -- No --> localTasks["Visible task or tasks on the current host"]
-    localTasks --> localGdd["Goal Driven Delivery for each implementation lane"]
-    localGdd --> evidence["Evidence and handoff"]
-    crosshost -- Yes --> readiness["Machine Utilities readiness check"]
-    readiness --> taskA["Visible task on host A"]
-    readiness --> taskB["Visible task on host B"]
-    taskA --> gddA["Goal Driven Delivery for lane A"]
-    taskB --> gddB["Goal Driven Delivery for lane B"]
-    gddA --> evidence
-    gddB --> evidence
-    evidence --> director
+    decision -- Yes --> director["Delivery Director: coordinate and verify"]
+    director --> lanes["Owned lanes with one writer and integration owner"]
+    lanes --> gdd
+    gdd --> intent{"Requested outcome"}
+    intent -- "brainstorm / plan / diagnose / review / local-only" --> narrow["Matching CE route and requested artifact"]
+    intent -- "implement / fix / ship" --> lfg["LFG: plan through CI and review settlement"]
+    lfg --> checkpoint["Checkpoint or gh-stack chain"]
+    checkpoint --> merge["Authorized merge and post-merge proof"]
+    narrow --> evidence["Evidence and handoff"]
+    merge --> evidence
+    evidence -. delegated lane evidence .-> director
     director --> terminal{"Terminal acceptance and report verified?"}
     terminal -- No --> resumable["Keep task visible and resumable"]
     terminal -- Yes --> retitle["Retitle task ✅"]
@@ -132,6 +134,65 @@ does not require unrelated tools or machine configuration to be byte-identical.
 A repository present on disk is also not sufficient for Codex placement: the
 destination checkout must be available as the correct saved project.
 
+## Models, checkpoints, and terminal states
+
+Goal Driven Delivery, LFG, and Delivery Director use Sol High for orchestration
+by default and Sol Max for cross-cutting, release-critical, security-sensitive,
+multi-repository, or otherwise complex work. Luna handles most implementation,
+with Max effort preferred and the actual effort disclosed. Independent primary
+review uses a separate Sol High or Sol Max context by risk. Fable 5 is used only
+through a supported CE cross-model review
+path that verifies the model; otherwise the lane uses an independent Sol
+reviewer and discloses the fallback.
+
+Independent research, implementation, and review may run in parallel. Each
+mutable scope still has one canonical writer, branch, verification boundary,
+and handoff; overlapping writes, dependent stack segments, and integration
+operations serialize under named owners.
+
+The director assigns every lane a concurrency allowance and nested-agent
+ceiling from its global budget. A Goal Driven Delivery implementation lane
+starts LFG in Sol, carries the required Codex `gpt-5.6-luna` implementation
+binding to the `ce-work` seam, and prefers Max effort. Because effort is not a
+carrier field, an installed CE adapter that only supports a lower effort must
+disclose that actual effort; it may not fall back to a non-Luna implementation
+model or claim Max ran.
+
+When a writable GitHub remote exists, lane owners push useful active-branch or
+integration-branch checkpoints for resumability. A checkpoint does not open a
+PR, trigger review, or imply completion. Goal Driven Delivery establishes the
+branch and upstream before LFG, then runs a non-writing sidecar that publishes
+only clean, stable commits as the work stage advances; it stops before LFG's
+commit/push/PR stage. For a dependent stack against a GitHub upstream, use
+`gh-stack`; if its extension or skill is missing, run the authoritative
+bootstrap and verify it:
+
+```bash
+gh extension install github/gh-stack --force
+gh skill install github/gh-stack --all --agent codex --scope user --force
+gh stack --version
+gh skill list --agent codex --scope user
+```
+
+On hosts that use Claude Code, additionally install and verify its copy with
+`gh skill install github/gh-stack --all --agent claude-code --scope user --force`
+and `gh skill list --agent claude-code --scope user`. Keep unrelated PRs
+independent. The director owns integration visibility and evidence; the lane
+owns implementation and Git operations.
+
+Brainstorm-only, plan-only, diagnosis-only, review-only, and local-only work
+ends at the requested artifact or check boundary. Generic implementation,
+bug-fix, and ship requests use LFG for plan through CI and review settlement;
+Goal Driven Delivery then owns authorized merge and post-merge proof. The
+director verifies that integrated terminal evidence and does not execute the
+lane.
+
+That tail consumes any bounded follow-up watch returned by LFG, confirms an
+independent Sol review, resolves real findings, merges with the repository's
+configured strategy, verifies GitHub reports the PR merged, proves the merge
+commit is reachable from the fetched base branch, and runs or verifies the
+smallest applicable post-merge check.
+
 ## Why `orchestrate` was removed
 
 The former `orchestrate` skill said to delegate substantial work, assign
@@ -147,14 +208,20 @@ and validation to be delegated. The clearer rule is one control-plane skill,
 
 ## Examples
 
-**One local bug fix:** invoke `goal-driven-delivery`. It plans and executes the
-fix, runs the applicable quality gates, and stops locally unless shipping was
+**One local bug fix:** invoke `goal-driven-delivery`. It diagnoses as needed,
+routes implementation to LFG, runs the applicable quality gates, and continues
+through authorized merge and post-merge proof unless a narrower stop was
 requested.
 
+**A plan or brainstorm request:** invoke `goal-driven-delivery`. It uses the
+matching CE route and returns the requested artifact without starting LFG or
+creating a PR.
+
 **Frontend and API changes in separate PRs:** invoke `delivery-director`. It
-assigns one canonical writer per PR, records their dependency, and gives each
-worker its own acceptance evidence. Each worker can use
-`goal-driven-delivery`.
+assigns one canonical writer per PR, records their dependency, propagates the
+model and completion policy, and gives each worker its own acceptance evidence.
+Each worker uses `goal-driven-delivery`; dependent PRs use `gh-stack` after the
+conditional bootstrap when needed.
 
 **The same project on several nodes:** invoke `delivery-director`. It first
 uses Machine Utilities to verify project and agent readiness on each required
