@@ -61,12 +61,36 @@ flowchart TD
     narrow --> evidence["Evidence and handoff"]
     merge --> evidence
     evidence -. delegated lane evidence .-> director
+    director --> terminal{"Terminal acceptance and report verified?"}
+    terminal -- No --> resumable["Keep task visible and resumable"]
+    terminal -- Yes --> retitle["Retitle task ✅"]
+    retitle --> archive["Native archive"]
+    archive --> inspect["cleanup-codex inspect (read only)"]
+    inspect --> verified{"Runtime cleanup verified?"}
+    verified -- Yes --> closed["Close the lane"]
+    verified -- No --> unresolved["Record child archived; keep director active"]
 ```
 
 The separation is intentional. A director must remain available to coordinate,
 unblock, and monitor. A lane worker must be free to edit, test, and repair its
 owned scope. Combining those roles would make it unclear whether the active
 task is allowed to execute or must remain a control plane.
+
+Delivery Director invokes native archive only after the lane's existing
+acceptance criteria and final report are verified. It then runs read-only
+`cleanup-codex inspect` for host-wide runtime health; that inspection cannot
+attribute a residual process to the archived task. If archive succeeds but inspection fails, the child
+stays recorded as archived while the director remains active with runtime
+cleanup unresolved. An explicit `reap` or `recycle` is a separate repair and is
+allowed only after the cleanup skill proves its stronger exact ownership,
+identity, snapshot, and selection requirements.
+
+Goal Driven Delivery does not archive or mutate runtime when it stops at a
+locally verified, review-ready, PR-ready, blocked, or owner-action-required
+state. Generic tasks, `Stop`, completed turns, `SubagentStop`, idle or sidebar
+state, and completed v2 subagents without a native close or dispose operation
+remain visible and resumable. Root `SessionEnd` may perform inspection only; it
+does not prove that a saved task should be archived.
 
 ## Tasks, agents, and subagents
 

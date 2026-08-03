@@ -190,16 +190,21 @@ On each monitoring pass:
 2. Answer questions or obtain the one material user decision.
 3. Unblock dependencies, replace failed assignments, and trigger the next ready work.
 4. Demand concrete evidence for claimed completion.
-5. Verify the final report, then retitle the visible task `✅` and archive it.
+5. Verify the final report and terminal acceptance, then retitle the visible task `✅`.
+6. Invoke the host's native archive operation. Only after it succeeds, run read-only `cleanup-codex inspect` to inspect host-wide runtime health. This inspection cannot attribute a residual process to the archived task.
 
-A task is terminal only when:
+A task is eligible for native archive only when:
 
 - its acceptance criteria are met with inspectable evidence;
 - required tests, reviews, docs, and publication owned by that scope are complete;
 - implementation lanes include authorized merge and post-merge proof;
 - its report identifies artifacts and remaining dependencies;
-- the director has verified its report, retitled it `✅`, and archived it;
+- the director has verified its report and retitled it `✅`;
 - unused clean worktrees created by that task are removed; and
 - that task's owned merged, closed, or abandoned topic branches and refs are cleaned up safely.
 
-Never delete a dirty worktree or an unmerged ref without explicit authorization. Keep the director active until every scope is terminal or the user accepts a clearly evidenced blocker.
+If native archive fails, leave the task visible and resumable. If archive succeeds but inspection fails, record the child as archived, keep the director active, and leave runtime cleanup unresolved. Run `cleanup-codex reap` or `recycle` only as a separate, explicit repair after its exact ownership, identity, snapshot, and selection gates pass; archive status alone never authorizes mutation.
+
+Treat `Stop`, completed turns, `SubagentStop`, completed subagent turns, idle or sidebar state, and blocked or otherwise nonterminal work as resumable. When the active v2 subagent surface has no native close or dispose operation, leave a completed subagent resident; do not reclaim it externally. Generic tasks remain visible until the user or host archives them.
+
+Never delete a dirty worktree or an unmerged ref without explicit authorization. Keep the director active while any archived child has unresolved runtime cleanup, or until every remaining scope is archived with verification, remains visible with a clearly evidenced blocker the user accepts, or is otherwise explicitly handed off.

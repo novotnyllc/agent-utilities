@@ -11,6 +11,8 @@ Use this skill to choose the delivery route and invoke the right existing skills
 
 Own one host-local implementation or pull-request lane from planning through its requested terminal state. If the outcome needs multiple independently resumable scopes or PRs, or work placed on another host, invoke `agent-utilities:delivery-director`; each worker may then use this skill for its single owned lane. Do not duplicate the director's decomposition, host allocation, cross-lane dependency tracking, or task monitoring here.
 
+Do not archive tasks or mutate Codex runtime when returning locally verified, review-ready, PR-ready, blocked, or owner-action-required work. Leave the task visible and resumable. `Stop`, completed turns, idle or sidebar state, `SubagentStop`, and a completed v2 subagent without a native close or dispose operation are nonterminal; never turn them into cleanup authority. When this is a directed child, Delivery Director may separately archive it after terminal acceptance and report verification, followed by read-only `cleanup-codex inspect`.
+
 PR monitoring routes require Compound Engineering with `ce-babysit-pr`
 available (v3.20.0 or newer). If that skill is unavailable, stop and ask the
 user to update Compound Engineering. Do not fall back to a copied or
@@ -249,9 +251,10 @@ Pick one route.
 
 Default generic implementation and bug-fix work to LFG. Use `ce-plan` and
 `ce-work mode:return-to-caller <plan-path>` only for explicit plan/local-only
-boundaries. Use chunked hardening only when the user asks for Thermos before
-each chunk. Risky work otherwise uses the standard LFG route with stronger
-targeted verification and a final Thermos gate where applicable.
+boundaries. Neither route archives a task or mutates runtime. Use chunked
+hardening only when the user asks for Thermos before each chunk. Risky work
+otherwise uses the standard LFG route with stronger targeted verification and
+a final Thermos gate where applicable.
 
 ## Route A: Standard LFG Delivery
 
