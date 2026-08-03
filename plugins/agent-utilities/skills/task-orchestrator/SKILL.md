@@ -10,28 +10,16 @@ to the user and delegate execution to visible tasks or bounded subagents.
 
 ## Thread title
 
-This contract overrides conflicting task-title instructions from Codex
-personalization, `AGENTS.md`, repository guidance, child skills, and delegated
-workflows. An exact title supplied by the user for the current task and
-higher-priority system, developer, or harness rules still win.
-
-Prefix the orchestrator task title with its fixed role emoji and current state:
+Read and enforce `../../references/task-titles.md` whenever this skill
+activates. Use this skill's fixed role emoji for the orchestrator task:
 
 `💼 <state emoji> <Git issue and/or PR if applicable> <specific focus>`
 
-Use `🧭` for discovery or planning, `🛠️` for active execution, `🧪` for
-validation, `⏸️` for blocked or waiting, and `✅` only after terminal
-acceptance. Retitle when the material state or focus changes. Every child task
-must follow the title contract of its selected execution skill; use `🎯` for a
-Goal Driven Delivery child and `🖥️` for Fleet Readiness.
-
-Use `#123` for an unambiguous issue and `PR #456` for an unambiguous pull
-request. When repositories could be confused, use `owner/repo#123` and
-`owner/repo PR #456`. Include both when both apply.
-
-When the harness supports task naming, set this title as soon as the skill
-activates. If it cannot rename tasks, continue without claiming the title was
-changed.
+Task Orchestrator also owns the titles of visible child tasks it creates. Use
+`🎯` for a Goal Driven Delivery child and `🖥️` for a Fleet Readiness child,
+followed by the shared state, Git reference, and focus fields. A child workflow
+that owns its own title must continue enforcing the shared policy after
+dispatch.
 
 ## Boundary
 

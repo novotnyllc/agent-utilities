@@ -1,6 +1,6 @@
 {
   "name": "agent-utilities",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Agent utility skills for task orchestration, goal-driven delivery, Codex runtime inspection, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",

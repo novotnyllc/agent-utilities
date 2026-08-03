@@ -93,12 +93,15 @@ orchestration loops.
 
 ## Thread titles
 
-Each workflow uses one fixed role emoji followed by one current-state emoji,
-then any applicable Git issue or pull-request reference:
+Task Orchestrator and Goal Driven Delivery consume the shared
+`plugins/agent-utilities/references/task-titles.md` policy. They use one fixed
+role emoji followed by one current-state emoji, then any applicable Git issue
+or pull-request reference:
 
 - `💼 <state> <issue/PR if applicable> <focus>` for Task Orchestrator.
 - `🎯 <state> <issue/PR if applicable> <focus>` for Goal Driven Delivery.
-- `🖥️ <state> <issue/PR if applicable> <focus>` for Fleet Readiness.
+- `🖥️ <state> <issue/PR if applicable> <focus>` when Task Orchestrator creates
+  a Fleet Readiness child.
 
 Use `🧭` for discovery or planning, `🛠️` for active execution, `🧪` for
 testing or validation, `⏸️` for blocked or waiting, and `✅` only at the
@@ -109,6 +112,10 @@ higher-priority system, developer, or harness rules still win.
 Use `#123` and `PR #456` when the repository is unambiguous; qualify them as
 `owner/repo#123` and `owner/repo PR #456` when it is not. Include both when
 both apply.
+
+Fleet Readiness does not own task naming. When invoked by Task Orchestrator it
+uses the title assigned by the parent; when invoked directly it follows normal
+Codex personalization and repository guidance.
 
 Task Orchestrator invokes native archive only after the child's existing
 acceptance criteria and final report are verified. It then runs read-only

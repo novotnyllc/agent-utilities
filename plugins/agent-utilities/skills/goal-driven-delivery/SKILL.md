@@ -9,26 +9,14 @@ Use this skill to choose the delivery route and invoke the right existing skills
 
 ## Thread title
 
-This contract overrides conflicting task-title instructions from Codex
-personalization, `AGENTS.md`, repository guidance, child skills, and delegated
-workflows. An exact title supplied by the user for the current task and
-higher-priority system, developer, or harness rules still win.
-
-Prefix the task title with its fixed role emoji and current state:
+Read and enforce `../../references/task-titles.md` whenever this skill
+activates. Goal Driven Delivery always owns and maintains its task title,
+whether invoked directly or by Task Orchestrator. Use its fixed role emoji:
 
 `🎯 <state emoji> <Git issue and/or PR if applicable> <specific focus>`
 
-Use `🧭` for discovery or planning, `🛠️` for implementation, `🧪` for testing
-or validation, `⏸️` for blocked or waiting, and `✅` only at the route's
-requested terminal state. Retitle when the material state or focus changes,
-including when a child workflow would otherwise impose a different title.
-When the harness supports task naming, set this title as soon as the skill
-activates. If it cannot rename tasks, continue without claiming the title was
-changed.
-
-Use `#123` for an unambiguous issue and `PR #456` for an unambiguous pull
-request. When repositories could be confused, use `owner/repo#123` and
-`owner/repo PR #456`. Include both when both apply.
+Continue enforcing that title when a child workflow would otherwise impose a
+different naming convention.
 
 ## Boundary
 
