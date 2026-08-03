@@ -37,7 +37,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 
 - A1. **Operator or agent:** Requests inspection, reviews evidence, and explicitly authorizes a reap or recycle.
 - A2. **Lifecycle hook:** Performs bounded read-only inspection after a root runtime ends and records a latest-health receipt.
-- A3. **Delivery Director:** Proves a visible task terminal, archives it natively, and requests post-archive verification.
+- A3. **Task Orchestrator:** Proves a visible task terminal, archives it natively, and requests post-archive verification.
 - A4. **Codex or Claude host:** Supplies lifecycle events and native task/archive operations with host-specific capabilities.
 
 ### Requirements
@@ -64,7 +64,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 - R12. `Stop`, completed turns, `SubagentStop`, completed subagent turns, idle tasks, review-ready work, and sidebar presence are nonterminal signals and must not trigger mutation or archival.
 - R13. Root `SessionEnd` may run `inspect --hook` only. It must not archive a task or invoke `reap` or `recycle`, because a saved task can remain visible and resumable after its runtime unloads.
 - R14. Runtime cleanup and task archival must remain separate actions. Native close/archive is authoritative; cleanup verifies or repairs residual OS resources after the native action.
-- R15. Delivery Director may archive only after its existing terminal acceptance and report-verification gates, then request post-archive inspection. Goal Driven Delivery must not archive when it stops at locally verified, review-ready, PR-ready, blocked, or owner-action-required state.
+- R15. Task Orchestrator may archive only after its existing terminal acceptance and report-verification gates, then request post-archive inspection. Goal Driven Delivery must not archive when it stops at locally verified, review-ready, PR-ready, blocked, or owner-action-required state.
 - R16. Generic tasks outside terminal delivery workflows must remain visible and resumable until the user or native host archives them.
 - R17. The skill must not attempt external per-subagent reclamation when the active multi-agent surface has no close/dispose operation or when a completed agent is documented as resident and resumable.
 
@@ -96,7 +96,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
   - **Outcome:** The selected detached server is replaced without changing the GUI server or saved tasks.
   - **Covered by:** R6-R11, R16, R21
 - F4. Terminal delivery closeout
-  - **Trigger:** Delivery Director has verified all task acceptance criteria.
+  - **Trigger:** Task Orchestrator has verified all task acceptance criteria.
   - **Actors:** A3, A4, A1
   - **Steps:** Retitle terminal task; invoke native archive; inspect runtime cleanup; use explicit repair only when residual ownership is proven.
   - **Outcome:** The terminal task is archived and any provable residual runtime is reported or repaired; nonterminal tasks are unchanged.
@@ -107,7 +107,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 - AE1. **Root runtime ends while its saved task remains visible.** Given a root `SessionEnd`, when the hook runs, then it records inspection evidence only and the task remains resumable. Covers R12-R14 and R16.
 - AE2. **Completed v2 subagent remains resumable.** Given a `SubagentStop` and no exposed close operation, when the parent consumes the result, then cleanup sends no signals and does not archive either task. Covers R12 and R17.
 - AE3. **Pending delivery work is review-ready.** Given Goal Driven Delivery reaches a locally verified or PR-ready stop, when the workflow returns, then no archive or destructive cleanup occurs. Covers R15-R16.
-- AE4. **Terminal directed task is archived.** Given Delivery Director verifies terminal evidence, when it archives the task, then native archive runs before read-only cleanup verification. Covers R14-R16.
+- AE4. **Terminal directed task is archived.** Given Task Orchestrator verifies terminal evidence, when it archives the task, then native archive runs before read-only cleanup verification. Covers R14-R16.
 - AE5. **Detached Unix server and healthy GUI server coexist.** Given an explicit detached PID and a separate GUI app-server, when recycle runs, then only the detached server and its snapshotted tree are replaced and the GUI PID remains alive. Covers R6-R11.
 - AE6. **PID identity changes after snapshot.** Given a process exits and its PID is reused, when mutation revalidates identity, then it skips the PID and returns a refusal without signaling the replacement. Covers R5, R7, and R11.
 - AE7. **Replacement wins the socket race.** Given a replacement owns `app-server-control.sock` during verification, when cleanup observes ownership, then it preserves the socket and leaves all stale-socket mutation to native startup. Covers R8 and R11.
@@ -146,7 +146,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 
 ### Dependencies and Risks
 
-- Implementation must use `origin/main` at delivery-consolidation commit `1e0bc812f5dfaef689dcae106d329b9da4435f7d` or later. That landed change updates `delivery-director`, `goal-driven-delivery`, both manifests and documentation, and removes `orchestrate`; do not restore the removed skill.
+- Implementation must use `origin/main` at delivery-consolidation commit `1e0bc812f5dfaef689dcae106d329b9da4435f7d` or later. That landed change updates `delivery-director` (the former name of `task-orchestrator`), `goal-driven-delivery`, both manifests and documentation, and removes `orchestrate`; do not restore the removed skill.
 - PID and process-group reuse can target unrelated work. Every mutation needs fresh identity validation immediately before each signal.
 - Current Codex source performs explicit MCP runtime shutdown before root `SessionEnd`, and `SessionEnd` is root-only, advisory, capped at three seconds, and used on unload/archive/delete/shutdown. Hook work must stay bounded and diagnostic.
 - Current app-server keeps an unsubscribed root thread loaded for 30 idle minutes before unload. A finished turn is therefore not a runtime-end signal.
@@ -157,7 +157,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 ### Sources and Research
 
 - Agent Utilities patterns: `AGENTS.md`, `README.md`, `plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.ts`, and `plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts`.
-- Delivery consolidation baseline: `origin/main` commit `1e0bc812f5dfaef689dcae106d329b9da4435f7d` updates `delivery-director`, `goal-driven-delivery`, plugin metadata and documentation, and removes `orchestrate`.
+- Delivery consolidation baseline: `origin/main` commit `1e0bc812f5dfaef689dcae106d329b9da4435f7d` updates `delivery-director` (the former name of `task-orchestrator`), `goal-driven-delivery`, plugin metadata and documentation, and removes `orchestrate`.
 - Codex lifecycle source at commit `322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f`: [app-server thread unload and SessionEnd contract](https://github.com/openai/codex/blob/322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f/codex-rs/app-server/README.md), [session runtime shutdown order](https://github.com/openai/codex/blob/322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f/codex-rs/core/src/session/handlers.rs), [v1 close-agent subtree shutdown](https://github.com/openai/codex/blob/322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f/codex-rs/core/src/agent/control/legacy.rs), and [v2 active tool registration](https://github.com/openai/codex/blob/322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f/codex-rs/core/src/tools/spec_plan.rs).
 - Upstream lifecycle reports: [subagent MCP stacks remaining after close](https://github.com/openai/codex/issues/25015), [eager per-session MCP retention](https://github.com/openai/codex/issues/21984), [MCP manager replacement leakage](https://github.com/openai/codex/issues/18881), and [desktop task cleanup fixed by explicit MCP shutdown](https://github.com/openai/codex/issues/12491).
 - Automation boundary: [subscriber-presence API request](https://github.com/openai/codex/issues/35676) and current [plugin-bundled hook implementation](https://github.com/openai/codex/blob/322d5b96cfa5c8fd52bd83ecfdb79cd9b330205f/codex-rs/core/src/session/mod.rs).
@@ -171,7 +171,7 @@ The verified MacBook Pro incident establishes the recovery target. Detached Unix
 - KTD1. **Use one skill-local Node executable and no daemon.** Implement `cleanup-codex` with one plain `.mjs` executable plus `node:test` tests. This uses the existing executable-skill pattern while remaining compatible with Claude's Node 18 baseline. A daemon or ownership database is unnecessary. Governs R1-R11 and R18-R21. (session-settled: user-approved — chosen over a host-wide kill loop: automatic broad cleanup cannot prove task or process ownership.)
 - KTD2. **Expose `inspect`, `reap`, and `recycle` as separate authority levels.** Inspection is freely callable; reap requires a prior exact-tree snapshot; recycle requires an explicit detached PID and confirmation. One host-local mutation lock serializes reap and recycle. This makes the destructive boundary visible to both humans and agents. Governs R1-R11.
 - KTD3. **Keep hooks audit-only.** Register only root `SessionEnd` inspection. Never bind mutation to `Stop` or `SubagentStop`. SessionEnd runs after native runtime shutdown and cannot prove that a saved task should be archived. Governs R12-R19. (session-settled: user-directed — chosen over cleanup on every completed agent turn: completed turns and subagents can remain resumable.)
-- KTD4. **Native lifecycle operations remain authoritative.** Delivery Director archives only after its terminal gates; cleanup then verifies or repairs provable residue. Goal Driven Delivery and generic tasks do not archive at review-ready or idle states. Governs R12-R17. (session-settled: user-directed — chosen over archiving all apparently completed tasks: visible work may still be active or intentionally resumable.)
+- KTD4. **Native lifecycle operations remain authoritative.** Task Orchestrator archives only after its terminal gates; cleanup then verifies or repairs provable residue. Goal Driven Delivery and generic tasks do not archive at review-ready or idle states. Governs R12-R17. (session-settled: user-directed — chosen over archiving all apparently completed tasks: visible work may still be active or intentionally resumable.)
 - KTD5. **Use immutable identity evidence at every signal boundary.** Snapshot PID, PPID, PGID, executable, command identity, and start time; revalidate immediately before TERM and again before KILL. PID, name, age, and pressure alone never authorize mutation. Governs R5-R8 and R11.
 - KTD6. **Observe socket ownership but never unlink externally.** A path that looked stale before restart can be owned by the replacement by the time verification runs. Agent Utilities reports ownership/readiness and fails closed; native app-server startup alone owns locking and stale-socket mutation. Governs R8-R11. (session-settled: user-directed — chosen over external stale-socket unlink: the proven replacement race can delete a live server's socket.)
 - KTD7. **Prefer native daemon lifecycle and keep the descriptor-limit wrapper separate.** Classify a server as managed only when native daemon state attests ownership of the exact selected PID; missing or conflicting attestation refuses rather than defaulting to unmanaged cleanup. Use the native daemon restart as stop/start owner for an attested managed server because it already owns locking, binary selection, socket preparation, and readiness. Resolve an explicitly proven unmanaged restart launcher through an explicit flag, `AGENT_UTILITIES_CODEX_BIN`, the current `codex` command, or the user-local wrapper; validate its expected minimum soft limit before stopping and require the replacement to meet that limit afterward. Do not manage launchd or shared machine configuration from this plugin. Governs R7-R10 and R20. (session-settled: user-approved — chosen over plugin-installed host configuration: the wrapper is already the fleet safety fuse and cleanup addresses retained resources.)
@@ -316,9 +316,9 @@ sequenceDiagram
 - **Goal:** Integrate cleanup with the reconciled delivery architecture without changing terminal ownership or archiving generic work.
 - **Requirements:** R12-R17, R20
 - **Dependencies:** U3, U4, and `origin/main` at `1e0bc812f5dfaef689dcae106d329b9da4435f7d` or later
-- **Files:** `plugins/agent-utilities/skills/delivery-director/SKILL.md`; `plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md`; `docs/delivery-workflows.md`; `README.md`
-- **Approach:** Extend Delivery Director's existing terminal sequence with native archive followed by `cleanup-codex inspect`; allow explicit reap/recycle only when inspection proves its stronger preconditions. If archive succeeds but cleanup verification fails, keep the director active with the child recorded as archived and the cleanup lane unresolved. State that Goal Driven Delivery's review-ready exits do not archive or mutate runtime. Update the landed workflow documentation. Do not restore or integrate the removed `orchestrate` skill.
-- **Test scenarios:** Terminal directed task archives then inspects; archive succeeds but cleanup verification fails and the director remains active; blocked or nonterminal directed task stays visible; GDD review-ready and PR-ready exits do not archive; generic visible tasks remain resumable; v2 completed subagent without close capability is left resident; explicit post-archive repair refuses without ownership proof.
+- **Files:** `plugins/agent-utilities/skills/task-orchestrator/SKILL.md`; `plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md`; `docs/delivery-workflows.md`; `README.md`
+- **Approach:** Extend Task Orchestrator's existing terminal sequence with native archive followed by `cleanup-codex inspect`; allow explicit reap/recycle only when inspection proves its stronger preconditions. If archive succeeds but cleanup verification fails, keep the orchestrator active with the child recorded as archived and the cleanup lane unresolved. State that Goal Driven Delivery's review-ready exits do not archive or mutate runtime. Update the landed workflow documentation. Do not restore or integrate the removed `orchestrate` skill.
+- **Test scenarios:** Terminal directed task archives then inspects; archive succeeds but cleanup verification fails and the orchestrator remains active; blocked or nonterminal directed task stays visible; GDD review-ready and PR-ready exits do not archive; generic visible tasks remain resumable; v2 completed subagent without close capability is left resident; explicit post-archive repair refuses without ownership proof.
 - **Verification:** Manually trace each documented route against AE1-AE4; validate changed skill frontmatter; search for conflicting guidance that archives on Stop, SubagentStop, idle, or review-ready states.
 
 ---
@@ -346,7 +346,7 @@ sequenceDiagram
 - The cleanup skill defaults to read-only inspection and every destructive path fails closed on ambiguous identity or ownership.
 - No code path signals by name, age, descriptor pressure, task visibility, or nonterminal lifecycle event alone.
 - Socket ownership/readiness observation is tested, and no Agent Utilities path unlinks the control socket.
-- Delivery Director archives only after terminal proof and inspects afterward; Goal Driven Delivery and generic tasks remain non-archiving at review-ready or idle states.
+- Task Orchestrator archives only after terminal proof and inspects afterward; Goal Driven Delivery and generic tasks remain non-archiving at review-ready or idle states.
 - Implementation is based on `origin/main` at `1e0bc812f5dfaef689dcae106d329b9da4435f7d` or later, and the removed `orchestrate` skill is not reintroduced.
 - Focused tests, the existing skill-cleaner regression test, manifest parsing, skill validation, plugin validation, controlled canary, and lifecycle review pass.
 - A live canary is performed only with explicit operator approval and proves GUI/task preservation plus replacement health.
@@ -369,7 +369,7 @@ sequenceDiagram
 | Native v1 `close_agent` succeeds | Inspect residuals only | Native spawn edge closes | Native subtree shutdown owns the lifecycle. |
 | Active surface has no close/dispose | None | None | External ownership is insufficient. |
 | Goal Driven Delivery is review-ready or PR-ready | None | None | Owner or review work may remain. |
-| Delivery Director proves terminal and archives | Inspect, then explicit repair only with proof | Archive | Terminal evidence authorizes native archive first. |
+| Task Orchestrator proves terminal and archives | Inspect, then explicit repair only with proof | Archive | Terminal evidence authorizes native archive first. |
 | Explicit operator selects a detached Unix server | Guarded recycle | None | Server repair must not change saved-task state. |
 
 ### Operational refusal examples

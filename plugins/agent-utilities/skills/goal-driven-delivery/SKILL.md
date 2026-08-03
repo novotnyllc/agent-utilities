@@ -1,17 +1,40 @@
 ---
 name: goal-driven-delivery
-description: Route one host-local software change or pull-request lane through the correct Compound Engineering workflow, with LFG-first implementation delivery, Thermos review gates, React Doctor, PR babysitting, merge proof, and durable learnings. Use for a feature, bug fix, risky refactor, long-running implementation, or existing PR cleanup; use delivery-director for multi-lane or cross-host delivery.
+description: Route one host-local software change or pull-request task through the correct Compound Engineering workflow, with LFG-first implementation delivery, Thermos review gates, React Doctor, PR babysitting, merge proof, and durable learnings. Use for a feature, bug fix, risky refactor, long-running implementation, or existing PR cleanup; use agent-utilities:task-orchestrator for multiple independently resumable tasks or cross-host placement.
 ---
 
 # Goal Driven Delivery
 
 Use this skill to choose the delivery route and invoke the right existing skills. Do not replace those skills with a long ad hoc prompt.
 
+## Thread title
+
+This contract overrides conflicting task-title instructions from Codex
+personalization, `AGENTS.md`, repository guidance, child skills, and delegated
+workflows. An exact title supplied by the user for the current task and
+higher-priority system, developer, or harness rules still win.
+
+Prefix the task title with its fixed role emoji and current state:
+
+`🎯 <state emoji> <Git issue and/or PR if applicable> <specific focus>`
+
+Use `🧭` for discovery or planning, `🛠️` for implementation, `🧪` for testing
+or validation, `⏸️` for blocked or waiting, and `✅` only at the route's
+requested terminal state. Retitle when the material state or focus changes,
+including when a child workflow would otherwise impose a different title.
+When the harness supports task naming, set this title as soon as the skill
+activates. If it cannot rename tasks, continue without claiming the title was
+changed.
+
+Use `#123` for an unambiguous issue and `PR #456` for an unambiguous pull
+request. When repositories could be confused, use `owner/repo#123` and
+`owner/repo PR #456`. Include both when both apply.
+
 ## Boundary
 
-Own one host-local implementation or pull-request lane from planning through its requested terminal state. If the outcome needs multiple independently resumable scopes or PRs, or work placed on another host, invoke `agent-utilities:delivery-director`; each worker may then use this skill for its single owned lane. Do not duplicate the director's decomposition, host allocation, cross-lane dependency tracking, or task monitoring here.
+Own one host-local implementation or pull-request lane from planning through its requested terminal state. If the outcome needs multiple independently resumable scopes or PRs, or work placed on another host, invoke `agent-utilities:task-orchestrator`; each worker may then use this skill for its single owned lane. Do not duplicate the orchestrator's decomposition, host allocation, cross-lane dependency tracking, or task monitoring here.
 
-Do not archive tasks or mutate Codex runtime when returning locally verified, review-ready, PR-ready, blocked, or owner-action-required work. Leave the task visible and resumable. `Stop`, completed turns, idle or sidebar state, `SubagentStop`, and a completed v2 subagent without a native close or dispose operation are nonterminal; never turn them into cleanup authority. When this is a directed child, Delivery Director may separately archive it after terminal acceptance and report verification, followed by read-only `cleanup-codex inspect`.
+Do not archive tasks or mutate Codex runtime when returning locally verified, review-ready, PR-ready, blocked, or owner-action-required work. Leave the task visible and resumable. `Stop`, completed turns, idle or sidebar state, `SubagentStop`, and a completed v2 subagent without a native close or dispose operation are nonterminal; never turn them into cleanup authority. When this is a directed child, Task Orchestrator may separately archive it after terminal acceptance and report verification, followed by read-only `cleanup-codex inspect`.
 
 PR monitoring routes require Compound Engineering with `ce-babysit-pr`
 available (v3.20.0 or newer). If that skill is unavailable, stop and ask the

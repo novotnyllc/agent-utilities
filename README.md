@@ -14,7 +14,7 @@ they can be used across Codex and Claude Code environments.
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
 | `cleanup-codex` | Inspect macOS Codex app-server resources and perform separately authorized exact-identity cleanup. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
-| `delivery-director` | Coordinate multi-lane delivery, integration ownership, checkpoints, and terminal evidence. |
+| `task-orchestrator` | Orchestrate independently resumable tasks across projects and machines to a verified objective. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
 | `goal-driven-delivery` | Route one lane and drive generic implementation through LFG, merge, and post-merge proof. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
@@ -26,12 +26,12 @@ they can be used across Codex and Claude Code environments.
 | `thermo-nuclear-review` | Perform a deep correctness and security review. |
 | `thermos` | Run and synthesize both thermo-nuclear reviews. |
 
-Fleet-aware `remote-mac` and `ssh-doctor` skills now live in the
-`machine-utilities` plugin.
+Fleet Readiness, including fleet-aware `remote-mac` and `ssh-doctor` skills,
+lives in the `machine-utilities` plugin.
 
 ## Delivery workflows
 
-See [Delivery Director and Goal Driven Delivery](docs/delivery-workflows.md)
+See [Task Orchestrator, Goal Driven Delivery, and Fleet Readiness](docs/delivery-workflows.md)
 for the decision rules, cross-host model, and why `orchestrate` is not a third
 workflow.
 

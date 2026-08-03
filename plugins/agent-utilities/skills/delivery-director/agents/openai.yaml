@@ -1,4 +1,0 @@
-interface:
-  display_name: "Delivery Director"
-  short_description: "Direct verified multi-lane delivery"
-  default_prompt: "Use $delivery-director to direct multi-lane delivery, propagate the Goal Driven Delivery and LFG policy, and verify integration and post-merge evidence without executing lane work."
