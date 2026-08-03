@@ -28,8 +28,17 @@ test("bounds delegation and freezes expansion", () => {
 
 test("classifies capability and native gates once", () => {
   assert.match(orchestrator, /preferred carrier, model, tools, and skills/);
+  assert.match(orchestrator, /absent from the eagerly listed surface is unknown,\s+not unavailable/);
+  assert.match(orchestrator, /catalog is available, eager absence\s+remains unknown until the exact capability search completes/);
+  assert.match(orchestrator, /search that host catalog for the exact capability/);
+  assert.match(orchestrator, /call its read-only\s+discovery operation when available/);
+  assert.match(orchestrator, /exact catalog or search is\s+unavailable[\s\S]*`capability_discovery_unavailable`/);
+  assert.match(orchestrator, /required route blocks\s+because discovery cannot complete, while an explicitly optional capability\s+selects its one disclosed supported fallback/);
+  assert.match(orchestrator, /Record `capability_ready` only\s+when discovery confirms the route/);
+  assert.match(orchestrator, /tool_surface_missing[\s\S]*host_offline[\s\S]*saved_project_missing[\s\S]*task_creation_failed[\s\S]*executor_mismatch/);
+  assert.match(orchestrator, /WSL-only evidence for native Windows records\s+`native_evidence_unavailable`, not `executor_mismatch`, and cannot satisfy the\s+route/);
   assert.match(orchestrator, /choose its supported fallback once/);
-  assert.match(orchestrator, /capability required by the selected route blocks\s+dispatch/);
+  assert.match(orchestrator, /capability required by the selected route\s+blocks dispatch only after discovery proves absence, discovery is unavailable,\s+or the operation fails/);
   assert.match(orchestrator, /hosted, locally runnable\s+native, interactive-elevation, or recoverable-host/);
   assert.match(orchestrator, /never infer one class from another/);
   assert.match(orchestrator, /exact local\s+toolchain and CI parity early, once/);

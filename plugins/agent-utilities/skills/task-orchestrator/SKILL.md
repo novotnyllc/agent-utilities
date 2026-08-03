@@ -73,11 +73,27 @@ owns the host. Rebalance allowances when a child blocks or completes. Do not
 send execution back into the orchestrator.
 
 Before dispatch, verify that the preferred carrier, model, tools, and skills
-are actually exposed. Record that receipt in the ledger. If an explicitly
-optional capability is unavailable, choose its supported fallback once,
-disclose it to all affected children, and keep that choice stable unless its
-capability changes. A capability required by the selected route blocks
-dispatch instead. Never silently relabel a fallback as the preferred route.
+are actually exposed. A tool absent from the eagerly listed surface is unknown,
+not unavailable. When a deferred or lazy catalog is available, eager absence
+remains unknown until the exact capability search completes. Before fallback or
+blocking, search that host catalog for the exact capability (for example, app
+`list_projects`, `create_thread`, or `wait_threads`) and call its read-only
+discovery operation when available. If the exact catalog or search is
+unavailable, record `capability_discovery_unavailable`; a required route blocks
+because discovery cannot complete, while an explicitly optional capability
+selects its one disclosed supported fallback. Record `capability_ready` only
+when discovery confirms the route. Record failures as `tool_surface_missing`,
+`host_offline`, `saved_project_missing`, `task_creation_failed`, or
+`executor_mismatch`. WSL-only evidence for native Windows records
+`native_evidence_unavailable`, not `executor_mismatch`, and cannot satisfy the
+route. Record that receipt in the ledger.
+If an explicitly optional capability is unavailable,
+choose its supported fallback once, disclose it to all affected children, and
+keep that choice stable unless its capability changes.
+A capability required by the selected route
+blocks dispatch only after discovery proves absence, discovery is unavailable,
+or the operation fails.
+Never silently relabel a fallback as the preferred route.
 
 ## Freeze shared contracts before parallel work
 
