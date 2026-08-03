@@ -269,6 +269,27 @@ uses Machine Utilities to verify project and agent readiness on each required
 node, creates destination tasks only on ready hosts, and collects their final
 evidence before declaring the delivery complete.
 
+## Coupled delivery contracts
+
+Before parallel work, Task Orchestrator freezes every shared seam: exact paths,
+schemas and ordered fields, permissions/ACLs, ownership, acceptance checks, and
+content hashes acknowledged by both writers. It runs a thin seam canary before
+downstream expansion and freezes scope after interface convergence.
+
+Editing uses targeted tests. A component gate runs only when its content hash
+changes; one full integration gate runs after all writers freeze, and reruns
+only after a relevant shared-code fix. Independent lane reviewers reuse those
+hash-bound receipts and run focused reproductions instead of duplicating the
+full suite. Kickoff also records preferred tool/model capability, exact
+toolchain/CI parity, and whether each native gate is hosted, locally runnable,
+interactive-elevation, or recoverable-host.
+
+Goal Driven Delivery consumes the orchestrator's explicit contract. A ready
+plan with a local/return-to-caller boundary uses CE Work; unconstrained shipping
+uses LFG. Later user instructions explicitly reconcile that shipping boundary.
+Compound Engineering remains an external carrier: Agent Utilities selects it
+and supplies contracts but does not patch it.
+
 ## Source skills
 
 - [`task-orchestrator`](../plugins/agent-utilities/skills/task-orchestrator/SKILL.md)

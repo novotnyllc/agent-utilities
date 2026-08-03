@@ -52,6 +52,12 @@ skill. An explicit narrower outcome wins over the implementation default:
 8. Fix, drive, or deliver an existing PR -> use the appropriate CE review or
    babysitting route, then continue through merge and post-merge proof.
 
+Re-evaluate that boundary whenever the user gives a later instruction. Preserve
+still-valid evidence, but let an explicit later local/return-to-caller stop halt
+shipping and let a later authorized ship instruction replace an earlier local
+stop unless a higher-priority boundary still applies. Record the reconciled
+boundary before invoking another carrier.
+
 An instruction that asks to plan and implement is implementation delivery, so
 LFG owns its plan stage. LFG is the child workflow here: it must not invoke
 Goal Driven Delivery recursively, and Goal Driven Delivery must not wrap it in
@@ -154,6 +160,32 @@ gh skill list --agent claude-code --scope user
 ```
 
 Use `gh-stack` for the dependent PR chain; keep unrelated PRs independent.
+
+## Lane contract and verification cadence
+
+When directed by Task Orchestrator, acknowledge its frozen paths, schemas,
+ordered fields, permissions/ACLs, ownership, hashes, and acceptance checks
+before writing. For a standalone lane with parallel writers, establish the same
+contract locally. Keep one canonical writer per shared file and run the
+thinnest real seam canary before downstream code or fixtures expand.
+
+Use targeted checks in the edit loop. Run a component gate only when its input
+hash changes, then run one full integration gate after all writers freeze;
+rerun only evidence invalidated by a relevant shared-code fix. Preserve the
+command, toolchain, input/content hashes, result, and timestamp. Give one
+independent reviewer per frozen lane those receipts and require focused
+reproductions instead of another full-suite run when the evidence still
+matches. Existing required React, Thermos, CE review, hosted CI, and
+post-merge gates still apply; this cadence prevents duplicate runs, not gates.
+
+At kickoff, verify the preferred carrier/model and exact CI-parity toolchain
+once. Record one disclosed fallback only for an explicitly optional capability;
+a carrier or model required by the selected route blocks instead. Classify
+native gates as hosted, locally runnable native, interactive-elevation, or
+recoverable-host; one class never proves another. At seam freeze and before
+integration, surface disproportionate line growth, execution time, or fixture
+cost, then simplify or rescope. After interface convergence, freeze scope and
+reject adjacent abstractions or features unless the user explicitly reopens it.
 
 ## Evidence And Blockers
 
@@ -266,6 +298,14 @@ boundaries. Neither route archives a task or mutates runtime. Use chunked
 hardening only when the user asks for Thermos before each chunk. Risky work
 otherwise uses the standard LFG route with stronger targeted verification and
 a final Thermos gate where applicable.
+
+When invoked by Task Orchestrator, consume its explicit frozen contract rather
+than inferring one from transcript history. A ready plan with an explicit
+local/return-to-caller boundary routes through `compound-engineering:ce-work
+mode:return-to-caller`; unconstrained end-to-end implementation routes through
+`compound-engineering:lfg`. Task Orchestrator owns that routing decision and
+this lane passes the contract to the selected external carrier without
+modifying or patching the carrier.
 
 ## Route A: Standard LFG Delivery
 

@@ -72,6 +72,33 @@ the orchestrator's global budget; a child must not exceed either or assume it
 owns the host. Rebalance allowances when a child blocks or completes. Do not
 send execution back into the orchestrator.
 
+Before dispatch, verify that the preferred carrier, model, tools, and skills
+are actually exposed. Record that receipt in the ledger. If an explicitly
+optional capability is unavailable, choose its supported fallback once,
+disclose it to all affected children, and keep that choice stable unless its
+capability changes. A capability required by the selected route blocks
+dispatch instead. Never silently relabel a fallback as the preferred route.
+
+## Freeze shared contracts before parallel work
+
+For every coupled seam, name one integration owner and one canonical writer for
+each shared file. Freeze the exact paths, schemas, ordered fields,
+permissions/ACLs, ownership, and acceptance checks before parallel writers
+expand. Bind the contract to content hashes and require both sides of the seam
+to acknowledge that exact contract. Do not dispatch dependent implementation
+until both acknowledgements are recorded.
+
+Run the thinnest end-to-end seam canary immediately after the contract freezes,
+before downstream units or fixtures expand. Once the interface converges,
+freeze scope: reject adjacent abstractions, features, and cleanup unless they
+are required by the accepted contract or a later user instruction changes the
+objective.
+
+At kickoff, classify every terminal gate separately as hosted, locally runnable
+native, interactive-elevation, or recoverable-host. Name the owner and evidence
+source for each class; never infer one class from another. Verify exact local
+toolchain and CI parity early, once, then reuse the resulting cache and receipt.
+
 ## GitHub preflight, checkpoints, and stacks
 
 When a writable GitHub remote exists, require the software-delivery owner to push useful
@@ -105,9 +132,9 @@ result, while the child performs the implementation and Git operations.
 ## Direct the work
 
 1. Define the outcome, constraints, dependencies, risks, and terminal evidence.
-2. Split work into independently verifiable scopes. Assign exactly one canonical writer to each scope; make other agents reviewers or give them non-overlapping files and decisions.
+2. Split work into independently verifiable scopes. Assign exactly one canonical writer to each scope and shared file; make other agents reviewers or give them non-overlapping files and decisions.
 3. Use visible tasks for durable, user-visible, separately resumable work. Use bounded subagents for contained research, review, or execution within a task.
-4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, scope, constraints, dependencies, and required evidence. Never forward the orchestrator's transcript or conclusions.
+4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, owner, scope, title/concurrency/readiness contract, constraints, dependencies, acceptance criteria, and required evidence. For mutable seams, include exact owned files and frozen hashes. Require concise milestone output. Never forward the orchestrator's transcript or conclusions.
 5. Require child tasks to delegate their own separable work to fresh, minimal-context subagents when useful. Keep their canonical-writer boundaries explicit.
 6. Monitor all work, answer agent questions promptly from authoritative evidence, resolve ownership conflicts, and reassign stalled work. Keep directing while execution proceeds.
 7. Synthesize the child evidence and verify the combined objective. Delegate
@@ -115,11 +142,34 @@ result, while the child performs the implementation and Git operations.
    do not implement, test, commit, push, or merge in the orchestrator.
 8. When the user changes the objective, preserve still-valid evidence, revise
    or cancel only affected children, and propagate the new dependency and
-   terminal contracts without restarting unaffected work.
+   terminal contracts without restarting unaffected work. Reconcile the
+   shipping boundary explicitly: a later local/return-to-caller instruction
+   stops shipping, while a later authorized ship instruction replaces an
+   earlier local stop unless a higher-priority boundary still forbids it.
 
 Do not ask the user about reversible implementation details. Ask only when a choice materially changes direction, risk, cost, or wall-clock time.
 
 Use native task, subagent, and thread operations. Do not create orchestration or monitoring scripts unless repeated deterministic value clearly justifies them.
+
+## Test and review cadence
+
+Use targeted tests in each edit loop. Run a component gate only when that
+component's content hash changes. After all writers acknowledge the frozen
+seams, run one full integration gate; rerun it only when a relevant shared-code
+fix invalidates that evidence. Preserve each receipt with the command,
+toolchain, input/content hashes, result, and timestamp so downstream reviewers
+can reuse rather than recreate it.
+
+Assign one independent reviewer per frozen lane. Give the reviewer the frozen
+contract and prior hash-bound receipts; require focused reproductions for risks
+or changed code, not another full-suite run when the integration receipt still
+matches. The integration owner resolves cross-lane findings and decides which
+evidence was invalidated.
+
+At each seam freeze and before the integration gate, compare line growth,
+execution time, and fixture cost with the plan. Surface disproportionate growth
+before accepting more implementation; do not let a large solution accumulate
+silently.
 
 ## Create tasks with terminal goals
 
