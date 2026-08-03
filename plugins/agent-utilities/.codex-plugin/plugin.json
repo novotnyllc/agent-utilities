@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
   "version": "0.4.2",
-  "description": "Agent utility skills for delivery orchestration, browser control, 1Password, Oracle, native profiling, and CLI design.",
+  "description": "Agent utility skills for intent-routed delivery, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -25,8 +25,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Agent Utilities",
-    "shortDescription": "Delivery, orchestration, browser, 1Password, Oracle, profiling, and CLI utility skills",
-    "longDescription": "Agent Utilities bundles adapted operational skills for goal-driven delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "shortDescription": "Intent-routed delivery, orchestration, browser, 1Password, Oracle, profiling, and CLI utility skills",
+    "longDescription": "Agent Utilities bundles adapted operational skills for intent-routed, LFG-first delivery, multi-agent orchestration, browser use, CLI design, 1Password CLI workflows, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
@@ -39,7 +39,7 @@
     "termsOfServiceURL": "https://github.com/novotnyllc/agent-utilities",
     "defaultPrompt": [
       "Use agent utilities to inspect browser state and continue the task.",
-      "Use goal-driven delivery and Compound Engineering to move this PR toward merge readiness.",
+      "Use goal-driven delivery and Compound Engineering to route implementation through LFG, merge, and post-merge proof.",
       "Profile this native app with Instruments/xctrace and summarize hotspots."
     ],
     "brandColor": "#0F766E"

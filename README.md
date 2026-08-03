@@ -13,9 +13,9 @@ they can be used across Codex and Claude Code environments.
 | --- | --- |
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
-| `delivery-director` | Coordinate delivery across tasks, hosts, pull requests, and dependencies. |
+| `delivery-director` | Coordinate multi-lane delivery, integration ownership, checkpoints, and terminal evidence. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
-| `goal-driven-delivery` | Drive implementation through planning, review, validation, and PR readiness. |
+| `goal-driven-delivery` | Route one lane and drive generic implementation through LFG, merge, and post-merge proof. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |

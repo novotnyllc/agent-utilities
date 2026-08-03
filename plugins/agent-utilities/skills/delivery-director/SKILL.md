@@ -13,6 +13,64 @@ Use this skill when delivery has two or more independently resumable scopes or m
 
 The director is scoped to the requested delivery outcome, not to one project. It may coordinate lanes within one project or across several projects and repositories. For cross-project delivery, give each project an explicit integration and baseline owner. Give each mutable lane one canonical writer and its own branch or PR, validation boundary, and handoff; keep shared integration files in one named lane. Record dependencies between projects without merging their ownership.
 
+## Propagate the lane policy
+
+The director owns orchestration and the global concurrency budget. Use Sol High
+for director orchestration by default and Sol Max for cross-cutting,
+release-critical, security-sensitive, multi-repository, or otherwise complex
+coordination. A delegated implementation lane invokes
+`agent-utilities:goal-driven-delivery`, which routes explicit brainstorm,
+plan, diagnosis, review, and local-only outcomes to their narrower CE routes
+and defaults generic implementation or bug-fix delivery to LFG.
+
+- Assign most implementation work to Luna. Prefer Max effort and require the
+  lane to disclose the actual effort used.
+- Assign independent primary review to a separate Sol High or Sol Max context
+  by risk.
+- Use Fable 5 only through a supported CE cross-model review path that verifies
+  the model; otherwise use an independent Sol reviewer and disclose the
+  fallback.
+- Run independent research, implementation, and review in parallel when safe.
+  Keep one canonical writer per mutable scope and serialize overlapping writes,
+  dependent stack segments, and integration operations.
+
+Pass this lane policy, the named integration owner, the checkpoint rule, and
+the terminal policy to every delegated lane. Allocate each lane an explicit
+concurrency allowance and nested-subagent ceiling from the director's global
+budget; a lane must not exceed either or assume it owns the host. Rebalance the
+allowances when a lane blocks or completes. Do not send execution back into the
+director; each lane owns its own Goal Driven Delivery handoff.
+
+## GitHub preflight, checkpoints, and stacks
+
+When a writable GitHub remote exists, require the lane owner to push useful
+active-branch or integration-branch checkpoints so work is resumable across
+agents and machines. A checkpoint is not a review-ready branch, open PR, green
+CI result, merge, or completion signal. The director records the checkpoint
+evidence but never pushes it itself.
+
+When dependent delivery is selected against a GitHub upstream, use `gh-stack`.
+If its GitHub extension or companion skill is missing, install both and verify
+the capability before dispatching, without prompting:
+
+```bash
+gh extension install github/gh-stack --force
+gh skill install github/gh-stack --all --agent codex --scope user --force
+gh stack --version
+gh skill list --agent codex --scope user
+```
+
+On a host that also runs Claude Code, additionally run and verify:
+
+```bash
+gh skill install github/gh-stack --all --agent claude-code --scope user --force
+gh skill list --agent claude-code --scope user
+```
+
+The owned lane uses `gh-stack` for the dependent PR chain; unrelated PRs stay
+independent. The director retains integration ownership and verifies the
+result, while the lane performs the implementation and Git operations.
+
 ## Direct the work
 
 1. Define the outcome, constraints, dependencies, risks, and terminal evidence.
@@ -21,7 +79,9 @@ The director is scoped to the requested delivery outcome, not to one project. It
 4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, scope, constraints, dependencies, and required evidence. Never forward the director's transcript or conclusions.
 5. Require child tasks to delegate their own separable work to fresh, minimal-context subagents when useful. Keep their canonical-writer boundaries explicit.
 6. Monitor all work, answer agent questions promptly from authoritative evidence, resolve ownership conflicts, and reassign stalled work. Keep directing while execution proceeds.
-7. Integrate only after each scope supplies its required evidence. Delegate integration, review, and validation; do not perform them in the director.
+7. Integrate only after each scope supplies its required evidence. Delegate
+   integration, review, and validation to the named owners; do not perform
+   implementation, testing, commits, pushes, or merges in the director.
 
 Do not ask the user about reversible implementation details. Ask only when a choice materially changes direction, risk, cost, or wall-clock time.
 
@@ -46,6 +106,7 @@ Use this prompt shape. When persistent goal tracking is both useful and supporte
 
 Title: <status emoji> <PR/issue if any> <specific description>
 Assignment: <verified host; model class; effort; brief rationale>
+Concurrency: <global budget; this lane's allowance; nested-subagent ceiling>
 Readiness: <project identity/baseline; runtime/plugin/skill evidence>
 Objective: <single owned result>
 Scope: <owned project/repository, files, system, PR, or decision>
@@ -69,8 +130,10 @@ Choose per task from complexity, risk, budget, required quality, and wall-clock 
 | Work | Model class | Effort |
 |---|---|---|
 | Lookup, inventory, mechanical bounded edit | Fast/economical | Low |
-| Routine implementation, docs, focused tests | Balanced | Medium |
-| Cross-cutting change, ambiguous debugging, integration | Strong | High |
+| Most implementation work in an owned lane | Luna required | Max preferred; disclose actual effort |
+| Director or Goal Driven Delivery orchestration | Sol | High by default; Max for complex coordination |
+| Independent primary review | Separate Sol | High or Max by risk |
+| Supported cross-model review | Fable 5 when the CE path verifies it; otherwise separate Sol review | High or xhigh |
 | Security, data loss, release-critical design, final adversarial review | Strongest available | High or xhigh |
 
 Prefer multiple cheap independent reviews over one expensive agent only when scopes do not overlap and synthesis has a named owner. Do not spend high effort on deterministic mechanical work.
@@ -105,10 +168,19 @@ Never dispatch first and discover required capabilities later. Reassign when a h
 - Record dependencies explicitly. A downstream task may wait only on the specific artifact it consumes.
 - Prevent concurrent writers to the same scope. Transfer ownership explicitly before reassignment.
 - Let reviewers inspect evidence or diffs without becoming an unannounced second writer.
+- Keep integration branches and checkpoint pushes under their named owners;
+  do not open a PR merely because a checkpoint is available.
 
 ## Monitor to terminal completion
 
 Maintain a compact ledger for every task: owner, host, scope, status, dependency, last evidence, next action, and terminal criteria.
+
+Planning, brainstorming, diagnosis-only, and review-only lanes are terminal at
+their requested artifact. Implementation delivery is terminal only after the
+lane's LFG handoff has settled review and CI, the authorized merge has
+completed, and post-merge verification proves the integrated outcome. The
+director verifies that evidence and the integrated result; it never performs
+the lane's execution.
 
 In user-facing updates, link to each task when possible; otherwise use its stable title. Do not substitute raw thread IDs for readable task names unless an exact ID is needed for troubleshooting or handoff.
 
@@ -124,6 +196,7 @@ A task is terminal only when:
 
 - its acceptance criteria are met with inspectable evidence;
 - required tests, reviews, docs, and publication owned by that scope are complete;
+- implementation lanes include authorized merge and post-merge proof;
 - its report identifies artifacts and remaining dependencies;
 - the director has verified its report, retitled it `✅`, and archived it;
 - unused clean worktrees created by that task are removed; and
