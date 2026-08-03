@@ -3053,10 +3053,10 @@ test("plugin packaging exposes one Codex SessionEnd hook and no Claude hook", ()
     "utf8",
   ));
 
-  assert.equal(codexManifest.version, "0.4.3");
+  assert.match(codexManifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(codexManifest.hooks, "./codex/hooks.json");
   assert.ok(codexManifest.interface.defaultPrompt.length <= 3);
-  assert.equal(claudeManifest.version, "0.4.3");
+  assert.equal(claudeManifest.version, codexManifest.version);
   assert.ok(claudeManifest.skills.includes("./skills/cleanup-codex"));
   assert.equal("hooks" in claudeManifest, false);
   assert.equal(fs.existsSync(path.join(PLUGIN_DIRECTORY, "hooks")), false);

@@ -31,6 +31,7 @@ node --experimental-strip-types scripts/skill-cleaner.ts --no-live --no-logs
 node --experimental-strip-types scripts/skill-cleaner.ts --months 6 --max-log-mb 800 --deep-logs
 node --experimental-strip-types scripts/skill-cleaner.ts --context-tokens 272000 --budget-percent 2 --no-logs
 node --experimental-strip-types scripts/skill-cleaner.ts --root /path/to/skills --no-logs
+node --experimental-strip-types scripts/skill-cleaner.ts --root /path/to/skills --root-only --no-logs
 ```
 
 2. Read the report in this order:
@@ -55,6 +56,7 @@ node --experimental-strip-types scripts/skill-cleaner.ts --root /path/to/skills 
 - It follows Codex `core-skills/src/render.rs`: 2% of raw `context_window`, token cost `ceil(utf8_bytes / 4)`, then full descriptions -> equal description truncation -> omitted minimum lines. Alias-table line cost is included.
 - It reads `~/.codex/models_cache.json` for GPT-5.5 `context_window`; fallback is 272,000 tokens and 2%.
 - It scans only normal Codex/plugin/repo skill roots by default. Extra folders such as Dropbox archives are included only with `--root <path>`.
+- `--root-only` requires at least one `--root <path>`, disables live inventory, and scans only the supplied roots.
 - It realpath-dedupes roots, so symlinked roots do not create false duplicates.
 - For duplicate names, it reports description/body similarity and suggests deletion candidates only when bodies are near copies. Keep priority defaults to direct Codex system skills, then direct Codex skills, then plugin skills, then personal/repo copies.
 - It scans `~/.codex/history.jsonl` and recent `~/.codex/sessions/**/*.jsonl` by default. Add `--deep-logs` for archived sessions and optional extra log roots supplied through `AGENT_UTILITIES_LOG_ROOTS`.

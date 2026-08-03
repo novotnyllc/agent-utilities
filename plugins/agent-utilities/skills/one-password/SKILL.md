@@ -11,6 +11,7 @@ Follow the official CLI get-started steps. Don't guess install commands.
 ## References
 
 - Official docs: https://developer.1password.com/docs/cli/get-started/
+- Official app-integration controls: https://developer.1password.com/docs/cli/app-integration/
 - `references/get-started.md` (install + app integration + sign-in flow)
 - `references/cli-examples.md` (real `op` examples, including safe item create/edit patterns)
 
@@ -30,7 +31,8 @@ Follow the official CLI get-started steps. Don't guess install commands.
 
 - Use `${AGENT_UTILITIES_OP_ACCOUNT:-${OP_ACCOUNT:-my.1password.com}}` as the default account hint when the user has not specified one.
 - Do not silently switch to another account unless the user asks or the requested item URI includes that account.
-- Pass `--account "$ACCOUNT"` on every `op` command when storing or reading secrets. Do not rely on ambient account selection.
+- On the interactive desktop path, pass `--account "$ACCOUNT"` on every `op` command when storing or reading secrets. Do not rely on ambient account selection.
+- On the service-account path, never use `op signin` or `--account`; either can route through desktop integration instead of the supplied token.
 - `op account list` is metadata-only, but still must run inside tmux. Use it to confirm account names when routing is unclear.
 - `op signin --account "$ACCOUNT"` can return status 0 with no useful output and still not make a later shell signed in. Prefer doing sign-in, create/edit/get, and verification in the same tmux shell.
 
@@ -41,7 +43,8 @@ Follow the official CLI get-started steps. Don't guess install commands.
 - A service-account token may be exported as `OP_SERVICE_ACCOUNT_TOKEN`. Treat it as scoped and least-privilege.
 - Service-account vaults must be explicit. Use the user-provided vault or `${AGENT_UTILITIES_OP_VAULT}`; do not guess.
 - If the token is not already exported, not applicable, or cannot read the exact known item/field required, ask the user before using the desktop-app 1Password flow below.
-- Export/pass it only for the single command that needs it: `OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" op item get "<known item>" --vault "$VAULT" ...`.
+- Export/pass it only for the single command that needs it. Set `OP_LOAD_DESKTOP_APP_SETTINGS=false` and `OP_BIOMETRIC_UNLOCK_ENABLED=false` so a non-interactive token read cannot fall through to desktop integration:
+  `OP_LOAD_DESKTOP_APP_SETTINGS=false OP_BIOMETRIC_UNLOCK_ENABLED=false OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" op item get "<known item>" --vault "$VAULT" ... </dev/null`.
 - Service-account `op` reads require an explicit vault query; omitting `--vault "$VAULT"` fails even when the token is valid.
 - Keep the tmux rule: every `op` command, including service-account reads, still runs inside one named tmux session.
 - Do not enumerate vaults/items with service accounts by default. If the user explicitly asks to search, gives a screenshot/listing, or gives only a fuzzy item name, use the safe metadata search below before asking.
@@ -123,8 +126,10 @@ ITEM_TITLE="Known API Credential Item"
 FIELD_LABEL="api_token"
 VAULT="${AGENT_UTILITIES_OP_VAULT:?Set AGENT_UTILITIES_OP_VAULT or provide an explicit vault}"
 value="$(
-  OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" \
-    op item get "$ITEM_TITLE" --vault "$VAULT" --format json |
+  OP_LOAD_DESKTOP_APP_SETTINGS=false \
+    OP_BIOMETRIC_UNLOCK_ENABLED=false \
+    OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" \
+    op item get "$ITEM_TITLE" --vault "$VAULT" --format json </dev/null |
     FIELD_LABEL="$FIELD_LABEL" node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{const item=JSON.parse(s); const f=(item.fields||[]).find(x=>x.label===process.env.FIELD_LABEL); if(!f?.value) process.exit(2); process.stdout.write(f.value);})'
 )"
 echo "field_len:${#value}"
@@ -148,8 +153,10 @@ set -euo pipefail
 set +x
 VAULT="${AGENT_UTILITIES_OP_VAULT:?Set AGENT_UTILITIES_OP_VAULT or provide an explicit vault}"
 QUERY="minimax"
-OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" \
-  op item list --vault "$VAULT" --format json |
+OP_LOAD_DESKTOP_APP_SETTINGS=false \
+  OP_BIOMETRIC_UNLOCK_ENABLED=false \
+  OP_SERVICE_ACCOUNT_TOKEN="$OP_SERVICE_ACCOUNT_TOKEN" \
+  op item list --vault "$VAULT" --format json </dev/null |
   QUERY="$QUERY" VAULT="$VAULT" node -e '
 let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
   const q=process.env.QUERY.toLowerCase();
@@ -190,6 +197,9 @@ tmux -S "$SOCKET" send-keys -t "$SESSION" -- "bash /tmp/op-debug.sh; rm -f /tmp/
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.
+- Every service-account command sets `OP_LOAD_DESKTOP_APP_SETTINGS=false` and `OP_BIOMETRIC_UNLOCK_ENABLED=false`, passes the token explicitly, and keeps stdin off the pane TTY.
+- Do not run `op` from unguarded shell-completion setup; that can trigger desktop prompts on every shell start.
+- If repeated prompts persist after the originating command stops, check for an `op daemon`; terminate it only after proving no other `op` task is active.
 - Prefer `op run` / `op inject` over writing secrets to disk.
 - If sign-in without app integration is needed, use `op account add`.
 - If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.

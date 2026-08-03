@@ -77,7 +77,8 @@ const noLogs = args.has("--no-logs");
 const deepLogs = args.has("--deep-logs");
 const json = args.has("--json");
 const includeAll = args.has("--all");
-const noLive = args.has("--no-live");
+const rootOnly = args.has("--root-only");
+const noLive = args.has("--no-live") || rootOnly;
 const model = argValue("--model", "gpt-5.5");
 const budgetPercent = Number(argValue("--budget-percent", "2"));
 const contextTokensOverride = argValue("--context-tokens", "");
@@ -86,7 +87,10 @@ const maxLogBytes = Number(argValue("--max-log-mb", "300")) * 1024 * 1024;
 const cutoffMs = Date.now() - Math.max(0, months) * 31 * 24 * 60 * 60 * 1000;
 const extraRoots = process.argv
   .slice(2)
-  .flatMap((arg, index, all) => (arg === "--root" && all[index + 1] ? [all[index + 1]] : []));
+  .flatMap((arg, index, all) => {
+    const value = all[index + 1];
+    return arg === "--root" && value && !value.startsWith("--") ? [value] : [];
+  });
 
 function expandHome(input: string): string {
   return input.replace(/^~(?=$|\/)/, home);
@@ -507,29 +511,35 @@ function configState(): {
   return { disabledPaths, disabledNames, disabledPlugins };
 }
 
-function discoverRoots(): string[] {
+export function discoverRoots(
+  providedRoots = extraRoots,
+  exclusive = rootOnly,
+): string[] {
   const rootsByRealPath = new Map<string, string>();
   const projectRoots = (process.env.AGENT_UTILITIES_PROJECT_DIRS ?? `${home}/dev:${home}/Projects`)
     .split(path.delimiter)
     .map(expandHome)
     .filter(Boolean);
-  const aggregateRoots = [
-    scriptSkillRoot,
-    path.join(home, ".codex/skills"),
-    path.join(home, ".codex/plugins/cache"),
-    path.join(home, ".agents/skills"),
-    path.join(home, ".claude/skills"),
-    ...projectRoots.map((root) => path.join(root, "agent-scripts/skills")),
-    ...projectRoots.map((root) => path.join(root, "agent-utilities/plugins/agent-utilities/skills")),
-    ...extraRoots.map(expandHome),
-  ];
+  const suppliedRoots = providedRoots.map(expandHome);
+  const aggregateRoots = exclusive
+    ? suppliedRoots
+    : [
+        scriptSkillRoot,
+        path.join(home, ".codex/skills"),
+        path.join(home, ".codex/plugins/cache"),
+        path.join(home, ".agents/skills"),
+        path.join(home, ".claude/skills"),
+        ...projectRoots.map((root) => path.join(root, "agent-scripts/skills")),
+        ...projectRoots.map((root) => path.join(root, "agent-utilities/plugins/agent-utilities/skills")),
+        ...suppliedRoots,
+      ];
   aggregateRoots.forEach((root) => {
     if (!exists(root)) return;
     const real = fs.realpathSync(root);
     const current = rootsByRealPath.get(real);
     if (!current || root.length < current.length) rootsByRealPath.set(real, root);
   });
-  for (const projects of projectRoots) {
+  for (const projects of exclusive ? [] : projectRoots) {
     if (!exists(projects)) continue;
     for (const entry of fs.readdirSync(projects, { withFileTypes: true })) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
@@ -1223,6 +1233,11 @@ function render(
 }
 
 function main(): void {
+  if (rootOnly && extraRoots.length === 0) {
+    console.error("skill-cleaner: --root-only requires at least one --root <path>");
+    process.exitCode = 2;
+    return;
+  }
   const skills = discoverSkills();
   const live = livePrompt();
   const liveSkills = live ? parseLiveSkills(live) : [];

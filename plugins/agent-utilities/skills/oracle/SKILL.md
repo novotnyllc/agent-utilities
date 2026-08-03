@@ -7,14 +7,21 @@ description: "Oracle second-model review: bundle prompts/files, debug, refactor,
 
 Oracle bundles your prompt + selected files into one “one-shot” request so another model can answer with real repo context (API or browser automation). Treat outputs as advisory: verify against the codebase + tests.
 
-## Main use case (browser, advanced reasoning model)
+## Main use case (browser, GPT-5.6 Pro)
 
 Default workflow here: `--engine browser` with the user's preferred signed-in reasoning model. This is the “human in the loop” path: it can take ~10 minutes to ~1 hour; expect a stored session you can reattach to.
 
 Recommended defaults:
 - Engine: browser (`--engine browser`)
-- Model: `${ORACLE_MODEL:-gpt-5.5-pro}` or a picker label supplied by the user
+- Browser Pro: `${ORACLE_MODEL:-gpt-5-pro}` selects ChatGPT's current Pro picker target (GPT-5.6 Sol Pro when available)
+- Browser base Sol: `--model gpt-5.6-sol --browser-thinking-time heavy`
+- API Pro: `--model gpt-5.6-sol --reasoning-mode pro --reasoning-effort max`
 - Attachments: directories/globs + excludes; avoid secrets.
+
+Oracle 0.17.0 or newer is required for GPT-5.6 Pro. Pro is not a separate API
+model slug: `gpt-5.6-pro` and `gpt-5.6-sol-pro` are invalid. Browser mode uses
+the `gpt-5-pro` picker alias; API mode uses `gpt-5.6-sol` plus the Pro reasoning
+flags above. GPT-5.6 availability remains account-dependent.
 
 ## Golden path (fast + reliable)
 
@@ -26,7 +33,7 @@ Recommended defaults:
 ## Commands (preferred)
 
 - Show help (once/session):
-  - `${ORACLE_BIN:-oracle} --help`
+  - `${ORACLE_BIN:-oracle} --help --verbose`
 
 - Preview (no tokens):
   - `${ORACLE_BIN:-oracle} --dry-run summary -p "<task>" --file "src/**" --file "!**/*.test.*"`
@@ -40,7 +47,10 @@ Recommended defaults:
   - Use when CLI startup or time-to-first-output feels slow; inspect `first-output` and `exit`.
 
 - Browser run (main path; long-running is normal):
-  - `${ORACLE_BIN:-oracle} --engine browser --model "${ORACLE_MODEL:-gpt-5.5-pro}" -p "<task>" --file "src/**"`
+  - `${ORACLE_BIN:-oracle} --engine browser --model "${ORACLE_MODEL:-gpt-5-pro}" -p "<task>" --file "src/**"`
+
+- API Pro run (only after explicit cost consent):
+  - `${ORACLE_BIN:-oracle} --engine api --model gpt-5.6-sol --reasoning-mode pro --reasoning-effort max -p "<task>" --file "src/**"`
 
 - Manual paste fallback (assemble bundle, copy to clipboard):
   - `${ORACLE_BIN:-oracle} --render --copy -p "<task>" --file "src/**"`
@@ -75,6 +85,7 @@ Recommended defaults:
 ## Engines (API vs browser)
 
 - Auto-pick: uses `api` when `OPENAI_API_KEY` is set, otherwise `browser`.
+- GPT-5.6 Pro selection is surface-specific: browser uses `gpt-5-pro`; API uses `gpt-5.6-sol --reasoning-mode pro`.
 - Browser engine supports GPT + Gemini only; use `--engine api` for Claude/Grok/Codex or multi-model runs.
 - **API runs require explicit user consent** before starting because they incur usage costs.
 - Browser attachments:
@@ -134,3 +145,6 @@ If you need to reproduce the same context later, re-run with the same prompt + `
 
 - Don’t attach secrets by default (`.env`, key files, auth tokens). Redact aggressively; share only what’s required.
 - Prefer “just enough context”: fewer files + better prompt beats whole-repo dumps.
+
+Adapted from `steipete/oracle` `skills/oracle` at
+`0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851` (MIT).

@@ -9,16 +9,16 @@ The GitHub Agentic Workflow source in
 Copilot engine, preserves local adaptations, and opens a draft pull request
 only when an imported path changes.
 
-The initial skill copies came from:
+The agent-scripts imports were most recently reviewed against:
 
 - Repository: `https://github.com/steipete/agent-scripts`
-- Initial commit: `6e512e6fe0546471dfce5f48c9896c6ddce669cd`
+- Commit: `c46ea65b6323e8a2b6f441f8b6449ae731bc8f81`
 - License: MIT
 
 The `oracle` skill was refreshed from:
 
 - Repository: `https://github.com/steipete/oracle`
-- Commit: `bfa8f1de42669f151933afe9fe5843ecdf9933d2`
+- Commit: `0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851`
 - Path: `skills/oracle`
 
 ## Copied Skills
@@ -44,3 +44,5 @@ The `oracle` skill was refreshed from:
   configuration knobs.
 - Updated `skill-cleaner` to discover the installed plugin root and common
   project roots without depending on one `~/Projects` layout.
+- Retained portable browser and 1Password routing while adapting generic
+  service-account prompt isolation and root-only skill auditing.
