@@ -1,6 +1,6 @@
 {
   "name": "agent-utilities",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Agent utility skills for delivery orchestration, browser control, 1Password, Oracle, native profiling, and CLI design.",
   "author": {
     "name": "Claire Novotny LLC",
@@ -31,7 +31,6 @@
     "./skills/instruments-profiling",
     "./skills/native-app-performance",
     "./skills/one-password",
-    "./skills/orchestrate",
     "./skills/oracle",
     "./skills/skill-cleaner",
     "./skills/thermo-nuclear-code-quality-review",

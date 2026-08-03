@@ -21,13 +21,6 @@ The `oracle` skill was refreshed from:
 - Commit: `bfa8f1de42669f151933afe9fe5843ecdf9933d2`
 - Path: `skills/oracle`
 
-The `orchestrate` skill was copied and adapted from:
-
-- Repository: `https://github.com/provencher/codex-skills`
-- Commit: `8aa6c42b73781c905c55f8a1253a18127079ac21`
-- Path: `orchestrate`
-- License: MIT
-
 ## Copied Skills
 
 | Local skill | Upstream path |
@@ -38,7 +31,6 @@ The `orchestrate` skill was copied and adapted from:
 | `instruments-profiling` | `skills/instruments-profiling` |
 | `native-app-performance` | `skills/native-app-performance` |
 | `one-password` | `skills/one-password` |
-| `orchestrate` | `orchestrate` |
 | `oracle` | `skills/oracle` |
 | `skill-cleaner` | `skills/skill-cleaner` |
 
@@ -52,5 +44,3 @@ The `orchestrate` skill was copied and adapted from:
   configuration knobs.
 - Updated `skill-cleaner` to discover the installed plugin root and common
   project roots without depending on one `~/Projects` layout.
-- Added a Claude Code branch to `orchestrate` while preserving the upstream
-  Codex delegation settings.

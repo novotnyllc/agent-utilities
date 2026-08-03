@@ -1,4 +1,4 @@
 interface:
   display_name: "Delivery Director"
-  short_description: "Direct complex delivery through delegated tasks"
-  default_prompt: "Use $delivery-director to direct this delivery through bounded tasks with evidence-based completion."
+  short_description: "Direct verified multi-host delivery lanes"
+  default_prompt: "Use $delivery-director to direct this multi-lane delivery through verified host tasks and bounded host-local subagents."

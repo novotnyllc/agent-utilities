@@ -59,14 +59,6 @@
       "license": "MIT"
     },
     {
-      "name": "orchestrate",
-      "repository": "https://github.com/provencher/codex-skills.git",
-      "path": "orchestrate",
-      "commit": "8aa6c42b73781c905c55f8a1253a18127079ac21",
-      "track": "refs/heads/main",
-      "license": "MIT"
-    },
-    {
       "name": "skill-cleaner",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/skill-cleaner",

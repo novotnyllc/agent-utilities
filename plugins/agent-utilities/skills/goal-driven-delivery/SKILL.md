@@ -1,11 +1,15 @@
 ---
 name: goal-driven-delivery
-description: Orchestrate higher-quality first-pass software delivery with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR babysitting, and durable learnings. Use when starting a feature, bug fix, risky refactor, long-running implementation, existing PR cleanup, or any task where the goal is to reduce agent/CI/review churn and reach local or PR readiness.
+description: Route and harden one host-local software change or pull-request lane with goal-mode execution, Compound Engineering, Thermos review gates, RepoPromptCE context building, React Doctor, PR babysitting, and durable learnings. Use for a feature, bug fix, risky refactor, long-running implementation, or existing PR cleanup; use delivery-director for multi-lane or cross-host delivery.
 ---
 
 # Goal Driven Delivery
 
 Use this skill to choose the delivery route and invoke the right existing skills. Do not replace those skills with a long ad hoc prompt.
+
+## Boundary
+
+Own one host-local implementation or pull-request lane from planning through its requested terminal state. If the outcome needs multiple independently resumable scopes or PRs, or work placed on another host, invoke `agent-utilities:delivery-director`; each worker may then use this skill for its single owned lane. Do not duplicate the director's decomposition, host allocation, cross-lane dependency tracking, or task monitoring here.
 
 PR monitoring routes require Compound Engineering with `ce-babysit-pr`
 available (v3.20.0 or newer). If that skill is unavailable, stop and ask the
@@ -228,6 +232,6 @@ Stop and fix before PR when any of these are true:
 - The implementation changes a public/API contract without a test at the boundary.
 - The plan or PR cannot name the exact verification surface.
 - A React/Next UI diff has not passed the React Gate above.
-- A non-trivial chunk skipped the Thermos gate.
+- Risky work skipped its final Thermos gate, or an explicitly chunk-hardened route skipped a chunk gate.
 
 When any rule trips, fix it in the chunk before moving on.

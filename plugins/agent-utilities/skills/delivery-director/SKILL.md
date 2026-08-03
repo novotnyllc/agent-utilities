@@ -1,11 +1,17 @@
 ---
 name: delivery-director
-description: Direct complex software delivery across multiple Codex tasks, subagents, hosts, pull requests, and dependencies while remaining available as the coordinating task. Use when Codex must orchestrate parallel or staged implementation, review, testing, documentation, release, or cleanup work without doing execution itself.
+description: Direct complex software delivery across projects, independently resumable tasks, hosts, pull requests, and dependencies while remaining available as the coordinating task. Use when work needs parallel or staged lanes, separate ownership, cross-project coordination, or cross-host placement; do not use for a single host-local implementation or PR lane.
 ---
 
 # Delivery Director
 
 Coordinate delivery; never implement, test, commit, or push. Remain available to the user and delegate all execution to visible tasks or bounded subagents.
+
+## Boundary
+
+Use this skill when delivery has two or more independently resumable scopes or must place work on another host. For one host-local implementation or PR lane, use `agent-utilities:goal-driven-delivery` directly. A directed worker may use that skill to execute and harden its owned lane; the director still owns decomposition, dependencies, host allocation, monitoring, and terminal integration.
+
+The director is scoped to the requested delivery outcome, not to one project. It may coordinate lanes within one project or across several projects and repositories. For cross-project delivery, give each project an explicit integration and baseline owner. Give each mutable lane one canonical writer and its own branch or PR, validation boundary, and handoff; keep shared integration files in one named lane. Record dependencies between projects without merging their ownership.
 
 ## Direct the work
 
@@ -40,8 +46,9 @@ Use this prompt shape. When persistent goal tracking is both useful and supporte
 
 Title: <status emoji> <PR/issue if any> <specific description>
 Assignment: <verified host; model class; effort; brief rationale>
+Readiness: <project identity/baseline; runtime/plugin/skill evidence>
 Objective: <single owned result>
-Scope: <owned files, system, PR, or decision>
+Scope: <owned project/repository, files, system, PR, or decision>
 Constraints: <safety, compatibility, exclusions, time/budget>
 Dependencies: <required inputs and owners>
 Execution: Delegate separable work only to bounded, fresh minimal-context subagents given objective, scope, constraints, and required evidence. Keep one canonical writer per scope.
@@ -68,12 +75,24 @@ Choose per task from complexity, risk, budget, required quality, and wall-clock 
 
 Prefer multiple cheap independent reviews over one expensive agent only when scopes do not overlap and synthesis has a named owner. Do not spend high effort on deterministic mechanical work.
 
+## Prepare distributed hosts
+
+Director-side subagents run on the director's host unless the native tool explicitly supports host placement. For Codex work on another machine, use a visible task or thread on that destination's saved project; it may use bounded host-local subagents. For other harnesses, use their native remote-task mechanism when available and report unsupported placement rather than treating SSH command execution as a remote agent.
+
+Before cross-host dispatch, resolve the participating hosts and invoke the installed Machine Utilities skills when available:
+
+- `machine-utilities:fleet-projects` verifies repository identity, checkout state, the required project baseline, and Codex saved-project readiness.
+- `machine-utilities:fleet-agents` verifies agent runtimes, plugin versions, skill hashes and provenance, duplicate providers, and required logical capabilities.
+- `machine-utilities:fleet-inventory` supplies a preserved read-only fleet snapshot; use `machine-utilities:fleet-auth` only when a lane requires authenticated tooling.
+
+Treat missing projects, unavailable saved projects, stale required runtimes or plugins, inconsistent required skills, unhealthy required authentication, and unreachable hosts as prerequisite lanes. Delegate inventory and any user-approved reconciliation to Machine Utilities; do not reproduce its scripts or mutate hosts directly. Respect its plan, approval, manager-ownership, and post-inventory requirements. Dispatch only after every assigned host has evidence for its exact project and capabilities. When the outcome requires fleet-wide parity, verify every configured node, not only the selected workers. If Machine Utilities is unavailable, require equivalent read-only evidence and report consistency as unverified rather than guessed.
+
 ## Allocate hosts
 
 Treat host priority as configurable. Unless the user specifies another order:
 
 1. Filter to hosts with the required repository access, plugins, skills, credentials, platform, and toolchain.
-2. Verify those requirements on the chosen host before dispatch.
+2. Verify those requirements and the required project baseline on the chosen host before dispatch.
 3. Prefer an idle capable host, then the least-utilized capable host.
 4. Break ties by data locality and expected wall-clock time.
 

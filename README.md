@@ -19,7 +19,6 @@ they can be used across Codex and Claude Code environments.
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
-| `orchestrate` | Coordinate multiple agents on substantial work. |
 | `oracle` | Request a second-model review of selected prompts and files. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
 | `thermo-nuclear-code-quality-review` | Perform a strict maintainability and structure review. |
@@ -28,6 +27,12 @@ they can be used across Codex and Claude Code environments.
 
 Fleet-aware `remote-mac` and `ssh-doctor` skills now live in the
 `machine-utilities` plugin.
+
+## Delivery workflows
+
+See [Delivery Director and Goal Driven Delivery](docs/delivery-workflows.md)
+for the decision rules, cross-host model, and why `orchestrate` is not a third
+workflow.
 
 ## Install
 

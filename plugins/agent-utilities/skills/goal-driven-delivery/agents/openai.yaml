@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Driven Delivery"
-  short_description: "Ship cleaner PRs with review gates."
-  default_prompt: "Use $goal-driven-delivery to drive this feature to a green review-ready PR."
+  short_description: "Harden one change or PR lane."
+  default_prompt: "Use $goal-driven-delivery to drive this single change lane to its requested local or PR-ready state."
