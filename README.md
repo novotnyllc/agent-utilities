@@ -80,6 +80,7 @@ Validate both plugin manifests and each skill's YAML frontmatter before
 publishing. The repository has focused executable behavior tests:
 
 ```sh
+node --test plugins/agent-utilities/skills/task-orchestrator/scripts/delivery-contracts.test.mjs
 npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts
 node --test plugins/agent-utilities/skills/cleanup-codex/scripts/cleanup-codex.test.mjs
 ```

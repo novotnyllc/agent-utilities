@@ -83,7 +83,8 @@ readiness:
    request.
 2. Confirm the review evidence includes an independent Sol High or Sol Max
    pass. If it does not, run that read-only review before merge; fix actionable
-   findings with Luna, preferring Max effort and disclosing the actual effort,
+   findings with the selected implementation model, preferring Max effort and
+   disclosing the actual effort,
    then rerun affected checks and CI.
 3. Confirm no explicit hold or approval requirement remains, then merge with
    the repository's configured strategy. For a stack, use `gh-stack` and merge
@@ -99,6 +100,17 @@ fetch the base and use
 `git merge-base --is-ancestor <merge-commit> origin/<base>` before the
 post-merge check.
 
+## Provider-task routing
+
+Before launching LFG, a CE implementation route, or a model-specific review
+context, apply `../../references/provider-task-routing.md`. If it selects the
+visible provider-task bridge, create and verify that task first, send the full
+secret-free delivery contract through its returned identifier, and wait for its
+integrity acknowledgement before launching LFG or reviewers. The target task
+then runs this workflow and any LFG or Thermos work provider-locally; monitor it
+through the same returned identifier. Do not use a native cross-provider spawn
+as a probe, and do not let a model selection change the provider route.
+
 ## Model And Concurrency Policy
 
 - Start Goal Driven Delivery and LFG in a Sol context at High effort by default.
@@ -106,8 +118,13 @@ post-merge check.
   multi-repository, or otherwise complex work. If the current context does not
   match, use the host's supported model-launch mechanism; do not silently
   continue on another model.
-- Pass LFG this exact four-field implementation carrier so its `ce-work` stage
-  uses Luna rather than inheriting the orchestrator:
+- Prefer Luna at Max for implementation. If the active collaboration runtime
+  verifies Luna is unavailable or unselectable and no explicit user or repository model requirement applies,
+  prefer the cheaper supported Terra at Max. Record and disclose the actual model and
+  effort as `implementation_model_substitute`; it is not a carrier or provider
+  fallback.
+- When Luna is selected, pass LFG this exact four-field implementation carrier
+  so its `ce-work` stage uses Luna rather than inheriting the orchestrator:
 
   ```text
   implementation_engine:{"mode":"require","target":"codex","model":"gpt-5.6-luna","source":"goal-driven-delivery"}
@@ -115,9 +132,10 @@ post-merge check.
 
   Configure the qualified Codex implementation launch for Max reasoning effort
   when that route exposes an effort control; effort is not a carrier field.
-  The Luna model is required. Max effort is the default preference; when the
-  installed CE adapter supports only a lower effort, disclose the actual effort
-  instead of relabeling it or falling back to a non-Luna implementation model.
+  When the active collaboration runtime verifies Luna is unavailable or unselectable, state the cheaper supported Terra model and
+  Max effort in the LFG request instead of inventing a fallback carrier field.
+  An installed CE adapter that supports only lower effort must disclose the
+  actual effort. An explicit user or repository model requirement still wins.
 - Independent primary review uses a separate Sol High or Sol Max context
   selected by risk. Require the review receipt before merge.
 - Use Fable 5 for supported cross-model review only when the existing CE path
@@ -209,9 +227,12 @@ Resolve skill names against the host's available-skills list before invoking. Us
 - `compound-engineering:ce-debug`: focused one-shot CI or code failure diagnosis.
 - `compound-engineering:ce-compound`: durable learning capture after a solved problem.
 
-Use the required Luna route for implementation, prefer Max effort, and disclose
-the actual effort. Use native host subagents for bounded research and review
-when their assigned model matches the policy.
+Use Luna at Max for implementation when selectable. Use the recorded supported
+Terra-at-Max substitution only when the active collaboration runtime verifies
+Luna is unavailable or unselectable and no explicit user or repository model
+requirement applies. Disclose the actual model and effort. Use native host
+subagents for bounded research and review when their assigned model matches the
+policy.
 
 ## Thermos Gate
 
@@ -315,7 +336,7 @@ LFG invocation template (the routing line is stage-scoped control data, not
 product-plan content):
 
 ```text
-Implementation routing: require Codex gpt-5.6-luna; prefer Max reasoning effort and disclose the actual effort; retain implementation_engine:{"mode":"require","target":"codex","model":"gpt-5.6-luna","source":"goal-driven-delivery"} for the ce-work seam only.
+Implementation routing: prefer Codex gpt-5.6-luna at Max. If the active collaboration runtime verifies Luna is unavailable or unselectable and no explicit user or repository model requirement applies, use cheaper supported Terra at Max and disclose `implementation_model_substitute` with the actual model and effort. This does not change the provider route. When Luna is selected, retain implementation_engine:{"mode":"require","target":"codex","model":"gpt-5.6-luna","source":"goal-driven-delivery"} for the ce-work seam only.
 
 Deliver <FEATURE> through merge and post-merge proof.
 
@@ -361,7 +382,7 @@ Constraints: preserve <critical existing behavior/security/data boundaries>.
 
 Workflow:
 1. Invoke compound-engineering:ce-plan. Do not code until an implementation-ready plan exists.
-2. Implement one vertical chunk at a time using Luna workers and existing repo patterns; prefer Max effort, disclose the actual effort, and keep one canonical writer for the chunk.
+2. Implement one vertical chunk at a time using the selected implementation model and existing repo patterns; prefer Max effort, disclose the actual model and effort, and keep one canonical writer for the chunk.
 3. After each non-trivial chunk, run the smallest relevant checks. If React/Next UI is involved, run the React Doctor gate. Run the Thermos gate using the sibling Thermos skills, fix all real findings, and inspect the diff. Commit explicit paths only when the user authorized commits.
 4. Before final review, invoke compound-engineering:ce-simplify-code unless the diff is docs-only or trivial.
 5. If the branch is UI-heavy, run the React Doctor gate again after simplify and before CE code review.

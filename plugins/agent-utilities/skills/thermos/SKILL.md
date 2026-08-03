@@ -7,6 +7,19 @@ description: "Launch both thermo-nuclear review subagents in parallel, then synt
 
 Run the two thermo review passes as async background subagents in parallel, then synthesize their results.
 
+## Provider-task routing
+
+Before launching either model-specific reviewer, apply
+`../../references/provider-task-routing.md`. A compatible provider route keeps
+the native parallel reviewers below. For an encrypted incompatible or unresolved
+cross-provider route, first verify a visible task owned by the target provider,
+send its secret-free review contract through the returned task identifier, and
+wait for the integrity acknowledgement. That provider task launches both
+reviewers provider-locally within its inherited bounds; return its results only
+through the same native message and wait path. Never trial-spawn a foreign
+reviewer, and block if the required provider task cannot be created, messaged,
+acknowledged, or monitored.
+
 ## Workflow
 
 1. Determine the review scope from the user request, PR, current branch, or relevant changed files.
