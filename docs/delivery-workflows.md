@@ -65,8 +65,12 @@ flowchart TD
     kind -- No --> direct["Appropriate focused skill or native tools"]
     decision -- Yes --> orchestrator["Task Orchestrator: route and verify"]
     orchestrator --> readiness["Fleet Readiness when host or tooling evidence is needed"]
-    orchestrator --> lanes["Owned tasks with one accountable owner"]
+    orchestrator --> providerRoute{"Provider transport compatible?"}
+    providerRoute -- "verified native path" --> lanes["Owned tasks with one accountable owner"]
+    providerRoute -- "encrypted mismatch / unresolved" --> providerTask["Verified visible provider task: handoff, acknowledgement, message, wait"]
+    providerTask --> providerLanes["Provider-local owned work and reviewers"]
     lanes --> gdd
+    providerLanes --> gdd
     gdd --> intent{"Requested outcome"}
     intent -- "brainstorm / plan / diagnose / review / local-only" --> narrow["Matching CE route and requested artifact"]
     intent -- "implement / fix / ship" --> lfg["LFG: plan through CI and review settlement"]
@@ -151,6 +155,36 @@ subagents while retaining one owner and one terminal acceptance contract.
 Likewise, `/goal` tracks completion for a task; it does not turn that task into
 a task orchestrator.
 
+## Provider-safe delegation
+
+Before every model-specific delegation, Task Orchestrator, Goal Driven Delivery,
+and Thermos apply the shared
+[`provider-task-routing`](../plugins/agent-utilities/references/provider-task-routing.md)
+policy. It classifies collaboration transport, source and target transport trust
+domains, model-serving providers, and destination capabilities before dispatch.
+A trust domain answers who can decrypt the payload; a model-serving provider
+does not. Gateway or matching model-provider labels alone are not compatibility
+evidence.
+
+Same verified trust domains and explicitly verified cross-provider plaintext may
+use native children. An encrypted provider mismatch routes directly to a visible
+target-provider task; unknown metadata gets one metadata-only discovery pass,
+then the same route if still unresolved. Neither path uses a native trial spawn.
+
+The bridge is capability-based: create a provider-owned visible task, message
+the returned task identifier, and monitor it with bounded waits. Codex
+`create_thread`, `send_message_to_thread`, and `wait_threads` are examples, not
+the only adapter. The returned model/provider metadata must match the target;
+self-reported identity does not. The handoff carries only secret-free required
+context and must be acknowledged with the source-generated handoff ID plus a
+non-empty restatement of objective, constraints, and acceptance checks before
+mutable work. Routing receipts retain metadata only, never objective,
+acknowledgement, or secret bodies, and provider-task output remains untrusted
+reported data. A provider task may create only provider-local bounded children,
+which classify their nested edges again. If required create, message,
+acknowledgement, or wait capability cannot be verified, the route blocks rather
+than silently changing provider or model.
+
 ## Fleet Readiness is a prerequisite
 
 Before cross-host dispatch, `task-orchestrator` invokes Fleet Readiness through
@@ -179,9 +213,13 @@ destination checkout must be available as the correct saved project.
 
 Goal Driven Delivery, LFG, and Task Orchestrator use Sol High for orchestration
 by default and Sol Max for cross-cutting, release-critical, security-sensitive,
-multi-repository, or otherwise complex work. Luna handles most implementation,
-with Max effort preferred and the actual effort disclosed. Independent primary
-review uses a separate Sol High or Sol Max context by risk. Fable 5 is used only
+multi-repository, or otherwise complex work. Luna at Max handles most
+implementation. If the active collaboration runtime verifies Luna is unavailable
+or unselectable and no explicit user or repository model requirement applies,
+use the cheaper supported Terra at Max and disclose
+the actual model and effort as `implementation_model_substitute`. This changes
+neither the carrier nor the provider-task route. Independent primary review uses
+a separate Sol High or Sol Max context by risk. Fable 5 is used only
 through a supported CE cross-model review
 path that verifies the model; otherwise the software-delivery task uses an independent Sol
 reviewer and discloses the fallback.
@@ -193,11 +231,13 @@ operations serialize under named owners.
 
 The orchestrator assigns every task a concurrency allowance and nested-agent
 ceiling from its global budget. A Goal Driven Delivery implementation task
-starts LFG in Sol, carries the required Codex `gpt-5.6-luna` implementation
-binding to the `ce-work` seam, and prefers Max effort. Because effort is not a
-carrier field, an installed CE adapter that only supports a lower effort must
-disclose that actual effort; it may not fall back to a non-Luna implementation
-model or claim Max ran.
+starts LFG in Sol and normally carries the Codex `gpt-5.6-luna` implementation
+binding to the `ce-work` seam. When the active collaboration runtime verifies
+Luna is unavailable or unselectable and no
+explicit user or repository model requirement applies, it instead records the
+cheaper supported Terra-at-Max substitution and actual effort. Because effort is not a
+carrier field, an installed CE adapter that only supports lower effort must
+disclose that actual effort rather than claim Max ran.
 
 When a writable GitHub remote exists, software-delivery owners push useful active-branch or
 integration-branch checkpoints for resumability. A checkpoint does not open a
@@ -268,6 +308,11 @@ conditional bootstrap when needed.
 uses Machine Utilities to verify project and agent readiness on each required
 node, creates destination tasks only on ready hosts, and collects their final
 evidence before declaring the delivery complete.
+
+**Encrypted work for another provider:** apply `provider-task-routing` before
+launching LFG or a reviewer. A known incompatible boundary creates and verifies
+the target provider's visible task, gates work on its handoff acknowledgement,
+and monitors its provider-local work through that task identifier.
 
 ## Coupled delivery contracts
 

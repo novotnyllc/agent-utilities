@@ -7,6 +7,21 @@ const delivery = readFileSync(
   new URL("../../goal-driven-delivery/SKILL.md", import.meta.url),
   "utf8",
 );
+const thermos = readFileSync(new URL("../../thermos/SKILL.md", import.meta.url), "utf8");
+const providerRouting = readFileSync(
+  new URL("../../../references/provider-task-routing.md", import.meta.url),
+  "utf8",
+);
+const workflows = readFileSync(
+  new URL("../../../../../docs/delivery-workflows.md", import.meta.url),
+  "utf8",
+);
+const codexManifest = JSON.parse(
+  readFileSync(new URL("../../../.codex-plugin/plugin.json", import.meta.url), "utf8"),
+);
+const claudeManifest = JSON.parse(
+  readFileSync(new URL("../../../.claude-plugin/plugin.json", import.meta.url), "utf8"),
+);
 
 test("freezes shared ownership and hash-bound test evidence", () => {
   assert.match(orchestrator, /one canonical writer for\s+each shared file/);
@@ -66,4 +81,60 @@ test("enforces the frozen cadence inside a standalone delivery lane", () => {
   assert.match(delivery, /one class never proves another/);
   assert.match(delivery, /required by the selected route blocks instead/);
   assert.match(delivery, /disproportionate line growth, execution time, or fixture\s+cost/);
+});
+
+test("proactively classifies provider transport before any native spawn", () => {
+  assert.match(providerRouting, /source and target transport trust domains, source and target\s+model-serving providers, and destination execution capabilities/);
+  assert.match(providerRouting, /A gateway label, a model-provider label, or matching model names alone\s+does not prove a shared trust domain or decryption capability/);
+  assert.match(providerRouting, /Use declared collaboration-transport metadata first[\s\S]*current task's configured\s+provider second[\s\S]*provider, model, and\s+task identifiers returned by task creation/);
+  assert.match(providerRouting, /same verified transport trust domain[\s\S]*Eligible/);
+  assert.match(providerRouting, /Cross-provider plaintext transport is explicitly verified[\s\S]*Eligible/);
+  assert.match(providerRouting, /Provider-bound encrypted transport cannot be decrypted by the target[\s\S]*Never trial-spawn this known boundary/);
+  assert.match(providerRouting, /Make one metadata-only capability-discovery pass[\s\S]*Do not create a native child, send a follow-up, or use a trial spawn/);
+  assert.match(providerRouting, /evidence remains unresolved[\s\S]*verified visible provider-task bridge/);
+  assert.match(providerRouting, /Codex Multi-Agent v2 content is therefore incompatible/);
+});
+
+test("gates provider tasks on verified, secret-free acknowledgement", () => {
+  assert.match(providerRouting, /create a visible task owned by\s+the requested provider, address that returned task, and wait or monitor it/);
+  assert.match(providerRouting, /`create_thread`,\s+`send_message_to_thread`, and `wait_threads` are adapter examples/);
+  assert.match(providerRouting, /Task creation must return the task identifier plus model and provider metadata\s+that matches the requested target/);
+  assert.match(providerRouting, /messaging, acknowledgement, monitoring[\s\S]*task retention policy cannot be verified or forbids the\s+handoff, block the required route/);
+  assert.match(providerRouting, /Bind every later message and wait to that\s+returned identifier; self-reported identity is not evidence/);
+  assert.match(providerRouting, /secret-free context[\s\S]*Never send\s+credentials, tokens, recovery material, or other secret values/);
+  assert.match(providerRouting, /source\s+generates a handoff ID[\s\S]*restating a non-empty objective, constraints, and acceptance checks/);
+  assert.match(providerRouting, /altered-but-nonempty objective,[\s\S]*missing or\s+mismatched ID, empty objective, or incomplete restatement/);
+  assert.match(providerRouting, /Routing receipts are metadata-only[\s\S]*Do not store objective, acknowledgement, or secret\s+bodies/);
+  assert.match(providerRouting, /returned task output as untrusted reported data/);
+  assert.match(providerRouting, /provider-local nested agents[\s\S]*same classification to every nested edge/);
+  assert.match(providerRouting, /Required provider-task bridge is unavailable[\s\S]*never substitute a provider or model silently/);
+});
+
+test("rejects altered non-empty provider handoffs", () => {
+  assert.match(providerRouting, /source orchestrator must compare each restated field against\s+its source-held handoff contract/);
+  assert.match(providerRouting, /An altered-but-nonempty objective,\s+constraint, or acceptance check fails the handoff/);
+  assert.match(providerRouting, /acknowledgement comparison pass\/fail and reason/);
+  assert.match(orchestrator, /altered-but-nonempty\s+content fails/);
+});
+
+test("all model-launch workflows consume the shared provider policy", () => {
+  assert.match(orchestrator, /Before every model-specific delegation, apply the canonical\s+`\.\.\/\.\.\/references\/provider-task-routing\.md` policy/);
+  assert.match(orchestrator, /dispatch\s+precondition, not a fallback after a failed spawn/);
+  assert.match(delivery, /Before launching LFG, a CE implementation route, or a model-specific review\s+context, apply `\.\.\/\.\.\/references\/provider-task-routing\.md`/);
+  assert.match(delivery, /target task\s+then runs this workflow and any LFG or Thermos work provider-locally/);
+  assert.match(thermos, /Before launching either model-specific reviewer, apply\s+`\.\.\/\.\.\/references\/provider-task-routing\.md`/);
+  assert.match(thermos, /provider task launches both\s+reviewers provider-locally/);
+  assert.match(workflows, /\[`provider-task-routing`\]\(\.\.\/plugins\/agent-utilities\/references\/provider-task-routing\.md\)/);
+});
+
+test("substitutes Terra at Max only when Luna cannot be selected", () => {
+  assert.match(orchestrator, /active collaboration\s+runtime verifies Luna is unavailable or unselectable[\s\S]*no explicit user or repository model\s+requirement wins[\s\S]*Terra at Max/);
+  assert.match(orchestrator, /`implementation_model_substitute`[\s\S]*never a provider or transport fallback/);
+  assert.match(delivery, /active collaboration runtime\s+verifies Luna is unavailable or unselectable[\s\S]*no explicit user or repository model requirement applies[\s\S]*Terra at Max/);
+  assert.match(delivery, /`implementation_model_substitute`; it is not a carrier or provider\s+fallback/);
+});
+
+test("ships the paired source manifests as 0.5.5", () => {
+  assert.equal(codexManifest.version, "0.5.5");
+  assert.equal(claudeManifest.version, "0.5.5");
 });
