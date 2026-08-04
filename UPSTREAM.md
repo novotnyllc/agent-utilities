@@ -33,6 +33,9 @@ The `oracle` skill was refreshed from:
 | `one-password` | `skills/one-password` |
 | `oracle` | `skills/oracle` |
 | `skill-cleaner` | `skills/skill-cleaner` |
+| `thermos` | `thermos/skills/thermos` |
+| `thermo-nuclear-review` | `thermos/skills/thermo-nuclear-review` |
+| `thermo-nuclear-code-quality-review` | `thermos/skills/thermo-nuclear-code-quality-review` |
 
 ## Adaptation Notes
 
@@ -55,3 +58,13 @@ The `oracle` skill was refreshed from:
   project roots without depending on one `~/Projects` layout.
 - Retained portable browser and 1Password routing while adapting generic
   service-account prompt isolation and root-only skill auditing.
+- Thermos and its two reviewer rubrics are tracked from Cursor's
+  `cursor/plugins` at `fa16d695b35ccf4ea179d976e5aaee0834a25b0b`. Their local
+  wrappers retain provider/model-routing-safe dispatch, explicitly branch
+  Codex explorer work from Claude execution, package for both harnesses, and
+  preserve deterministic frozen review-packet and coverage-portfolio behavior
+  where applicable. Cursor's `disable-model-invocation: true` frontmatter is
+  deliberately handled by those wrappers rather than copied as an
+  unconditional local restriction. Refresh review presents these expected
+  adaptations and never raw-copies over them; any other upstream drift remains
+  reviewable.
