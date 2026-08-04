@@ -34,6 +34,26 @@ const claudeManifest = JSON.parse(
   readFileSync(new URL("../../../.claude-plugin/plugin.json", import.meta.url), "utf8"),
 );
 
+test("dispatches explicit software-delivery authorization to visible execution tasks", () => {
+  assert.match(orchestrator, /explicit user instruction to perform software-delivery work/);
+  assert.match(orchestrator, /`go do`, `implement`, `fix`, `ship`/);
+  assert.match(orchestrator, /must consume one task-authority use per destination and dispatch one or more\s+fresh visible execution tasks/);
+  assert.match(orchestrator, /configured one-lane fast path still creates\s+one fresh visible Goal Driven Delivery child/);
+  assert.match(orchestrator, /Do not satisfy that instruction\s+with analysis, a plan, a status response, or internal-subagent output alone/);
+  assert.match(orchestrator, /Every software-delivery execution child uses\s+`agent-utilities:goal-driven-delivery`/);
+  assert.match(orchestrator, /must never implement, test, commit, push, or merge child work/);
+  assert.match(orchestrator, /Use bounded subagents only for controller-scoped research or review; execution stays in visible child tasks/);
+  assert.doesNotMatch(orchestrator, /bounded subagents for contained research, review, or execution/);
+});
+
+test("keeps answer, status, planning, and read-only turns non-work-starting", () => {
+  assert.match(orchestrator, /request only for an answer, status, explanation, planning, or bounded\s+read-only inspection is non-work-starting/);
+  assert.match(orchestrator, /without consuming task authority or creating or activating\s+a visible execution task/);
+  assert.match(orchestrator, /request to plan and implement is work-starting;\s+only a planning-only request takes this bounded path/);
+  assert.match(orchestrator, /bounded internal subagent[\s\S]*cannot mutate a child scope or count\s+as the required visible execution-task dispatch/);
+  assert.match(orchestrator, /later explicit\s+work-starting instruction is a new classification and authority decision/);
+});
+
 test("freezes shared ownership and hash-bound test evidence", () => {
   assert.match(orchestrator, /one canonical writer for\s+each shared file/);
   assert.match(orchestrator, /both sides of the seam[\s\S]*acknowledge that exact contract/);

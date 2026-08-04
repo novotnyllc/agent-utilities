@@ -6,7 +6,9 @@ description: Orchestrate configured fleet/account delivery or complex objectives
 # Task Orchestrator
 
 Orchestrate the objective; never execute delegated task work. Remain available
-to the user and delegate execution to visible tasks or bounded subagents.
+to the user and dispatch implementation to fresh visible execution tasks.
+Use bounded internal subagents only for controller-scoped research or review;
+they are not substitutes for visible execution tasks.
 
 ## Thread title
 
@@ -45,6 +47,36 @@ integration and baseline owner. Give each mutable task one canonical writer
 and its own branch or PR, validation boundary, and handoff; keep shared
 integration files in one named task. Record dependencies without merging
 ownership.
+
+## Classify the current user turn
+
+Classify the current user turn before any work-starting action. This is a
+one-turn authority decision; do not infer it from an earlier plan, approval,
+status exchange, or transcript history.
+
+- An explicit user instruction to perform software-delivery work -- for
+  example, `go do`, `implement`, `fix`, `ship`, or an equivalent direction to
+  carry out an approved plan -- is work-starting. After bounded read-only
+  intake, decomposition, allocation, and readiness checks, Task Orchestrator
+  must consume one task-authority use per destination and dispatch one or more
+  fresh visible execution tasks. A configured one-lane fast path still creates
+  one fresh visible Goal Driven Delivery child. Do not satisfy that instruction
+  with analysis, a plan, a status response, or internal-subagent output alone.
+- A request only for an answer, status, explanation, planning, or bounded
+  read-only inspection is non-work-starting. Answer it or perform the bounded
+  controller action without consuming task authority or creating or activating
+  a visible execution task. A request to plan and implement is work-starting;
+  only a planning-only request takes this bounded path. A later explicit
+  work-starting instruction is a new classification and authority decision.
+
+Task Orchestrator remains controller-only in both cases. It may perform intake,
+decomposition, allocation, monitoring, synthesis, lifecycle cleanup, and result
+verification. It must never implement, test, commit, push, or merge child work.
+Every software-delivery execution child uses
+`agent-utilities:goal-driven-delivery`, which owns implementation and its
+checks inside that child. A bounded internal subagent may assist the
+orchestrator with research or review, but cannot mutate a child scope or count
+as the required visible execution-task dispatch.
 
 ## Propagate the software-delivery policy
 
@@ -187,7 +219,7 @@ path. This is a dispatch precondition, not a fallback after a failed spawn.
 
 1. Define the outcome, constraints, dependencies, risks, and terminal evidence.
 2. Split substantial work into a dependency DAG of independently verifiable scopes. Keep simple work on one lane. Assign exactly one canonical writer to each scope and shared file; name every lane's output consumer and stop condition, and make other agents reviewers or give them non-overlapping files and decisions.
-3. Use a fresh visible task for each durable, user-visible, separately resumable assignment. A child task is single-use: never resume, unarchive, compact, or repurpose an older task for new work, even to reuse its checkout or worktree. Use bounded subagents for contained research, review, or execution within a task.
+3. Use a fresh visible task for each durable, user-visible, separately resumable assignment. A child task is single-use: never resume, unarchive, compact, or repurpose an older task for new work, even to reuse its checkout or worktree. Use bounded subagents only for controller-scoped research or review; execution stays in visible child tasks.
 4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, owner, scope, title/concurrency/readiness contract, constraints, dependencies, acceptance criteria, and required evidence. For mutable seams, include exact owned files and frozen hashes. Require concise milestone output. Never forward the orchestrator's transcript or conclusions.
 5. Require child tasks to delegate their own separable work to fresh, minimal-context subagents when useful. Keep their canonical-writer boundaries explicit.
 6. Track each lane as `admitted -> oriented -> active -> frozen -> consumed|superseded|blocked -> terminal`. Start all dependency-ready lanes. Monitor by milestone or artifact, not tight polling; close a scout as soon as its output is consumed. Give a lane with no consumable output one bounded redirect before replacement or stop, and never restart a healthy observable long-running tool merely for elapsed time.
