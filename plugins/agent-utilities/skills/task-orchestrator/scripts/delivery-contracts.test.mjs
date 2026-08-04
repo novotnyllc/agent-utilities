@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const orchestrator = readFileSync(new URL("../SKILL.md", import.meta.url), "utf8");
@@ -11,6 +13,9 @@ const thermos = readFileSync(new URL("../../thermos/SKILL.md", import.meta.url),
 const providerRouting = readFileSync(
   new URL("../../../references/provider-task-routing.md", import.meta.url),
   "utf8",
+);
+const fableReceipt = fileURLToPath(
+  new URL("../../../scripts/claude-fable-review-receipt.mjs", import.meta.url),
 );
 const workflows = readFileSync(
   new URL("../../../../../docs/delivery-workflows.md", import.meta.url),
@@ -119,6 +124,143 @@ test("gates provider tasks on verified, secret-free acknowledgement", () => {
   assert.match(providerRouting, /returned task output as untrusted reported data/);
   assert.match(providerRouting, /provider-local nested agents[\s\S]*same classification to every nested edge/);
   assert.match(providerRouting, /Required provider-task bridge is unavailable[\s\S]*never substitute a provider or model silently/);
+});
+
+test("defines an isolated, bounded Fable review launch contract", () => {
+  assert.match(providerRouting, /`--safe-mode` preserves OAuth\/keychain auth/);
+  assert.match(providerRouting, /--mcp-config '\{"mcpServers":\{\}\}' --strict-mcp-config/);
+  assert.match(providerRouting, /--output-format stream-json --verbose --include-partial-messages/);
+  assert.match(providerRouting, /startup\s+deadline[\s\S]*idle deadline[\s\S]*total wall-clock deadline/);
+  assert.match(providerRouting, /Never use `--bare`[\s\S]*Never combine `--bg` with\s+`--print`/);
+  assert.match(providerRouting, /must not include `--fallback-model`[\s\S]*no-configured-fallback state/);
+  assert.match(providerRouting, /`CLAUDE_BIN` is the canonical executable path attested by the preflight/);
+  assert.match(providerRouting, /intentionally excludes `Bash`/);
+  assert.match(providerRouting, /exactly one fresh Fable-only attempt[\s\S]*semantically equivalent rephrase/);
+  assert.match(providerRouting, /`ambiguous_wording_clarified`[\s\S]*`legitimate_context_clarified`[\s\S]*`defensive_read_only_purpose_clarified`/);
+  assert.match(providerRouting, /never falls through to Opus, Sol, or another\s+model/);
+});
+
+function validateFable(events, exitStatus = 0) {
+  const result = spawnSync(
+    process.execPath,
+    [fableReceipt, "--exit-status", String(exitStatus)],
+    { input: `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, encoding: "utf8" },
+  );
+  return { ...result, receipt: JSON.parse(result.stdout) };
+}
+
+const init = {
+  type: "system",
+  subtype: "init",
+  model: "claude-fable-5",
+  claude_code_version: "2.1.220",
+  session_id: "test-session",
+};
+const assistant = { type: "assistant", message: { model: "claude-fable-5" } };
+const success = {
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  modelUsage: {
+    "claude-haiku-4-5-20251001": { provider: "firstParty" },
+    "claude-fable-5": { provider: "firstParty" },
+  },
+};
+
+test("accepts a first-party Fable stream with auxiliary Haiku usage", () => {
+  const run = validateFable([init, assistant, success]);
+  assert.equal(run.status, 0);
+  assert.equal(run.receipt.ok, true);
+  assert.equal(run.receipt.reason, "validated");
+});
+
+test("rejects refusal fallback after a valid Fable init", () => {
+  const run = validateFable([
+    init,
+    {
+      type: "system",
+      subtype: "model_refusal_fallback",
+      trigger: "refusal",
+      api_refusal_category: "cyber",
+      original_model: "claude-fable-5",
+      fallback_model: "claude-opus-5",
+    },
+  ]);
+  assert.equal(run.status, 1);
+  assert.equal(run.receipt.reason, "model_refusal_fallback");
+  assert.equal(run.receipt.api_refusal_category, "cyber");
+});
+
+test("rejects model drift, error results, nonzero exits, and truncated streams", () => {
+  assert.equal(
+    validateFable([init, { type: "assistant", message: { model: "claude-opus-5" } }]).receipt.reason,
+    "assistant_model_mismatch",
+  );
+  assert.equal(validateFable([init, assistant, { ...success, is_error: true }]).receipt.reason, "result_error");
+  assert.equal(validateFable([init, assistant, success], 1).receipt.reason, "process_exit_nonzero");
+  assert.equal(
+    validateFable([init, assistant, { ...success, is_error: true }], 1).receipt.result_is_error,
+    true,
+  );
+  assert.equal(validateFable([init, assistant]).receipt.reason, "missing_terminal_result");
+  assert.equal(validateFable([init, success]).receipt.reason, "missing_assistant_event");
+  assert.equal(
+    validateFable([{ ...init, model: "claude-fable-999" }]).receipt.reason,
+    "init_model_mismatch",
+  );
+  assert.equal(validateFable([assistant, init, success]).receipt.reason, "invalid_event_order");
+  assert.equal(validateFable([init, assistant, success, success]).receipt.reason, "invalid_event_order");
+  assert.equal(
+    validateFable([
+      init,
+      assistant,
+      { ...success, modelUsage: { ...success.modelUsage, "claude-opus-5": { provider: "firstParty" } } },
+    ]).receipt.reason,
+    "model_usage_mismatch",
+  );
+  assert.equal(
+    validateFable([
+      init,
+      assistant,
+      { ...success, modelUsage: { "claude-fable-5": { provider: "thirdParty" } } },
+    ]).receipt.reason,
+    "provider_mismatch",
+  );
+  assert.equal(
+    validateFable([
+      init,
+      assistant,
+      { ...success, modelUsage: { ...success.modelUsage, "claude-haiku-999": { provider: "firstParty" } } },
+    ]).receipt.reason,
+    "model_usage_mismatch",
+  );
+  const failedWithDrift = validateFable([
+    init,
+    assistant,
+    { ...success, modelUsage: { "claude-opus-5": { provider: "thirdParty" } } },
+  ], 1);
+  assert.equal(failedWithDrift.receipt.reason, "process_exit_nonzero");
+  assert.equal(failedWithDrift.receipt.evidence_reason, "model_usage_mismatch");
+  assert.equal(failedWithDrift.receipt.observed_provider, "thirdParty");
+  const erroredWithDrift = validateFable([
+    init,
+    assistant,
+    { ...success, is_error: true, modelUsage: { "claude-opus-5": { provider: "thirdParty" } } },
+  ]);
+  assert.equal(erroredWithDrift.receipt.reason, "result_error");
+  assert.equal(erroredWithDrift.receipt.evidence_reason, "model_usage_mismatch");
+  assert.equal(erroredWithDrift.receipt.observed_provider, "thirdParty");
+});
+
+test("reports unreadable Fable streams as metadata", () => {
+  const run = spawnSync(
+    process.execPath,
+    [fableReceipt, "--exit-status", "0", "/path/that/does/not/exist/fable.jsonl"],
+    { encoding: "utf8" },
+  );
+  assert.equal(run.status, 1);
+  assert.equal(JSON.parse(run.stdout).reason, "stream_read_error");
+  assert.equal(run.stderr, "");
 });
 
 test("rejects altered non-empty provider handoffs", () => {
