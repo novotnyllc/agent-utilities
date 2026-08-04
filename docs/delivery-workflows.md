@@ -137,10 +137,28 @@ acceptance criteria and final report are verified. Every visible child is a
 fresh, single-use task; the parent never resumes, unarchives, compacts, or
 repurposes an older task for a new assignment. Before archive, the parent uses
 the host's supported handoff or worktree-cleanup operation for any task-created
-worktree and waits for success. It never assumes archive removes a worktree,
-uses raw filesystem deletion, or forces cleanup of dirty or unintegrated work.
-A conflict leaves the child visible and retitled `⏸️` with an explicit blocker. After safe
-cleanup, the parent archives the child promptly and then runs read-only
+worktree and waits for success. Before cleanup it proves the child is terminal
+and has not resumed; a clean worktree is evidence, not cleanup authority. It
+binds cleanup to the registered worktree identity, resolved path, HEAD, and
+owned ref. It must acquire a host-owned cleanup claim or compare-and-transition
+that keeps the child non-startable through removal; without one, cleanup blocks.
+It then rechecks that binding and the child's activity revision immediately
+before each mutation. Changed or unknown state blocks cleanup.
+Worktrees and refs are transient execution state, so durable evidence belongs
+in the integrated artifact, commit, or final receipt rather than a retained
+worktree. Handoff or archive alone is not cleanup: the bound path must be
+absent from both the repository's registered worktree inventory and filesystem,
+and the owned ref must be deleted or transferred. A continuing ref may transfer
+to a named owner, but the terminal task's worktree must still be removed. When
+no native removal exists, the parent may use the repository's supported
+exact-path worktree removal within its authorized task scope. It never uses
+raw filesystem deletion or forces cleanup of dirty,
+unintegrated, or resumed work. A conflict leaves the child visible and retitled
+`⏸️` with an explicit blocker. Canonical branch, upstream, and HEAD identity is
+snapshotted before integration; after dual absence and ref cleanup, equality
+checks are read-only, and drift never authorizes a switch, reset, or rewrite.
+After serialized cleanup,
+the parent archives the child promptly and then runs read-only
 `cleanup-codex inspect` for host-wide runtime health; that inspection cannot
 attribute a residual process to the archived task. If archive succeeds but inspection fails, the child
 stays recorded as archived while the orchestrator remains active with runtime

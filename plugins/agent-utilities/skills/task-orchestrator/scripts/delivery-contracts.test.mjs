@@ -54,13 +54,20 @@ test("bounds delegation and freezes expansion", () => {
 
 test("parents use fresh children and safely close their lifecycle", () => {
   assert.match(orchestrator, /child task is single-use: never resume, unarchive, compact, or repurpose/);
-  assert.match(orchestrator, /report its path and owned ref for parent cleanup/);
-  assert.match(orchestrator, /never rely on archive to delete a worktree and never use raw filesystem deletion/);
-  assert.match(orchestrator, /dirty or unintegrated without a successful ownership transfer[\s\S]*retitle the child `⏸️`/);
+  assert.match(orchestrator, /report its registered identity, path, HEAD, and owned ref for parent removal and absence verification in the same monitoring pass/);
+  assert.match(orchestrator, /A clean worktree is evidence, not cleanup authority[\s\S]*Bind the cleanup target[\s\S]*Acquire a host-owned cleanup claim or compare-and-transition[\s\S]*Immediately before each cleanup mutation[\s\S]*Worktrees and refs are transient execution state/);
+  assert.match(orchestrator, /bound path is absent from both the repository's registered worktree inventory and the filesystem/);
+  assert.match(orchestrator, /successful handoff response without bound-path absence and owned-ref cleanup proof is incomplete/);
+  assert.match(orchestrator, /Acquire a host-owned cleanup claim[\s\S]*Immediately before each cleanup mutation[\s\S]*After the operation, require the bound path absent[\s\S]*perform only read-only clean local-head\/tracking-remote\/remote equality checks[\s\S]*After cleanup succeeds[\s\S]*invoke the host's native archive operation/);
+  assert.match(orchestrator, /drift blocks completion and never authorizes a switch, reset, or rewrite/);
+  assert.match(orchestrator, /activity revision changed[\s\S]*target binding changed[\s\S]*retitle the child `⏸️`/);
+  assert.match(orchestrator, /dirty or unintegrated without a successful continuing-ref ownership transfer[\s\S]*retitle the child `⏸️`/);
   assert.match(orchestrator, /continuing ref has been transferred to a named owner/);
   assert.match(orchestrator, /parent archives it in the same monitoring pass/);
   assert.match(workflows, /Every visible child is a[\s\S]*fresh, single-use task/);
-  assert.match(workflows, /A conflict leaves the child visible and retitled `⏸️` with an explicit blocker/);
+  assert.match(workflows, /a clean worktree is evidence, not cleanup authority/);
+  assert.match(workflows, /bound path must be[\s\S]*absent from both the repository's registered worktree inventory and filesystem/);
+  assert.match(workflows, /A conflict leaves the child visible and retitled\s+`⏸️` with an explicit blocker/);
 });
 
 test("classifies capability and native gates once", () => {

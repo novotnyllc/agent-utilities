@@ -191,7 +191,8 @@ path. This is a dispatch precondition, not a fallback after a failed spawn.
 4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, owner, scope, title/concurrency/readiness contract, constraints, dependencies, acceptance criteria, and required evidence. For mutable seams, include exact owned files and frozen hashes. Require concise milestone output. Never forward the orchestrator's transcript or conclusions.
 5. Require child tasks to delegate their own separable work to fresh, minimal-context subagents when useful. Keep their canonical-writer boundaries explicit.
 6. Track each lane as `admitted -> oriented -> active -> frozen -> consumed|superseded|blocked -> terminal`. Start all dependency-ready lanes. Monitor by milestone or artifact, not tight polling; close a scout as soon as its output is consumed. Give a lane with no consumable output one bounded redirect before replacement or stop, and never restart a healthy observable long-running tool merely for elapsed time.
-7. Synthesize the child evidence and verify the combined objective. Delegate
+7. Before integration starts, record each canonical checkout's expected branch,
+   upstream, and HEAD for later read-only equality proof. Synthesize the child evidence and verify the combined objective. Delegate
    any integration, review, validation, or repair execution to named owners;
    do not implement, test, commit, push, or merge in the orchestrator.
 8. When the user changes the objective, preserve still-valid evidence, revise
@@ -298,7 +299,7 @@ Acceptance:
 - <observable result>
 - <required checks and evidence>
 - <docs/tests owned by this scope>
-- Leave any task-owned worktree clean with changes integrated or explicitly handed off; report its path and owned ref for parent cleanup.
+- Leave any terminal task-owned worktree clean with durable output integrated; report its registered identity, path, HEAD, and owned ref for parent removal and absence verification in the same monitoring pass. Continuing work may transfer its ref to a named owner, but the terminal task's worktree must still be removed.
 Report: <final evidence, artifacts, cleanup, blockers, and remaining handoff; the orchestrator verifies this before archive>
 ```
 
@@ -404,7 +405,7 @@ On each monitoring pass:
 3. Unblock dependencies, replace failed assignments, and trigger the next ready work.
 4. Demand concrete evidence for claimed completion.
 5. Verify the final report and terminal acceptance.
-6. If the parent created the task with a worktree, verify its changes are integrated or transferred to a named owner and it is clean and unused. Use the host's native handoff or worktree cleanup operation and wait for success; never rely on archive to delete a worktree and never use raw filesystem deletion.
+6. If the parent created the task with a worktree, first prove the child is terminal and has not resumed, its durable output is integrated or any continuing ref is transferred to a named owner, and the worktree is clean and unused. A clean worktree is evidence, not cleanup authority. Bind the cleanup target to the repository's registered worktree identity, resolved path, HEAD, and owned ref. Acquire a host-owned cleanup claim or compare-and-transition that keeps the child non-startable through removal; if the host cannot provide one, block cleanup. Immediately before each cleanup mutation, re-read the child's activity revision and target binding, and block if either changed or is unknown. Worktrees and refs are transient execution state: bring durable evidence forward into the integrated artifact, commit, or final receipt instead of retaining them for audit. Use the host's native handoff or worktree cleanup operation and wait for success; if no native removal exists, use the repository's supported exact-path worktree removal only within the authorized task scope. Never rely on handoff or archive alone, and never use raw filesystem deletion. After the operation, require the bound path absent from both the repository's registered worktree inventory and the filesystem and delete or transfer the owned ref. Using the pre-integration snapshot, perform only read-only clean local-head/tracking-remote/remote equality checks; drift blocks completion and never authorizes a switch, reset, or rewrite.
 7. After cleanup succeeds, retain the child's fixed role emoji, change its state emoji to `✅`, and invoke the host's native archive operation promptly. Only after archive succeeds, run read-only `cleanup-codex inspect` to inspect host-wide runtime health. This inspection cannot attribute a residual process to the archived task.
 
 A task is eligible for native archive only when:
@@ -414,10 +415,10 @@ A task is eligible for native archive only when:
 - software-delivery tasks include authorized merge and post-merge proof;
 - its report identifies artifacts and remaining dependencies;
 - the orchestrator has verified its report and retitled it `✅`;
-- every task-created worktree has been safely handed back or removed; and
+- every task-created worktree's bound path is absent from both the repository's registered worktree inventory and the filesystem after handoff or removal; and
 - that task's owned merged, closed, or abandoned topic branches and refs are cleaned up safely, while any continuing ref has been transferred to a named owner.
 
-If worktree handoff or cleanup conflicts, or the worktree is dirty or unintegrated without a successful ownership transfer, leave both the task and worktree visible, retitle the child `⏸️`, and report the blocker; do not archive or force cleanup. If native archive fails, leave the task visible and resumable. If archive succeeds but inspection fails, record the child as archived, keep the orchestrator active, and leave runtime cleanup unresolved. Run `cleanup-codex reap` or `recycle` only as a separate, explicit repair after its exact ownership, identity, snapshot, and selection gates pass; archive status alone never authorizes mutation.
+If worktree handoff or cleanup conflicts, the child has resumed or its activity revision changed, the target binding changed, or the worktree is dirty or unintegrated without a successful continuing-ref ownership transfer, leave both the task and worktree visible, retitle the child `⏸️`, and report the blocker; do not archive or force cleanup. A successful handoff response without bound-path absence and owned-ref cleanup proof is incomplete. Serialize cleanup after canonical integrations. If native archive fails, leave the task visible and resumable. If archive succeeds but inspection fails, record the child as archived, keep the orchestrator active, and leave runtime cleanup unresolved. Run `cleanup-codex reap` or `recycle` only as a separate, explicit repair after its exact ownership, identity, snapshot, and selection gates pass; archive status alone never authorizes mutation.
 
 Treat `Stop`, completed turns, `SubagentStop`, completed subagent turns, idle or sidebar state, and blocked or otherwise nonterminal work as resumable. When the active v2 subagent surface has no native close or dispose operation, leave a completed subagent resident; do not reclaim it externally. Generic tasks remain visible until the user or host archives them.
 
