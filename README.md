@@ -49,7 +49,12 @@ Some skills have narrower requirements: 1Password needs `op` and `tmux`;
 profiling skills require macOS or iOS tooling; and
 `goal-driven-delivery` requires Compound Engineering 3.20 or newer. Oracle
 sends only the files selected for its second-model review, whose output must
-still be verified.
+still be verified. On every Oracle skill activation, its mandatory local
+bootstrap resolves the installed skill directory, validates or repairs Oracle
+0.17.0 or newer, and returns the absolute binary used for every later Oracle
+command. It prefers `steipete/tap/oracle`, uses the bounded `$HOME/.local` npm
+fallback when Homebrew cannot provide a current binary, and preserves
+user-owned Oracle configuration, authentication, sessions, and browser state.
 
 `cleanup-codex` is macOS-only. Codex runs a bounded root `SessionEnd` hook that
 terminates only same-user processes carrying the ending task's exact
@@ -86,6 +91,7 @@ publishing. The repository has focused executable behavior tests:
 node --test plugins/agent-utilities/skills/task-orchestrator/scripts/delivery-contracts.test.mjs
 npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts
 node --test plugins/agent-utilities/skills/cleanup-codex/scripts/cleanup-codex.test.mjs
+node --test plugins/agent-utilities/skills/oracle/scripts/ensure-oracle.test.mjs
 ```
 
 These are not a repository-wide test suite.

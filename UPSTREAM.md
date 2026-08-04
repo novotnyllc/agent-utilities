@@ -42,6 +42,15 @@ The `oracle` skill was refreshed from:
   routing.
 - Replaced fixed Oracle package/repo/account examples with `ORACLE_*`
   configuration knobs.
+- Added Oracle's portable, skill-local lifecycle bootstrap: resolve the active
+  installed skill directory, run `scripts/ensure-oracle.sh` once, and invoke
+  only its returned absolute Oracle 0.17.0-or-newer path. It prefers
+  `steipete/tap/oracle`, has a bounded `$HOME/.local` npm fallback, treats an
+  explicit `ORACLE_BIN` as validation-only, and preserves user-owned Oracle
+  configuration, authentication, sessions, and browser state.
+- Added local Oracle browser-profile guidance: honor nested
+  `browser.manualLogin`, never combine it with `--copy-profile`, and leave any
+  profile-mode or authentication change to the user.
 - Updated `skill-cleaner` to discover the installed plugin root and common
   project roots without depending on one `~/Projects` layout.
 - Retained portable browser and 1Password routing while adapting generic
