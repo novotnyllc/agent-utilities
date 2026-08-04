@@ -41,6 +41,17 @@ test("bounds delegation and freezes expansion", () => {
   assert.match(orchestrator, /freeze scope: reject adjacent abstractions/);
 });
 
+test("parents use fresh children and safely close their lifecycle", () => {
+  assert.match(orchestrator, /child task is single-use: never resume, unarchive, compact, or repurpose/);
+  assert.match(orchestrator, /report its path and owned ref for parent cleanup/);
+  assert.match(orchestrator, /never rely on archive to delete a worktree and never use raw filesystem deletion/);
+  assert.match(orchestrator, /dirty or unintegrated without a successful ownership transfer[\s\S]*retitle the child `⏸️`/);
+  assert.match(orchestrator, /continuing ref has been transferred to a named owner/);
+  assert.match(orchestrator, /parent archives it in the same monitoring pass/);
+  assert.match(workflows, /Every visible child is a[\s\S]*fresh, single-use task/);
+  assert.match(workflows, /A conflict leaves the child visible and retitled `⏸️` with an explicit blocker/);
+});
+
 test("classifies capability and native gates once", () => {
   assert.match(orchestrator, /preferred carrier, model, tools, and skills/);
   assert.match(orchestrator, /absent from the eagerly listed surface is unknown,\s+not unavailable/);

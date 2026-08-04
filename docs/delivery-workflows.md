@@ -81,7 +81,9 @@ flowchart TD
     evidence -. delegated task evidence .-> orchestrator
     orchestrator --> terminal{"Terminal acceptance and report verified?"}
     terminal -- No --> resumable["Keep task visible and resumable"]
-    terminal -- Yes --> retitle["Retitle task ✅"]
+    terminal -- Yes --> release["Safely hand back or remove task worktree"]
+    release -- "blocked" --> cleanupBlocked["Retitle task ⏸️ and keep visible"]
+    release -- "succeeded" --> retitle["Retitle task ✅"]
     retitle --> archive["Native archive"]
     archive --> inspect["cleanup-codex inspect (read only)"]
     inspect --> verified{"Runtime cleanup verified?"}
@@ -122,7 +124,14 @@ uses the title assigned by the parent; when invoked directly it follows normal
 Codex personalization and repository guidance.
 
 Task Orchestrator invokes native archive only after the child's existing
-acceptance criteria and final report are verified. It then runs read-only
+acceptance criteria and final report are verified. Every visible child is a
+fresh, single-use task; the parent never resumes, unarchives, compacts, or
+repurposes an older task for a new assignment. Before archive, the parent uses
+the host's supported handoff or worktree-cleanup operation for any task-created
+worktree and waits for success. It never assumes archive removes a worktree,
+uses raw filesystem deletion, or forces cleanup of dirty or unintegrated work.
+A conflict leaves the child visible and retitled `⏸️` with an explicit blocker. After safe
+cleanup, the parent archives the child promptly and then runs read-only
 `cleanup-codex inspect` for host-wide runtime health; that inspection cannot
 attribute a residual process to the archived task. If archive succeeds but inspection fails, the child
 stays recorded as archived while the orchestrator remains active with runtime

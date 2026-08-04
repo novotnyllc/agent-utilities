@@ -178,7 +178,7 @@ precondition, not a fallback after a failed spawn.
 
 1. Define the outcome, constraints, dependencies, risks, and terminal evidence.
 2. Split work into independently verifiable scopes. Assign exactly one canonical writer to each scope and shared file; make other agents reviewers or give them non-overlapping files and decisions.
-3. Use visible tasks for durable, user-visible, separately resumable work. Use bounded subagents for contained research, review, or execution within a task.
+3. Use a fresh visible task for each durable, user-visible, separately resumable assignment. A child task is single-use: never resume, unarchive, compact, or repurpose an older task for new work, even to reuse its checkout or worktree. Use bounded subagents for contained research, review, or execution within a task.
 4. Create every task or subagent with no inherited context when supported, otherwise the minimum possible. Pass only its objective, owner, scope, title/concurrency/readiness contract, constraints, dependencies, acceptance criteria, and required evidence. For mutable seams, include exact owned files and frozen hashes. Require concise milestone output. Never forward the orchestrator's transcript or conclusions.
 5. Require child tasks to delegate their own separable work to fresh, minimal-context subagents when useful. Keep their canonical-writer boundaries explicit.
 6. Monitor all work, answer agent questions promptly from authoritative evidence, resolve ownership conflicts, and reassign stalled work. Keep directing while execution proceeds.
@@ -248,7 +248,7 @@ Acceptance:
 - <observable result>
 - <required checks and evidence>
 - <docs/tests owned by this scope>
-- Remove only unused clean worktrees created by this task and only its owned merged, closed, or abandoned topic refs.
+- Leave any task-owned worktree clean with changes integrated or explicitly handed off; report its path and owned ref for parent cleanup.
 Report: <final evidence, artifacts, cleanup, blockers, and remaining handoff; the orchestrator verifies this before archive>
 ```
 
@@ -336,8 +336,9 @@ On each monitoring pass:
 2. Answer questions or obtain the one material user decision.
 3. Unblock dependencies, replace failed assignments, and trigger the next ready work.
 4. Demand concrete evidence for claimed completion.
-5. Verify the final report and terminal acceptance, then retain its fixed role emoji and change its state emoji to `✅`.
-6. Invoke the host's native archive operation. Only after it succeeds, run read-only `cleanup-codex inspect` to inspect host-wide runtime health. This inspection cannot attribute a residual process to the archived task.
+5. Verify the final report and terminal acceptance.
+6. If the parent created the task with a worktree, verify its changes are integrated or transferred to a named owner and it is clean and unused. Use the host's native handoff or worktree cleanup operation and wait for success; never rely on archive to delete a worktree and never use raw filesystem deletion.
+7. After cleanup succeeds, retain the child's fixed role emoji, change its state emoji to `✅`, and invoke the host's native archive operation promptly. Only after archive succeeds, run read-only `cleanup-codex inspect` to inspect host-wide runtime health. This inspection cannot attribute a residual process to the archived task.
 
 A task is eligible for native archive only when:
 
@@ -346,11 +347,13 @@ A task is eligible for native archive only when:
 - software-delivery tasks include authorized merge and post-merge proof;
 - its report identifies artifacts and remaining dependencies;
 - the orchestrator has verified its report and retitled it `✅`;
-- unused clean worktrees created by that task are removed; and
-- that task's owned merged, closed, or abandoned topic branches and refs are cleaned up safely.
+- every task-created worktree has been safely handed back or removed; and
+- that task's owned merged, closed, or abandoned topic branches and refs are cleaned up safely, while any continuing ref has been transferred to a named owner.
 
-If native archive fails, leave the task visible and resumable. If archive succeeds but inspection fails, record the child as archived, keep the orchestrator active, and leave runtime cleanup unresolved. Run `cleanup-codex reap` or `recycle` only as a separate, explicit repair after its exact ownership, identity, snapshot, and selection gates pass; archive status alone never authorizes mutation.
+If worktree handoff or cleanup conflicts, or the worktree is dirty or unintegrated without a successful ownership transfer, leave both the task and worktree visible, retitle the child `⏸️`, and report the blocker; do not archive or force cleanup. If native archive fails, leave the task visible and resumable. If archive succeeds but inspection fails, record the child as archived, keep the orchestrator active, and leave runtime cleanup unresolved. Run `cleanup-codex reap` or `recycle` only as a separate, explicit repair after its exact ownership, identity, snapshot, and selection gates pass; archive status alone never authorizes mutation.
 
 Treat `Stop`, completed turns, `SubagentStop`, completed subagent turns, idle or sidebar state, and blocked or otherwise nonterminal work as resumable. When the active v2 subagent surface has no native close or dispose operation, leave a completed subagent resident; do not reclaim it externally. Generic tasks remain visible until the user or host archives them.
+
+The parent owns the entire lifecycle of every visible child it creates. Once a child reaches verified terminal acceptance and its worktree/ref cleanup succeeds, the parent archives it in the same monitoring pass. This parent-owned rule overrides the generic-task retention default for those children.
 
 Never delete a dirty worktree or an unmerged ref without explicit authorization. Keep the orchestrator active while any archived child has unresolved runtime cleanup, or until every remaining scope is archived with verification, remains visible with a clearly evidenced blocker the user accepts, or is otherwise explicitly handed off.
