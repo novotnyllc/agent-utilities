@@ -1,0 +1,479 @@
+changes:
+  - id: SC-01
+    priority: P0
+    title: Deployable runtime-artifact closure
+    classification:
+      - missing skill instruction
+      - agent failure to follow adequate skill
+    target_files:
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+      - plugins/agent-utilities/skills/thermo-nuclear-review/SKILL.md
+    target_sections:
+      - First-Pass Quality Rules
+      - Lane contract and verification cadence
+      - Frozen contract and readiness
+      - Breaking Functionality Guidelines
+    supporting_findings: [F01, F11]
+    problem: >-
+      A compiled Windows helper was built and reviewed without proving that the
+      plugin could publish, authenticate, package, install, or enroll its
+      required x64 and ARM64 payloads.
+    root_cause: >-
+      Build success was treated as artifact delivery, and no workflow gate
+      traced generated runtime bytes from producer to installed consumer.
+    proposed_behavior: >-
+      Before implementation expands, require a complete producer-to-runtime
+      delivery receipt for every compiled, generated, signed, downloaded, or
+      platform-specific artifact.
+    proposed_instruction_text: |-
+      Runtime artifact closure: If the outcome adds or changes a compiled,
+      generated, signed, downloaded, or platform-specific runtime artifact,
+      establish its complete delivery path before implementation expands.
+      Record the reproducible producer command, target architectures,
+      authentication/signing owner, packaged or published path, integrity
+      entry, installed/enrolled destination, upgrade/rollback owner, and the
+      smallest runtime/install smoke check. A green build is not delivery. If
+      a required link has neither a repository-owned implementation nor an
+      explicitly owned external prerequisite, block the lane.
+    triggers:
+      - new native executable or library
+      - generated runtime output
+      - signed or downloaded payload
+      - installer, extension, model asset, migration bundle, or consumer of gitignored bytes
+    exclusions:
+      - source-only library already carried by the existing package path
+      - documentation-only change
+    model_routing: >-
+      Use a fast scout for artifact mapping and Sol High or Max only to
+      adjudicate signing, trust, or external ownership gaps.
+    orchestration_effect: >-
+      Adds an admission dependency before downstream implementation and names
+      one release owner for the complete artifact chain.
+    expected_wall_clock_effect: >-
+      Costs 20 to 60 minutes when triggered; saves approximately 3 to 8 hours
+      when the delivery path is absent.
+    expected_cost_effect: >-
+      High reduction in wasted implementation and review cost on broken paths;
+      negligible effect on source-only changes.
+    expected_reliability_effect: >-
+      High improvement because runtime availability becomes a proved
+      prerequisite instead of an assumption.
+    implementation_effort: medium
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - do not require generated binaries to be committed to Git
+      - accept authenticated repository-owned release or download pipelines
+      - do not weaken signing, integrity, native canary, or rollback requirements
+    acceptance_criteria:
+      - build-only gitignored binary expected by enrollment blocks before feature expansion
+      - signed published artifact passes only when installation consumes the exact authenticated bytes
+      - ordinary source-only package does not trigger a false blocker
+    evaluation_scenarios: [E2-complex-parallel, E5-failure-recovery, E6-source-only-control]
+
+  - id: SC-02
+    priority: P0
+    title: Existing-plan objective admission
+    classification:
+      - missing skill instruction
+      - task-specific ambiguity
+    target_files:
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+    target_sections:
+      - Lane contract and verification cadence
+      - Before Direct the work
+    supporting_findings: [F02, F11]
+    problem: >-
+      The implementation-ready plan excluded macOS root mutation while the
+      owning fleet outcome was later understood to require privileged macOS
+      and Homebrew behavior.
+    root_cause: >-
+      The existing plan was accepted without comparing objective-level
+      platform and terminal requirements to plan inclusions and exclusions.
+    proposed_behavior: >-
+      Emit a compact requirement-closure table and return only contradictory
+      or omitted objective-level requirements for focused plan repair.
+    proposed_instruction_text: |-
+      Existing-plan admission: Before mutable work, compare the source
+      objective, explicit user constraints, settled decisions, terminal state,
+      and platform or deliverable scope against the plan's inclusions,
+      exclusions, implementation units, and acceptance criteria. Record a
+      compact closure table. A plan that omits or contradicts an
+      objective-level platform, deliverable, security boundary, or terminal
+      requirement is not implementation-ready; return it for focused repair
+      while preserving valid plan content. Do not reopen details the objective
+      genuinely leaves unspecified.
+    triggers:
+      - implementation from an existing plan or imported checklist
+      - resumed or handed-off implementation
+      - high-impact plan exclusions
+    exclusions:
+      - exact user instruction to implement only a named plan slice
+      - tiny task without a plan
+    model_routing: >-
+      A fast model builds the table; Sol handles only genuine outcome or
+      security contradictions.
+    orchestration_effect: >-
+      No implementation fan-out begins until plan admission passes.
+    expected_wall_clock_effect: >-
+      Negligible when aligned; saved approximately 3 to 4.5 hours in this run.
+    expected_cost_effect: low cost and potentially high rework reduction
+    expected_reliability_effect: high
+    implementation_effort: small
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - do not turn admission into full replanning
+      - stop only for outcome-changing omissions or contradictions
+      - preserve explicit user and security boundaries
+    acceptance_criteria:
+      - privileged cross-platform objective plus explicit macOS no-root plan exclusion stops before edits
+      - Linux-only objective plus Linux-only plan proceeds
+    evaluation_scenarios: [E2-complex-parallel, E3-strong-escalation]
+
+  - id: SC-03
+    priority: P1
+    title: Critical-path lane manifest and bounded fan-in
+    classification:
+      - orchestration/model-routing defect
+      - missing skill instruction
+    target_files:
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+    target_sections:
+      - Decomposition and routing
+      - Monitoring and fan-in
+      - Model And Concurrency Policy
+    supporting_findings: [F03, F09, F12, F13]
+    problem: >-
+      The run accumulated 84 subagent thread identifiers and 701 activity
+      events, with repeated interactions, interruptions, stale-hash review
+      recovery, 1,459 agent waits, and 257 agent-list calls.
+    root_cause: >-
+      Agent utilization was optimized more than the dependency-weighted
+      critical path, and lane identity lacked a compact consumed-output and
+      resume contract.
+    proposed_behavior: >-
+      Require a minimal DAG for three or more lanes, close bounded scouts after
+      delivery, and release superseded or consumed lanes at fan-in.
+    proposed_instruction_text: |-
+      Before dispatching more than two lanes, record a compact DAG. Every lane
+      names its unique output, downstream consumer, dependencies, exclusive
+      mutable paths, model and effort, first receipt, freeze condition,
+      terminal stop, and whether its output was consumed. Prefer the fewest
+      lanes that shorten the dependency-weighted critical path. Read-only
+      scouts close after returning their artifact. At fan-in, stop or release
+      lanes whose output is consumed, superseded, or no longer on the critical
+      path. Bind remote lanes to host, cwd, repository, branch/base/head,
+      objective digest, plan digest, and checkpoint; a thread ID alone is not
+      a resume receipt. Monitor only orientation, first consumed artifact,
+      blocker, freeze, and final milestones; use one bounded wait across active
+      lanes and suppress unchanged snapshots.
+    triggers:
+      - three or more lanes
+      - cross-repository or remote work
+      - dependent stack or long-running delivery
+    exclusions:
+      - simple single-lane task
+      - two short independent read-only scouts
+    model_routing: >-
+      Sol owns the DAG, fast models scout, and Luna or verified Terra fallback
+      owns implementation.
+    orchestration_effect: >-
+      Demand-driven concurrency, one canonical writer per shared surface, and
+      explicit fan-in termination.
+    expected_wall_clock_effect: approximately 2 to 5 hours on comparable complex runs
+    expected_cost_effect: high reduction in rereading and coordination traffic
+    expected_reliability_effect: medium to high
+    implementation_effort: medium
+    confidence: medium-high
+    overfitting_risk: low
+    guardrails:
+      - no sensitive objective body in routing metadata
+      - one writer per overlapping file
+      - do not invoke Task Orchestrator ceremony for simple tasks
+    acceptance_criteria:
+      - every lane has a consumed output or is stopped
+      - unused scouts close at fan-in
+      - complex task explains how each lane shortens the critical path
+      - simple task remains single-lane
+    evaluation_scenarios: [E1-simple, E2-complex-parallel, E5-failure-recovery]
+
+  - id: SC-04
+    priority: P1
+    title: Progress-budgeted model redirect
+    classification:
+      - orchestration/model-routing defect
+      - tool/environment limitation
+    target_files:
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+    target_sections:
+      - Model routing
+      - Implementation carrier
+    supporting_findings: [F04, F08]
+    problem: >-
+      Three preferred-model attempts reportedly consumed at least 519k tokens
+      and produced no edits; one process waited because stdin was not closed.
+    root_cause: >-
+      The preferred model had no output-based progress budget or bounded
+      redirect trigger.
+    proposed_behavior: >-
+      Require a rapid orientation receipt and a first consumed artifact for
+      routine implementation, then diagnose once and redirect once.
+    proposed_instruction_text: |-
+      Give each implementation lane a progress budget appropriate to its risk.
+      Require an orientation receipt naming owned paths, reuse points, first
+      check, and next mutation within 5 to 10 minutes; require the first scoped
+      artifact or edit within 15 to 20 minutes for routine implementation. If
+      the lane is still rereading, waiting for stdin, or has no consumed
+      output, diagnose once and redirect once to the verified economical
+      fallback or a narrower task. Security architecture may declare a longer
+      receipt budget but must still return a decision artifact. Tokens alone
+      do not determine progress or wall time.
+    triggers:
+      - implementation or model-specific lane
+      - preferred-provider route
+    exclusions:
+      - research-only work
+      - healthy long build or test with observable progress
+      - user-mandated model without fallback
+    model_routing: >-
+      Preserve Luna preference and existing verified Terra substitution rules;
+      never change provider or transport authority during redirect.
+    orchestration_effect: one diagnosis and at most one redirect per stalled lane
+    expected_wall_clock_effect: approximately 0.5 to 1 hour in this run
+    expected_cost_effect: very high token savings when triggered
+    expected_reliability_effect: neutral to positive
+    implementation_effort: small-medium
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - do not kill healthy long-running tests
+      - deep security reasoning may use a longer declared receipt budget
+      - disclose actual fallback model and effort
+    acceptance_criteria:
+      - no-output routine lane redirects once
+      - productive long analysis continues after a decision receipt
+      - no silent provider substitution occurs
+    evaluation_scenarios: [E3-strong-escalation, E4-fast-majority, E5-failure-recovery]
+
+  - id: SC-05
+    priority: P1
+    title: Deterministic risky-review and simplification packet
+    classification:
+      - missing skill instruction
+      - agent failure to follow adequate skill
+      - tool/environment limitation
+    target_files:
+      - plugins/agent-utilities/skills/thermos/SKILL.md
+      - plugins/agent-utilities/skills/thermo-nuclear-review/SKILL.md
+      - plugins/agent-utilities/skills/thermo-nuclear-code-quality-review/SKILL.md
+    target_sections:
+      - Workflow
+      - Breaking Functionality Guidelines
+      - Complexity thresholds
+    supporting_findings: [F01, F03, F07, F11, F14]
+    problem: >-
+      Multiple reviews found local security defects but did not disposition the
+      helper's size, existing 1,000-line complexity threshold, or absent
+      distribution path; optional providers stalled or reviewed changing inputs.
+    root_cause: >-
+      Review inputs were prose-heavy and lacked deterministic size, artifact,
+      packaging, and frozen-evidence facts.
+    proposed_behavior: >-
+      Supply a risk manifest to two purpose-distinct reviewers and add a
+      cross-model reviewer only for a unique question after provider preflight.
+    proposed_instruction_text: |-
+      For risky, release, cross-platform, or native-artifact diffs, the Thermos
+      packet includes base/head and frozen hashes, changed-file pre/post line
+      counts, every file crossing 1,000 lines, new runtime/build/generated
+      artifacts and their package/install consumers, security-boundary deltas,
+      reusable hash-bound test receipts, and unresolved native or release
+      gates. Each reviewer dispositions every threshold crossing and artifact
+      chain. A file crossing 1,000 lines requires an explicit
+      reuse/delete/split/justify disposition; no-simplification without that
+      evidence is not a clean result. Run one correctness/security review and
+      one code-quality review in parallel. Add a cross-model review only for a
+      distinct question after provider/auth preflight; time-box no-output waits.
+    triggers:
+      - risky, security, release, native, or cross-platform diff
+      - changed file crossing 1000 lines
+    exclusions:
+      - tiny or documentation-only diff
+    model_routing: >-
+      Independent Sol High or Max is mandatory; a second provider is optional
+      and purpose-specific.
+    orchestration_effect: >-
+      Fewer duplicate reviewers, stronger deterministic coverage, bounded
+      optional-provider wait.
+    expected_wall_clock_effect: saves approximately 20 to 60 minutes of review wait
+    expected_cost_effect: medium reduction
+    expected_reliability_effect: high
+    implementation_effort: medium
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - preserve independent security and correctness review
+      - do not replace tests or native gates
+      - do not rerun a full suite when a matching frozen receipt remains valid
+    acceptance_criteria:
+      - reviewer flags a large runtime helper without a package path
+      - purpose-distinct reviewers do not duplicate a full suite
+      - stalled optional provider cannot indefinitely block completion
+    evaluation_scenarios: [E2-complex-parallel, E3-strong-escalation, E5-failure-recovery]
+
+  - id: SC-06
+    priority: P1
+    title: Governing-skill provenance and restart receipt
+    classification:
+      - missing skill instruction
+      - tool/environment limitation
+    target_files:
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+    target_sections:
+      - Kickoff evidence
+      - Readiness and handoff
+    supporting_findings: [F09, F12]
+    problem: >-
+      Thirty compactions, multiple app restarts, and skill-version changes
+      required narrative reconstruction of authority, hashes, and next steps.
+    root_cause: >-
+      No durable procedural provenance or compact restart checkpoint was
+      required.
+    proposed_behavior: >-
+      Pin resolved workflow source/version/digest and checkpoint lane state
+      before restart, compaction handoff, plugin refresh, or long wait.
+    proposed_instruction_text: |-
+      At kickoff record each governing workflow skill's resolved source path,
+      version, and content digest. Before resume after restart, compaction
+      handoff, or plugin refresh, compare the receipt. Preserve the accepted
+      objective, authorization, and terminal contract; apply newer safety
+      requirements immediately, but do not silently change carrier, model,
+      test, shipping, or review policy. Record the procedural delta and chosen
+      reconciliation. Checkpoint lane hashes, consumed outputs, blockers, and
+      next commands.
+    triggers:
+      - long-running, remote, delegated, or restart-resumable task
+    exclusions:
+      - tiny single-turn task
+    model_routing: fast read-only check; Sol only for conflicting procedural deltas
+    orchestration_effect: deterministic resume without broad transcript reread
+    expected_wall_clock_effect: saves approximately 0.5 to 2 hours on long runs
+    expected_cost_effect: medium token reduction
+    expected_reliability_effect: high
+    implementation_effort: medium
+    confidence: medium-high
+    overfitting_risk: low
+    guardrails:
+      - do not execute obsolete cached code merely to preserve history
+      - current safety requirements apply immediately
+      - do not expose sensitive objective text in routing receipts
+    acceptance_criteria:
+      - restart detects and reconciles a skill-version change
+      - unchanged restart resumes from a named next command without broad reread
+      - thread identity is bound to host, cwd, objective digest, plan digest, and branch
+    evaluation_scenarios: [E5-failure-recovery]
+
+  - id: SC-07
+    priority: P1
+    title: Objective-delta and dependency-invalidation gate
+    classification:
+      - orchestration/model-routing defect
+      - agent failure to follow adequate skill
+    target_files:
+      - plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md
+      - plugins/agent-utilities/skills/task-orchestrator/SKILL.md
+      - plugins/agent-utilities/skills/task-orchestrator/scripts/delivery-contracts.test.mjs
+    target_sections:
+      - Intent And Terminal Routing
+      - Direct the work
+      - Hash-aware verification contracts
+    supporting_findings: [F02, F05, F06, F10]
+    problem: >-
+      A late macOS catalog expansion invalidated Windows parsers and expensive
+      evidence, but cheap dependency checks and branch-currency work happened
+      late.
+    root_cause: >-
+      Later scope was handled as a platform slice rather than an impact change
+      across shared contracts and evidence.
+    proposed_behavior: >-
+      Emit an impact/invalidation slice before editing and execute invalidated
+      checks cheapest-to-expensive.
+    proposed_instruction_text: |-
+      When a later instruction adds or removes a platform, action catalog
+      entry, package class, runtime, schema, or delivery requirement, record an
+      impact slice before editing: changed requirements, shared contracts and
+      catalogs, dependent parsers and consumers, invalidated evidence, affected
+      lanes, required packaging and native gates, and branch-currency effect.
+      Preserve unaffected receipts. Run invalidated gates cheapest-to-expensive:
+      canonical parsers and rejection canaries, component checks, lifecycle
+      suites, then one integration suite on the frozen hash.
+    triggers:
+      - material late scope delta
+      - shared contract, schema, or catalog hash change
+    exclusions:
+      - local implementation detail with no contract or evidence impact
+    model_routing: fast impact mapper; integration owner adjudicates dependencies
+    orchestration_effect: preserves unaffected evidence and orders dependent checks
+    expected_wall_clock_effect: saves approximately 20 to 90 minutes per material delta
+    expected_cost_effect: medium reduction in duplicate compute and debugging
+    expected_reliability_effect: high
+    implementation_effort: small-medium
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - do not rerun unaffected gates
+      - preserve one final integration suite and required native proof
+      - integrate upstream at seam freeze and pre-PR, not continuously
+    acceptance_criteria:
+      - new catalog ID immediately schedules every parser canary
+      - unaffected receipts remain valid
+      - expensive suite begins only after review and integrity freeze
+      - pre-PR branch currency is recorded
+    evaluation_scenarios: [E2-complex-parallel, E5-failure-recovery]
+
+  - id: SC-08
+    priority: P2
+    title: Stable objective-level task title
+    classification:
+      - ambiguous/conflicting skill instruction
+    target_files:
+      - plugins/agent-utilities/references/task-titles.md
+    target_sections:
+      - Material focus changes
+    supporting_findings: [F02]
+    problem: >-
+      The title narrowed to macOS even though the owning objective remained the
+      cross-platform Fleet Privilege Brokers delivery.
+    root_cause: >-
+      Material focus was interpreted as the current implementation slice.
+    proposed_behavior: keep the title anchored to the owning objective
+    proposed_instruction_text: |-
+      Keep the title anchored to the owning objective. A temporary platform
+      slice, failing test, review finding, or current implementation unit is
+      not a material focus change unless the user narrowed the objective or it
+      became the durable resume boundary.
+    triggers:
+      - multi-phase workflow-owned task title
+    exclusions:
+      - user-supplied exact title
+      - genuinely narrowed objective or durable blocked resume state
+    model_routing: none
+    orchestration_effect: improves navigation and restart orientation
+    expected_wall_clock_effect: small indirect improvement
+    expected_cost_effect: negligible
+    expected_reliability_effect: low to medium
+    implementation_effort: small
+    confidence: high
+    overfitting_risk: low
+    guardrails:
+      - retain normal state emoji updates
+      - do not ignore a genuine material focus change
+    acceptance_criteria:
+      - cross-platform task remains cross-platform while a macOS slice is active
+      - user-narrowed macOS-only follow-up may retitle
+    evaluation_scenarios: [E2-complex-parallel]
