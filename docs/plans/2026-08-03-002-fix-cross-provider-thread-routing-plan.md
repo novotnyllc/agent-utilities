@@ -4,6 +4,8 @@ type: fix
 date: 2026-08-03
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
+implementation_status: completed
+incorporated_by: 2026-08-03-001-feat-delivery-routing-model-policy-plan.md
 product_contract_source: ce-plan-bootstrap
 execution: code
 ---
