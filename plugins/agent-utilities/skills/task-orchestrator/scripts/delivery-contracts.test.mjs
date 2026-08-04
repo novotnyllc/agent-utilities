@@ -134,7 +134,7 @@ test("substitutes Terra at Max only when Luna cannot be selected", () => {
   assert.match(delivery, /`implementation_model_substitute`; it is not a carrier or provider\s+fallback/);
 });
 
-test("ships the paired source manifests as 0.5.6", () => {
-  assert.equal(codexManifest.version, "0.5.6");
-  assert.equal(claudeManifest.version, "0.5.6");
+test("ships paired source manifest versions", () => {
+  assert.match(codexManifest.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(claudeManifest.version, codexManifest.version);
 });
