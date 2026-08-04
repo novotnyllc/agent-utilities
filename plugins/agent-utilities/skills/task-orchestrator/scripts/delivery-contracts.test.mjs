@@ -10,6 +10,12 @@ const delivery = readFileSync(
   "utf8",
 );
 const thermos = readFileSync(new URL("../../thermos/SKILL.md", import.meta.url), "utf8");
+const modelRoutingSkill = readFileSync(new URL("../../model-routing/SKILL.md", import.meta.url), "utf8");
+const modelRoutingReference = readFileSync(
+  new URL("../../../references/model-routing.md", import.meta.url),
+  "utf8",
+);
+const oracle = readFileSync(new URL("../../oracle/SKILL.md", import.meta.url), "utf8");
 const providerRouting = readFileSync(
   new URL("../../../references/provider-task-routing.md", import.meta.url),
   "utf8",
@@ -267,27 +273,81 @@ test("rejects altered non-empty provider handoffs", () => {
   assert.match(providerRouting, /source orchestrator must compare each restated field against\s+its source-held handoff contract/);
   assert.match(providerRouting, /An altered-but-nonempty objective,\s+constraint, or acceptance check fails the handoff/);
   assert.match(providerRouting, /acknowledgement comparison pass\/fail and reason/);
-  assert.match(orchestrator, /altered-but-nonempty\s+content fails/);
+  assert.match(orchestrator, /altered-but-nonempty\s+content fails/i);
 });
 
-test("all model-launch workflows consume the shared provider policy", () => {
-  assert.match(orchestrator, /Before every model-specific delegation, apply the canonical\s+`\.\.\/\.\.\/references\/provider-task-routing\.md` policy/);
-  assert.match(orchestrator, /dispatch\s+precondition, not a fallback after a failed spawn/);
-  assert.match(delivery, /Before launching LFG, a CE implementation route, or a model-specific review\s+context, apply `\.\.\/\.\.\/references\/provider-task-routing\.md`/);
-  assert.match(delivery, /target task\s+then runs this workflow and any LFG or Thermos work provider-locally/);
-  assert.match(thermos, /Before launching either model-specific reviewer, apply\s+`\.\.\/\.\.\/references\/provider-task-routing\.md`/);
-  assert.match(thermos, /provider task launches both\s+reviewers provider-locally/);
-  assert.match(workflows, /\[`provider-task-routing`\]\(\.\.\/plugins\/agent-utilities\/references\/provider-task-routing\.md\)/);
+test("all model-launch workflows consume one model-routing entrypoint", () => {
+  for (const consumer of [orchestrator, delivery, thermos]) {
+    assert.match(consumer, /agent-utilities:model-routing/);
+    assert.match(consumer, /agent-utilities\/model-routing\/v1/);
+    assert.match(consumer, /do not invoke that reference as a\s+second router|never call a second router|only public model/i);
+  }
+  assert.match(providerRouting, /normative internal transport phase/);
+  assert.match(providerRouting, /never this reference as a second router/);
+  assert.match(workflows, /exact contract `agent-utilities\/model-routing\/v1`/);
+  assert.match(workflows, /consumers never call a second router/);
+  assert.match(modelRoutingSkill, /contractVersion/);
+  assert.match(modelRoutingReference, /provider-task-routing\.md/);
 });
 
-test("substitutes Terra at Max only when Luna cannot be selected", () => {
-  assert.match(orchestrator, /active collaboration\s+runtime verifies Luna is unavailable or unselectable[\s\S]*no explicit user or repository model\s+requirement wins[\s\S]*Terra at Max/);
-  assert.match(orchestrator, /`implementation_model_substitute`[\s\S]*never a provider or transport fallback/);
-  assert.match(delivery, /active collaboration runtime\s+verifies Luna is unavailable or unselectable[\s\S]*no explicit user or repository model requirement applies[\s\S]*Terra at Max/);
-  assert.match(delivery, /`implementation_model_substitute`; it is not a carrier or provider\s+fallback/);
+test("delivery workflows apply the invariant work contract and closed carrier overlay", () => {
+  for (const text of [delivery, orchestrator]) {
+    assert.match(text, /build-work-contract/);
+    assert.match(text, /objective, source-of-truth/);
+    assert.match(text, /acceptance-evidence, and stop-condition/);
+    assert.match(text, /Direct user[\s\S]{0,80}applicable\s+repository instructions outrank/);
+    assert.match(text, /catalog prompt text|prompt policy from\nthe catalog/);
+  }
+});
+
+test("centralizes the no-config implementation binding and fallback", () => {
+  assert.match(modelRoutingReference, /gpt-5\.6-luna/);
+  assert.match(modelRoutingReference, /implementation_model_substitute/);
+  assert.match(modelRoutingReference, /unavailable(?: or |\/)unselectable[\s\S]*Terra/);
+  assert.doesNotMatch(orchestrator, /gpt-5\.6-luna/);
+  assert.doesNotMatch(delivery, /gpt-5\.6-luna/);
+});
+
+test("overrides only named CE execution stages without modifying CE", () => {
+  assert.match(delivery, /Stage-scoped overrides for unchanged Compound Engineering/);
+  assert.match(delivery, /CE Plan[\s\S]*glm-5-2-scout/);
+  assert.match(delivery, /CE Work[\s\S]*glm-5-2-engineer/);
+  assert.match(delivery, /Claude slot[\s\S]*claude -p/);
+  assert.match(delivery, /never\s+the CE workflow, persona, legitimacy gate, artifact schema, writer ownership/);
+  assert.match(orchestrator, /Agent Utilities owner replaces\s+only the named CE executor\/reviewer step/);
+  assert.match(workflows, /Compound Engineering is not modified/);
+});
+
+test("adds objective, artifact, cadence, and terminal-ledger controls", () => {
+  assert.match(delivery, /objective\/artifact admission receipt/);
+  assert.match(delivery, /producer-to-package-to-install-to-consumer chain/);
+  assert.match(delivery, /simplification receipt/);
+  assert.match(delivery, /coherent vertical chunk/);
+  assert.match(delivery, /one instrumented\s+diagnostic push/);
+  assert.match(delivery, /executionHost/);
+  assert.match(delivery, /terminal-gate ledger/);
+  assert.match(orchestrator, /admitted -> oriented -> active -> frozen -> consumed\|superseded\|blocked -> terminal/);
+  assert.match(orchestrator, /one bounded redirect/);
+  assert.match(orchestrator, /output consumer/);
+  assert.match(orchestrator, /critical-path duration/);
+});
+
+test("Thermos freezes one packet and reuses matching concern coverage", () => {
+  assert.match(thermos, /Freeze one deterministic review packet/);
+  assert.match(thermos, /one correctness\/security disposition and one code-quality disposition/);
+  assert.match(thermos, /matching independent CE or Sol review may satisfy a disposition only when/);
+  assert.match(thermos, /review is a concern-coverage portfolio, not an additive swarm/);
+});
+
+test("Oracle exposes a routed browser-only mode without changing manual use", () => {
+  assert.match(oracle, /agent-utilities\/model-routing\/v1/);
+  assert.match(oracle, /oracle-route\.mjs/);
+  assert.match(oracle, /routed Oracle API|oracle-api/);
+  assert.match(oracle, /Manual API usage[\s\S]*manual Oracle commands/);
 });
 
 test("ships paired source manifest versions", () => {
   assert.match(codexManifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(claudeManifest.version, codexManifest.version);
+  assert.ok(claudeManifest.skills.includes("./skills/model-routing"));
 });

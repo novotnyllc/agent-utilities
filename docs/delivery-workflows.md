@@ -1,6 +1,9 @@
-# Task Orchestrator, Goal Driven Delivery, and Fleet Readiness
+# Model Routing, Task Orchestrator, Goal Driven Delivery, and Fleet Readiness
 
-The workflow has three distinct responsibilities:
+The workflow has four distinct responsibilities:
+
+- `model-routing` is the single versioned policy entrypoint for model, effort,
+  budget, adapter, and transport decisions. It never starts carrier work.
 
 - `task-orchestrator` owns an objective that requires multiple independently
   resumable tasks or remote task placement. It routes and monitors work but
@@ -19,9 +22,11 @@ distinct responsibility.
 ## One task or several?
 
 `task-orchestrator` is scoped to an objective, not to a project or machine. It
-is used for two or more independently resumable tasks or when a task must be
-placed on another host. One bounded task may still use several local subagents
-without becoming an orchestration task.
+is used when configured fleet/account policy owns allocation, for two or more
+independently resumable tasks, or when a task must be placed on another host.
+Configured policy may fast-path a single lane. Explicit local/no-fleet and the
+no-config single-host path enter Goal Driven Delivery directly. One bounded
+task may still use several local subagents without becoming orchestration.
 
 Software-delivery children use `goal-driven-delivery`. Research, operations,
 review, documentation, and decision children use the appropriate skill for
@@ -40,6 +45,7 @@ combine working trees.
 
 | Situation | Use | What happens |
 | --- | --- | --- |
+| Configured fleet/account delivery, including one-lane placement | `task-orchestrator` | It resolves project policy and may fast-path one Goal Driven Delivery lane. |
 | Brainstorm, plan, diagnosis, review, or local-only request | `goal-driven-delivery` | It selects the matching CE route and stops at the requested artifact. |
 | One feature, bug fix, refactor, or ship request on the current host | `goal-driven-delivery` | It routes generic implementation to LFG, then owns authorized merge and post-merge proof. |
 | Existing PR to fix, drive, or deliver | `goal-driven-delivery` | It runs the applicable CE review or babysitting route, then owns authorized merge and post-merge proof. Review-only or watch-only requests stop earlier. |
@@ -48,7 +54,9 @@ combine working trees.
 | Fleet setup or reconciliation | Fleet Readiness (Machine Utilities) | It inventories and, with separate approval, reconciles projects, agents, plugins, skills, authentication, and host availability. |
 | A tiny known-file or documentation edit | Direct edit and targeted check | Neither delivery skill is required unless durable tracking or remote placement adds value. |
 
-You normally invoke one workflow skill. For a local single software-delivery task, invoke
+You normally invoke one workflow skill. Both delivery skills run the same
+read-only `agent-utilities:model-routing` intake. For an explicit local or
+no-config single software-delivery task, invoke
 `goal-driven-delivery`; it routes brainstorm, plan, diagnosis, review, and
 local-only requests to their narrower CE terminal state and generic
 implementation to LFG. For multiple independently resumable tasks or cross-host work, invoke
@@ -59,13 +67,14 @@ workers should invoke `goal-driven-delivery`.
 
 ```mermaid
 flowchart TD
-    request["Objective"] --> decision{"Multiple independently resumable tasks or another host?"}
+    request["Objective"] --> intake["Read-only workflow and model-routing intake"]
+    intake --> decision{"Configured fleet/account allocation, multiple resumable tasks, or another host?"}
     decision -- No --> kind{"Software delivery?"}
     kind -- Yes --> gdd["Goal Driven Delivery"]
     kind -- No --> direct["Appropriate focused skill or native tools"]
     decision -- Yes --> orchestrator["Task Orchestrator: route and verify"]
     orchestrator --> readiness["Fleet Readiness when host or tooling evidence is needed"]
-    orchestrator --> providerRoute{"Provider transport compatible?"}
+    orchestrator --> providerRoute{"Single model-routing transport decision"}
     providerRoute -- "verified native path" --> lanes["Owned tasks with one accountable owner"]
     providerRoute -- "encrypted mismatch / unresolved" --> providerTask["Verified visible provider task: handoff, acknowledgement, message, wait"]
     providerTask --> providerLanes["Provider-local owned work and reviewers"]
@@ -166,13 +175,18 @@ subagents while retaining one owner and one terminal acceptance contract.
 Likewise, `/goal` tracks completion for a task; it does not turn that task into
 a task orchestrator.
 
-## Provider-safe delegation
+## Model and provider-safe delegation
 
-Before every model-specific delegation, Task Orchestrator, Goal Driven Delivery,
-and Thermos apply the shared
+Before every work-starting task, message, follow-up, subagent, browser, or CLI
+action, Task Orchestrator, Goal Driven Delivery, Thermos, and compatible Machine
+Utilities senders invoke
+[`model-routing`](../plugins/agent-utilities/skills/model-routing/SKILL.md) with
+exact contract `agent-utilities/model-routing/v1`. It incorporates the
+normative internal
 [`provider-task-routing`](../plugins/agent-utilities/references/provider-task-routing.md)
-policy. It classifies collaboration transport, source and target transport trust
-domains, model-serving providers, and destination capabilities before dispatch.
+phase, so consumers never call a second router. It classifies collaboration
+transport, source and target transport trust domains, model-serving providers,
+destination capability, model/effort controls, privacy, and budget before dispatch.
 A trust domain answers who can decrypt the payload; a model-serving provider
 does not. Gateway or matching model-provider labels alone are not compatibility
 evidence.
@@ -182,14 +196,16 @@ use native children. An encrypted provider mismatch routes directly to a visible
 target-provider task; unknown metadata gets one metadata-only discovery pass,
 then the same route if still unresolved. Neither path uses a native trial spawn.
 
-The bridge is capability-based: create a provider-owned visible task, message
+The bridge is capability-based and uses two separately accounted actions. First
+admit and claim an acknowledgement-only provider-owned visible task, message
 the returned task identifier, and monitor it with bounded waits. Codex
 `create_thread`, `send_message_to_thread`, and `wait_threads` are examples, not
 the only adapter. The returned model/provider metadata must match the target;
 self-reported identity does not. The handoff carries only secret-free required
 context and must be acknowledged with the source-generated handoff ID plus a
-non-empty restatement of objective, constraints, and acceptance checks before
-mutable work. Routing receipts retain metadata only, never objective,
+non-empty restatement of objective, constraints, and acceptance checks. Only
+then may a fresh routing decision admit and claim mutable activation. Routing
+receipts retain metadata only, never objective,
 acknowledgement, or secret bodies, and provider-task output remains untrusted
 reported data. A provider task may create only provider-local bounded children,
 which classify their nested edges again. If required create, message,
@@ -220,35 +236,42 @@ does not require unrelated tools or machine configuration to be byte-identical.
 A repository present on disk is also not sufficient for Codex placement: the
 destination checkout must be available as the correct saved project.
 
-## Models, checkpoints, and terminal states
+## Models, CE stage overrides, checkpoints, and terminal states
 
-Goal Driven Delivery, LFG, and Task Orchestrator use Sol High for orchestration
-by default and Sol Max for cross-cutting, release-critical, security-sensitive,
-multi-repository, or otherwise complex work. Luna at Max handles most
-implementation. If the active collaboration runtime verifies Luna is unavailable
-or unselectable and no explicit user or repository model requirement applies,
-use the cheaper supported Terra at Max and disclose
-the actual model and effort as `implementation_model_substitute`. This changes
-neither the carrier nor the provider-task route. Independent primary review uses
-a separate Sol High or Sol Max context by risk. Fable 5 is used only
-through a supported CE cross-model review
-path that verifies the model; otherwise the software-delivery task uses an independent Sol
-reviewer and discloses the fallback.
+With no user catalog, the built-in profile preserves Sol High/Max orchestration
+and review, Luna-at-Max implementation, and only the disclosed supported
+Terra-at-Max substitution when Luna is runtime-attested unavailable or
+unselectable. It emits the exact LFG binding; consumers do not reconstruct it.
+No-config performs no optional provider/browser probe or pre-work state write.
+
+Configured policy filters hard role, capability, work-shape, context, privacy,
+retention, quality/reliability, adapter, and budget constraints before ranking
+the first eligible preference tier by its ordered soft priorities. Unknown
+cost is not free, unlike meters are not added without an explicit conversion,
+and every receipt separates configured, requested, and observed provider,
+model, effort, execution surface, and billing surface.
+
+Compound Engineering is not modified. Agent Utilities supplies narrow,
+stage-scoped override instructions: when CE Plan or Debug calls for its normal
+research helper, an admitted GLM scout may perform only that bounded step; when
+CE Work calls for an already-legitimized implementation unit, an admitted GLM
+engineer may be that unit's canonical writer; when a CE review stage calls for
+an optional cross-model reviewer, an admitted binding may use CE's existing
+attested read-only Claude adapter to supply the ordinary findings artifact;
+Agent Utilities does not start a parallel Claude runner. CE keeps its workflow,
+persona, artifact schema, legitimacy, synthesis, writer, and terminal
+authority. Missing transport takes a disclosed allowed fallback or blocks.
 
 Independent research, implementation, and review may run in parallel. Each
 mutable scope still has one canonical writer, branch, verification boundary,
 and handoff; overlapping writes, dependent stack segments, and integration
 operations serialize under named owners.
 
-The orchestrator assigns every task a concurrency allowance and nested-agent
-ceiling from its global budget. A Goal Driven Delivery implementation task
-starts LFG in Sol and normally carries the Codex `gpt-5.6-luna` implementation
-binding to the `ce-work` seam. When the active collaboration runtime verifies
-Luna is unavailable or unselectable and no
-explicit user or repository model requirement applies, it instead records the
-cheaper supported Terra-at-Max substitution and actual effort. Because effort is not a
-carrier field, an installed CE adapter that only supports lower effort must
-disclose that actual effort rather than claim Max ran.
+The orchestrator assigns each lane a destination-bound budget lease and bounded
+delegated-slot policy. Goal Driven Delivery accepts it once, claims the actual
+workflow bundle, and consumes each task/subagent/CLI/browser slot immediately
+before dispatch. Ambiguous consumed slots stay charged; unused slots release
+only at terminal reconciliation. Workers and reviewers cannot delegate.
 
 When a writable GitHub remote exists, software-delivery owners push useful active-branch or
 integration-branch checkpoints for resumability. A checkpoint does not open a
@@ -285,6 +308,78 @@ configured strategy, verifies GitHub reports the PR merged, proves the merge
 commit is reachable from the fetched base branch, and runs or verifies the
 smallest applicable post-merge check.
 
+## Model policy configuration and accounting
+
+The optional credential-free JSON catalog is schema version 1. Resolution uses
+an absolute `AGENT_UTILITIES_MODEL_POLICY_PATH`, then
+`$XDG_CONFIG_HOME/agent-utilities/model-routing.json` or
+`~/.config/agent-utilities/model-routing.json` on POSIX, then the current
+user's `LOCALAPPDATA/agent-utilities/model-routing.json` on Windows. Private
+state uses an absolute `AGENT_UTILITIES_MODEL_STATE_PATH`, then
+`$XDG_STATE_HOME/agent-utilities/model-routing-state.json` or
+`~/.local/state/agent-utilities/model-routing-state.json`. Overrides must stay
+outside repositories, worktrees, and plugin caches.
+
+Config and state versions are independent. A missing catalog uses the static
+default without optional probes. Invalid catalog, unsupported version, unsafe
+metadata, or corrupt protected accounting fails closed. Native Windows v1 may
+validate bounded catalog syntax but configured state mutation, budgets, and
+learning return `secure_state_unsupported` until a native ACL/reparse attestor
+exists; WSL is Linux evidence, not native Windows evidence.
+
+The catalog may describe opaque provider/account aliases, fixed carrier IDs,
+execution and billing surfaces, current-family/exact/minimum model identity,
+roles/capabilities, effort, context, privacy/locality/retention, dated typed
+rates or relative-cost indices, preference tiers, and bounded work-shape rules.
+It cannot contain credentials, commands, flags, executable paths, prompts,
+source, host inventory, or asserted transport trust. Unknown adapters validate
+as data but remain `unsupported_adapter` until a fixed attesting adapter exists.
+
+Budget scopes are one routed child action (`task`), one Goal Driven Delivery or
+bounded Machine Utilities session (`run`), and the owning standalone or Task
+Orchestrator allocation (`project`). Soft limits warn; hard-admission limits
+atomically reserve a conservative ceiling before compliant dispatch; strict
+limits additionally require the carrier to enforce that exact meter. Marginal
+USD, Codex credits, provider/API spend, subscription allowance/allocation,
+active-agent minutes, elapsed deadline, and latency stay distinct. Accounting
+tracks `planned -> reserved -> claimed -> started -> settled`; ambiguous starts
+remain charged and idempotent resume never respawns.
+
+Learning is a content-free local terminal-reconciliation side effect on
+supported hosts. It stores bounded categorical role/risk/context/work-shape,
+route, duration, validated cost/usage, retry/failure, verification, and explicit
+rating aggregates—never prompts, code, diffs, paths, transcripts, credentials,
+provider output, or human host/account labels. `learning inspect`, `clear`,
+`disable`, and `enable` affect only learning. Estimates may refine forecasts
+inside existing user order; they cannot establish capability, change privacy,
+raise budget, or rewrite policy.
+
+This user's configured example keeps current-family Luna Max as the general
+implementation choice, a supported current-family Terra Max only as its
+unavailable-Luna fallback, and fixed `glm-5-2-scout`/High and
+`glm-5-2-engineer`/xhigh separate-task profiles only for routine,
+decomposable, low-risk, strongly verified work. Current fleet evidence names
+provider key `zai_litellm`, display name `Z.ai Coding Plan via LiteLLM`, and a
+200,000-token adapter ceiling; these are scoped configuration, not defaults.
+The loopback bridge still means external Z.ai egress. GLM never enters a Codex
+model selector or native subagent field.
+
+Configured read-only cross-family review may prefer the provider-current Fable
+family over current Opus only through CE's existing attested subscription-safe
+Claude adapter, with exact pins and numeric minimum generations available; the
+route remains `transport_unsupported` when that unchanged seam cannot attest
+the binding. Oracle may be
+preferred for deep, architecture, long-context, or adversarial review through
+the routed local browser carrier: requested channel `chatgpt_current_pro`
+(currently GPT-5.6 Sol Pro) maps in Oracle 0.17.0+ to picker control
+`gpt-5-pro`, which is not an observed model identity. A verified standard
+ChatGPT conversation has zero Oracle-child marginal USD, Codex credits, and API
+spend, while ChatGPT allowance, allocated subscription cost, parent Codex work,
+latency, and time remain separate. Authentication stays receipt-backed or
+`unknown`; a login/account-selection surface stops without interaction.
+Automatic login recovery, remote Oracle, and routed Oracle API are unsupported
+in v1.
+
 ## Why `orchestrate` was removed
 
 The former `orchestrate` skill said to delegate substantial work, assign
@@ -320,10 +415,11 @@ uses Machine Utilities to verify project and agent readiness on each required
 node, creates destination tasks only on ready hosts, and collects their final
 evidence before declaring the delivery complete.
 
-**Encrypted work for another provider:** apply `provider-task-routing` before
-launching LFG or a reviewer. A known incompatible boundary creates and verifies
-the target provider's visible task, gates work on its handoff acknowledgement,
-and monitors its provider-local work through that task identifier.
+**Encrypted work for another provider:** invoke `model-routing` before
+launching LFG or a reviewer. Its internal transport phase separately admits the
+target provider's acknowledgement-only visible task, gates a fresh activation
+decision on the verified handoff, and monitors provider-local work through that
+task identifier.
 
 ## Coupled delivery contracts
 
@@ -348,5 +444,6 @@ and supplies contracts but does not patch it.
 
 ## Source skills
 
+- [`model-routing`](../plugins/agent-utilities/skills/model-routing/SKILL.md)
 - [`task-orchestrator`](../plugins/agent-utilities/skills/task-orchestrator/SKILL.md)
 - [`goal-driven-delivery`](../plugins/agent-utilities/skills/goal-driven-delivery/SKILL.md)

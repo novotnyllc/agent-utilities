@@ -1,9 +1,12 @@
 # Provider task routing
 
-Apply this policy before every model-specific delegation. It owns the one
-compatibility matrix for Task Orchestrator, Goal Driven Delivery, and Thermos.
-The policy chooses a transport-safe delivery path; model selection remains a
-separate decision inside that path.
+This is the normative internal transport phase of
+`agent-utilities/model-routing/v1`. Workflow consumers invoke
+`agent-utilities:model-routing`, never this reference as a second router. The
+phase owns the one compatibility matrix for Task Orchestrator, Goal Driven
+Delivery, Thermos, and compatible Machine Utilities senders. It chooses a
+transport-safe path without changing the frozen model, effort, privacy, or
+budget decision.
 
 ## Classify before dispatch
 

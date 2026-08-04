@@ -18,6 +18,7 @@ they can be used across Codex and Claude Code environments.
 | `frontend-design` | Build polished, non-generic web interfaces. |
 | `goal-driven-delivery` | Route one lane and drive generic implementation through LFG, merge, and post-merge proof. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
+| `model-routing` | Resolve versioned model, effort, budget, transport, and per-action dispatch policy without starting provider work. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
 | `oracle` | Request a second-model review of selected prompts and files. |
@@ -89,9 +90,11 @@ publishing. The repository has focused executable behavior tests:
 
 ```sh
 node --test plugins/agent-utilities/skills/task-orchestrator/scripts/delivery-contracts.test.mjs
+node --test plugins/agent-utilities/scripts/model-routing.test.mjs
 npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts
 node --test plugins/agent-utilities/skills/cleanup-codex/scripts/cleanup-codex.test.mjs
 node --test plugins/agent-utilities/skills/oracle/scripts/ensure-oracle.test.mjs
+node --test plugins/agent-utilities/skills/oracle/scripts/oracle-route.test.mjs
 ```
 
 These are not a repository-wide test suite.

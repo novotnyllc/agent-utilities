@@ -100,50 +100,90 @@ fetch the base and use
 `git merge-base --is-ancestor <merge-commit> origin/<base>` before the
 post-merge check.
 
-## Provider-task routing
+## Model-routing preflight
 
-Before launching LFG, a CE implementation route, or a model-specific review
-context, apply `../../references/provider-task-routing.md`. If it selects the
-visible provider-task bridge, create and verify that task first, send the full
-secret-free delivery contract through its returned identifier, and wait for its
-integrity acknowledgement before launching LFG or reviewers. The target task
-then runs this workflow and any LFG or Thermos work provider-locally; monitor it
-through the same returned identifier. Do not use a native cross-provider spawn
-as a probe, and do not let a model selection change the provider route.
+Before work or every work-starting steering action, invoke
+`agent-utilities:model-routing` with exact contract
+`agent-utilities/model-routing/v1`. It is the only public model, effort,
+budget, and transport router. Its internal transport phase applies
+`../../references/provider-task-routing.md`; do not invoke that reference as a
+second router or copy its matrix here.
+
+Run the shared intake first without a model call, provider probe, visible-task
+creation, or state mutation. Explicit workflow and terminal instructions win.
+Configured fleet/account delivery enters Task Orchestrator, even when it
+fast-paths one lane; explicit local/no-fleet work or the no-config default stays
+in this lane. Model selection never changes the chosen workflow.
+
+Before fan-out, emit an objective/artifact admission receipt covering every
+named platform, lifecycle path, security boundary, deliverable, completion
+condition, and producer-to-package-to-install-to-consumer chain. A source-only
+skill payload needs no invented binary. A missing objective item or unresolved
+runtime delivery path blocks expansion; ordinary implementation uncertainty
+gets at most one bounded spike.
 
 ## Model And Concurrency Policy
 
-- Start Goal Driven Delivery and LFG in a Sol context at High effort by default.
-  Use Max effort for cross-cutting, release-critical, security-sensitive,
-  multi-repository, or otherwise complex work. If the current context does not
-  match, use the host's supported model-launch mechanism; do not silently
-  continue on another model.
-- Prefer Luna at Max for implementation. If the active collaboration runtime
-  verifies Luna is unavailable or unselectable and no explicit user or repository model requirement applies,
-  prefer the cheaper supported Terra at Max. Record and disclose the actual model and
-  effort as `implementation_model_substitute`; it is not a carrier or provider
-  fallback.
-- When Luna is selected, pass LFG this exact four-field implementation carrier
-  so its `ce-work` stage uses Luna rather than inheriting the orchestrator:
+Consume the resolver's immutable snapshot, including policy digest, selected
+model and effort, carrier/adapter, transport, budget lease or reservation,
+fallback policy, and requested-versus-actual disclosure. With no catalog, the
+resolver preserves the shipped Sol orchestration/review and Luna implementation
+defaults, including only the verified-unavailable-Luna Terra substitution; it
+must emit the exact LFG implementation binding. Do not reconstruct operational
+model constants or ranking rules in this skill.
 
-  ```text
-  implementation_engine:{"mode":"require","target":"codex","model":"gpt-5.6-luna","source":"goal-driven-delivery"}
-  ```
+Immediately after selection, call the same router's `build-work-contract`
+command with the frozen objective, source-of-truth, scope, constraints,
+authorization, acceptance-evidence, and stop-condition digests plus the
+selected carrier/model/effort. Preserve its invariant digest unchanged and
+apply its source-owned GPT/Sol, Opus, Fable, GLM, or Oracle presentation
+instructions to the dispatched brief. Direct user instructions and applicable
+repository instructions outrank that overlay. Never accept prompt policy from
+the catalog or hand-edit a carrier-specific objective, authority, or stop
+condition.
 
-  Configure the qualified Codex implementation launch for Max reasoning effort
-  when that route exposes an effort control; effort is not a carrier field.
-  When the active collaboration runtime verifies Luna is unavailable or unselectable, state the cheaper supported Terra model and
-  Max effort in the LFG request instead of inventing a fallback carrier field.
-  An installed CE adapter that supports only lower effort must disclose the
-  actual effort. An explicit user or repository model requirement still wins.
-- Independent primary review uses a separate Sol High or Sol Max context
-  selected by risk. Require the review receipt before merge.
-- Use Fable 5 for supported cross-model review only when the existing CE path
-  verifies that model. If it cannot be verified, use an independent Sol
-  reviewer and disclose the fallback; never guess a model identifier.
-- Run independent research, implementation, and review in parallel when safe.
-  Keep one canonical writer per mutable scope and serialize overlapping writes,
-  semantic hotspots, dependent stack segments, and integration operations.
+For configured nested work, reserve and claim one bounded delegated-slot bundle
+before the owning workflow. Consume a slot durably immediately before its task,
+subagent, browser, or CLI action; unused slots release only at terminal
+reconciliation and ambiguous consumed slots stay charged. Review peers and
+workers cannot delegate, change policy, commit, push, merge, or expand authority.
+
+### Stage-scoped overrides for unchanged Compound Engineering
+
+Compound Engineering remains an unchanged external workflow carrier. A frozen
+model-routing decision may replace only a named CE execution mechanism, never
+the CE workflow, persona, legitimacy gate, artifact schema, writer ownership,
+review authority, or terminal boundary:
+
+- When CE Plan or its deepening instructions say to launch their normal
+  research subagent, a claimed `glm-5-2-scout` slot means create the explicitly
+  authorized separate GLM scout task instead, give it the same bounded research
+  question and frozen egress envelope, then return its evidence in the ordinary
+  CE Plan research input shape.
+- When CE Debug says to launch an investigation helper, the same scout override
+  may replace only that bounded investigation. Root-cause selection and fix
+  legitimacy remain with CE Debug and this lane.
+- When CE Work says to execute an already-legitimized implementation unit, a
+  claimed `glm-5-2-engineer` slot means use the authorized separate GLM engineer
+  task as that unit's canonical writer, then hand its patch, focused-check
+  receipt, and worktree state back through CE Work's normal unit boundary.
+- When CE Code Review, CE Doc Review, POV, LFG review, or Thermos says to launch
+  its normal optional cross-model reviewer, a claimed Claude slot may replace
+  only that executor through CE's existing attested read-only Claude adapter.
+  Pass the frozen model-routing binding to that CE-owned seam and feed its
+  receipt-bound findings into the same synthesis/disposition step. Agent
+  Utilities never starts a parallel raw `claude -p` runner. Until the existing
+  CE seam attests the binding, the route remains `transport_unsupported`. It
+  does not replace mandatory independent Sol, correctness/security, or
+  code-quality coverage.
+
+If the selected separate-task/profile or Claude CLI adapter cannot be attested,
+take the resolver's disclosed allowed fallback or block when required. Never
+pass GLM, Fable, or Opus through a Codex selector, silently inherit CE's model,
+patch CE source/cache, or claim the override ran from instructions alone.
+
+Run independent work in parallel only when writers, dependencies, transport,
+and reservations do not overlap. Keep one canonical writer per mutable scope.
 
 ## GitHub Checkpoints And Stacked Delivery
 
@@ -205,6 +245,60 @@ integration, surface disproportionate line growth, execution time, or fixture
 cost, then simplify or rescope. After interface convergence, freeze scope and
 reject adjacent abstractions or features unless the user explicitly reopens it.
 
+### Objective, artifact, and simplification gates
+
+Before a substantial implementation unit, name its observable user operation
+and the required secondary state that proves the result reached the real
+consumer. A new platform, manager, carrier, or privileged capability needs one
+such end-to-end exemplar before sibling expansion. Parser, build, broker, or
+simulated-target success alone is not that proof.
+
+Before scaling a compiled/native helper, service, daemon, runtime payload, or
+material complexity increase, write a simplification receipt comparing an
+existing helper, stdlib, platform API/CLI/module, and repository primitive. Name
+the exact required security property a simpler choice loses and prove the
+chosen artifact's build, package, install, and invocation chain. If that chain
+or justification is unresolved, stop after one bounded feasibility spike.
+
+Implement a coherent vertical chunk before pausing: the smallest behaviorally
+complete slice with a focused check that can fail for that behavior. A cheap
+boundary canary runs inside the chunk only when it can change the next step.
+At the boundary run the minimum focused checks; do not rerun an unchanged check
+because another file was edited. Freeze full/native/hosted/lifecycle/release
+and review inputs, run each required gate once, and invalidate only receipts
+whose dependency hash changed.
+
+### Hosted feedback, restart, and completion ledger
+
+Treat hosted CI and remote/native matrices as frozen-input proof, not the
+default debugger. After the first opaque, silent, or late failure, isolate the
+smallest stage, add bounded secret-free progress evidence, and move the cheapest
+decisive check before unrelated setup. Permit at most one instrumented
+diagnostic push for that unresolved stage; every later push needs new evidence.
+
+Keep `executionHost` separate from `targetPlatform`; choose shell, filesystem,
+process, permission, and utility semantics from the real execution host while
+policy and expected behavior come from the target. WSL never proves native
+Windows.
+
+Maintain a compact restart receipt containing plan digest, objective epoch,
+governing skill/package digest, active lanes, frozen inputs, decisions, and
+reusable evidence. Resume at the next invalidated action rather than rereading
+the repository or transcript. A skill or objective digest change requires
+reconciliation; a local delta invalidates only dependent evidence.
+
+Render status from one terminal-gate ledger: implementation units, changed
+repositories, frozen local checks, native/hosted/lifecycle gates, review,
+Git/PR/merge state, release coupling, source pins, and local/remote clean-state
+proof. `No currently known implementation defects` is not terminal completion,
+and `only X remains` is allowed only when every other gate is satisfied,
+intentionally excluded, or explicitly blocked.
+
+Report critical-path wall time, active-agent time, external wait, and tool time
+separately from model tier, token/cost estimate, retries, and duplicated work.
+Parallelism may lower wall time while increasing aggregate model cost; never
+use either metric as permission to weaken final proof.
+
 ## Evidence And Blockers
 
 Report the selected route, terminal state, checks, review or CI evidence, and
@@ -227,12 +321,11 @@ Resolve skill names against the host's available-skills list before invoking. Us
 - `compound-engineering:ce-debug`: focused one-shot CI or code failure diagnosis.
 - `compound-engineering:ce-compound`: durable learning capture after a solved problem.
 
-Use Luna at Max for implementation when selectable. Use the recorded supported
-Terra-at-Max substitution only when the active collaboration runtime verifies
-Luna is unavailable or unselectable and no explicit user or repository model
-requirement applies. Disclose the actual model and effort. Use native host
-subagents for bounded research and review when their assigned model matches the
-policy.
+Use the immutable model-routing decision and disclose its requested and actual
+model, effort, adapter, transport, reason, and fallback. The built-in policy
+owns the no-config defaults and exact LFG binding. Use native host subagents
+only when the selected model is exposed by that selector and the fork/effort
+controls are attested; non-selector routes use their fixed stage override.
 
 ## Thermos Gate
 
@@ -336,7 +429,7 @@ LFG invocation template (the routing line is stage-scoped control data, not
 product-plan content):
 
 ```text
-Implementation routing: prefer Codex gpt-5.6-luna at Max. If the active collaboration runtime verifies Luna is unavailable or unselectable and no explicit user or repository model requirement applies, use cheaper supported Terra at Max and disclose `implementation_model_substitute` with the actual model and effort. This does not change the provider route. When Luna is selected, retain implementation_engine:{"mode":"require","target":"codex","model":"gpt-5.6-luna","source":"goal-driven-delivery"} for the ce-work seam only.
+Implementation routing: apply the claimed `agent-utilities/model-routing/v1` snapshot verbatim. Pass its emitted LFG implementation binding only at the ce-work seam. Apply any named stage-scoped override above without changing the CE workflow, persona, artifact schema, authority, or terminal boundary. Disclose requested and actual model, effort, adapter, transport, and fallback; do not reconstruct a model constant here.
 
 Deliver <FEATURE> through merge and post-merge proof.
 

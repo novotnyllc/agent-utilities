@@ -7,6 +7,63 @@ description: "Oracle second-model review: bundle prompts/files, debug, refactor,
 
 Oracle bundles your prompt + selected files into one “one-shot” request so another model can answer with real repo context (API or browser automation). Treat outputs as advisory: verify against the codebase + tests.
 
+## Routed model-routing mode (policy-selected browser reviews only)
+
+When an active caller supplies an admitted, claimed
+`agent-utilities/model-routing/v1` `oracle-browser` review decision, use this
+skill's `scripts/oracle-route.mjs` carrier instead of the manual bootstrap
+below. It accepts only the current ChatGPT Pro channel
+`chatgpt_current_pro`, fixes Oracle to local Homebrew Oracle `>=0.17.0`, and
+spawns only `--engine browser --model gpt-5-pro`. The picker control is not an
+observed-model claim: OpenAI currently labels the target GPT-5.6 Sol Pro, while
+the served identity and remaining ChatGPT allowance can remain unknown.
+
+The carrier verifies the immutable claimed review and frozen-input digest
+through model-routing's read-only claim inspection before any Oracle or
+Homebrew call; caller-shaped claim JSON is not authority. The verified claim's
+host, account, dispatch kind, session, tool, and tool-version identity is
+copied into every receipt. Model Routing accepts that receipt only through the
+Oracle carrier's private-state receipt importer, so modifying the returned JSON
+cannot forge settlement. It ignores
+`ORACLE_BIN`, `ORACLE_MODEL`, `ORACLE_HOME_DIR`, caller `PATH`, and Homebrew
+overrides. It freezes secret-checked bounded regular prompt/file bytes,
+arguments, and exclusions into a private local bundle, dry-runs/validates those
+same bytes, revalidates their SHA-256 digest before its one browser spawn, and
+returns a router-compatible sanitized read-only-advisor receipt. Review output
+stays in a bounded private result artifact; the receipt exposes only its local
+locator and digest for CE/Thermos verification. Its route-owned private
+Oracle home and `--retain-hours` are bounded. A detached session is reattached
+by the same claim on the same host, never redispatched; reattachment preserves
+the original retention deadline rather than extending it. At that deadline,
+started, ambiguous, settled, and proved-no-start receipts plus private bundles
+and result artifacts are removed. The remaining content-free terminal claim
+tombstone rejects redispatch and stale reattachment. Reattach locks carry the
+claim/session/digest identity and a bounded lease that never exceeds the
+session deadline; stale locks are removed only after no-follow regular-file
+identity checks. A login or account selection
+surface stops without interaction. A durable pre-spawn claim tombstone makes
+concurrent or lost-response retries return the existing receipt or a durable
+`ambiguous` receipt, never launch again. Terminal or proved-no-start runs
+delete the prompt/file bundle. The carrier binds both the final executable and
+every ancestor's identity, owner, group, and mode and revalidates them before
+each spawn. The final file remains a no-follow regular root/current-user-owned
+non-group/world-writable executable. Ancestor group write is accepted only
+inside the fixed `/opt/homebrew` or `/usr/local` tree when that writable
+ancestor is current-user-owned, not world-writable, and its group is one of the
+current process groups; arbitrary or other-owner group-writable trees fail.
+Lifecycle installation/upgrade is a distinct
+resolver-verified admitted/claimed `oracle-homebrew-lifecycle` Homebrew
+transaction and never runs as a test or as part of a review claim. It can only
+run the fixed `steipete/tap/oracle` install/upgrade command without elevation,
+re-resolves Oracle afterward, and reports fixed zero model-usage meters. A
+successful lifecycle settlement creates a same-host, same-account fresh-review
+requirement in Model Routing; the next review claim must bind that requirement
+before review work can start.
+
+Routed `oracle-api` is `unsupported_adapter` in v1: it never falls back from
+the browser claim. Manual API usage, including its explicit per-use cost
+consent, remains outside routed v1 along with all manual Oracle commands below.
+
 ## Required bootstrap (every activation)
 
 Before the first Oracle command on **every** activation, resolve `SKILL_DIR` as
