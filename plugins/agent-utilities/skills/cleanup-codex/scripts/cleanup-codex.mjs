@@ -38,10 +38,16 @@ const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 const MAX_ATTESTATION_BYTES = 64 * 1024;
 const MAX_PID_RECORD_BYTES = 4 * 1024;
 const MAX_HOOK_RECEIPT_BYTES = 64 * 1024;
+const MAX_HOOK_INPUT_BYTES = 16 * 1024;
+// ponytail: one bounded SessionEnd pass; chunk only if real residue exceeds the three-second cap.
+const MAX_HOOK_TARGETS = 24;
 const MAX_HOOK_ANCESTORS = 8;
-const HOOK_COMMAND_TIMEOUT_MS = 125;
-const HOOK_TOTAL_BUDGET_MS = 1_500;
-const HOOK_RECEIPT_SCHEMA = "cleanup-codex-hook-health-v1";
+const HOOK_COMMAND_TIMEOUT_MS = 500;
+const HOOK_TOTAL_BUDGET_MS = 2_700;
+const HOOK_GRACE_MS = 200;
+const HOOK_POST_SIGNAL_MS = 50;
+const HOOK_RECEIPT_SCHEMA = "cleanup-codex-hook-cleanup-v1";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PS = "/bin/ps";
 const LSOF = "/usr/sbin/lsof";
@@ -214,7 +220,7 @@ export function parseCliArgs(argv) {
 
     if (!arg.startsWith("-") && !actionSeen) {
       actionSeen = true;
-      if (arg === "inspect" || arg === "reap" || arg === "recycle") action = arg;
+      if (arg === "inspect" || arg === "cleanup" || arg === "reap" || arg === "recycle") action = arg;
       else {
         action = "invalid";
         error = "invalid-action";
@@ -240,7 +246,8 @@ export function parseCliArgs(argv) {
   }
   if (action === "recycle" && !unmanaged && launcher !== null) error = "launcher-requires-unmanaged";
   if (hook && snapshot !== null) error = "hook-snapshot-not-allowed";
-  if (hook && action !== "inspect") error = "hook-requires-inspect";
+  if (hook && action !== "cleanup") error = "hook-requires-cleanup";
+  if (!hook && action === "cleanup") error = "cleanup-requires-hook";
   return {
     action,
     json,
@@ -1163,16 +1170,102 @@ export function readSnapshotSecure(file, {
   }
 }
 
+function processLiveness(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "ESRCH" ? false : null;
+  }
+}
+
+function processBirthObservation(pid, runner = defaultRunner) {
+  if (!Number.isInteger(pid) || pid <= 0) return { state: "unknown" };
+  const run = safeRun(runner, PS, [
+    "-p",
+    String(pid),
+    "-o",
+    "pid=,ppid=,pgid=,uid=,lstart=,comm=",
+  ], { timeout: HOOK_COMMAND_TIMEOUT_MS });
+  if (run.status === 1 && !run.stdout.trim()) return { state: "absent" };
+  if (run.status !== 0) return { state: "unknown" };
+  const rows = parsePsOutput(run.stdout, "psCommand").parsed;
+  const identity = rows.length === 1 && rows[0].pid === pid ? rows[0] : null;
+  return identity
+    ? { state: "present", uid: identity.uid, startTime: identity.startTime }
+    : { state: rows.length ? "unknown" : "absent" };
+}
+
+function reclaimDeadMutationLock(fsApi, lockPath, uid, pidIsAlive, readProcessBirth) {
+  let before;
+  let descriptor = null;
+  try {
+    before = fsApi.lstatSync(lockPath);
+    if (
+      before.isSymbolicLink()
+      || !before.isFile()
+      || before.uid !== uid
+      || before.nlink !== 1
+      || (before.mode & 0o777) !== 0o600
+      || before.size <= 0
+      || before.size > 1024
+    ) return false;
+    descriptor = fsApi.openSync(lockPath, fsApi.constants.O_RDONLY | fsApi.constants.O_NOFOLLOW);
+    const opened = fsApi.fstatSync(descriptor);
+    if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) return false;
+    const owner = JSON.parse(fsApi.readFileSync(descriptor, "utf8"));
+    const legacy = exactKeys(owner, ["pid", "uid"]);
+    const birthBound = exactKeys(owner, ["pid", "uid", "startTime"])
+      && validIsoTime(owner.startTime);
+    if (
+      (!legacy && !birthBound)
+      || !Number.isInteger(owner.pid)
+      || owner.pid <= 0
+      || owner.uid !== uid
+    ) return false;
+    if (birthBound) {
+      const observed = readProcessBirth(owner.pid);
+      if (
+        observed?.state !== "absent"
+        && !(observed?.state === "present" && observed.startTime !== owner.startTime)
+      ) return false;
+    } else if (pidIsAlive(owner.pid) !== false) return false;
+    const current = fsApi.lstatSync(lockPath);
+    if (
+      current.isSymbolicLink()
+      || !current.isFile()
+      || current.uid !== uid
+      || current.dev !== opened.dev
+      || current.ino !== opened.ino
+    ) return false;
+    fsApi.unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== null) {
+      try { fsApi.closeSync(descriptor); } catch {}
+    }
+  }
+}
+
 export function createMutationLock({
   fsApi = fs,
   uid = callerUid(),
   lockPath = path.join(os.tmpdir(), `agent-utilities-cleanup-codex-${uid}.lock`),
+  pidIsAlive = processLiveness,
+  readProcessBirth = processBirthObservation,
 } = {}) {
   return {
     acquire() {
       let descriptor;
       let createdIdentity = null;
       try {
+        reclaimDeadMutationLock(fsApi, lockPath, uid, pidIsAlive, readProcessBirth);
+        const owner = readProcessBirth(process.pid);
+        if (owner?.state !== "present" || owner.uid !== uid || !validIsoTime(owner.startTime)) {
+          refuse("mutation-lock-unavailable");
+        }
         const flags = fsApi.constants.O_WRONLY
           | fsApi.constants.O_CREAT
           | fsApi.constants.O_EXCL
@@ -1180,7 +1273,11 @@ export function createMutationLock({
         descriptor = fsApi.openSync(lockPath, flags, 0o600);
         createdIdentity = fsApi.fstatSync(descriptor);
         fsApi.fchmodSync(descriptor, 0o600);
-        fsApi.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, uid })}\n`, "utf8");
+        fsApi.writeFileSync(descriptor, `${JSON.stringify({
+          pid: process.pid,
+          uid,
+          startTime: owner.startTime,
+        })}\n`, "utf8");
         fsApi.fsyncSync(descriptor);
         const held = fsApi.fstatSync(descriptor);
         if (
@@ -2931,9 +3028,12 @@ function readHookReceiptSecure(file, { fsApi, uid }) {
     const receipt = JSON.parse(fsApi.readFileSync(descriptor, "utf8"));
     const after = fsApi.fstatSync(descriptor);
     if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) return null;
+    const supportedShape = receipt.schema === HOOK_RECEIPT_SCHEMA
+      ? exactKeys(receipt, ["appServer", "cleanup", "missingEvidence", "observedAt", "schema", "status", "verification", "warnings"])
+      : receipt.schema === "cleanup-codex-hook-health-v1"
+        && exactKeys(receipt, ["appServer", "health", "missingEvidence", "observedAt", "schema", "status", "verification", "warnings"]);
     if (
-      !exactKeys(receipt, ["appServer", "health", "missingEvidence", "observedAt", "schema", "status", "verification", "warnings"])
-      || receipt.schema !== HOOK_RECEIPT_SCHEMA
+      !supportedShape
       || !validIsoTime(receipt.observedAt)
       || !exactKeys(receipt.appServer, [
         "commandIdentity",
@@ -3056,6 +3156,156 @@ function writeLatestHookReceipt(receipt, { fsApi, env, uid }) {
   }
 }
 
+function hookThreadMarker(expandedCommand, plainCommand) {
+  if (!expandedCommand.startsWith(plainCommand)) return { kind: "invalid" };
+  const suffix = expandedCommand.slice(plainCommand.length);
+  if (suffix && !/^\s/.test(suffix)) return { kind: "invalid" };
+  const matches = [...suffix.matchAll(/(?:^|\s)CODEX_THREAD_ID=([^\s]+)(?=\s|$)/g)];
+  if (!matches.length) return { kind: "absent" };
+  if (matches.length !== 1 || !UUID_PATTERN.test(matches[0][1])) return { kind: "invalid" };
+  return { kind: "present", threadId: matches[0][1].toLowerCase() };
+}
+
+function hookUnsafeCommand(command) {
+  return appServerCommandKind(command) !== null
+    || proxyCommandIdentity(command) !== null
+    || /(?:^|\s)app-server\s+daemon(?:\s|$)/i.test(command)
+    || /(?:^|\/)codex-app-server(?:\s|$)/i.test(command);
+}
+
+function hookAncestorSets(processes, selfPid, parentPid) {
+  const byPid = new Map(processes.map((record) => [record.pid, record]));
+  const pids = new Set();
+  const pgids = new Set();
+  let pid = byPid.has(selfPid) ? selfPid : parentPid;
+  for (let depth = 0; depth < MAX_HOOK_ANCESTORS + 2 && pid > 1 && !pids.has(pid); depth += 1) {
+    pids.add(pid);
+    const record = byPid.get(pid);
+    if (!record) break;
+    pgids.add(record.processGroupId);
+    pid = record.parentPid;
+  }
+  const self = byPid.get(selfPid);
+  if (self) pgids.add(self.processGroupId);
+  return { pids, pgids };
+}
+
+function hookSignalOrder(targets) {
+  const byPid = new Map(targets.map((target) => [target.pid, target]));
+  const depth = (target) => {
+    let value = 0;
+    let current = target;
+    const seen = new Set();
+    while (byPid.has(current.parentPid) && !seen.has(current.parentPid)) {
+      seen.add(current.parentPid);
+      current = byPid.get(current.parentPid);
+      value += 1;
+    }
+    return value;
+  };
+  return targets.slice().sort((left, right) => depth(right) - depth(left) || right.pid - left.pid);
+}
+
+function hookExecutableMap(pids, runner) {
+  if (!pids.length) return new Map();
+  const run = safeRun(runner, LSOF, [
+    "-nP", "-a", "-p", pids.join(","), "-d", "txt", "-Fptn",
+  ]);
+  if (run.status !== 0) return null;
+  const executables = new Map();
+  let pid = null;
+  let textFile = false;
+  for (const line of run.stdout.split(/\r?\n/)) {
+    if (/^p\d+$/.test(line)) {
+      pid = Number(line.slice(1));
+      textFile = false;
+    } else if (line === "ftxt") {
+      textFile = true;
+    } else if (line.startsWith("f")) {
+      textFile = false;
+    } else if (textFile && line.startsWith("n/") && !executables.has(pid)) {
+      executables.set(pid, line.slice(1));
+      textFile = false;
+    }
+  }
+  return executables;
+}
+
+function collectHookTargets(sessionId, {
+  runner,
+  uid,
+  selfPid,
+  parentPid,
+  appServer,
+}) {
+  const plainRun = safeRun(runner, PS, [
+    "ww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,command=",
+  ]);
+  const expandedRun = safeRun(runner, PS, [
+    "eww", "-axo", "pid=,ppid=,pgid=,uid=,lstart=,command=",
+  ]);
+  if (plainRun.status !== 0 || expandedRun.status !== 0) {
+    return { complete: false, reason: "hook-process-list-unavailable", targets: [], skippedGroups: [] };
+  }
+  const plain = parsePsOutput(plainRun.stdout, "rawCommand");
+  const expanded = parsePsOutput(expandedRun.stdout, "expandedCommand");
+  if (plain.invalidRows || expanded.invalidRows) {
+    return { complete: false, reason: "hook-process-list-incomplete", targets: [], skippedGroups: [] };
+  }
+  const expandedByPid = new Map(expanded.parsed.map((record) => [record.pid, record]));
+  const plainPids = new Set(plain.parsed.map((record) => record.pid));
+  const expandedOnlyGroups = new Set(expanded.parsed
+    .filter((record) => !plainPids.has(record.pid))
+    .map((record) => record.processGroupId));
+  const groups = new Map();
+  for (const record of plain.parsed) {
+    const list = groups.get(record.processGroupId) ?? [];
+    list.push(record);
+    groups.set(record.processGroupId, list);
+  }
+  const ancestors = hookAncestorSets(plain.parsed, selfPid, parentPid);
+  ancestors.pids.add(appServer.pid);
+  ancestors.pgids.add(appServer.processGroupId);
+  const desired = sessionId.toLowerCase();
+  const targets = [];
+  const skippedGroups = [];
+
+  for (const [pgid, members] of groups) {
+    const correlated = members.map((member) => {
+      const envRecord = expandedByPid.get(member.pid);
+      if (!envRecord || identityDifferences(member, envRecord, [
+        "pid", "parentPid", "processGroupId", "uid", "startTime",
+      ]).length) return null;
+      const marker = hookThreadMarker(envRecord.expandedCommand, member.rawCommand);
+      return { member, marker };
+    });
+    if (!correlated.some((item) => item?.marker.threadId === desired)) continue;
+    const reasons = [];
+    if (correlated.some((item) => item === null)) reasons.push("incomplete-identity");
+    if (expandedOnlyGroups.has(pgid)) reasons.push("incomplete-identity");
+    if (correlated.some((item) => item?.marker.kind === "invalid")) reasons.push("ambiguous-thread-marker");
+    if (members.some((member) => member.uid !== uid)) reasons.push("cross-uid-group");
+    if (members.some((member) => ancestors.pids.has(member.pid)) || ancestors.pgids.has(pgid)) {
+      reasons.push("hook-or-app-server-group");
+    }
+    if (members.some((member) => hookUnsafeCommand(member.rawCommand))) reasons.push("shared-runtime-group");
+    const threadIds = new Set(correlated.flatMap((item) => item?.marker.threadId ? [item.marker.threadId] : []));
+    if ([...threadIds].some((threadId) => threadId !== desired)) reasons.push("mixed-thread-group");
+    const tagged = correlated.flatMap((item) => item?.marker.threadId === desired ? [item.member] : []);
+    if (tagged.length > MAX_HOOK_TARGETS || targets.length + tagged.length > MAX_HOOK_TARGETS) {
+      reasons.push("target-bound-exceeded");
+    }
+    if (reasons.length) {
+      skippedGroups.push({ processGroupId: pgid, reasons: unique(reasons) });
+      continue;
+    }
+    targets.push(...tagged);
+  }
+  return skippedGroups.length
+    ? { complete: false, reason: "hook-group-refused", targets: [], skippedGroups }
+    : { complete: true, targets, skippedGroups };
+}
+
 export function inspectHook({
   platform = process.platform,
   runner = defaultRunner,
@@ -3065,7 +3315,15 @@ export function inspectHook({
   now = Date.now(),
   monotonicNow = () => performance.now(),
   parentPid = process.ppid,
+  selfPid = process.pid,
   thresholds = DEFAULT_THRESHOLDS,
+  sessionId = null,
+  readIdentity = (pid, { runner: identityRunner = runner } = {}) => (
+    collectExactProcessIdentity(pid, { runner: identityRunner })
+  ),
+  signalProcess = signalExactPid,
+  sleep = sleepSync,
+  lock = createMutationLock({ fsApi, uid }),
 } = {}) {
   if (env.AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED === "1") {
     return { status: "disabled", receipt: null, receiptPath: null };
@@ -3079,28 +3337,227 @@ export function inspectHook({
     if (remaining <= 0) return { status: null, stdout: "", stderr: "", error: true };
     return runner(file, args, { timeout: Math.min(HOOK_COMMAND_TIMEOUT_MS, remaining) });
   };
+  if (!UUID_PATTERN.test(sessionId ?? "")) {
+    return { status: "unavailable", receipt: null, receiptPath: null };
+  }
   const observation = hookAncestor(parentPid, boundedRunner);
   if (!observation || observation.identity.uid !== uid) {
     return { status: "unavailable", receipt: null, receiptPath: null };
   }
-  const { identity, descriptors, controlSocket } = observation;
-  const directChildren = directChildCount(identity.pid, boundedRunner);
+  const identity = observation.identity;
   const missingEvidence = [];
-  if (!descriptors.complete) missingEvidence.push("file-descriptors");
-  if (!Number.isInteger(directChildren)) missingEvidence.push("direct-children");
-  if (!controlSocket) missingEvidence.push("control-socket");
-  const startedAt = Date.parse(identity.startTime);
-  const ageHours = Number.isFinite(startedAt)
-    ? Number((Math.max(0, now - startedAt) / 3_600_000).toFixed(2))
-    : null;
-  const warnings = pressureWarnings({
-    pid: identity.pid,
-    descriptorCount: descriptors.count,
-    highestDescriptor: descriptors.highest,
-    ageHours,
-    descendants: { total: directChildren },
-  }, thresholds).map(({ code, observed, threshold }) => ({ code, observed, threshold }));
-  const status = missingEvidence.length ? "refused" : warnings.length ? "warning" : "healthy";
+  const warnings = [];
+  const cleanup = {
+    action: "session-process-cleanup",
+    selectedPids: [],
+    termPids: [],
+    killPids: [],
+    verifiedPids: [],
+    skippedGroups: [],
+  };
+  let release = null;
+  let mutationAttempted = false;
+  let status = "healthy";
+  try {
+    const first = collectHookTargets(sessionId, {
+      runner: boundedRunner,
+      uid,
+      selfPid,
+      parentPid,
+      appServer: identity,
+    });
+    cleanup.skippedGroups = first.skippedGroups;
+    if (!first.complete) refuse(first.reason);
+
+    let lockAttempts = 0;
+    while (!release && lockAttempts < 128) {
+      lockAttempts += 1;
+      try {
+        release = lock.acquire();
+      } catch (error) {
+        if (error?.code !== "mutation-lock-held" && error?.code !== "ELOCKED") throw error;
+        if (deadline - monotonicNow() <= 50) refuse("mutation-lock-held");
+        sleep(20);
+      }
+    }
+    if (!release) refuse("mutation-lock-held");
+
+    const second = collectHookTargets(sessionId, {
+      runner: boundedRunner,
+      uid,
+      selfPid,
+      parentPid,
+      appServer: identity,
+    });
+    if (!second.complete) refuse(second.reason);
+    const firstByPid = new Map(first.targets.map((target) => [target.pid, target]));
+    const observedTargets = second.targets.filter((target) => {
+      const before = firstByPid.get(target.pid);
+      return before && identityDifferences(before, target, [
+        "pid", "parentPid", "processGroupId", "uid", "startTime",
+      ]).length === 0;
+    });
+    if (observedTargets.length !== second.targets.length) {
+      refuse("hook-targets-changed");
+    }
+    const secondPids = new Set(second.targets.map((target) => target.pid));
+    cleanup.verifiedPids.push(...first.targets
+      .filter((target) => !secondPids.has(target.pid))
+      .map((target) => target.pid));
+    const executables = hookExecutableMap(observedTargets.map((target) => target.pid), boundedRunner);
+    if (!executables) refuse("hook-target-identity-unavailable");
+    const third = collectHookTargets(sessionId, {
+      runner: boundedRunner,
+      uid,
+      selfPid,
+      parentPid,
+      appServer: identity,
+    });
+    if (!third.complete) refuse(third.reason);
+    const secondByPid = new Map(observedTargets.map((target) => [target.pid, target]));
+    const targets = third.targets.flatMap((target) => {
+      const before = secondByPid.get(target.pid);
+      const executable = executables.get(target.pid);
+      if (!before || !executable || identityDifferences(before, target, [
+        "pid", "parentPid", "processGroupId", "uid", "startTime", "rawCommand",
+      ]).length) return [];
+      return [{ ...target, executable }];
+    });
+    if (targets.length !== third.targets.length) refuse("hook-targets-changed");
+    const thirdPids = new Set(third.targets.map((target) => target.pid));
+    cleanup.verifiedPids.push(...observedTargets
+      .filter((target) => !thirdPids.has(target.pid))
+      .map((target) => target.pid));
+    cleanup.selectedPids = targets.map((target) => target.pid);
+
+    const termTargets = [];
+    for (const target of hookSignalOrder(targets)) {
+      try {
+        mutationAttempted = true;
+        signalProcess(target.pid, "SIGTERM");
+        cleanup.termPids.push(target.pid);
+        termTargets.push(target);
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+        cleanup.verifiedPids.push(target.pid);
+      }
+    }
+    if (termTargets.length) sleep(Math.min(HOOK_GRACE_MS, Math.max(0, deadline - monotonicNow() - 100)));
+    const killTargets = [];
+    for (const target of termTargets) {
+      const current = readIdentity(target.pid, { runner: boundedRunner });
+      if (current?.state === "absent") {
+        cleanup.verifiedPids.push(target.pid);
+        continue;
+      }
+      if (current?.state !== "present" || !validObservedIdentity(current.identity)) {
+        refuse("hook-post-term-identity-unavailable");
+      }
+      if (!sameBirthIdentityPresent(target, current)) {
+        cleanup.verifiedPids.push(target.pid);
+        continue;
+      }
+      if (skippedIdentity(target.pid, current, target)) refuse("hook-target-identity-changed");
+      try {
+        signalProcess(target.pid, "SIGKILL");
+        cleanup.killPids.push(target.pid);
+        killTargets.push(target);
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+        cleanup.verifiedPids.push(target.pid);
+      }
+    }
+    if (killTargets.length) sleep(Math.min(HOOK_POST_SIGNAL_MS, Math.max(0, deadline - monotonicNow() - 25)));
+    for (const target of killTargets) {
+      const current = readIdentity(target.pid, { runner: boundedRunner });
+      if (current?.state === "absent") {
+        cleanup.verifiedPids.push(target.pid);
+      } else if (current?.state === "present" && validObservedIdentity(current.identity)) {
+        if (!sameBirthIdentityPresent(target, current)) cleanup.verifiedPids.push(target.pid);
+        else missingEvidence.push("post-kill-survivor");
+      } else {
+        missingEvidence.push("post-kill-verification-unknown");
+      }
+    }
+    const late = collectHookTargets(sessionId, {
+      runner: boundedRunner,
+      uid,
+      selfPid,
+      parentPid,
+      appServer: identity,
+    });
+    if (!late.complete) refuse(late.reason);
+    if (late.targets.length) {
+      const lateExecutables = hookExecutableMap(late.targets.map((target) => target.pid), boundedRunner);
+      if (!lateExecutables) refuse("hook-late-target-identity-unavailable");
+      const confirmation = collectHookTargets(sessionId, {
+        runner: boundedRunner,
+        uid,
+        selfPid,
+        parentPid,
+        appServer: identity,
+      });
+      if (!confirmation.complete) refuse(confirmation.reason);
+      const lateByPid = new Map(late.targets.map((target) => [target.pid, target]));
+      const lateTargets = confirmation.targets.flatMap((target) => {
+        const before = lateByPid.get(target.pid);
+        const executable = lateExecutables.get(target.pid);
+        if (!before || !executable || identityDifferences(before, target, [
+          "pid", "parentPid", "processGroupId", "uid", "startTime", "rawCommand",
+        ]).length) return [];
+        return [{ ...target, executable }];
+      });
+      if (lateTargets.length !== confirmation.targets.length) refuse("hook-late-targets-changed");
+      cleanup.selectedPids.push(...lateTargets.map((target) => target.pid));
+      const lateKilled = [];
+      for (const target of hookSignalOrder(lateTargets)) {
+        try {
+          mutationAttempted = true;
+          signalProcess(target.pid, "SIGKILL");
+          cleanup.killPids.push(target.pid);
+          lateKilled.push(target);
+        } catch (error) {
+          if (error?.code !== "ESRCH") throw error;
+          cleanup.verifiedPids.push(target.pid);
+        }
+      }
+      if (lateKilled.length) sleep(Math.min(HOOK_POST_SIGNAL_MS, Math.max(0, deadline - monotonicNow() - 25)));
+      for (const target of lateKilled) {
+        const current = readIdentity(target.pid, { runner: boundedRunner });
+        if (current?.state === "absent") cleanup.verifiedPids.push(target.pid);
+        else if (
+          current?.state === "present"
+          && validObservedIdentity(current.identity)
+          && !sameBirthIdentityPresent(target, current)
+        ) cleanup.verifiedPids.push(target.pid);
+        else missingEvidence.push(current?.state === "present"
+          ? "post-kill-survivor"
+          : "post-kill-verification-unknown");
+      }
+    }
+    const final = collectHookTargets(sessionId, {
+      runner: boundedRunner,
+      uid,
+      selfPid,
+      parentPid,
+      appServer: identity,
+    });
+    if (!final.complete) refuse(final.reason);
+    if (final.targets.length) refuse("hook-final-target-survivor");
+    cleanup.selectedPids = unique(cleanup.selectedPids);
+    cleanup.verifiedPids = unique(cleanup.verifiedPids);
+    if (missingEvidence.length) status = "failed";
+  } catch (error) {
+    status = mutationAttempted ? "failed" : "refused";
+    missingEvidence.push(error instanceof CleanupRefusal ? error.code : "hook-cleanup-failed");
+  } finally {
+    if (release) {
+      try { release(); } catch {
+        status = "failed";
+        missingEvidence.push("mutation-lock-release-failed");
+      }
+    }
+  }
   const receipt = {
     schema: HOOK_RECEIPT_SCHEMA,
     observedAt: new Date(now).toISOString(),
@@ -3114,20 +3571,16 @@ export function inspectHook({
       executable: identity.executable,
       commandIdentity: "codex app-server",
     },
-    health: {
-      descriptorCount: descriptors.complete ? descriptors.count : null,
-      highestDescriptor: descriptors.complete ? descriptors.highest : null,
-      directChildren,
-      ageHours,
-      controlSocket,
-    },
+    cleanup,
     warnings,
     missingEvidence,
     verification: {
-      readOnly: true,
-      mutationAttempted: false,
+      readOnly: false,
+      mutationAttempted,
       ancestryBound: MAX_HOOK_ANCESTORS,
-      machineWideScan: false,
+      machineWideScan: true,
+      targetBound: MAX_HOOK_TARGETS,
+      threadIdDigest: sha256(sessionId).slice(0, 16),
     },
   };
   try {
@@ -3147,15 +3600,15 @@ function hookInspectionResult(outcome, platform, thresholds) {
   if (outcome.status === "unavailable") missingEvidence.push("hook-unavailable");
   return {
     schemaVersion: 1,
-    action: "inspect",
+    action: "cleanup",
     status: outcome.status,
     selected: [],
     skipped: [],
     warnings: outcome.receipt?.warnings ?? [],
     verification: {
       platform,
-      readOnly: true,
-      mutationAttempted: false,
+      readOnly: outcome.receipt?.verification.readOnly ?? false,
+      mutationAttempted: outcome.receipt?.verification.mutationAttempted ?? false,
       complete: outcome.status === "healthy" || outcome.status === "warning",
       thresholds: { ...thresholds },
       missingEvidence: unique(missingEvidence),
@@ -3164,6 +3617,40 @@ function hookInspectionResult(outcome, platform, thresholds) {
     },
     receipt: outcome.receipt,
   };
+}
+
+export function parseHookPayload(input) {
+  if (typeof input !== "string" || Buffer.byteLength(input) > MAX_HOOK_INPUT_BYTES) return null;
+  try {
+    const payload = JSON.parse(input);
+    if (
+      !payload
+      || Array.isArray(payload)
+      || typeof payload !== "object"
+      || payload.hook_event_name !== "SessionEnd"
+      || typeof payload.session_id !== "string"
+      || !UUID_PATTERN.test(payload.session_id)
+    ) return null;
+    return { sessionId: payload.session_id.toLowerCase() };
+  } catch {
+    return null;
+  }
+}
+
+function readHookPayload(fsApi) {
+  try {
+    const buffer = Buffer.alloc(MAX_HOOK_INPUT_BYTES + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const count = fsApi.readSync(0, buffer, bytes, buffer.length - bytes, null);
+      if (!count) break;
+      bytes += count;
+    }
+    if (bytes <= 0 || bytes > MAX_HOOK_INPUT_BYTES) return null;
+    return parseHookPayload(buffer.subarray(0, bytes).toString("utf8"));
+  } catch {
+    return null;
+  }
 }
 
 export function classifyInventory(inventory, {
@@ -3391,7 +3878,7 @@ export function renderHuman(result) {
 
 function usage() {
   return [
-    "Usage: cleanup-codex [inspect [--snapshot path | --hook] | reap --snapshot path | recycle --pid PID] [--json]",
+    "Usage: cleanup-codex [inspect [--snapshot path] | cleanup --hook | reap --snapshot path | recycle --pid PID] [--json]",
     "",
     "Inspection is the default action; --snapshot records an exact tree for an explicit later reap.",
     "Recycle requires --nofile-attestor PATH on the receipt-producing pass; rerun the same command with --confirm TOKEN.",
@@ -3421,6 +3908,7 @@ export function runCli(argv = process.argv.slice(2), {
   readyPollMs = DEFAULT_READY_POLL_MS,
   monotonicNow = () => performance.now(),
   hookParentPid = process.ppid,
+  hookInput,
   lockPath,
   lock = createMutationLock({ fsApi, uid, ...(lockPath ? { lockPath } : {}) }),
   recycleDependencies = null,
@@ -3431,13 +3919,22 @@ export function runCli(argv = process.argv.slice(2), {
     write(usage());
     return EXIT_CODES.healthy;
   }
-  if (parsed.error || !["inspect", "reap", "recycle"].includes(parsed.action)) {
+  if (parsed.error || !["inspect", "cleanup", "reap", "recycle"].includes(parsed.action)) {
     const result = invalidResult(parsed.error ?? "invalid-action", platform);
     write(parsed.json ? JSON.stringify(result, null, 2) : renderHuman(result));
     return EXIT_CODES.refused;
   }
 
   if (parsed.hook) {
+    const payload = hookInput === undefined ? readHookPayload(fsApi) : parseHookPayload(hookInput);
+    if (!payload) {
+      if (parsed.json) write(JSON.stringify(hookInspectionResult(
+        { status: "unavailable", receipt: null, receiptPath: null },
+        platform,
+        parsed.thresholds,
+      ), null, 2));
+      return EXIT_CODES.refused;
+    }
     const outcome = inspectHook({
       platform,
       runner,
@@ -3447,8 +3944,16 @@ export function runCli(argv = process.argv.slice(2), {
       now,
       parentPid: hookParentPid,
       thresholds: parsed.thresholds,
+      sessionId: payload.sessionId,
+      readIdentity,
+      signalProcess,
+      sleep,
+      lock,
     });
-    if (!parsed.json) return EXIT_CODES.healthy;
+    if (!parsed.json) {
+      if (outcome.status === "healthy" || outcome.status === "disabled") return EXIT_CODES.healthy;
+      return outcome.status === "failed" ? EXIT_CODES.failed : EXIT_CODES.refused;
+    }
     write(JSON.stringify(hookInspectionResult(outcome, platform, parsed.thresholds), null, 2));
     if (outcome.status === "warning") return EXIT_CODES.warning;
     return outcome.status === "healthy" || outcome.status === "disabled"

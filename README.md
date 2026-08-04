@@ -51,11 +51,14 @@ profiling skills require macOS or iOS tooling; and
 sends only the files selected for its second-model review, whose output must
 still be verified.
 
-`cleanup-codex` inspection is macOS-only. Codex runs its root `SessionEnd` hook
-in bounded read-only mode and stores one private latest health receipt per
-app-server identity. Set `AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED=1` to
-disable that inspection. Claude exposes the skill for explicit invocation and
-does not install the Codex lifecycle hook. Recycle additionally requires a
+`cleanup-codex` is macOS-only. Codex runs a bounded root `SessionEnd` hook that
+terminates only same-user processes carrying the ending task's exact
+`CODEX_THREAD_ID`, escalates exact survivors from `TERM` to `KILL`, and stores
+one private latest receipt per app-server identity. It never signals or
+restarts the shared app-server. Set
+`AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED=1` to disable that cleanup. Claude
+exposes the skill for explicit invocation and does not install the Codex
+lifecycle hook. Recycle additionally requires a
 trusted machine-provided descriptor attestor; Agent Utilities does not install
 or change launcher and descriptor-limit configuration. Managed recycle fails
 closed because the current native restart command cannot compare-and-swap the

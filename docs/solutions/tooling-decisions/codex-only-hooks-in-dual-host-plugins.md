@@ -18,8 +18,9 @@ tags: [codex-plugins, claude-code, plugin-hooks, dual-host-packaging, validator-
 
 Agent Utilities is one source plugin for Codex and Claude Code. Its cleanup
 skill is shared, but the root `SessionEnd` adapter is Codex-only: Codex must
-discover one inspect-only hook and Claude must discover none. This boundary is
-required by [the runtime-cleanup plan](../../plans/2026-08-02-001-fix-codex-runtime-cleanup-plan.md).
+discover one exact-session cleanup hook and Claude must discover none. This
+boundary is required by
+[the runtime-cleanup plan](../../plans/2026-08-02-001-fix-codex-runtime-cleanup-plan.md).
 
 Codex 0.146 exhibits a contract mismatch around that boundary. Its
 [manifest parser](https://github.com/openai/codex/blob/rust-v0.146.0/codex-rs/core-plugins/src/manifest.rs#L34-L55)
@@ -46,7 +47,9 @@ The source contract is visible at
 `plugins/agent-utilities/.codex-plugin/plugin.json:27`,
 `plugins/agent-utilities/.claude-plugin/plugin.json`, and
 `plugins/agent-utilities/codex/hooks.json:4`. The hook command is bounded to
-`inspect --hook` with a two-second timeout; it cannot route to reap or recycle.
+`cleanup --hook` with a three-second timeout. It terminates only exact same-user
+PIDs tagged with the ending session's `CODEX_THREAD_ID`; it cannot route to
+whole-server reap or recycle.
 
 Treat loader behavior and schema validation as separate release gates:
 
@@ -61,7 +64,7 @@ Treat loader behavior and schema validation as separate release gates:
 
 The `plugin packaging exposes one Codex SessionEnd hook and no Claude hook`
 test in `plugins/agent-utilities/skills/cleanup-codex/scripts/cleanup-codex.test.mjs`
-asserts the explicit Codex path, one inspect-only `SessionEnd` event, and no
+asserts the explicit Codex path, one cleanup `SessionEnd` event, and no
 Claude manifest hook. The adjacent `Claude loader excludes the Codex-only
 SessionEnd hook` test asserts Claude output `Hooks (0)`.
 

@@ -1,6 +1,6 @@
 ---
 name: cleanup-codex
-description: Inspect macOS Codex app-server resources, reap exact snapshot-bound residue, or explicitly recycle one fully attested detached server.
+description: Clean completed-session process residue, inspect macOS Codex app-server resources, reap exact snapshot-bound residue, or explicitly recycle one fully attested detached server.
 ---
 
 # Cleanup Codex
@@ -27,9 +27,11 @@ The stable JSON result always includes `action`, `selected`, `skipped`, `warning
 
 ### Root SessionEnd hook
 
-Codex invokes `inspect --hook` only at root `SessionEnd`. Hook mode walks at most eight ancestors to identify the owning app-server, queries only that PID for executable, descriptors, direct children, and its control socket, and never performs the manual inspector's machine-wide process or socket scan. It does not read hook input, session history, prompts, or transcripts and cannot route to `reap` or `recycle`.
+Codex invokes `cleanup --hook` only at root `SessionEnd`. It accepts only a bounded JSON payload naming `SessionEnd` and a UUID `session_id`, then takes paired plain and environment-expanded macOS process snapshots. It considers only same-user PIDs carrying that exact `CODEX_THREAD_ID`; process groups are used for exclusion and reporting, never group signaling. Mixed-thread, cross-user, hook/app-server, proxy/daemon, incomplete, or oversized groups are refused.
 
-The hook atomically replaces one mode-`0600` latest receipt for the exact app-server identity under `${XDG_STATE_HOME}/agent-utilities/cleanup-codex` when `XDG_STATE_HOME` is set, otherwise under `~/Library/Application Support/agent-utilities/cleanup-codex`. A later complete manual inspection prunes only private receipts whose exact identities are proven absent or reused. The hook is silent when healthy and returns harmlessly if ancestry or private state storage is unavailable. Set `AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED=1` to disable hook inspection. Claude Code exposes this skill for explicit use but does not install the Codex hook.
+Under the shared mutation lock, the hook revalidates each exact PID, UID, start time, absolute executable, and process group, signals exact PIDs deepest-first with `TERM`, waits about 200 ms, then revalidates and sends `KILL` only to exact survivors. It verifies the old birth identities are absent or reused. The hook stays within the three-second manifest timeout, remains silent during normal invocation, never restarts or signals the shared app-server, and never writes raw commands or environment values to its private receipt.
+
+The hook atomically replaces one mode-`0600` latest receipt for the exact app-server identity under `${XDG_STATE_HOME}/agent-utilities/cleanup-codex` when `XDG_STATE_HOME` is set, otherwise under `~/Library/Application Support/agent-utilities/cleanup-codex`. A later complete manual inspection prunes only private receipts whose exact identities are proven absent or reused. Set `AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED=1` to disable hook cleanup. Claude Code exposes this skill for explicit use but does not install the Codex hook.
 
 ## Snapshot
 
@@ -122,7 +124,7 @@ Thresholds identify pressure only. Age, descriptor use, and child count never pr
 
 ## Exit codes
 
-- `0`: healthy inspection, successful reap, or fully verified recycle
+- `0`: healthy inspection or hook cleanup, successful reap, or fully verified recycle
 - `1`: warning or pressure; no action authorized
 - `2`: refused, ambiguous, unsupported, or invalid request
 - `3`: attempted cleanup or restart verification failure

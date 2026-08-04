@@ -1418,6 +1418,52 @@ test("filesystem mutation lock is exclusive and reusable", () => {
   }
 });
 
+test("filesystem mutation lock reclaims only a private lock whose owner is absent", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-lock-stale-"));
+  const lockPath = path.join(directory, "mutation.lock");
+  try {
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: 999_999, uid: process.getuid() })}\n`, { mode: 0o600 });
+    const release = createMutationLock({
+      uid: process.getuid(),
+      lockPath,
+      pidIsAlive: (pid) => pid !== 999_999,
+    }).acquire();
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid, process.pid);
+    release();
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("filesystem mutation lock reclaims a birth-bound lock after PID reuse", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-lock-reused-"));
+  const lockPath = path.join(directory, "mutation.lock");
+  const oldStartTime = "2026-08-02T12:00:00.000Z";
+  const currentStartTime = "2026-08-03T12:00:00.000Z";
+  try {
+    fs.writeFileSync(lockPath, `${JSON.stringify({
+      pid: 999_999,
+      uid: process.getuid(),
+      startTime: oldStartTime,
+    })}\n`, { mode: 0o600 });
+    const release = createMutationLock({
+      uid: process.getuid(),
+      lockPath,
+      readProcessBirth: (pid) => ({
+        state: "present",
+        uid: process.getuid(),
+        startTime: pid === process.pid ? currentStartTime : "2026-08-02T13:00:00.000Z",
+      }),
+    }).acquire();
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).startTime, currentStartTime);
+    release();
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("lock release preserves a replacement across an inode swap", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-lock-swap-"));
   const lockPath = path.join(directory, "mutation.lock");
@@ -2698,348 +2744,271 @@ test("unmanaged stop refuses same-start UID drift after TERM", () => {
   assert.equal(states.has(snapshot.targets[0].pid), true);
 });
 
-function hookRunnerFixture(calls, {
-  uid = process.getuid(),
-  hookPid = 700,
-  serverPid = 500,
-  started = "Sun Aug 2 12:00:00 2026",
-} = {}) {
-  const socket = "/tmp/hook-fixture/app-server-control.sock";
-  const row = (pid, parentPid, pgid, command) => (
-    `${pid} ${parentPid} ${pgid} ${uid} ${started} ${command}\n`
+const HOOK_THREAD = "11111111-1111-4111-8111-111111111111";
+const OTHER_THREAD = "22222222-2222-4222-8222-222222222222";
+
+function hookCleanupFixture(processes) {
+  const uid = process.getuid();
+  const started = "Sun Aug 2 12:00:00 2026";
+  const startedAt = new Date(started).toISOString();
+  const records = new Map(processes.map((record) => [record.pid, {
+    uid, startTime: startedAt, executable: "/bin/sh", ...record,
+  }]));
+  const signals = [];
+  const row = (record, command) => (
+    `${record.pid} ${record.parentPid} ${record.processGroupId} ${record.uid} ${started} ${command}\n`
   );
+  const server = { pid: 500, parentPid: 1, processGroupId: 500, uid, startTime: startedAt };
+  const hook = { pid: 700, parentPid: 500, processGroupId: 500, uid, startTime: startedAt };
   return {
-    socket,
-    startedAt: new Date(started).toISOString(),
+    uid,
+    startedAt,
+    signals,
+    remove(pid) { records.delete(pid); },
+    add(record) {
+      records.set(record.pid, { uid, startTime: startedAt, executable: "/bin/sh", ...record });
+    },
     runner(file, args) {
-      calls.push({ file, args: [...args] });
-      if (file === "/bin/ps") {
-        const pid = Number(args[1]);
-        const ancestry = args.at(-1).endsWith("command=");
-        if (pid === hookPid) {
-          return { status: 0, stdout: row(hookPid, serverPid, serverPid, "/bin/sh -c hook"), stderr: "" };
-        }
-        if (pid === serverPid) {
+      if (file !== "/bin/ps" && file !== "/usr/sbin/lsof") return { status: 1, stdout: "", stderr: "" };
+      if (file === "/usr/sbin/lsof") {
+        if (args.includes("-d") && args.includes("txt")) {
+          const pids = String(args[args.indexOf("-p") + 1]).split(",").map(Number);
           return {
             status: 0,
-            stdout: row(
-              serverPid,
-              1,
-              serverPid,
-              ancestry
-                ? "codex -c features.code_mode_host=true app-server --listen unix://"
-                : "/usr/local/bin/codex",
-            ),
+            stdout: pids.flatMap((pid) => records.has(pid)
+              ? [`p${pid}`, "ftxt", "tREG", `n${records.get(pid).executable}`]
+              : []).join("\n"),
             stderr: "",
           };
         }
+        return { status: 0, stdout: "ftxt\nn/usr/local/bin/codex\nf10\nn/tmp/app-server-control.sock\n", stderr: "" };
       }
-      if (file === "/usr/sbin/lsof" && args.includes("-Fftn")) {
-        return {
-          status: 0,
-          stdout: "ftxt\nn/usr/local/bin/codex\nf10\nn/tmp/hook-fixture/app-server-control.sock\n",
-          stderr: "",
-        };
+      if (args[0] === "ww" || args[0] === "eww") {
+        const env = args[0] === "eww";
+        const all = [server, hook, ...records.values()];
+        return { status: 0, stdout: all.map((record) => {
+          const command = record.pid === 500 ? "/usr/local/bin/codex app-server"
+            : record.pid === 700 ? "/bin/sh hook"
+              : record.command ?? "/bin/sh worker";
+          return row(record, env && record.threadId
+            ? `${command} CODEX_THREAD_ID=${record.threadId} SECRET_VALUE=never-write-this`
+            : command);
+        }).join(""), stderr: "" };
       }
-      if (file === "/usr/sbin/lsof" && args.includes("-Ff")) {
-        return { status: 0, stdout: "f0\nf1\nf12\n", stderr: "" };
-      }
-      if (file === "/usr/sbin/lsof" && args.includes("-U")) {
-        return { status: 0, stdout: `f10\nn${socket}\n`, stderr: "" };
-      }
-      if (file === "/usr/bin/pgrep") {
-        return { status: 1, stdout: "", stderr: "" };
-      }
-      return { status: 1, stdout: "", stderr: "" };
+      const pid = Number(args[1]);
+      const record = pid === 500 ? server : pid === 700 ? hook : records.get(pid);
+      if (!record) return { status: 1, stdout: "", stderr: "" };
+      const command = args.at(-1).endsWith("command=")
+        ? (pid === 500 ? "/usr/local/bin/codex app-server" : "/bin/sh hook")
+        : "/usr/local/bin/codex";
+      return { status: 0, stdout: row(record, command), stderr: "" };
+    },
+    readIdentity(pid) {
+      const record = records.get(pid);
+      return record ? { state: "present", identity: {
+        pid: record.pid,
+        parentPid: record.parentPid,
+        processGroupId: record.processGroupId,
+        uid: record.uid,
+        startTime: record.startTime,
+        executable: record.executable,
+      } } : { state: "absent" };
+    },
+    signalProcess(pid, signal) {
+      signals.push([pid, signal]);
+      if (signal === "SIGKILL") records.delete(pid);
     },
   };
 }
 
-test("inspect --hook records one bounded private latest receipt and stays silent when healthy", () => {
+function runHookFixture(fixture, directory) {
+  return inspectHook({
+    platform: "darwin",
+    runner: fixture.runner,
+    env: { XDG_STATE_HOME: directory, HOME: directory },
+    uid: fixture.uid,
+    now: Date.parse(fixture.startedAt) + 1_000,
+    parentPid: 700,
+    sessionId: HOOK_THREAD,
+    readIdentity: fixture.readIdentity,
+    signalProcess: fixture.signalProcess,
+    sleep: () => {},
+    lock: { acquire: () => () => {} },
+  });
+}
+
+test("SessionEnd hook TERM then KILLs exact matching PIDs and writes no environment", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-"));
   try {
-    const calls = [];
-    const fixture = hookRunnerFixture(calls);
-    const env = { XDG_STATE_HOME: directory, HOME: directory };
-    const now = Date.parse(fixture.startedAt) + 1_000;
-    const first = inspectHook({
-      platform: "darwin",
-      runner: fixture.runner,
-      env,
-      uid: process.getuid(),
-      now,
-      parentPid: 700,
-    });
-    const second = inspectHook({
-      platform: "darwin",
-      runner: fixture.runner,
-      env,
-      uid: process.getuid(),
-      now: now + 1_000,
-      parentPid: 700,
-    });
-
-    assert.equal(first.status, "healthy");
-    assert.equal(first.receiptPath, second.receiptPath);
-    assert.equal(first.receipt.verification.readOnly, true);
-    assert.equal(first.receipt.verification.mutationAttempted, false);
-    assert.equal(first.receipt.verification.machineWideScan, false);
-    assert.equal(first.receipt.health.controlSocket, fixture.socket);
-    assert.equal(fs.statSync(first.receiptPath).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(path.dirname(first.receiptPath)).mode & 0o777, 0o700);
-    assert.equal(fs.readdirSync(path.dirname(first.receiptPath)).length, 1);
-    assert.doesNotMatch(fs.readFileSync(first.receiptPath, "utf8"), /SessionEnd|transcript|prompt/i);
-    assert.ok(calls.every(({ file, args }) => (
-      file !== "/bin/ps" || !args.includes("-axo")
-    )));
-    assert.ok(calls.every(({ file, args }) => (
-      file !== "/usr/sbin/lsof" || args.includes("-p")
-    )));
-
-    const output = [];
-    const started = Date.now();
-    const exitCode = runCli(["inspect", "--hook"], {
-      platform: "darwin",
-      runner: fixture.runner,
-      env,
-      uid: process.getuid(),
-      now: now + 2_000,
-      hookParentPid: 700,
-      write: (value) => output.push(value),
-    });
-    assert.equal(exitCode, EXIT_CODES.healthy);
-    assert.deepEqual(output, []);
-    assert.ok(Date.now() - started < 2_000);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("explicit hook JSON reports unavailable and warning exit states", () => {
-  const unavailableOutput = [];
-  const unavailableExit = runCli(["inspect", "--hook", "--json"], {
-    platform: "linux",
-    write: (value) => unavailableOutput.push(value),
-  });
-  assert.equal(unavailableExit, EXIT_CODES.refused);
-  assert.equal(unavailableOutput.length, 1);
-  const unavailable = JSON.parse(unavailableOutput[0]);
-  assert.equal(unavailable.status, "unavailable");
-  assert.deepEqual(unavailable.verification.missingEvidence, ["hook-unavailable"]);
-
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-json-"));
-  try {
-    const calls = [];
-    const fixture = hookRunnerFixture(calls);
-    const warningOutput = [];
-    const warningExit = runCli([
-      "inspect",
-      "--hook",
-      "--json",
-      "--fd-count-warn",
-      "1",
-    ], {
-      platform: "darwin",
-      runner: fixture.runner,
-      env: { XDG_STATE_HOME: directory, HOME: directory },
-      uid: process.getuid(),
-      now: Date.parse(fixture.startedAt) + 1_000,
-      hookParentPid: 700,
-      write: (value) => warningOutput.push(value),
-    });
-    assert.equal(warningExit, EXIT_CODES.warning);
-    assert.equal(warningOutput.length, 1);
-    const warning = JSON.parse(warningOutput[0]);
-    assert.equal(warning.status, "warning");
-    assert.equal(warning.verification.complete, true);
-    assert.deepEqual(warning.warnings.map((item) => item.code), ["fd-count-pressure"]);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("hook reserves receipt time when the aggregate command budget is exhausted", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-deadline-"));
-  const uid = process.getuid();
-  const started = "Sun Aug 2 12:00:00 2026";
-  const socket = "/tmp/hook-deadline/app-server-control.sock";
-  const parents = new Map([
-    [700, 699],
-    [699, 698],
-    [698, 697],
-    [697, 696],
-    [696, 695],
-    [695, 694],
-    [694, 500],
-  ]);
-  let elapsed = 0;
-  const calls = [];
-  const row = (pid, parentPid, pgid, command) => (
-    `${pid} ${parentPid} ${pgid} ${uid} ${started} ${command}\n`
-  );
-  const runner = (file, args, { timeout } = {}) => {
-    calls.push({ file, args: [...args], timeout });
-    elapsed += timeout;
-    if (file === "/bin/ps") {
-      const pid = Number(args[1]);
-      const ancestry = args.at(-1).endsWith("command=");
-      if (parents.has(pid)) {
-        const parentPid = parents.get(pid);
-        return { status: 0, stdout: row(pid, parentPid, pid, "/bin/sh -c hook"), stderr: "" };
-      }
-      if (pid === 500) {
-        return {
-          status: 0,
-          stdout: row(500, 1, 500, ancestry
-            ? "codex -c features.code_mode_host=true app-server --listen unix://"
-            : "/usr/local/bin/codex"),
-          stderr: "",
-        };
-      }
-    }
-    if (file === "/usr/sbin/lsof" && args.includes("-Fftn")) {
-      return { status: 0, stdout: `ftxt\nn/usr/local/bin/codex\nf10\nn${socket}\n`, stderr: "" };
-    }
-    if (file === "/usr/sbin/lsof" && args.includes("-Ff")) {
-      return { status: 0, stdout: "f0\nf1\nf12\n", stderr: "" };
-    }
-    return { status: 1, stdout: "", stderr: "" };
-  };
-
-  try {
-    const outcome = inspectHook({
-      platform: "darwin",
-      runner,
-      env: { XDG_STATE_HOME: directory, HOME: directory },
-      uid,
-      now: Date.parse(new Date(started).toISOString()) + 1_000,
-      monotonicNow: () => elapsed,
-      parentPid: 700,
-    });
-
+    const fixture = hookCleanupFixture([
+      { pid: 801, parentPid: 1, processGroupId: 800, threadId: HOOK_THREAD },
+      { pid: 802, parentPid: 801, processGroupId: 800, threadId: HOOK_THREAD },
+      { pid: 803, parentPid: 1, processGroupId: 803, threadId: OTHER_THREAD },
+    ]);
+    const outcome = runHookFixture(fixture, directory);
     assert.equal(outcome.status, "healthy");
-    assert.ok(outcome.receiptPath);
-    assert.equal(elapsed, 1_500);
-    assert.equal(calls.length, 12);
-    assert.deepEqual(outcome.receipt.missingEvidence, []);
+    assert.deepEqual(fixture.signals, [
+      [802, "SIGTERM"], [801, "SIGTERM"], [802, "SIGKILL"], [801, "SIGKILL"],
+    ]);
+    assert.deepEqual(outcome.receipt.cleanup.selectedPids.sort(), [801, 802]);
+    const receipt = fs.readFileSync(outcome.receiptPath, "utf8");
+    assert.doesNotMatch(receipt, /CODEX_THREAD_ID|SECRET_VALUE|never-write-this|\/bin\/sh worker/);
+    assert.equal(fs.statSync(outcome.receiptPath).mode & 0o777, 0o600);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("manual receipt pruning removes only identities proven gone", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-prune-"));
-  const env = { XDG_STATE_HOME: directory, HOME: directory };
-  const uid = process.getuid();
+test("SessionEnd hook refuses mixed-thread and hook/app-server groups", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-refuse-"));
   try {
-    const currentFixture = hookRunnerFixture([], { uid, hookPid: 700, serverPid: 500 });
-    const staleFixture = hookRunnerFixture([], {
-      uid,
-      hookPid: 701,
-      serverPid: 501,
-      started: "Sun Aug 2 11:00:00 2026",
-    });
-    const current = inspectHook({
-      platform: "darwin",
-      runner: currentFixture.runner,
-      env,
-      uid,
-      now: Date.parse(currentFixture.startedAt) + 1_000,
-      parentPid: 700,
-    });
-    const stale = inspectHook({
-      platform: "darwin",
-      runner: staleFixture.runner,
-      env,
-      uid,
-      now: Date.parse(staleFixture.startedAt) + 1_000,
-      parentPid: 701,
-    });
-
-    const outcome = pruneHookReceipts({
-      fsApi: fs,
-      env,
-      uid,
-      readIdentity: (pid) => pid === 500
-        ? { state: "present", identity: current.receipt.appServer }
-        : { state: "absent" },
-    });
-
-    assert.deepEqual(outcome, { complete: true, pruned: 1 });
-    assert.equal(fs.existsSync(current.receiptPath), true);
-    assert.equal(fs.existsSync(stale.receiptPath), false);
+    const fixture = hookCleanupFixture([
+      { pid: 810, parentPid: 1, processGroupId: 810, threadId: HOOK_THREAD },
+      { pid: 811, parentPid: 1, processGroupId: 810, threadId: OTHER_THREAD },
+      { pid: 812, parentPid: 700, processGroupId: 500, threadId: HOOK_THREAD },
+    ]);
+    const outcome = runHookFixture(fixture, directory);
+    assert.deepEqual(fixture.signals, []);
+    assert.deepEqual(outcome.receipt.cleanup.selectedPids, []);
+    assert.ok(outcome.receipt.cleanup.skippedGroups.some((group) => group.reasons.includes("mixed-thread-group")));
+    assert.ok(outcome.receipt.cleanup.skippedGroups.some((group) => group.reasons.includes("hook-or-app-server-group")));
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("hook opt-out performs no inspection and unavailable state fails harmlessly", () => {
+test("SessionEnd hook accepts native disappearance and never KILLs a TERM-responsive target", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-natural-"));
+  try {
+    const fixture = hookCleanupFixture([
+      { pid: 820, parentPid: 1, processGroupId: 820, threadId: HOOK_THREAD },
+      { pid: 821, parentPid: 1, processGroupId: 821, threadId: HOOK_THREAD },
+    ]);
+    const baseRunner = fixture.runner;
+    let scans = 0;
+    fixture.runner = (file, args, options) => {
+      if (file === "/bin/ps" && args[0] === "ww" && ++scans === 2) fixture.remove(820);
+      return baseRunner(file, args, options);
+    };
+    fixture.signalProcess = (pid, signal) => {
+      fixture.signals.push([pid, signal]);
+      if (signal === "SIGTERM") fixture.remove(pid);
+    };
+    const outcome = runHookFixture(fixture, directory);
+    assert.equal(outcome.status, "healthy");
+    assert.deepEqual(fixture.signals, [[821, "SIGTERM"]]);
+    assert.deepEqual(outcome.receipt.cleanup.verifiedPids.sort(), [820, 821]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd hook treats SIGKILL ESRCH as already gone", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-esrch-"));
+  try {
+    const fixture = hookCleanupFixture([
+      { pid: 830, parentPid: 1, processGroupId: 830, threadId: HOOK_THREAD },
+    ]);
+    fixture.signalProcess = (pid, signal) => {
+      fixture.signals.push([pid, signal]);
+      if (signal === "SIGKILL") {
+        fixture.remove(pid);
+        const error = new Error("gone");
+        error.code = "ESRCH";
+        throw error;
+      }
+    };
+    const outcome = runHookFixture(fixture, directory);
+    assert.equal(outcome.status, "healthy");
+    assert.deepEqual(fixture.signals, [[830, "SIGTERM"], [830, "SIGKILL"]]);
+    assert.deepEqual(outcome.receipt.cleanup.verifiedPids, [830]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd hook fails closed when post-TERM identity is unknown", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-unknown-"));
+  try {
+    const fixture = hookCleanupFixture([
+      { pid: 840, parentPid: 1, processGroupId: 840, threadId: HOOK_THREAD },
+    ]);
+    const originalReadIdentity = fixture.readIdentity;
+    let reads = 0;
+    fixture.readIdentity = (pid) => {
+      reads += 1;
+      return pid === 840 && reads >= 1 ? { state: "unknown" } : originalReadIdentity(pid);
+    };
+    const outcome = runHookFixture(fixture, directory);
+    assert.equal(outcome.status, "failed");
+    assert.deepEqual(fixture.signals, [[840, "SIGTERM"]]);
+    assert.ok(outcome.receipt.missingEvidence.includes("hook-post-term-identity-unavailable"));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd hook KILLs an exact process created during TERM grace", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-late-"));
+  try {
+    const fixture = hookCleanupFixture([
+      { pid: 850, parentPid: 1, processGroupId: 850, threadId: HOOK_THREAD },
+    ]);
+    const originalSignal = fixture.signalProcess;
+    fixture.signalProcess = (pid, signal) => {
+      originalSignal(pid, signal);
+      if (pid === 850 && signal === "SIGTERM") {
+        fixture.add({ pid: 851, parentPid: 850, processGroupId: 850, threadId: HOOK_THREAD });
+      }
+    };
+    const outcome = runHookFixture(fixture, directory);
+    assert.equal(outcome.status, "healthy");
+    assert.ok(fixture.signals.some(([pid, signal]) => pid === 851 && signal === "SIGKILL"));
+    assert.ok(outcome.receipt.cleanup.verifiedPids.includes(851));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd hook fails if a target appears during the late KILL pass", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-final-"));
+  try {
+    const fixture = hookCleanupFixture([
+      { pid: 860, parentPid: 1, processGroupId: 860, threadId: HOOK_THREAD },
+    ]);
+    const originalSignal = fixture.signalProcess;
+    fixture.signalProcess = (pid, signal) => {
+      originalSignal(pid, signal);
+      if (pid === 860 && signal === "SIGTERM") {
+        fixture.add({ pid: 861, parentPid: 860, processGroupId: 860, threadId: HOOK_THREAD });
+      } else if (pid === 861 && signal === "SIGKILL") {
+        fixture.add({ pid: 862, parentPid: 1, processGroupId: 862, threadId: HOOK_THREAD });
+      }
+    };
+    const outcome = runHookFixture(fixture, directory);
+    assert.equal(outcome.status, "failed");
+    assert.ok(outcome.receipt.missingEvidence.includes("hook-final-target-survivor"));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("invalid SessionEnd stdin fails closed without scanning or mutation", () => {
   const calls = [];
-  const disabled = inspectHook({
-    platform: "darwin",
-    runner: (...args) => {
-      calls.push(args);
-      throw new Error("must not inspect");
-    },
-    env: { AGENT_UTILITIES_CLEANUP_CODEX_HOOK_DISABLED: "1" },
-    uid: process.getuid(),
-    parentPid: 700,
-  });
-  assert.equal(disabled.status, "disabled");
+  const signals = [];
+  for (const hookInput of ["", "{}", '{"hook_event_name":"Stop","session_id":"11111111-1111-4111-8111-111111111111"}']) {
+    assert.equal(runCli(["cleanup", "--hook"], {
+      platform: "darwin",
+      hookInput,
+      runner: (...args) => { calls.push(args); throw new Error("must not scan"); },
+      signalProcess: (...args) => signals.push(args),
+    }), EXIT_CODES.refused);
+  }
   assert.deepEqual(calls, []);
-
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-unavailable-"));
-  try {
-    const blocked = path.join(directory, "state-file");
-    fs.writeFileSync(blocked, "not a directory");
-    const fixture = hookRunnerFixture([]);
-    const outcome = inspectHook({
-      platform: "darwin",
-      runner: fixture.runner,
-      env: { XDG_STATE_HOME: blocked },
-      uid: process.getuid(),
-      now: Date.parse(fixture.startedAt) + 1_000,
-      parentPid: 700,
-    });
-    assert.equal(outcome.status, "unavailable");
-    assert.equal(outcome.receiptPath, null);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  assert.deepEqual(signals, []);
 });
 
-test("hook mode rejects mutation actions and ignores lifecycle payload content", () => {
-  assert.equal(parseCliArgs(["reap", "--hook", "--snapshot", "/tmp/tree.json"]).error, "hook-requires-inspect");
-  assert.equal(parseCliArgs(["recycle", "--hook", "--pid", "500"]).error, "hook-requires-inspect");
-
-  const calls = [];
-  const fixture = hookRunnerFixture(calls);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cleanup-codex-hook-payload-"));
-  try {
-    const exitCode = runCli(["inspect", "--hook"], {
-      platform: "darwin",
-      runner: fixture.runner,
-      env: {
-        XDG_STATE_HOME: directory,
-        CODEX_HOOK_EVENT: "Stop SubagentStop recycle --pid 1 SECRET_PAYLOAD",
-      },
-      uid: process.getuid(),
-      now: Date.parse(fixture.startedAt) + 1_000,
-      hookParentPid: 700,
-      signalProcess: () => {
-        throw new Error("hook attempted mutation");
-      },
-    });
-    assert.equal(exitCode, EXIT_CODES.healthy);
-    const receiptDirectory = path.join(directory, "agent-utilities", "cleanup-codex");
-    const receipt = fs.readFileSync(path.join(receiptDirectory, fs.readdirSync(receiptDirectory)[0]), "utf8");
-    assert.doesNotMatch(receipt, /Stop|SubagentStop|SECRET_PAYLOAD|recycle/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("plugin packaging exposes one Codex SessionEnd hook and no Claude hook", () => {
+test("plugin packaging exposes actual root SessionEnd cleanup and no Claude hook", () => {
   const codexManifest = JSON.parse(fs.readFileSync(
     path.join(PLUGIN_DIRECTORY, ".codex-plugin", "plugin.json"),
     "utf8",
@@ -3063,8 +3032,8 @@ test("plugin packaging exposes one Codex SessionEnd hook and no Claude hook", ()
   assert.deepEqual(Object.keys(hooks.hooks), ["SessionEnd"]);
   const commandHook = hooks.hooks.SessionEnd[0].hooks[0];
   assert.equal(commandHook.type, "command");
-  assert.equal(commandHook.timeout, 2);
-  assert.match(commandHook.command, /cleanup-codex\.mjs\" inspect --hook$/);
+  assert.equal(commandHook.timeout, 3);
+  assert.match(commandHook.command, /cleanup-codex\.mjs\" cleanup --hook$/);
   assert.doesNotMatch(commandHook.command, /\breap\b|\brecycle\b|\bStop\b|\bSubagentStop\b/);
 });
 

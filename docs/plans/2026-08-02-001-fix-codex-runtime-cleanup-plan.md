@@ -11,6 +11,11 @@ deepened: 2026-08-02
 
 # Codex Runtime Cleanup - Plan
 
+> Superseded for root `SessionEnd` cleanup: Codex's exact `session_id` payload
+> and inherited `CODEX_THREAD_ID` now provide the per-task ownership evidence
+> this plan lacked. The hook may terminate only those exact same-user residual
+> PIDs; its whole-app-server reap and recycle boundaries remain unchanged.
+
 ## Goal Capsule
 
 - **Objective:** Add a safe Agent Utilities skill that diagnoses retained Codex runtime resources and can explicitly recycle one verified detached Unix app-server without disturbing the current GUI server or resumable tasks.

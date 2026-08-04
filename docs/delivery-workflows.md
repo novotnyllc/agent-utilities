@@ -134,8 +134,10 @@ Goal Driven Delivery does not archive or mutate runtime when it stops at a
 locally verified, review-ready, PR-ready, blocked, or owner-action-required
 state. Generic tasks, `Stop`, completed turns, `SubagentStop`, idle or sidebar
 state, and completed v2 subagents without a native close or dispose operation
-remain visible and resumable. Root `SessionEnd` may perform inspection only; it
-does not prove that a saved task should be archived.
+remain visible and resumable. Root `SessionEnd` may terminate only residual
+same-user processes carrying that ending task's exact `CODEX_THREAD_ID`; it
+does not archive the saved task or treat ordinary turn completion as cleanup
+authority.
 
 ## Tasks, agents, and subagents
 
