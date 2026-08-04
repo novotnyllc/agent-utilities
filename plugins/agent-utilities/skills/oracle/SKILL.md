@@ -7,6 +7,40 @@ description: "Oracle second-model review: bundle prompts/files, debug, refactor,
 
 Oracle bundles your prompt + selected files into one “one-shot” request so another model can answer with real repo context (API or browser automation). Treat outputs as advisory: verify against the codebase + tests.
 
+## Required bootstrap (every activation)
+
+Before the first Oracle command on **every** activation, resolve `SKILL_DIR` as
+the absolute directory containing this activated, installed `SKILL.md` (from the
+path supplied by Codex or Claude Code). Do not infer it from a plugin cache or
+source checkout. Then run this helper exactly once:
+
+```bash
+ORACLE_CLI="$(bash "$SKILL_DIR/scripts/ensure-oracle.sh")" || exit $?
+```
+
+The helper returns the validated absolute executable path. If it fails, stop
+Oracle use: do not invoke a bare `oracle`, try another package command, or
+otherwise bypass the failure. Use `"$ORACLE_CLI"` for every later normal Oracle
+command in this activation, including help, preflight, remote-browser, and
+session commands. Agents whose shell variables do not persist between tool
+calls must retain the returned absolute path and substitute it literally in
+later Oracle commands.
+
+Oracle requires version 0.17.0 or newer. `ORACLE_BIN` is only an explicit
+validation-only input override: it must be an absolute executable at that
+version or newer; the helper does not replace it. Otherwise the helper prefers the canonical
+`steipete/tap/oracle` Homebrew formula. A current selected package owner is a
+no-op. If Homebrew is unavailable, cannot repair its missing or stale formula,
+or cannot post-verify the selected formula, the bounded fallback is:
+
+```bash
+npm install --global --prefix "$HOME/.local" @steipete/oracle@0.17.0
+```
+
+A current stable `~/.local/bin/oracle` avoids repeat Homebrew attempts. The
+bootstrap preserves Oracle configuration, authentication, sessions, browser
+profiles, cookies, and other browser state.
+
 ## Main use case (browser, GPT-5.6 Pro)
 
 Default workflow here: `--engine browser` with the user's preferred signed-in reasoning model. This is the “human in the loop” path: it can take ~10 minutes to ~1 hour; expect a stored session you can reattach to.
@@ -23,6 +57,60 @@ model slug: `gpt-5.6-pro` and `gpt-5.6-sol-pro` are invalid. Browser mode uses
 the `gpt-5-pro` picker alias; API mode uses `gpt-5.6-sol` plus the Pro reasoning
 flags above. GPT-5.6 availability remains account-dependent.
 
+## Browser profile mode (choose one)
+
+Before a browser run, inspect only the presence, JSON type, and boolean value of
+the nested `browser.manualLogin` value in `~/.oracle/config.json`; never print
+the config, environment, or secrets. Oracle reads this nested key: a top-level
+`browserManualLogin` value and the absence of `ORACLE_*` environment variables
+do not override it. Oracle 0.17.0 rejects `--copy-profile` with manual-login
+mode.
+
+Run this read-only Node stdlib probe; it prints only the non-secret
+classification `browser.manualLogin=missing|true|false|invalid`:
+
+```bash
+node <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+let state = "missing";
+try {
+  const config = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".oracle", "config.json"), "utf8"));
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    state = "invalid";
+  } else {
+    const browser = config.browser;
+    if (browser === undefined) {
+      state = "missing";
+    } else if (!browser || typeof browser !== "object" || Array.isArray(browser)) {
+      state = "invalid";
+    } else if (browser.manualLogin === undefined) {
+      state = "missing";
+    } else if (typeof browser.manualLogin === "boolean") {
+      state = String(browser.manualLogin);
+    } else {
+      state = "invalid";
+    }
+  }
+} catch (error) {
+  state = error && error.code === "ENOENT" ? "missing" : "invalid";
+}
+process.stdout.write(`browser.manualLogin=${state}\n`);
+NODE
+```
+
+- **Persistent manual-login:** when the probe prints `true`,
+  omit `--copy-profile` and use the configured manual-login profile.
+- **Copied profile:** use `--copy-profile` only after the user deliberately
+  sets nested `browser.manualLogin` to `false` in their own configuration.
+- **Missing or invalid:** ask the user which profile mode to use. Never edit
+  configuration or authentication state automatically.
+
+An unsigned-in private browser profile is an authentication state, not a
+bootstrap failure.
+
 ## Golden path (fast + reliable)
 
 1. Pick a tight file set (fewest files that still contain the truth).
@@ -33,27 +121,27 @@ flags above. GPT-5.6 availability remains account-dependent.
 ## Commands (preferred)
 
 - Show help (once/session):
-  - `${ORACLE_BIN:-oracle} --help --verbose`
+  - `"$ORACLE_CLI" --help --verbose`
 
 - Preview (no tokens):
-  - `${ORACLE_BIN:-oracle} --dry-run summary -p "<task>" --file "src/**" --file "!**/*.test.*"`
-  - `${ORACLE_BIN:-oracle} --dry-run full -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --dry-run summary -p "<task>" --file "src/**" --file "!**/*.test.*"`
+  - `"$ORACLE_CLI" --dry-run full -p "<task>" --file "src/**"`
 
 - Token/cost sanity:
-  - `${ORACLE_BIN:-oracle} --dry-run summary --files-report -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --dry-run summary --files-report -p "<task>" --file "src/**"`
 
 - Startup/perf trace:
-  - `${ORACLE_BIN:-oracle} --perf-trace --perf-trace-path /tmp/oracle-perf.json --dry-run summary -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --perf-trace --perf-trace-path /tmp/oracle-perf.json --dry-run summary -p "<task>" --file "src/**"`
   - Use when CLI startup or time-to-first-output feels slow; inspect `first-output` and `exit`.
 
 - Browser run (main path; long-running is normal):
-  - `${ORACLE_BIN:-oracle} --engine browser --model "${ORACLE_MODEL:-gpt-5-pro}" -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --engine browser --model "${ORACLE_MODEL:-gpt-5-pro}" -p "<task>" --file "src/**"`
 
 - API Pro run (only after explicit cost consent):
-  - `${ORACLE_BIN:-oracle} --engine api --model gpt-5.6-sol --reasoning-mode pro --reasoning-effort max -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --engine api --model gpt-5.6-sol --reasoning-mode pro --reasoning-effort max -p "<task>" --file "src/**"`
 
 - Manual paste fallback (assemble bundle, copy to clipboard):
-  - `${ORACLE_BIN:-oracle} --render --copy -p "<task>" --file "src/**"`
+  - `"$ORACLE_CLI" --render --copy -p "<task>" --file "src/**"`
   - Note: `--copy` is a hidden alias for `--copy-markdown`.
 
 ## Attaching files (`--file`)
@@ -80,7 +168,7 @@ flags above. GPT-5.6 availability remains account-dependent.
 - Target: keep total input under ~196k tokens.
 - Use `--files-report` (and/or `--dry-run json`) to spot the token hogs before spending.
 - Use `--perf-trace` / `ORACLE_PERF_TRACE=1` for startup and first-output timing. Traces redact prompts, tokens, keys, cookies, and inline cookie payloads; detached API children write a session-suffixed sidecar trace.
-- If you need hidden/advanced knobs: `${ORACLE_BIN:-oracle} --help --verbose`.
+- If you need hidden/advanced knobs: `"$ORACLE_CLI" --help --verbose`.
 
 ## Engines (API vs browser)
 
@@ -92,20 +180,20 @@ flags above. GPT-5.6 availability remains account-dependent.
   - `--browser-attachments auto|never|always` (auto pastes inline up to ~60k chars then uploads).
   - Add `--browser-bundle-files --browser-bundle-format auto|zip` to upload many files as one bundle; ZIP bundles preserve original file bytes.
 - Remote browser host (signed-in machine runs automation):
-  - Host: `oracle serve --host 0.0.0.0 --port 9473 --token <secret>`
-  - Client: `oracle --engine browser --remote-host <host:port> --remote-token <secret> -p "<task>" --file "src/**"`
+  - Host: `"$ORACLE_CLI" serve --host 0.0.0.0 --port 9473 --token <secret>`
+  - Client: `"$ORACLE_CLI" --engine browser --remote-host <host:port> --remote-token <secret> -p "<task>" --file "src/**"`
 
 ## API preflight
 
 - API runs require explicit user consent and cost money.
 - Before API runs, check provider readiness without printing secrets:
-  - `oracle doctor --providers --models "${ORACLE_MODELS:-<models>}"`
-  - `oracle --preflight --models "${ORACLE_MODELS:-<models>}"`
-  - `oracle --route --model "${ORACLE_MODEL:-<model>}"`
+  - `"$ORACLE_CLI" doctor --providers --models "${ORACLE_MODELS:-<models>}"`
+  - `"$ORACLE_CLI" --preflight --models "${ORACLE_MODELS:-<models>}"`
+  - `"$ORACLE_CLI" --route --model "${ORACLE_MODEL:-<model>}"`
 - If the user wants first-party OpenAI, pass `--provider openai` or `--no-azure`. This prevents exported Azure env/config from hijacking the route:
-  - `oracle --provider openai --engine api --model "${ORACLE_MODEL:-<model>}" ...`
+  - `"$ORACLE_CLI" --provider openai --engine api --model "${ORACLE_MODEL:-<model>}" ...`
 - For advisory multi-model panels where partial success is useful, use `--allow-partial --write-output <path>` so successful model files and the `<stem>.oracle.json` manifest are easy to recover:
-  - `oracle --models "${ORACLE_MODELS:-<models>}" --allow-partial --write-output /tmp/panel.md -p "<task>"`
+  - `"$ORACLE_CLI" --models "${ORACLE_MODELS:-<models>}" --allow-partial --write-output /tmp/panel.md -p "<task>"`
 - `--timeout 10m` is the normal user-facing API deadline; Oracle derives the HTTP transport timeout unless `--http-timeout` is explicitly set.
 - If the exported `OPENAI_API_KEY` is invalid and the user wants a personal OpenAI key, use `$one-password` in one persistent tmux session with the user-provided item and field. Inject only into the single Oracle command; never print the key.
 - For debugging Oracle itself, use the checkout path supplied by the user or `${ORACLE_REPO:-$HOME/dev/oracle}`:
@@ -117,8 +205,8 @@ flags above. GPT-5.6 availability remains account-dependent.
 - Stored under `~/.oracle/sessions` (override with `ORACLE_HOME_DIR`).
 - Browser runs save durable files under `~/.oracle/sessions/<id>/artifacts/`, including `transcript.md`, Deep Research reports, and downloaded ChatGPT-generated images when available.
 - Runs may detach or take a long time. If the CLI times out: don’t re-run; reattach.
-  - List: `oracle status --hours 72`
-  - Attach: `oracle session <id> --render`
+  - List: `"$ORACLE_CLI" status --hours 72`
+  - Attach: `"$ORACLE_CLI" session <id> --render`
 - Use `--slug "<3-5 words>"` to keep session IDs readable.
 - Duplicate prompt guard exists; use `--force` only when you truly want a fresh run.
 - CLI guardrails: root runs without a prompt exit nonzero; `--dry-run` conflicts with `--render` / `--render-markdown`; Ctrl-C exits foreground API runs with code 130 while browser cleanup/reattach still runs.
