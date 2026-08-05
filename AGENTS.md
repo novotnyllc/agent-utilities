@@ -13,7 +13,7 @@ routing, orchestration, or the fleet.
 **Belongs elsewhere:** everything about delivering work — model routing,
 delivery, orchestration, cross-machine placement, review gates, Oracle, and
 Codex runtime hygiene live in
-[`yardmaster`](https://github.com/novotnyllc/yardmaster); fleet readiness,
+[`railyard`](https://github.com/novotnyllc/railyard); fleet readiness,
 machine administration, and UniFi live in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse). If a new skill needs
 the router, the fleet CLI, or dispatch semantics, it goes there, not here.

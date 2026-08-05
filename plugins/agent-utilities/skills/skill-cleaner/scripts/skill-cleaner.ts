@@ -409,7 +409,7 @@ function skillRootScope(root: string): string {
   if (normalized.includes("/.codex/plugins/cache")) return "codex-plugin";
   if (normalized.includes("/.codex/skills")) return "codex";
   if (normalized.includes("/agent-scripts/skills")) return "agent-scripts";
-  for (const plugin of ["agent-utilities", "yardmaster", "roundhouse"]) {
+  for (const plugin of ["agent-utilities", "railyard", "roundhouse"]) {
     if (normalized.includes(`/${plugin}/`) && normalized.includes("/skills")) return plugin;
   }
   if (normalized.includes("/.agents/skills")) return "repo";
@@ -534,7 +534,7 @@ export function discoverRoots(
         ...projectRoots.map((root) => path.join(root, "agent-scripts/skills")),
         ...projectRoots.flatMap((root) => [
           path.join(root, "agent-utilities/plugins/agent-utilities/skills"),
-          path.join(root, "yardmaster/plugins/yardmaster/skills"),
+          path.join(root, "railyard/plugins/railyard/skills"),
           path.join(root, "roundhouse/plugins/roundhouse/skills"),
         ]),
         ...suppliedRoots,

@@ -11,7 +11,7 @@ upstream-specific machine names, home paths, vault names, and package paths.
 
 Delivery, model routing, orchestration, review gates, Oracle, and Codex
 runtime hygiene live in the sibling
-[`yardmaster`](https://github.com/novotnyllc/yardmaster) plugin; fleet
+[`railyard`](https://github.com/novotnyllc/railyard) plugin; fleet
 readiness, machine administration, and UniFi in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse).
 

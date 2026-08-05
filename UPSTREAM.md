@@ -16,7 +16,7 @@ The agent-scripts imports were most recently reviewed against:
 - License: MIT
 
 Oracle, the thermos family, and the delivery/orchestration skills moved to
-the [`yardmaster`](https://github.com/novotnyllc/yardmaster) plugin; their
+the [`railyard`](https://github.com/novotnyllc/railyard) plugin; their
 upstream ledger and adaptation notes moved with them. Fleet, transport, and
 UniFi administration live in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse).
