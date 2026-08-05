@@ -29,9 +29,10 @@ the user supplies an exact title or a higher-priority harness rule applies.
   Sol/Luna defaults and attested unavailable-Luna substitution without probing
   optional providers. Consumers must not copy its constants or ranking logic.
   That frozen route is harness-independent. Per-harness session defaults
-  (Sol/Luna/Terra on Codex, Fable/Opus/Sonnet on Claude), the explicit GLM-5.2
-  option on each harness, and the cross-harness `codex:rescue` and `claude -p`
-  handoffs live in `references/harness-model-invocation.md`.
+  (Sol/Luna/Terra on Codex, Fable/Opus/Sonnet on Claude), the Codex-only
+  GLM-5.2 route, and the cross-harness `codex:rescue` and `claude -p` handoffs
+  live in `references/harness-model-invocation.md`. Claude Code cannot invoke
+  GLM-5.2.
 - Compound Engineering remains unchanged. When a frozen route selects GLM or
   Claude, Agent Utilities may override only the named CE execution step. GLM
   uses its admitted separate task; Claude uses CE's existing attested

@@ -174,10 +174,10 @@ This table is the delegated carrier route and is harness-independent: a Claude
 session that delegates bounded implementation still receives the Luna route.
 The model each harness runs as for its own turn is a separate layer with
 per-harness defaults. See
-[harness model invocation](harness-model-invocation.md) for those defaults, the
-concrete GLM-5.2 and cross-harness commands, and the capability-preservation
-rule. That reference is invocation guidance only; it grants no route this
-contract has not admitted.
+[harness model invocation](harness-model-invocation.md) for those defaults,
+the Codex-only GLM-5.2 route, and the cross-harness handoffs. That reference
+is invocation guidance only; it grants no route this contract has not
+admitted.
 
 ## Catalog
 

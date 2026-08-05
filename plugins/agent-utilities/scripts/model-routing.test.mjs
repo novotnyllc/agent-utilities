@@ -1232,7 +1232,10 @@ test("public CLI environment and JSON cannot mint visible-task authority or sett
       destinationClass: "visible_task",
       maxTaskCount: 1,
       currentTurn: "native-cli-turn",
-      expiresAt: "2026-08-05T12:00:00.000Z",
+      // The CLI subprocess uses the real clock, so a fixed instant becomes a
+      // time bomb; this test needs an unexpired authority to reach the
+      // attestor-availability check.
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       explicitUserInstructionDigest: DIGEST_B,
     };
 
