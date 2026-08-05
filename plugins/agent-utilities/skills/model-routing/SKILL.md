@@ -15,6 +15,10 @@ before using this skill. Its transport phase incorporates the normative
 provider-task policy; consumers do not invoke a second router or copy a model
 table.
 
+For per-harness session defaults, the concrete GLM-5.2 and cross-harness
+invocations, and the capability-preservation rule, see
+[`../../references/harness-model-invocation.md`](../../references/harness-model-invocation.md).
+
 ## Activation
 
 Resolve `SKILL_DIR` from the activated skill path, then use the sibling plugin
@@ -118,6 +122,44 @@ with `prior_route_unknown`.
   attestor. Its bootstrap acknowledgement and activation must have the exact
   same host/account/dispatch/session/tool identity; caller transport booleans
   cannot choose or unlock it.
+
+## Harness defaults and GLM
+
+The router's frozen no-config route is harness-independent: implementation
+resolves to Luna at `max`, orchestration and review to Sol. That is a
+delegation decision, separate from the model the current session runs as.
+
+Session defaults differ by harness, and effort is part of the default. On
+Codex/ChatGPT, Sol at `medium` is the working default for orchestration,
+routine review, and steering, escalating to `high`/`xhigh` for difficult
+reasoning and `max` for high or critical risk; implementation is Luna at `max`;
+Terra at `max` is both the attested Luna substitute and the natural
+implementation partner for a Sol orchestration context. On Claude Code, Fable
+at `high` leads for orchestration and difficult cross-family review with
+`xhigh` for hard review and `max` only on high-risk justification plus budget
+headroom, Opus is the lower-priority alternate for that role and the default
+for implementation, and Sonnet covers bounded mechanical work.
+
+GLM-5.2 is not a manual opt-in. It is a suitability-and-cost route: select it
+implicitly when work is large-volume but routine, repetitive or mechanical,
+well-specified, cleanly decomposable, low-ambiguity, bounded-risk, and strongly
+verifiable, and the budget component sees a materially cheaper eligible route.
+Never let it outrank Luna, Terra, or a current GPT/Claude route for
+architecture, ambiguous synthesis, novel design, weak verification, security
+judgment, or high semantic risk. `glm-5-2-scout` is `high` for research and
+investigation; `glm-5-2-engineer` is `xhigh` for mechanical and bounded
+implementation; both carry a hard 200,000-token ceiling.
+
+Availability is cached host evidence, not a per-decision probe: discovery's
+scoped negative evidence and reason-class TTLs own that, and positive
+attestation still requires the trusted in-process host attestor, so the GLM
+carriers return `transport_unsupported` until then. Changing the model changes
+only the model — a GLM session keeps every MCP server, skill, plugin, and hook,
+so never add the isolated review contract's `--safe-mode` or
+`--strict-mcp-config` flags to ordinary GLM work. Across harnesses, Claude
+reaches Codex models through the `codex` plugin's `codex:rescue` forwarder and
+Codex reaches Claude models through `claude -p`. The reference above has the
+exact commands, suitability rules, and boundaries.
 
 ## Carrier-neutral work-contract metadata
 

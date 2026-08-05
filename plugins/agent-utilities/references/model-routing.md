@@ -170,6 +170,15 @@ An unavailable Luna with no attested Terra substitute returns
 `preferred_unavailable`. Explicit user/repository model requirements prevent
 that automatic substitution.
 
+This table is the delegated carrier route and is harness-independent: a Claude
+session that delegates bounded implementation still receives the Luna route.
+The model each harness runs as for its own turn is a separate layer with
+per-harness defaults. See
+[harness model invocation](harness-model-invocation.md) for those defaults, the
+concrete GLM-5.2 and cross-harness commands, and the capability-preservation
+rule. That reference is invocation guidance only; it grants no route this
+contract has not admitted.
+
 ## Catalog
 
 The optional user-owned JSON catalog has exact `schemaVersion: 1` and these
