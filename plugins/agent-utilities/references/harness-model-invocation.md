@@ -135,7 +135,7 @@ cold.
 
 | Direction | Mechanism |
 | --- | --- |
-| Claude Code → Codex models (including GLM) | the `codex` plugin's `codex:rescue` skill and its related skills, or a direct `codex` CLI invocation (`codex exec -m <model> ...`) |
+| Claude Code → Codex models (including GLM) | the `codex` plugin's rescue forwarder — a skill on Codex, the `codex-rescue` agent on Claude Code — or a direct `codex` CLI invocation (`codex exec -m <model> ...`) |
 | Codex → Claude models | `claude -p --model <claude-model-id>`; a read-only Claude subscription review uses only the supported Compound Engineering `-p` adapter |
 | Either → ChatGPT Pro one-shot review | `agent-utilities:oracle`, which has its own invocation rules and requires a ChatGPT Pro subscription (see that skill for cached availability detection) |
 

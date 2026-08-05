@@ -1,6 +1,6 @@
 ---
 name: task-orchestrator
-description: Orchestrate configured fleet/account delivery or complex objectives across independently resumable tasks, projects, hosts, pull requests, and dependencies while remaining available as the control task. Use when configured routing owns allocation, or an objective needs multiple tasks, parallel or staged execution, separate ownership, cross-project work, or cross-host placement.
+description: Orchestrate configured fleet/account delivery or complex objectives across independently resumable tasks, projects, hosts, pull requests, and dependencies while remaining available as the control task. Use when configured routing owns allocation, when the user asks to run work on another machine or across the fleet, or when an objective needs multiple tasks, parallel or staged execution, separate ownership, cross-project work, or cross-host placement — including when the user names this skill directly.
 ---
 
 # Task Orchestrator
@@ -9,6 +9,26 @@ Orchestrate the objective; never execute delegated task work. Remain available
 to the user and dispatch implementation to fresh visible execution tasks. Use
 bounded internal subagents only for controller-scoped research or review; they
 are not substitutes for visible execution tasks.
+
+## Harness surface
+
+Both harnesses run this skill. Codex-native operations map as follows on
+Claude Code; where the cell says none, skip that gate — never block or invent
+a tool:
+
+| Operation | Codex | Claude Code |
+| --- | --- | --- |
+| Fresh execution child | visible task / thread on a saved project | `Agent` tool subagent (`run_in_background` for long work; always fresh-context) |
+| Message an existing child | `send_message_to_thread` / `followup_task` | `SendMessage` to a live subagent |
+| Wait / monitor children | `wait_threads` | task-completion notifications; `Monitor` for external conditions |
+| Cross-host placement | visible task on the destination's saved project | SSH-launched destination-native worker (below) |
+| Task title / retitle | thread title (own it) | session title where the host exposes one; otherwise none — skip retitle gates |
+| Archive at terminal acceptance | native task archive | none — record verified terminal acceptance in the ledger and final report |
+| Durable goal tracking | `/goal` | native task list (`TaskCreate`/`TaskUpdate`); `/goal` does not exist |
+| Time-based polling | in-chat scheduled task | `/loop` or a scheduled task |
+| Runtime cleanup after archive | read-only `cleanup-codex inspect` | only when children ran on a Codex carrier; otherwise none |
+| Capability discovery | lazy tool catalog search | `ToolSearch` over deferred tools |
+| Task links in updates | link to the task | stable title or session/agent ID — links may not exist |
 
 ## Thread title
 
@@ -75,8 +95,9 @@ fallback); never copy model constants, scoring, or transport rules here. With
 no catalog, the router preserves its built-in Sol orchestration/review and
 Luna implementation behavior; optional providers are not probed.
 
-After each selection and before dispatch, call the router's
-`build-work-contract` with the frozen objective/source-of-truth/scope/
+After each selection and before dispatch, run the router's
+`build-work-contract` command — a stdin command of the model-routing script,
+not a host tool — with the frozen objective/source-of-truth/scope/
 constraints/authorization/acceptance/stop digests plus the selected
 carrier/model/effort. Keep the invariant digest identical for every carrier
 and apply only the returned source-owned presentation overlay; direct user and
@@ -89,9 +110,10 @@ budget; rebalance when a child blocks or completes. Do not send execution back
 into the orchestrator.
 
 **Capability discovery before dispatch.** A tool absent from the eagerly
-listed surface is unknown, not unavailable: when a deferred catalog exists,
-search it for the exact capability and call its read-only discovery operation
-before falling back or blocking. Record `capability_ready` only when discovery
+listed surface is unknown, not unavailable: when a deferred catalog exists
+(Claude Code's `ToolSearch`, Codex's lazy tool catalog), search it for the
+exact capability and call its read-only discovery operation before falling
+back or blocking. Record `capability_ready` only when discovery
 confirms the route; `capability_discovery_unavailable` when the catalog or
 search is missing (a required route then blocks; an explicitly optional
 capability selects its one disclosed fallback, disclosed to all affected
@@ -198,8 +220,9 @@ unless repeated deterministic value clearly justifies them.
 
 ### Route every destination action
 
-Before `create_thread`, `send_message_to_thread`, `spawn_agent`,
-`send_message`, `followup_task`, or equivalent, classify what work that
+Before any destination action — `create_thread`, `send_message_to_thread`,
+`spawn_agent`, `followup_task` on Codex; an `Agent` launch, `SendMessage`, or
+a remote `claude -p` worker launch on Claude Code — classify what work that
 destination turn performs and re-enter model-routing under exactly one sender
 owner. Fresh work passes model and effort only when the adapter attests those
 controls. A user-owned catalog is standing model policy, never authority to
@@ -303,10 +326,32 @@ requested and actual model/effort/adapter/transport.
 ## Prepare and allocate hosts
 
 Orchestrator-side subagents run on the orchestrator's host unless the native
-tool supports placement. For Codex work on another machine, use a visible task
-or thread on that destination's saved project. For other harnesses, use their
-native remote-task mechanism or report unsupported placement — SSH command
-execution is not a remote agent.
+tool supports placement. Two remote lanes exist, one per destination harness:
+
+- **Codex destination**: a visible task or thread on that destination's saved
+  project, per `machine-utilities`' codex-remote-control contract. Claude Code
+  cannot drive that app-tool surface; from a Claude orchestrator, a Codex
+  destination goes through the codex plugin's rescue forwarder or a directly
+  invoked `codex` CLI on the destination via the SSH lane below.
+- **Claude Code destination**: over machine-utilities-verified SSH (the
+  configured alias, login shell, bounded timeouts), launch a real
+  destination-native worker in the fleet-verified project checkout:
+  `claude -p '<child brief>' --session-id <orchestrator-assigned uuid>
+  --output-format json --permission-mode <mode>`, output captured to a
+  destination-local log. Wrap long-running or interactive children in a named
+  tmux session (the `machine-utilities:remote-mac` pattern) and report the
+  attach command. The session UUID is the child's durable identity: resume the
+  same child with `--resume <uuid>` on the same host; a new assignment gets a
+  fresh UUID. Evidence returns through Git checkpoint pushes plus the captured
+  JSON result — the same harness-neutral handoff substrate the Codex lane
+  uses.
+
+Raw SSH command execution is still not a remote agent — running loose shell
+commands and calling it delegation stays forbidden. What the Claude lane
+launches is an actual harness process with its own session identity, model
+policy, and terminal report, and it gets the same readiness verification,
+single-use child rule, one-canonical-writer boundary, and monitoring cadence
+as any other child.
 
 Before cross-host dispatch, invoke the installed Machine Utilities skills:
 `machine-utilities:fleet-projects` (repository identity, checkout state,
@@ -353,8 +398,9 @@ Git/PR/merge state, release coupling, clean-state proof). Report "no currently
 known implementation defects" separately from completion; claim "only X
 remains" only when every other gate is satisfied, intentionally excluded, or
 explicitly blocked. Report critical-path duration, active agent time, external
-wait, and tool time separately from model tier and token/cost. Link to each
-task in updates; use raw IDs only for troubleshooting.
+wait, and tool time separately from model tier and token/cost. Reference each
+child by link where the host provides one, otherwise by its stable title or
+session ID.
 
 Planning, brainstorming, diagnosis-only, and review-only tasks are terminal at
 their requested artifact. Software delivery is terminal only after the child's
@@ -396,22 +442,28 @@ and refs are transient execution state — carry durable evidence into the
 integrated artifact or final receipt instead of retaining them.
 
 After cleanup succeeds, retitle the child `✅` and invoke native archive
-promptly; only then run read-only `cleanup-codex inspect` for host-wide
-runtime health. On conflict — the child resumed, a binding changed, or the
-worktree is dirty/unintegrated without a transferred ref — leave the task and
-worktree visible, retitle `⏸️`, and report the blocker; do not archive or
-force cleanup. If archive fails, leave the task resumable; if archive succeeds
-but inspection fails, record the child archived and leave runtime cleanup
+promptly where the harness has those operations; where it does not (see the
+harness table), record verified terminal acceptance in the ledger and final
+report instead — the gate is the verification, not the archive. Only for
+children that ran on a Codex carrier, follow archive with read-only
+`cleanup-codex inspect` for host-wide runtime health. On conflict — the child
+resumed, a binding changed, or the worktree is dirty/unintegrated without a
+transferred ref — leave the task and worktree visible, mark the child blocked
+(`⏸️` where titles exist), and report the blocker; do not archive or force
+cleanup. If archive fails, leave the task resumable; if archive succeeds but
+inspection fails, record the child archived and leave runtime cleanup
 unresolved. Run `cleanup-codex reap` or `recycle` only as a separate explicit
 repair after its own gates pass; archive status never authorizes mutation.
 Never delete a dirty worktree or unmerged ref without explicit authorization.
 
-Treat `Stop`, completed turns, `SubagentStop`, idle/sidebar state, and blocked
-work as resumable; a completed v2 subagent without a native close operation
-stays resident. Generic tasks remain visible until the user or host archives
-them, but the parent owns the entire lifecycle of every visible child it
-creates: once a child reaches verified terminal acceptance and cleanup
-succeeds, the parent archives it in the same monitoring pass. Keep the
+Treat harness stop/idle signals (Codex idle/sidebar state, Claude Code
+`Stop`/`SubagentStop` hook events, completed turns, a completed background
+subagent) and blocked work as resumable, never as completion or cleanup
+authority. Generic tasks remain visible until the user or host archives them,
+but the parent owns the entire lifecycle of every visible child it creates:
+once a child reaches verified terminal acceptance and cleanup succeeds, the
+parent closes it out (native archive where one exists) in the same monitoring
+pass. Keep the
 orchestrator active while any archived child has unresolved runtime cleanup or
 any remaining scope is neither archived-with-verification, visibly blocked
 with user-accepted evidence, nor explicitly handed off.

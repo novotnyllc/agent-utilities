@@ -1,12 +1,33 @@
 ---
 name: goal-driven-delivery
-description: Route one host-local software change or pull-request task through the correct Compound Engineering workflow, with LFG-first implementation delivery, Thermos review gates, React Doctor, PR babysitting, merge proof, and durable learnings. Use for a feature, bug fix, risky refactor, long-running implementation, or existing PR cleanup; use agent-utilities:task-orchestrator for multiple independently resumable tasks or cross-host placement.
+description: Route one host-local software change or pull-request task through the correct Compound Engineering workflow, with LFG-first implementation delivery, Thermos review gates, React Doctor, PR babysitting, merge proof, and durable learnings. Use whenever the user says to implement, fix, ship, deliver, or "go do" a software change — including when they name this skill directly — for a feature, bug fix, risky refactor, long-running implementation, or existing PR; this skill then routes to the right child skill. Use agent-utilities:task-orchestrator instead for multiple independently resumable tasks or cross-host placement.
 ---
 
 # Goal Driven Delivery
 
 Choose the delivery route and invoke the right existing skills. Do not replace
-those skills with a long ad hoc prompt.
+those skills with a long ad hoc prompt. This skill is the implicit entry point
+for delivery requests: a plain "implement/fix/ship X" enters here without the
+user naming it, and naming it still means routing through the child skills
+below, never bypassing them.
+
+## Harness surface
+
+Both harnesses run this skill. Codex-native nouns map as follows on Claude
+Code; where the cell says none, skip that gate — never block or invent a tool:
+
+| Operation | Codex | Claude Code |
+| --- | --- | --- |
+| Fresh execution child | visible task / thread | `Agent` tool subagent; `run_in_background` for long work (always fresh-context — no flag needed) |
+| Durable goal tracking | `/goal` | native task list (`TaskCreate`/`TaskUpdate`); `/goal` does not exist |
+| Task title | thread title (own it) | session title where the host exposes one; CLI has none — skip retitle steps |
+| Archive at terminal | native task archive | none — the verified terminal report is the record |
+| Time-based polling | in-chat scheduled task | `/loop` or a scheduled task |
+| Parallel reviewers | parallel subagents when supported | two `Agent` calls in one block — always supported |
+
+Harness stop signals are nonterminal on both sides: Codex idle/sidebar state,
+Claude Code `Stop`/`SubagentStop` hook events, and a completed background
+subagent are never cleanup or completion authority.
 
 ## Thread title
 
@@ -25,12 +46,11 @@ resumable scopes or PRs, or work placed on another host, invoke
 its single owned lane. Do not duplicate the orchestrator's decomposition, host
 allocation, cross-lane dependency tracking, or task monitoring here.
 
-Do not archive tasks or mutate Codex runtime when returning locally verified,
+Do not archive tasks or mutate agent runtime when returning locally verified,
 review-ready, PR-ready, blocked, or owner-action-required work — leave the
-task visible and resumable. `Stop`, completed turns, idle/sidebar state,
-`SubagentStop`, and a completed v2 subagent without a native close operation
-are nonterminal, never cleanup authority. When this is a directed child, Task
-Orchestrator archives it after terminal acceptance and report verification.
+work visible and resumable. Per the harness table above, stop/idle signals are
+never cleanup authority. When this is a directed child, Task Orchestrator
+closes it out after terminal acceptance and report verification.
 
 PR monitoring requires Compound Engineering with `ce-babysit-pr` (v3.20.0+).
 If unavailable, stop and ask the user to update CE; never hand-roll a watcher.
@@ -113,7 +133,9 @@ catalog it preserves the shipped Sol orchestration/review and Luna
 implementation defaults, including the exact LFG implementation binding; never
 reconstruct model constants or ranking rules here.
 
-Immediately after selection, call `build-work-contract` with the frozen
+Immediately after selection, run the router's `build-work-contract` command —
+a stdin command of the model-routing script, invoked exactly as that skill
+describes, not a host tool — with the frozen
 objective/source-of-truth/scope/constraints/authorization/acceptance/stop
 digests plus the selected carrier/model/effort. Preserve its invariant digest
 and apply its source-owned presentation overlay to the dispatched brief;
@@ -137,14 +159,17 @@ scope.
 CE stays an unchanged external carrier. A frozen model-routing decision may
 replace only a named CE execution mechanism — never the workflow, persona,
 legitimacy gate, artifact schema, writer ownership, review authority, or
-terminal boundary. The supported case: when CE Code Review, Doc Review, POV,
-LFG review, or Thermos launches its optional cross-model reviewer, a claimed
-Claude slot may replace that executor through CE's existing attested read-only
-Claude adapter, feeding receipt-bound findings into the same synthesis step.
-Never start a parallel raw `claude -p` runner; until the CE seam attests the
-binding, the route is `transport_unsupported`. The router's GLM scout/engineer
-seams remain fail-closed — GLM work reaches Codex only through the harness
-reference's `codex exec` route, not through a CE override.
+terminal boundary. The supported case is the cross-family reviewer, and its
+direction depends on the running harness: when CE Code Review, Doc Review,
+POV, LFG review, or Thermos launches its optional cross-model reviewer, a
+Codex host reaches Claude only through CE's existing attested read-only
+Claude `-p` adapter, and a Claude Code host reaches the other family through
+`agent-utilities:oracle` or the codex plugin's rescue forwarder — never a
+hand-rolled parallel runner in either direction. Findings feed the same
+synthesis step; until the CE seam attests the binding, the route is
+`transport_unsupported`. The router's GLM scout/engineer seams remain
+fail-closed — GLM work runs on Codex via the harness reference's `codex exec`
+route (from Claude Code, that command via Bash), not through a CE override.
 
 If the selected adapter cannot be attested, take the resolver's disclosed
 fallback or block. Never pass GLM, Fable, or Opus through a Codex selector,
@@ -157,24 +182,24 @@ at useful checkpoints so another agent or machine can resume. A checkpoint
 push does not open a PR, trigger review, or imply completion.
 
 Before starting LFG, establish the named branch and its writable upstream. Run
-a lane-owned checkpoint monitor beside LFG: when the canonical branch advances
-to a clean, stable commit created by the work stage, push it without opening a
-PR. Stop the monitor when LFG enters commit/push/PR or returns. The monitor
-never edits, stages, or decides readiness.
+a lane-owned checkpoint monitor beside LFG (on Claude Code, a background Bash
+loop or the Monitor tool watching the branch head; on Codex, a background
+thread): when the canonical branch advances to a clean, stable commit created
+by the work stage, push it without opening a PR. Stop the monitor when LFG
+enters commit/push/PR or returns. The monitor never edits, stages, or decides
+readiness.
 
 For dependent delivery against a GitHub upstream, use `gh-stack`. If missing,
-install and verify without prompting:
+install both agents' copies and verify, without prompting:
 
 ```bash
 gh extension install github/gh-stack --force
 gh skill install github/gh-stack --all --agent codex --scope user --force
+gh skill install github/gh-stack --all --agent claude-code --scope user --force
 gh stack --version
 ```
 
-On a host that also runs Claude Code, additionally
-`gh skill install github/gh-stack --all --agent claude-code --scope user --force`
-and verify. Use `gh-stack` for the dependent chain; keep unrelated PRs
-independent.
+Use `gh-stack` for the dependent chain; keep unrelated PRs independent.
 
 ## Verification cadence
 
@@ -302,10 +327,12 @@ continuation, then execute the delivery tail above.
 
 ## Route B: chunked hardening goal
 
-Only when the user explicitly requests Thermos review after each chunk:
+Only when the user explicitly requests Thermos review after each chunk. On
+Codex, prefix the first line with `/goal `; on Claude Code, run the same
+workflow tracking the stages with the native task list:
 
 ```text
-/goal Deliver <FEATURE> with chunk-level hardening through merge and post-merge proof.
+Deliver <FEATURE> with chunk-level hardening through merge and post-merge proof.
 
 Outcome: <measurable behavior>.
 Verification: <targeted tests/checks>, plus the repo final gate.
