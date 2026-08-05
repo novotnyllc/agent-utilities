@@ -15,11 +15,9 @@ The agent-scripts imports were most recently reviewed against:
 - Commit: `c46ea65b6323e8a2b6f441f8b6449ae731bc8f81`
 - License: MIT
 
-The `oracle` skill was refreshed from:
-
-- Repository: `https://github.com/steipete/oracle`
-- Commit: `0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851`
-- Path: `skills/oracle`
+Oracle, the thermos family, and the delivery/orchestration skills moved to
+the `yardmaster` plugin; their upstream ledger moved with them. Fleet,
+transport, and UniFi administration live in `roundhouse`.
 
 ## Copied Skills
 
@@ -31,11 +29,7 @@ The `oracle` skill was refreshed from:
 | `instruments-profiling` | `skills/instruments-profiling` |
 | `native-app-performance` | `skills/native-app-performance` |
 | `one-password` | `skills/one-password` |
-| `oracle` | `skills/oracle` |
 | `skill-cleaner` | `skills/skill-cleaner` |
-| `thermos` | `thermos/skills/thermos` |
-| `thermo-nuclear-review` | `thermos/skills/thermo-nuclear-review` |
-| `thermo-nuclear-code-quality-review` | `thermos/skills/thermo-nuclear-code-quality-review` |
 
 ## Adaptation Notes
 

@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.5.19",
-  "description": "Agent utility skills for budget-aware model routing, intent-routed delivery, Codex runtime inspection, browser control, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.6.0",
+  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, CLI design, frontend design, native profiling and performance, 1Password, and skill auditing.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -13,23 +13,18 @@
     "codex",
     "claude-code",
     "browser",
-    "github",
-    "pull-requests",
     "1password",
     "macos",
     "profiling",
     "cli",
-    "runtime-inspection",
-    "model-routing",
-    "orchestration",
+    "frontend",
     "skills"
   ],
   "skills": "./skills/",
-  "hooks": "./codex/hooks.json",
   "interface": {
     "displayName": "Agent Utilities",
-    "shortDescription": "Model-routed delivery, runtime inspection, browser, 1Password, Oracle, profiling, and CLI skills",
-    "longDescription": "Agent Utilities bundles operational skills for budget-aware model routing, intent-routed LFG-first delivery, multi-agent orchestration, bounded Codex runtime inspection, browser use, CLI design, 1Password workflows, skill cleanup, Oracle second-model review, native app performance, Instruments profiling, and frontend design.",
+    "shortDescription": "Browser, CLI design, frontend, profiling, 1Password, and skill auditing craft skills",
+    "longDescription": "The toolbox plugin: self-contained craft skills any single agent session can use \u2014 browser automation, CLI UX design, frontend design, Instruments profiling, native app performance, 1Password secret workflows, and skill auditing. Delivery/orchestration lives in yardmaster; machine and infrastructure administration in roundhouse.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
@@ -42,8 +37,8 @@
     "termsOfServiceURL": "https://github.com/novotnyllc/agent-utilities",
     "defaultPrompt": [
       "Use agent utilities to inspect browser state and continue the task.",
-      "Use goal-driven delivery and Compound Engineering to route implementation through LFG, merge, and post-merge proof.",
-      "Profile this native app with Instruments/xctrace and summarize hotspots."
+      "Profile this native app with Instruments/xctrace and summarize hotspots.",
+      "Audit the installed skills for budget, duplicates, and stale descriptions."
     ],
     "brandColor": "#0F766E"
   }

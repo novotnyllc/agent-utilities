@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.5.19",
-  "description": "Agent utility skills for budget-aware model routing, task orchestration, goal-driven delivery, Codex runtime inspection, browser control, 1Password, Oracle, native profiling, and CLI design.",
+  "version": "0.6.0",
+  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, CLI design, frontend design, native profiling and performance, 1Password, and skill auditing.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -13,32 +13,20 @@
     "codex",
     "claude-code",
     "browser",
-    "github",
-    "pull-requests",
     "1password",
     "macos",
     "profiling",
     "cli",
-    "runtime-inspection",
-    "model-routing",
-    "orchestration",
+    "frontend",
     "skills"
   ],
   "skills": [
     "./skills/browser-use",
-    "./skills/cleanup-codex",
     "./skills/create-cli",
-    "./skills/task-orchestrator",
     "./skills/frontend-design",
-    "./skills/goal-driven-delivery",
     "./skills/instruments-profiling",
-    "./skills/model-routing",
     "./skills/native-app-performance",
     "./skills/one-password",
-    "./skills/oracle",
-    "./skills/skill-cleaner",
-    "./skills/thermo-nuclear-code-quality-review",
-    "./skills/thermo-nuclear-review",
-    "./skills/thermos"
+    "./skills/skill-cleaner"
   ]
 }
