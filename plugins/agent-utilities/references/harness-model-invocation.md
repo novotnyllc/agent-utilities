@@ -203,23 +203,41 @@ Z.ai serves an Anthropic-compatible endpoint, so Claude Code reaches GLM-5.2 by
 environment alone. With the Z.ai key in the environment as `ZAI_API_KEY`:
 
 ```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-glm" \
 ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic" \
-ANTHROPIC_API_KEY="$ZAI_API_KEY" \
+ANTHROPIC_AUTH_TOKEN="$ZAI_API_KEY" \
 ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-4.7" \
-claude --bare
+claude
 ```
 
-**`--bare` is not optional on a host with an active `claude.ai` login, and
-`ANTHROPIC_API_KEY` is the variable that works.** The keychain credential
-otherwise outranks the environment token and is sent to Z.ai, which rejects it
-with a 401 after a long retry — the symptom is a command that hangs for minutes
-and then reports an authentication failure, which is easy to misread as
-slowness. `--bare` skips keychain reads so the env key is used. Measured on
-this host: without it, 401 after 215s; with it, a clean reply in 6s. Both
-`x-api-key` and bearer auth work at the HTTP layer, so the variable name is not
-the issue — credential precedence is.
+**Authentication needs a config profile with no login in it.** On a host with
+an active `claude.ai` login, that credential outranks any token in the
+environment and is sent to Z.ai, which rejects it with a 401 after roughly 210
+seconds. The symptom is a command that hangs for minutes and then reports an
+authentication failure, which is easy to misread as slowness rather than an
+auth fault.
+
+Credential source is not the lever, and neither are the obvious settings:
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, an `apiKeyHelper` supplied through
+`--settings`, `forceLoginMethod`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+all fail identically, because `claude auth status` still reports
+`loggedIn: true, authMethod: claude.ai` in every one of them. What works is
+removing the login from the profile the process reads: with
+`CLAUDE_CONFIG_DIR` pointed at a directory whose `.claude.json` has no
+`oauthAccount`, the same command reports `loggedIn: false` and uses the
+environment token. Measured here: 401 after 210s without it, a completed reply
+in about 10s with it.
+
+Build that profile once (`claude-glm-setup` in the shell config does this):
+symlink `plugins` and `skills` from the real config directory, copy
+`settings.json`, and copy `.claude.json` with `oauthAccount` removed. Rebuild it
+after changing plugins or MCP servers.
+
+`--bare` also fixes the auth precedence and is the wrong tool for it: it drops
+plugins, MCP servers, hooks, and `CLAUDE.md` outright, loading no MCP servers
+and about three tools. The isolated profile keeps them.
 
 Operators bind this to a `claude-glm` shell alias beside the normal `claude`
 alias, so an entire session can run on GLM without disturbing the
@@ -269,22 +287,21 @@ decision, not a capability constraint.
 
 ## Capability surface
 
-Changing the model is meant to change the model and nothing else, and on the
-Codex side it does. On Claude Code it currently cannot: `--bare` is required
-for auth (above) and `--bare` strips plugins, MCP servers, hooks, and
-`CLAUDE.md`. Restore what the session needs with `--mcp-config`,
-`--plugin-dir`, `--agents`, and `--add-dir`.
+Changing the model should change the model and nothing else. The isolated
+profile mostly holds that: measured here, a GLM session through
+`~/.claude-glm` loads 5 MCP servers and 60 tools, against 0 and 3 under
+`--bare`. It is not yet the full 27 servers and ~475 tools of the default
+session — plugin-provided MCP servers need more of the profile reproduced than
+symlinked `plugins` and `skills` alone supply. Treat the gap as a known,
+closable limitation rather than a property of running on GLM, and do not
+describe a GLM session as carrying the identical surface until the profile
+actually reproduces it.
 
-Measured on this host: a normal session reports 27 MCP servers and 475 tools; a
-`--bare` session reports 0 and 3. Do not describe a GLM session as carrying the
-same surface as the default one unless those flags were passed.
-
-Separately, never add `--safe-mode`, `--strict-mcp-config`,
-`--mcp-config '{"mcpServers":{}}'`, or `--tools` to ordinary GLM work. Those
-belong to the isolated review and canary contracts in
+Never add `--safe-mode`, `--strict-mcp-config`, `--mcp-config
+'{"mcpServers":{}}'`, or `--tools` to ordinary GLM work. Those belong to the
+isolated review and canary contracts in
 [`provider-task-routing.md`](provider-task-routing.md), where stripping
-customization is the point; reusing them here removes capability for no reason
-and is a different thing from the `--bare` auth requirement.
+customization is the point.
 
 ## Boundaries this reference does not move
 

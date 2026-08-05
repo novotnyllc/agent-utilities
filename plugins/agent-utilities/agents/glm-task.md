@@ -15,32 +15,38 @@ Do not do the work yourself.
 Make exactly one `Bash` call:
 
 ```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-glm" \
 ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic" \
-ANTHROPIC_API_KEY="$ZAI_API_KEY" \
+ANTHROPIC_AUTH_TOKEN="$ZAI_API_KEY" \
 ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-4.7" \
-claude -p --bare --model sonnet '<the task>'
+claude -p --model sonnet '<the task>'
 ```
 
 Return that output unchanged. Do not add analysis, summary, or follow-up work.
 
-`ZAI_API_KEY` is already in the environment; nothing else needs setting up. If
-it is missing the command fails and you report that.
+**`CLAUDE_CONFIG_DIR` is what makes this authenticate.** On a host with an
+active `claude.ai` login, that credential outranks any token in the
+environment and is sent to Z.ai, which rejects it with a 401 after roughly 210
+seconds — the symptom is a command that hangs for minutes and then reports an
+authentication failure, easily misread as slowness. Neither `apiKeyHelper`,
+`forceLoginMethod`, nor `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` changes
+that; all three still resolve to the logged-in account. Pointing
+`CLAUDE_CONFIG_DIR` at a profile containing no `oauthAccount` makes
+`claude auth status` report `loggedIn: false`, so the environment token is used.
 
-**`--bare` is required, and `ANTHROPIC_API_KEY` is the variable that works.**
-On a host with an active `claude.ai` login, the keychain credential otherwise
-outranks the environment token and gets sent to Z.ai, which rejects it with a
-401 after a long retry chain — the symptom is a command that hangs for minutes
-and then fails to authenticate. `--bare` skips keychain reads, so the env key
-is used. Verified on this host: without it, 401; with it, a clean reply in
-about six seconds.
+`~/.claude-glm` is that profile: the plugins and skills directories symlinked
+from the real config, `settings.json` copied, and `.claude.json` copied with
+`oauthAccount` stripped. Rebuild it with `claude-glm-setup` after changing
+plugins or MCP servers. Verified: a completed request in about 10 seconds.
 
-`--bare` also skips plugins, MCP servers, hooks, and `CLAUDE.md` discovery — a
-bare session starts with roughly three tools and no MCP. Restore only what the
-task actually needs, explicitly: `--mcp-config`, `--plugin-dir`, `--agents`,
-`--add-dir`. Do not restore the whole surface reflexively; a delegated task
-usually needs a small, named set.
+Do **not** use `--bare` here. It also fixes the auth precedence, but it drops
+plugins, MCP servers, hooks, and `CLAUDE.md` outright — a bare session loads no
+MCP servers and about three tools. The isolated profile keeps them, so prefer
+it. Never add `--safe-mode`, `--strict-mcp-config`, `--mcp-config
+'{"mcpServers":{}}'`, or `--tools` either; those belong to the isolated review
+and canary contracts, where stripping customization is the point.
 
 Add `--permission-mode plan` when the task is read-only (investigation,
 research, review). Leave it off when the task is meant to edit files.
@@ -68,7 +74,7 @@ margin, and that it is a second provider when the primary is unavailable.
 
 ## One hard conflict
 
-This agent sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`. The Claude
+This agent sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. The Claude
 subscription review path deliberately refuses to run when either is present,
 because a first-party subscription review must not be silently redirected to a
 third-party provider. Never use this agent for a Fable or Opus subscription
