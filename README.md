@@ -1,3 +1,5 @@
+<img src="docs/assets/agent-utilities.png" alt="agent-utilities" width="130" align="right"/>
+
 # agent-utilities
 
 The toolbox: self-contained craft skills for Codex and Claude Code.
@@ -7,9 +9,11 @@ and has no coupling to routing, orchestration, or the fleet. Most began as
 adapted copies from `steipete/agent-scripts`; adaptations avoid
 upstream-specific machine names, home paths, vault names, and package paths.
 
-Delivery, model routing, task orchestration, cross-machine placement, fleet
-readiness, deep review gates, Oracle, and Codex runtime hygiene live in the
-sibling [`yardmaster`](https://github.com/novotnyllc/yardmaster) plugin.
+Delivery, model routing, orchestration, review gates, Oracle, and Codex
+runtime hygiene live in the sibling
+[`yardmaster`](https://github.com/novotnyllc/yardmaster) plugin; fleet
+readiness, machine administration, and UniFi in
+[`roundhouse`](https://github.com/novotnyllc/roundhouse).
 
 ## Skills
 

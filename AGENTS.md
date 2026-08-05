@@ -4,17 +4,18 @@
 
 `agent-utilities` is the toolbox: self-contained craft skills any single agent
 session can pick up — how to drive a browser, design a CLI or a frontend,
-profile a native app, handle 1Password secrets, audit skills, or administer
-the UniFi network.
+profile a native app, handle 1Password secrets, or audit skills.
 
 **Belongs here:** skills that are useful on their own, carry their own
 references and scripts inside their skill directory, and have no coupling to
 routing, orchestration, or the fleet.
 
 **Belongs elsewhere:** everything about delivering work — model routing,
-goal-driven delivery, task orchestration, cross-machine placement, fleet
-readiness, review gates, Oracle, and Codex runtime hygiene live in
-[`yardmaster`](https://github.com/novotnyllc/yardmaster). If a new skill needs
+delivery, orchestration, cross-machine placement, review gates, Oracle, and
+Codex runtime hygiene live in
+[`yardmaster`](https://github.com/novotnyllc/yardmaster); fleet readiness,
+machine administration, and UniFi live in
+[`roundhouse`](https://github.com/novotnyllc/roundhouse). If a new skill needs
 the router, the fleet CLI, or dispatch semantics, it goes there, not here.
 
 ## Release Coupling
