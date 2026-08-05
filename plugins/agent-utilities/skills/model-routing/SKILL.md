@@ -86,11 +86,14 @@ The full adapter/carrier tables are in the reference. Operative rules:
 
 The router's frozen no-config route is harness-independent. Session defaults
 are a separate layer with per-harness values; effort is part of the default,
-and the two harness columns map row for row (routine steering Sol
-`medium`/Opus `medium`; mechanical work Luna `medium`/Sonnet `medium`;
-implementation Luna `max`/Opus `xhigh`; difficult review Sol `high`/Fable
+and the two harness columns map row for row by tier (routine steering Sol
+`medium`/Opus `medium`; mechanical work Luna `max`/Sonnet `medium`;
+implementation Terra `max`/Opus `high`; difficult review Sol `high`/Fable
 `high`; critical Sol `max`/Fable `max`; Terra `max` under Sol for long-running
-implementation). `medium` is the workhorse; escalate deliberately. The
+implementation). `medium` is the steering workhorse; Codex implementation
+runs at `max` because Luna and Terra are priced for it, while Opus `high` is
+the agentic-coding sweet spot with `xhigh` reserved for genuinely hard units.
+Escalate deliberately. The
 harness-model-invocation reference has the table, the current rate data, and
 why sticker rates settle almost nothing (meters differ, operating points
 differ, cache rates dominate).

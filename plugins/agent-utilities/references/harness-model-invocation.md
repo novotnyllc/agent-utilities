@@ -26,24 +26,30 @@ sides, same escalation ladder, so the columns are directly comparable:
 | Work | Codex / ChatGPT | Claude Code |
 | --- | --- | --- |
 | Routine orchestration, steering, status | Sol `medium` | Opus `medium` |
-| Bounded mechanical implementation | Luna `medium` | Sonnet `medium` |
-| General implementation and agentic coding | Luna `max` | Opus `xhigh` |
+| Bounded mechanical implementation | Luna `max` | Sonnet `medium` |
+| General implementation and agentic coding | Terra `max` | Opus `high` |
 | Difficult review, cross-cutting planning | Sol `high` | Fable `high` |
 | Highest-stakes reasoning, critical risk | Sol `max` | Fable `max` |
-| Long-running implementation under separate orchestration | Terra `max` driven by Sol | Opus `xhigh` driven by Fable |
+| Long-running implementation under separate orchestration | Terra `max` driven by Sol | Opus `high` driven by Fable |
 
-`medium` is the workhorse, not `high`: most steering turns are not
-reasoning-bound, and paying `high` on all of them spends budget the hard turns
-need. That is a session-turn statement — the router's frozen delegated default
-for an orchestration/review handoff stays Sol `high`, because a bounded
-delegated unit is closer to the difficult-review row than to a steering turn.
+`medium` is the workhorse for steering, not `high`: most steering turns are
+not reasoning-bound, and paying `high` on all of them spends budget the hard
+turns need. That is a session-turn statement — the router's frozen delegated
+default for an orchestration/review handoff stays Sol `high`, and its frozen
+delegated implementation route stays Luna at `max` (Terra only as the attested
+substitute); this table is what an interactive session picks, not that
+contract.
 
-Fable `high` maps to Sol `high`: both are the "this is actually hard" step.
-Opus starts coding at `xhigh` per Anthropic's own guidance, then sweeps down.
-`max` is never a default except Luna, which ships at its ceiling. Terra `max`
-under Sol is the long-running pairing and the Luna substitute.
-Fable-over-Opus for difficult review is this user's ordering, not a benchmark
-claim.
+The two sides escalate by tier, not by matching effort labels. On the Codex
+side implementation runs at `max` because the models are priced for it: Luna
+at `max` is nearly free and removes retries on mechanical work, and Terra at
+`max` is the implementation partner under a Sol orchestration context. On the
+Claude side effort stays proportional to rate: Sonnet `medium` already
+saturates mechanical work, and Opus `high` is the agentic-coding sweet spot —
+`xhigh` is reserved for a genuinely hard unit, since as a standing default it
+overthinks and burns budget. Fable `high` maps to Sol `high`: both are the
+"this is actually hard" step. Fable-over-Opus for difficult review is this
+user's ordering, not a benchmark claim.
 
 ## Published rates and what they imply
 
