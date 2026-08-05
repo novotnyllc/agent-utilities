@@ -105,6 +105,21 @@ They settle very little else, and a rate table must not be read as a ranking:
 - **The meters are not the same type.** USD per token and Z.ai plan credits do
   not convert (below), so for this host's GLM route there is no shared scalar
   to compare against Luna at all.
+- **Cache rates, not list input rates, dominate agentic spend.** These harnesses
+  send large stable prefixes every turn — system prompt, tool definitions,
+  repository context — so most input tokens are cache reads, billed far below
+  list. Anthropic reads at roughly 0.1x with writes at 1.25x (5-minute TTL) or
+  2x (1-hour); OpenAI bills cached input at one tenth of standard input with
+  writes at 1.25x; Z.ai's Coding Plan credit formula carries its own separate
+  cached-input multiplier, and Z.ai's own plan sizing assumes about a 90% cache
+  hit rate. A comparison built on uncached list input rates is therefore
+  measuring the case that least resembles the actual workload, and the ranking
+  it produces can invert once cache behavior is included.
+
+Cache behavior is a property of the workload and the harness, not of the price
+list: prefix stability, how often tools or the system prompt change, and TTL
+choice move it more than the provider does. That is another reason the decision
+belongs with measured outcomes rather than published rates.
 
 So treat the table as one bounded input, never as the decision. Cost ranking
 runs only after hard eligibility, and the authority on actual cost is measured
