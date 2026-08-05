@@ -68,7 +68,7 @@ margin, and that it is a second provider when the primary is unavailable.
 
 ## One hard conflict
 
-This agent sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. The Claude
+This agent sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`. The Claude
 subscription review path deliberately refuses to run when either is present,
 because a first-party subscription review must not be silently redirected to a
 third-party provider. Never use this agent for a Fable or Opus subscription

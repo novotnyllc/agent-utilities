@@ -139,7 +139,8 @@ is the long-running implementation pairing, and the Luna substitute.
 
 `medium` is the workhorse on both sides, not `high` — most steering turns are
 not reasoning-bound, and defaulting to `high` spends budget the hard turns
-need. Fable `high` maps to Sol `high`: both are the "actually hard" step, not
+need. That is a session-turn default only: the delegated no-config
+orchestration/review route stays Sol `high` as resolved above. Fable `high` maps to Sol `high`: both are the "actually hard" step, not
 the default. `max` is never a default except Luna, which ships at its ceiling.
 Opus starts coding at `xhigh` per Anthropic's own guidance, then sweeps down.
 
@@ -161,10 +162,13 @@ investigation; `glm-5-2-engineer` is `xhigh` for mechanical and bounded
 implementation; the 200,000-token ceiling both carry is this host adapter
 profile's limit, not the model's (GLM-5.2 advertises 1M).
 
-GLM is available when its config is present — `ZAI_API_KEY` for Claude Code,
-the `zai_litellm` provider plus the local proxy for Codex — and there is no
-precondition to check first. A missing key or a stopped proxy surfaces as a
-normal command failure; that is the detection. Changing the model changes
+For direct invocation — the `claude-glm` alias, the `glm-task` agent, or a
+one-off `codex exec` — GLM is available when its config is present
+(`ZAI_API_KEY` for Claude Code, the `zai_litellm` provider plus the local
+proxy for Codex) and there is no precondition to check first; a missing key or
+a stopped proxy surfaces as a normal command failure, and that is the
+detection. The claimed scout/engineer carrier routes above are a separate
+layer and keep their fail-closed transport requirement. Changing the model changes
 only the model — a GLM session keeps every MCP server, skill, plugin, and hook,
 so never add the isolated review contract's `--safe-mode` or
 `--strict-mcp-config` flags to ordinary GLM work. Across harnesses, Claude

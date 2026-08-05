@@ -46,6 +46,12 @@ actually comparable:
 steering turns are not reasoning-bound, and paying `high` on all of them spends
 budget that the genuinely difficult turns need. Escalate deliberately.
 
+That `medium` default is a session-turn statement, not the delegated route.
+The router's no-config route for an orchestration or independent-review
+handoff stays Sol `high` per the contract: a bounded delegated unit is closer
+to the difficult-review row than to an interactive steering turn, and the
+resolver's frozen default is code, not this table.
+
 The rows line up because the tiers do: **Fable `high` maps to Sol `high`** —
 both are the "this is actually hard" step, not the default. Opus sits where Sol
 sits for routine work and where Luna sits for implementation; Sonnet and Luna
@@ -170,8 +176,14 @@ it as a model limit.
 
 ## Availability
 
-GLM is available when its configuration is present, and there is no
-precondition to satisfy before using it:
+This section is about direct invocation: the `claude-glm` alias, the
+`glm-task` agent, and one-off `codex exec` runs. The router's claimed
+`glm-5-2-scout`/`glm-5-2-engineer` carrier routes are a separate layer — the
+resolver still fails closed with `transport_unsupported` until its fixed
+in-process attestor supplies profile evidence, and nothing here changes that.
+
+For direct invocation, GLM is available when its configuration is present, and
+there is no precondition to satisfy before using it:
 
 - **Claude Code** — `ZAI_API_KEY` in the environment. The `claude-glm` alias and
   the `glm-task` agent both read it directly.
