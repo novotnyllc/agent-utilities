@@ -30,40 +30,45 @@ A model name without an effort is an incomplete route. Each row below is a
 model-plus-effort pair, and the escalation column is the condition that
 justifies moving up.
 
-### Codex / ChatGPT
+Same work rows on both sides, same escalation ladder, so the two columns are
+actually comparable:
 
-| Work | Default | Escalate when |
+| Work | Codex / ChatGPT | Claude Code |
 | --- | --- | --- |
-| Orchestration, routine review, steering | Sol at `medium` | `high` for genuinely difficult review or cross-cutting planning; `xhigh` for dense multi-constraint reasoning; `max` for high or critical risk and explicitly complex work |
-| Implementation | Luna at `max` | already the ceiling |
-| Implementation when Luna is unavailable or unselectable | Terra at `max` | already the ceiling; disclosed as `implementation_model_substitute` |
-| Long-running orchestration paired with a separate implementation context | Sol at `medium`/`high` driving Terra at `max` | Terra and Sol pair well: Sol holds the plan and review context while Terra carries the bounded implementation |
+| Routine orchestration, steering, status | Sol `medium` | Opus `medium` |
+| Bounded mechanical implementation | Luna `medium` | Sonnet `medium` |
+| General implementation and agentic coding | Luna `max` | Opus `xhigh` |
+| Difficult review, cross-cutting planning | Sol `high` | Fable `high` |
+| Highest-stakes reasoning, critical risk | Sol `max` | Fable `max` |
+| Long-running implementation under a separate orchestration context | Terra `max` driven by Sol | Opus `xhigh` driven by Fable |
 
-Sol at `medium` is the working default because most orchestration and steering
-turns are not reasoning-bound, and paying `high` on all of them wastes budget
-that difficult review turns actually need. Escalate deliberately rather than
-starting high.
+`medium` is the workhorse on both sides, not `high`. Most orchestration and
+steering turns are not reasoning-bound, and paying `high` on all of them spends
+budget that the genuinely difficult turns need. Escalate deliberately.
 
-Terra at `max` is both the attested Luna substitute and the natural
-implementation partner for a Sol orchestration context. The resolver never
-invents a Terra slug, and no catalog, request, or environment variable can
-nominate Terra or mark Luna unavailable; only the trusted host-runtime attestor
-can.
+The rows line up because the tiers do: **Fable `high` maps to Sol `high`** —
+both are the "this is actually hard" step, not the default. Opus sits where Sol
+sits for routine work and where Luna sits for implementation; Sonnet and Luna
+share the mechanical tier.
 
-### Claude Code
+Two places the published guidance overrides a naive symmetry, and both are
+worth respecting:
 
-| Work | Default | Escalate when |
-| --- | --- | --- |
-| Orchestration, interactive depth, difficult cross-family review | Fable at `high` | `xhigh` for difficult review; `max` only with high-risk justification and budget headroom |
-| Alternate for the same review role | Opus at `high`/`xhigh` | lower-priority alternate to Fable, not a silent fallback |
-| Implementation | Opus at `high` | `xhigh` for dense or cross-cutting work |
-| Bounded mechanical implementation | Sonnet | escalate to Opus when ambiguity or risk turns out higher than scoped |
+- **Opus at `xhigh` for coding**, not `high`. Anthropic's own guidance is to
+  start coding and agentic work at `xhigh`, then sweep down — `low` and
+  `medium` punch above their weight on Opus 5, so the sweep is worth running,
+  but the starting point is `xhigh`. This is the analog of Luna at `max`.
+- **`max` is not a default anywhere.** On both sides it is for critical risk or
+  genuinely hardest reasoning, and it can show diminishing returns and
+  overthinking. Luna at `max` is the one standing exception: it is the shipped
+  implementation route and already at its ceiling.
 
-Fable ranks above Opus for appropriate difficult cross-family review; that
-ordering is this user's policy, not a universal benchmark claim. Claude review
-model identities stay inside the Fable/Opus family aliases, and a numeric
-version alone can never cross from Fable to Opus or the reverse. Claude has no
-Terra equivalent.
+Terra at `max` is both the Luna substitute and the natural implementation
+partner under a Sol orchestration context — Sol holds the plan and review
+context while Terra carries the bounded implementation. Fable-over-Opus for
+difficult review is this user's ordering, not a benchmark claim; Claude review
+identities stay inside the Fable/Opus family aliases, and a version number
+alone never crosses between them.
 
 ## Published rates and what they imply
 
@@ -163,24 +168,20 @@ a hard eligibility constraint for work routed through these profiles: context
 that does not fit the profile is ineligible regardless of cost. Do not restate
 it as a model limit.
 
-## Availability detection and caching
+## Availability
 
-GLM availability is host evidence, and it should be discovered once and cached,
-not re-checked on every routing decision. The resolver's existing discovery
-machinery is the mechanism: negative evidence is scoped to carrier/version,
-adapter/version, host/account, and policy digest, with fixed reason classes and
-TTLs — transient 60 seconds, auth 5 minutes, missing binary 1 hour, unsupported
-24 hours — bounded by `discovery.negativeTtls` and
-`discovery.retryAfterMaxSeconds`.
+GLM is available when its configuration is present, and there is no
+precondition to satisfy before using it:
 
-Positive `host_capability_attested` evidence cannot be minted from JSON by the
-public CLI; it requires the fixed in-process trusted host attestor and is bound
-to carrier/version, adapter/version, host/account, policy digest, expiry,
-resolved model, and scoped capabilities. Until that attestation exists,
-`glm-5-2-scout` and `glm-5-2-engineer` return `transport_unsupported` and other
-work proceeds unaffected. A working shell alias or provider entry is
-operator-level evidence that the host mechanism exists; it is not resolver
-admission by itself.
+- **Claude Code** — `ZAI_API_KEY` in the environment. The `claude-glm` alias and
+  the `glm-task` agent both read it directly.
+- **Codex** — the `zai_litellm` provider block in `config.toml`, plus the local
+  LiteLLM proxy running on port 4141.
+
+If the key or the proxy is missing, the command fails with a normal error and
+you fix the config. Don't build a detection or caching layer in front of that;
+a failed command is the detection, and the configuration is the source of
+truth.
 
 ## Reaching each model
 
@@ -191,12 +192,22 @@ environment alone. With the Z.ai key in the environment as `ZAI_API_KEY`:
 
 ```bash
 ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic" \
-ANTHROPIC_AUTH_TOKEN="$ZAI_API_KEY" \
+ANTHROPIC_API_KEY="$ZAI_API_KEY" \
 ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.2" \
 ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-4.7" \
-claude
+claude --bare
 ```
+
+**`--bare` is not optional on a host with an active `claude.ai` login, and
+`ANTHROPIC_API_KEY` is the variable that works.** The keychain credential
+otherwise outranks the environment token and is sent to Z.ai, which rejects it
+with a 401 after a long retry — the symptom is a command that hangs for minutes
+and then reports an authentication failure, which is easy to misread as
+slowness. `--bare` skips keychain reads so the env key is used. Measured on
+this host: without it, 401 after 215s; with it, a clean reply in 6s. Both
+`x-api-key` and bearer auth work at the HTTP layer, so the variable name is not
+the issue — credential precedence is.
 
 Operators bind this to a `claude-glm` shell alias beside the normal `claude`
 alias, so an entire session can run on GLM without disturbing the
@@ -204,6 +215,13 @@ Anthropic-backed default. The mapping variables map Claude's tier names onto
 Z.ai models: the Opus and Sonnet tiers resolve to `glm-5.2`, and the Haiku tier
 resolves to `glm-4.7`, which is what background and title-generation traffic
 uses. Environment variables are read at launch, so start a new session.
+
+The cost of `--bare` is real: it also skips plugins, MCP servers, hooks, and
+`CLAUDE.md` discovery, so a bare session starts with about three tools and no
+MCP servers rather than the full surface. Restore what a given session needs
+explicitly with `--mcp-config`, `--plugin-dir`, `--agents`, and `--add-dir`.
+There is currently no way to get both keychain-free auth and the implicit full
+surface in one flag.
 
 ### GLM-5.2 from Codex
 
@@ -237,21 +255,24 @@ never local inference, provider entitlement, or live usage proof.
 Because both harnesses can reach every model, choosing one is a routing
 decision, not a capability constraint.
 
-## Preserve the full capability surface
+## Capability surface
 
-Changing the model changes the model and nothing else. The session invocations
-above intentionally carry no isolation flags, so a GLM session keeps every MCP
-server, skill, plugin, hook, and `CLAUDE.md`/`AGENTS.md` instruction the default
-session would have loaded. A verified `claude-glm` launch on this host reported
-`model: glm-5.2` with 27 MCP servers and 475 tools — the same surface as the
-default session.
+Changing the model is meant to change the model and nothing else, and on the
+Codex side it does. On Claude Code it currently cannot: `--bare` is required
+for auth (above) and `--bare` strips plugins, MCP servers, hooks, and
+`CLAUDE.md`. Restore what the session needs with `--mcp-config`,
+`--plugin-dir`, `--agents`, and `--add-dir`.
 
-Do not add `--safe-mode`, `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`,
-or `--tools` to a general-purpose GLM session. Those belong to the isolated
-review and canary contracts in
+Measured on this host: a normal session reports 27 MCP servers and 475 tools; a
+`--bare` session reports 0 and 3. Do not describe a GLM session as carrying the
+same surface as the default one unless those flags were passed.
+
+Separately, never add `--safe-mode`, `--strict-mcp-config`,
+`--mcp-config '{"mcpServers":{}}'`, or `--tools` to ordinary GLM work. Those
+belong to the isolated review and canary contracts in
 [`provider-task-routing.md`](provider-task-routing.md), where stripping
-customization is the point. Reusing them for ordinary work silently removes the
-capabilities the operator expects.
+customization is the point; reusing them here removes capability for no reason
+and is a different thing from the `--bare` auth requirement.
 
 ## Boundaries this reference does not move
 
@@ -261,9 +282,8 @@ capabilities the operator expects.
   GLM-aliased shell is exactly what that preflight exists to reject, so launch
   subscription reviews from an unaliased one. This is correct behavior, not an
   obstacle to work around.
-- GLM is a separate-task profile carrier. Never pass `glm-5.2` to a Codex model
-  selector field, `spawn_agent`, or a native-subagent override merely because
-  the catalog contains it.
-- A documented mechanism is not `live_carrier_verified`. That still requires a
-  separately authorized minimal canary or an equivalently bound successful
-  adapter receipt.
+- GLM runs as its own process, not as a model value handed to another harness's
+  selector. Never pass `glm-5.2` to a Codex model field, `spawn_agent`, or a
+  native-subagent override — those select among the models the current session
+  already talks to, and GLM is reached by pointing a separate process at Z.ai.
+  The `glm-task` agent is the supported way to delegate to it from Claude Code.

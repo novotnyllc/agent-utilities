@@ -129,16 +129,19 @@ The router's frozen no-config route is harness-independent: implementation
 resolves to Luna at `max`, orchestration and review to Sol. That is a
 delegation decision, separate from the model the current session runs as.
 
-Session defaults differ by harness, and effort is part of the default. On
-Codex/ChatGPT, Sol at `medium` is the working default for orchestration,
-routine review, and steering, escalating to `high`/`xhigh` for difficult
-reasoning and `max` for high or critical risk; implementation is Luna at `max`;
-Terra at `max` is both the attested Luna substitute and the natural
-implementation partner for a Sol orchestration context. On Claude Code, Fable
-at `high` leads for orchestration and difficult cross-family review with
-`xhigh` for hard review and `max` only on high-risk justification plus budget
-headroom, Opus is the lower-priority alternate for that role and the default
-for implementation, and Sonnet covers bounded mechanical work.
+Session defaults differ by harness, and effort is part of the default. The two
+sides map row for row, so they can be compared directly — routine orchestration
+and steering is Sol `medium` / Opus `medium`; bounded mechanical work is Luna
+`medium` / Sonnet `medium`; general implementation and agentic coding is Luna
+`max` / Opus `xhigh`; difficult review and cross-cutting planning is Sol `high`
+/ Fable `high`; critical risk is Sol `max` / Fable `max`. Terra `max` under Sol
+is the long-running implementation pairing, and the Luna substitute.
+
+`medium` is the workhorse on both sides, not `high` — most steering turns are
+not reasoning-bound, and defaulting to `high` spends budget the hard turns
+need. Fable `high` maps to Sol `high`: both are the "actually hard" step, not
+the default. `max` is never a default except Luna, which ships at its ceiling.
+Opus starts coding at `xhigh` per Anthropic's own guidance, then sweeps down.
 
 On sticker rate, "route to GLM-5.2 to save money" does not hold after OpenAI's
 2026-07-30 change — Luna lists roughly 7x cheaper on input. But a rate table
@@ -158,10 +161,10 @@ investigation; `glm-5-2-engineer` is `xhigh` for mechanical and bounded
 implementation; the 200,000-token ceiling both carry is this host adapter
 profile's limit, not the model's (GLM-5.2 advertises 1M).
 
-Availability is cached host evidence, not a per-decision probe: discovery's
-scoped negative evidence and reason-class TTLs own that, and positive
-attestation still requires the trusted in-process host attestor, so the GLM
-carriers return `transport_unsupported` until then. Changing the model changes
+GLM is available when its config is present — `ZAI_API_KEY` for Claude Code,
+the `zai_litellm` provider plus the local proxy for Codex — and there is no
+precondition to check first. A missing key or a stopped proxy surfaces as a
+normal command failure; that is the detection. Changing the model changes
 only the model — a GLM session keeps every MCP server, skill, plugin, and hook,
 so never add the isolated review contract's `--safe-mode` or
 `--strict-mcp-config` flags to ordinary GLM work. Across harnesses, Claude
