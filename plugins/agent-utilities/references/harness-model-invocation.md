@@ -65,39 +65,88 @@ model identities stay inside the Fable/Opus family aliases, and a numeric
 version alone can never cross from Fable to Opus or the reverse. Claude has no
 Terra equivalent.
 
+## Published rates and what they imply
+
+Rates are policy input and go stale; every catalog rate carries its source URL,
+checked timestamp, and a default 30-day freshness limit. The figures below were
+checked 2026-08-05 against provider and OpenRouter listings and are list prices
+in USD per million tokens. Re-check before relying on them.
+
+| Model | Input | Output | Context |
+| --- | --- | --- | --- |
+| `gpt-5.6-luna` | 0.20 | 1.20 | 1M |
+| `claude-haiku-4-5` | 1.00 | 5.00 | 200K |
+| `glm-5.2` (Z.ai direct API) | 1.40 | 4.40 | 1M |
+| `gpt-5.6-terra` | 2.00 | 12.00 | 1M |
+| `claude-sonnet-5` | 3.00 | 15.00 | 1M |
+| `gpt-5.6-sol` | 5.00 | 30.00 | 1M |
+| `claude-opus-5` | 5.00 | 25.00 | 1M |
+| `claude-fable-5` | 10.00 | 50.00 | 1M |
+
+Two of these carry promotions with their own expiry: Terra and Luna are listed
+at 50% off, and Sonnet 5 has introductory pricing through 2026-08-31. A
+promotional rate is not the rate to plan against.
+
+### What these rates do and do not settle
+
+The one claim they do settle: after OpenAI's 2026-07-30 change, **"route to
+GLM-5.2 to save money" is not true as a sticker-price argument** — Luna lists
+roughly 7x cheaper on input and 3.7x on output.
+
+They settle very little else, and a rate table must not be read as a ranking:
+
+- **Rate is not cost per completed task.** What gets billed is tokens consumed
+  to finish the work, including thinking tokens, retries, and extra turns. A
+  higher-rate model that finishes in one pass can cost less than a cheaper one
+  that needs three.
+- **The operating points are not comparable.** Luna at `max` and GLM at `xhigh`
+  are different amounts of work per request. Dividing two sticker rates
+  compares units that were never the same.
+- **The meters are not the same type.** USD per token and Z.ai plan credits do
+  not convert (below), so for this host's GLM route there is no shared scalar
+  to compare against Luna at all.
+
+So treat the table as one bounded input, never as the decision. Cost ranking
+runs only after hard eligibility, and the authority on actual cost is measured
+local outcomes — which is what the resolver's learning subsystem accumulates,
+keyed by carrier, effort, and billing surface with duration, validated usage,
+retry, and verification. Prefer that evidence over arithmetic on list prices.
+
 ## What GLM-5.2 is for
 
-GLM-5.2 is not a manual opt-in for work that would otherwise go to Luna. It is
-a suitability-and-cost route: when the work shape fits and the budget component
-sees a materially cheaper eligible route, GLM should be selected implicitly,
-the same way any other eligible cheaper candidate is.
+Its case does not rest on being cheaper per token, and does not need to:
 
-Select GLM-5.2 when the work is:
+- **Subscription headroom.** This host reaches GLM through the Z.ai Coding Plan
+  (`api/coding/paas/v4`), a monthly subscription metered in plan credits with
+  5-hour and weekly ceilings — not per-token USD. Within a quota already paid
+  for, marginal token cost is zero. That makes GLM attractive for high-volume
+  work *inside* remaining quota, and unattractive the moment the comparison is
+  drawn in USD.
+- **Provider diversity.** A second independent provider is worth having when
+  the primary is rate-limited, degraded, or unavailable.
 
-- large-volume but routine
-- repetitive or mechanical
-- well-specified, with the decisions already made
-- cleanly decomposable into independent units
-- low-ambiguity and low-novelty
-- bounded-risk
-- strongly verifiable by deterministic checks
+Credits and USD are different meter types. The router does not convert or add
+across meter types without explicit user policy, and it must not: "cheaper in
+credits" says nothing about USD, and vice versa. Model GLM on its credit meter,
+not by converting to dollars.
 
-Do not select GLM-5.2 — and never let a cheaper GLM route outrank Luna, Terra,
-or a current GPT/Claude route — when the work requires architecture, ambiguous
-synthesis, novel design, weak or subjective verification, security judgment,
-high semantic risk, or workflow authority outside its declared profile. Cost
-ranking applies only after hard role, carrier, effort, context, work-shape, and
-privacy eligibility have already been satisfied.
+Deliberately **not** a selection criterion: published benchmark placements.
+Cross-model benchmark claims are weak evidence for routing, they move with
+every release, and no eligibility or ranking rule here derives from one. Route
+on hard constraints, meter, and measured local outcomes instead.
 
 Its two fixed profiles:
 
-| Profile | Effort | Roles | Context ceiling |
+| Profile | Effort | Roles | Adapter context ceiling |
 | --- | --- | --- | --- |
 | `glm-5-2-scout` | `high` | research, investigation, secondary review | 200,000 tokens |
 | `glm-5-2-engineer` | `xhigh` | mechanical implementation, bounded fixes | 200,000 tokens |
 
-The 200,000-token ceiling is a hard eligibility constraint, not a soft
-preference: work whose context does not fit is ineligible regardless of cost.
+The 200,000-token figure is this **host adapter profile's** ceiling, not the
+model's capability — GLM-5.2 itself advertises a 1M context window. It is still
+a hard eligibility constraint for work routed through these profiles: context
+that does not fit the profile is ineligible regardless of cost. Do not restate
+it as a model limit.
 
 ## Availability detection and caching
 

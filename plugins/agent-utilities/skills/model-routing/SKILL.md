@@ -140,15 +140,23 @@ at `high` leads for orchestration and difficult cross-family review with
 headroom, Opus is the lower-priority alternate for that role and the default
 for implementation, and Sonnet covers bounded mechanical work.
 
-GLM-5.2 is not a manual opt-in. It is a suitability-and-cost route: select it
-implicitly when work is large-volume but routine, repetitive or mechanical,
-well-specified, cleanly decomposable, low-ambiguity, bounded-risk, and strongly
-verifiable, and the budget component sees a materially cheaper eligible route.
-Never let it outrank Luna, Terra, or a current GPT/Claude route for
-architecture, ambiguous synthesis, novel design, weak verification, security
-judgment, or high semantic risk. `glm-5-2-scout` is `high` for research and
+On sticker rate, "route to GLM-5.2 to save money" does not hold after OpenAI's
+2026-07-30 change — Luna lists roughly 7x cheaper on input. But a rate table
+settles little else: it is not cost per completed task (thinking tokens,
+retries, and extra turns are what get billed), Luna at `max` and GLM at `xhigh`
+are not the same unit of work, and this host's GLM route bills in Z.ai Coding
+Plan credits, which do not convert to USD at all. Treat list prices as one
+bounded input, never the decision, and prefer measured local outcomes from the
+learning subsystem. GLM's real case is subscription headroom — marginal cost
+inside already-paid quota is zero — plus provider diversity when the primary is
+rate-limited or degraded.
+
+Published benchmark placements are deliberately not a selection criterion — no
+eligibility or ranking rule derives from one. Route on hard constraints, meter,
+and measured local outcomes. `glm-5-2-scout` is `high` for research and
 investigation; `glm-5-2-engineer` is `xhigh` for mechanical and bounded
-implementation; both carry a hard 200,000-token ceiling.
+implementation; the 200,000-token ceiling both carry is this host adapter
+profile's limit, not the model's (GLM-5.2 advertises 1M).
 
 Availability is cached host evidence, not a per-decision probe: discovery's
 scoped negative evidence and reason-class TTLs own that, and positive
