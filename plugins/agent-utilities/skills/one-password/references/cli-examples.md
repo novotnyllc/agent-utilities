@@ -1,5 +1,10 @@
 # op CLI examples (from op help)
 
+> Syntax reference only. The Read/Run/Inject commands below print live secret
+> values to stdout as written — never run them bare in an agent session. Route
+> output to a file or the consuming process (`--out-file`, `op run -- <cmd>`,
+> `op inject -o`), or capture presence/shape only, per the SKILL.md guardrails.
+
 ## Sign in
 
 - `op signin`
