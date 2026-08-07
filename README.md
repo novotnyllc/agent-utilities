@@ -24,8 +24,28 @@ readiness, machine administration, and UniFi in
 | `frontend-design` | Build polished, non-generic web interfaces. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
+| `onedrive-fileprovider-repair` | Diagnose and safely repair macOS OneDrive File Provider churn. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
+
+### Why the OneDrive repair skill exists
+
+Codex can create and actively use `~/Documents/Codex`. When Documents is
+OneDrive-backed on macOS, that real working directory is also a File Provider
+sync target. Repeated workspace changes, cloud hydration, and stale provider
+reconciliation can then drive sustained CPU in OneDrive, `fileproviderd`, and
+`suggestd`. The `onedrive-fileprovider-repair` skill captures the bounded
+diagnosis and FPCK repair while preserving the real Codex directory, keeping
+Documents backed up, and never quitting Codex.
+
+Adjacent open `openai/codex` issues document the upstream product constraints;
+none currently describes this exact `suggestd`/FPCK failure loop:
+
+- [#20880](https://github.com/openai/codex/issues/20880) — the app recreates `~/Documents/Codex` on launch.
+- [#28857](https://github.com/openai/codex/issues/28857) — make the default artifact/output directory configurable.
+- [#15159](https://github.com/openai/codex/issues/15159) — broad searches can hydrate macOS CloudStorage trees.
+- [#28729](https://github.com/openai/codex/issues/28729) — warn about active workspaces in cloud-synced folders.
+- [#32853](https://github.com/openai/codex/issues/32853) — restored macOS OneDrive File Provider workspaces can fail after relaunch.
 
 ## Install
 

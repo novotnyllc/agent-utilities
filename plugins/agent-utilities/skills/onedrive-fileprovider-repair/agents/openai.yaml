@@ -1,0 +1,4 @@
+interface:
+  display_name: "OneDrive File Provider Repair"
+  short_description: "Diagnose macOS OneDrive File Provider churn"
+  default_prompt: "Use $onedrive-fileprovider-repair to diagnose File Provider churn without moving Documents/Codex."
