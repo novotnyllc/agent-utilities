@@ -87,3 +87,14 @@ npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.
 Use `UPSTREAM.md` and `upstreams.json` to compare adapted copies with their
 listed sources. Do not overwrite local adaptations blindly; refresh by diffing
 the upstream skill folder and reapplying the local configuration changes.
+
+## License
+
+MIT — see [LICENSE](LICENSE), which preserves the upstream copyright notice
+for the skills adapted from `steipete/agent-scripts`.
+
+One exception: the `frontend-design` skill is Apache-2.0 (Copyright 2024
+Anthropic PBC) and keeps its own
+[LICENSE.txt](plugins/agent-utilities/skills/frontend-design/LICENSE.txt).
+Every incorporation is itemized in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
