@@ -22,7 +22,7 @@ Follow the official CLI get-started steps. Don't guess install commands.
 3. REQUIRED: create exactly one persistent named tmux session for the whole secret task.
 4. Try scoped service-account access first when a matching token/workflow exists; no dialogs.
 5. If service-account access is missing or lacks the exact item/field needed, stop and ask before desktop-app sign-in.
-6. Desktop fallback: confirm app integration/unlock, then `op signin` once inside the same session.
+6. Desktop fallback: first `unset OP_SERVICE_ACCOUNT_TOKEN` and any vault-specific service-account token inside the task window — an exported service token silently overrides `--account` and confines reads to the service-account vault. Then confirm app integration/unlock and run `op signin` once inside the same session.
 7. Verify chosen access path inside that same session: `op whoami`.
 8. If multiple accounts: use `--account` or `OP_ACCOUNT`.
 9. If a command fails, reuse the same tmux session with `tmux send-keys`; do not start a second session just to retry.
