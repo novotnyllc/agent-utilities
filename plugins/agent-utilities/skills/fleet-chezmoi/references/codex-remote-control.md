@@ -1,10 +1,7 @@
 # Codex Desktop remote control
 
-> **Check the interop lane first.** For a target whose registry entry
-> declares `wsl_interop_via`, CLI-shaped work defaults to the WSL interop
-> lane (SSH to the sibling, `cd /mnt/c`, full-path `cmd.exe /c` — native
-> processes, any harness). This contract is the fallback for Desktop-app
-> surface work, or when WSL is absent or unreachable.
+Use the configured `codex-remote-control` transport for every operation in
+this contract. Never substitute WSL, SSH, or another execution context.
 
 Use this only for a machine whose configured transport is
 `codex-remote-control`. Never substitute WSL or SSH.
