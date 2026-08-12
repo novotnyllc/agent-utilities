@@ -27,6 +27,7 @@ readiness, machine administration, and UniFi in
 | `onedrive-fileprovider-repair` | Diagnose and safely repair macOS OneDrive File Provider churn. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
+| `fleet-chezmoi` | Reconcile chezmoi source and live-state drift with roundhouse when present. |
 
 ### Why the OneDrive repair skill exists
 

@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.6.4",
-  "description": "The toolbox: self-contained craft skills for any single agent session — browser automation, CLI design, frontend design, native profiling and performance, 1Password, and skill auditing.",
+  "version": "0.6.5",
+  "description": "The toolbox: self-contained craft skills for any single agent session — browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, and optional chezmoi reconciliation.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -18,13 +18,14 @@
     "profiling",
     "cli",
     "frontend",
-    "skills"
+    "skills",
+    "chezmoi"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Agent Utilities",
     "shortDescription": "Browser, CLI design, frontend, profiling, 1Password, and skill auditing craft skills",
-    "longDescription": "The toolbox plugin: self-contained craft skills any single agent session can use — browser automation, CLI UX design, frontend design, Instruments profiling, native app performance, 1Password secret workflows, and skill auditing. Delivery/orchestration lives in railyard; machine and infrastructure administration in roundhouse.",
+    "longDescription": "The toolbox plugin: self-contained craft skills any single agent session can use — browser automation, CLI UX design, frontend design, Instruments profiling, native app performance, 1Password secret workflows, skill auditing, and optional chezmoi reconciliation through roundhouse. Delivery/orchestration lives in railyard; machine and infrastructure administration in roundhouse.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
