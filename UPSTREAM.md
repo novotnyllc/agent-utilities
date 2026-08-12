@@ -19,7 +19,8 @@ Oracle, the thermos family, and the delivery/orchestration skills moved to
 the [`railyard`](https://github.com/novotnyllc/railyard) plugin; their
 upstream ledger and adaptation notes moved with them. Fleet, transport, and
 UniFi administration live in
-[`roundhouse`](https://github.com/novotnyllc/roundhouse).
+[`roundhouse`](https://github.com/novotnyllc/roundhouse); the optional personal
+chezmoi integration lives here as `fleet-chezmoi`.
 
 ## Copied Skills
 

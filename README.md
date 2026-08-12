@@ -21,6 +21,7 @@ readiness, machine administration, and UniFi in
 | --- | --- |
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
+| `fleet-chezmoi` | Reconcile chezmoi source and live-state drift with roundhouse when present. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
