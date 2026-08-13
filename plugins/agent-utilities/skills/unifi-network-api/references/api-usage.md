@@ -35,20 +35,20 @@ Do not retrieve API keys from browser storage. Ask the user for the key, use a p
 List high-value endpoints:
 
 ```sh
-jq -r '.paths | keys[] | select(test("firewall|policy|zone|traffic-matching|network|client|device|site"; "i"))' references/current-openapi.json
+jq -r '.paths | keys[] | select(test("firewall|policy|zone|traffic-matching|network|client|device|site"; "i"))' "$SKILL_DIR"/references/current-openapi.json
 ```
 
 Inspect an endpoint:
 
 ```sh
-jq '.paths["/v1/sites/{siteId}/firewall/policies"]' references/current-openapi.json
+jq '.paths["/v1/sites/{siteId}/firewall/policies"]' "$SKILL_DIR"/references/current-openapi.json
 ```
 
 Inspect schemas:
 
 ```sh
-jq -r '.components.schemas | keys[] | select(test("Firewall|Policy|Zone|Traffic"; "i"))' references/current-openapi.json
-jq '.components.schemas["Create or update firewall policy"]' references/current-openapi.json
+jq -r '.components.schemas | keys[] | select(test("Firewall|Policy|Zone|Traffic"; "i"))' "$SKILL_DIR"/references/current-openapi.json
+jq '.components.schemas["Create or update firewall policy"]' "$SKILL_DIR"/references/current-openapi.json
 ```
 
 Discover sites:

@@ -52,4 +52,4 @@ After firewall or policy changes:
 - Verify compiled gateway behavior over SSH with `iptables-save`, `ipset`, or equivalent live firewall inspection.
 - Remove any temporary runtime-only emergency rules once managed policy rules are compiled and confirmed.
 
-For Alexandria/Synology-style scoped region blocking, use explicit destination-scoped firewall policies rather than global CyberSecure region blocking when the user wants only one host affected.
+For host-scoped region blocking, use explicit destination-scoped firewall policies rather than global CyberSecure region blocking when the user wants only one host affected.
