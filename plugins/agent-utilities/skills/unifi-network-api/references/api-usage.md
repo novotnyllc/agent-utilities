@@ -4,7 +4,7 @@
 
 `current-openapi.json` was copied from UDM Pro:
 
-- Source: `root@unifi:/usr/lib/unifi/webapps/ROOT/api-docs/integration.json`
+- Source: `/usr/lib/unifi/webapps/ROOT/api-docs/integration.json` on the user-configured `UNIFI_SSH_TARGET`
 - Title: `UniFi Network API`
 - Version: `10.5.67`
 - OpenAPI: `3.1.0`
@@ -54,8 +54,12 @@ jq '.components.schemas["Create or update firewall policy"]' references/current-
 Discover sites:
 
 ```sh
-curl -sk -H "X-API-KEY: $UNIFI_API_KEY" \
-  "https://unifi.housenet.novotny.org/proxy/network/integration/v1/sites"
+: "${UNIFI_API_KEY:?Set UNIFI_API_KEY from the user-provided or user-configured API key}"
+: "${UNIFI_CONSOLE_HOST:?Set UNIFI_CONSOLE_HOST to the configured console host}"
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+  -H "X-API-KEY: $UNIFI_API_KEY" \
+  -H "Accept: application/json" \
+  "https://$UNIFI_CONSOLE_HOST/proxy/network/integration/v1/sites"
 ```
 
 ## Firewall Policy Workflow

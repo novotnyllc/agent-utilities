@@ -7,16 +7,26 @@ description: Use the official UniFi Network Integration API for managed UniFi co
 
 Use UniFi Network's managed Integration API before browser UI automation for repeatable Network app configuration changes.
 
+Set `SKILL_DIR` to the absolute directory containing this loaded `SKILL.md`; the shell working directory is not necessarily the skill directory. Before running the examples below, configure `UNIFI_SSH_TARGET` with the user's SSH target and `UNIFI_CONSOLE_HOST` with the user's console hostname. Guard these variables before any refresh or API request:
+
+```sh
+: "${SKILL_DIR:?Resolve the absolute directory containing this loaded SKILL.md and set SKILL_DIR}"
+: "${UNIFI_SSH_TARGET:?Set UNIFI_SSH_TARGET to the configured SSH target}"
+: "${UNIFI_CONSOLE_HOST:?Set UNIFI_CONSOLE_HOST to the configured console host}"
+```
+
 ## Source Of Truth
 
-- Live console OpenAPI spec: `/usr/lib/unifi/webapps/ROOT/api-docs/integration.json` on `root@unifi`.
-- Saved snapshot: `references/current-openapi.json` from the operator's UDM Pro, currently Network `10.3.58`.
+- Live console OpenAPI spec: `/usr/lib/unifi/webapps/ROOT/api-docs/integration.json` on the user-configured `UNIFI_SSH_TARGET`.
+- Saved snapshot: `references/current-openapi.json` from the operator's UDM Pro, currently Network `10.5.67`.
 - Notes and examples: `references/api-usage.md`.
 
 Before relying on a schema, prefer refreshing or checking the live console spec:
 
 ```sh
-scp root@unifi:/usr/lib/unifi/webapps/ROOT/api-docs/integration.json "$SKILL_DIR"/references/current-openapi.json
+: "${SKILL_DIR:?Resolve the absolute directory containing this loaded SKILL.md and set SKILL_DIR}"
+: "${UNIFI_SSH_TARGET:?Set UNIFI_SSH_TARGET to the configured SSH target}"
+scp "$UNIFI_SSH_TARGET:/usr/lib/unifi/webapps/ROOT/api-docs/integration.json" "$SKILL_DIR/references/current-openapi.json"
 jq -r '[.info.title,.info.version,.openapi,.servers[0].url] | @tsv' "$SKILL_DIR"/references/current-openapi.json
 ```
 
