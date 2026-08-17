@@ -277,7 +277,7 @@ def run(context):
         existing_parameters = {}
         for spec in PARAMETER_SPECS:
             existing = user_parameters.itemByName(spec["name"])
-            if existing and spec["units"] and existing.unit != spec["units"]:
+            if existing and existing.unit != spec["units"]:
                 raise RuntimeError(
                     "Existing parameter unit mismatch for "
                     + spec["name"]

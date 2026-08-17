@@ -287,7 +287,7 @@ def _parameter_mismatches(user_parameters):
                 "expected": spec["expression"],
                 "actual": existing.expression,
             })
-        if spec["units"] and existing.unit != spec["units"]:
+        if existing.unit != spec["units"]:
             mismatches.append({
                 "name": spec["name"],
                 "reason": "units",

@@ -324,6 +324,28 @@ class ScriptEmissionTests(unittest.TestCase):
             conflict_namespace["run"](None)
         self.assertEqual("unchanged-on-error", early.expression)
 
+        unitless_manifest_data = self.manifest.to_dict()
+        unitless_manifest_data["parameters"][0]["units"] = ""
+        unitless_source = emit_parameter_sync_script(Manifest.from_data(unitless_manifest_data))
+        unitless_namespace = load_generated_script(unitless_source)
+        unitless_spec = unitless_namespace["PARAMETER_SPECS"][0]
+        dimensional = Parameter(
+            unitless_spec["name"], "unchanged-on-error", "mm", unitless_spec["comment"]
+        )
+        unitless_parameters = UserParameters()
+        unitless_parameters.values[unitless_spec["name"]] = dimensional
+        unitless_design = SimpleNamespace(
+            designType="parametric",
+            userParameters=unitless_parameters,
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
+        unitless_namespace["_active_design"] = lambda: (app, unitless_design)
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "unit mismatch"):
+            unitless_namespace["run"](None)
+        self.assertEqual("unchanged-on-error", dimensional.expression)
+        self.assertEqual(0, unitless_parameters.add_count)
+
         text_manifest_data = self.manifest.to_dict()
         text_manifest_data["parameters"].append(
             {
@@ -381,7 +403,7 @@ class ScriptEmissionTests(unittest.TestCase):
         app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
         namespace["_active_design"] = lambda: (app, design)
         namespace["_root_context_occurrence_map"] = lambda root: next(observations)
-        namespace["_ensure_component_path"] = lambda root, path: []
+        namespace["_ensure_component_path"] = lambda root, path: ([], [])
         output = StringIO()
         with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, "component paths are still missing"):
             namespace["run"](None)
@@ -455,7 +477,12 @@ class ScriptEmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "failed to write component attribute managed"):
             real_ensure_component_path(parent, "NEW_COMPONENT")
         retry_attributes.fail_writes = False
-        self.assertEqual([], real_ensure_component_path(parent, "NEW_COMPONENT"))
+        created, attribute_updates = real_ensure_component_path(parent, "NEW_COMPONENT")
+        self.assertEqual([], created)
+        self.assertEqual(
+            [{"component_path": "NEW_COMPONENT", "attributes": ["managed", "manifest_sha256"]}],
+            attribute_updates,
+        )
         self.assertEqual("true", retry_attributes.values[("fusion_parametric_design", "managed")])
         self.assertIn(("fusion_parametric_design", "manifest_sha256"), retry_attributes.values)
 
@@ -464,7 +491,7 @@ class ScriptEmissionTests(unittest.TestCase):
         namespace["_active_design"] = lambda: (app, design)
         observations = iter([([], {}, {})])
         namespace["_root_context_occurrence_map"] = lambda root: next(observations)
-        namespace["_ensure_component_path"] = lambda root, path: []
+        namespace["_ensure_component_path"] = lambda root, path: ([], [])
         event_pumps = []
 
         def switch_document():
@@ -482,6 +509,61 @@ class ScriptEmissionTests(unittest.TestCase):
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "does not match manifest target"):
             namespace["run"](None)
 
+    def test_scaffold_reports_attribute_updates_and_idempotent_second_pass(self) -> None:
+        namespace = load_generated_script(emit_scaffold_script(self.manifest))
+
+        class Attributes:
+            def __init__(self):
+                self.values = {
+                    ("fusion_parametric_design", "managed"): "false",
+                }
+
+            def itemByName(self, group, name):
+                value = self.values.get((group, name))
+                return SimpleNamespace(value=value) if value is not None else None
+
+            def add(self, group, name, value):
+                self.values[(group, name)] = value
+                return SimpleNamespace(value=value)
+
+        component = SimpleNamespace(name="EXISTING", attributes=Attributes())
+        occurrence = SimpleNamespace(component=component)
+        component.occurrences = SimpleNamespace(count=0, item=lambda index: None)
+        root = SimpleNamespace(
+            occurrences=SimpleNamespace(count=1, item=lambda index: occurrence),
+        )
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=root,
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        namespace["COMPONENT_PATHS"] = ["EXISTING"]
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda current: (["EXISTING"], {}, {})
+
+        first_output = StringIO()
+        with redirect_stdout(first_output):
+            namespace["run"](None)
+        first_report = next(
+            json.loads(line) for line in first_output.getvalue().splitlines() if line.startswith("{")
+        )
+        self.assertEqual([], first_report["created"])
+        self.assertEqual(
+            [{"component_path": "EXISTING", "attributes": ["managed", "manifest_sha256"]}],
+            first_report["attribute_updates"],
+        )
+
+        second_output = StringIO()
+        with redirect_stdout(second_output):
+            namespace["run"](None)
+        second_report = next(
+            json.loads(line) for line in second_output.getvalue().splitlines() if line.startswith("{")
+        )
+        self.assertEqual([], second_report["created"])
+        self.assertEqual([], second_report["attribute_updates"])
+
     def test_scaffold_success_uses_same_document_snapshot_after_event_pump(self) -> None:
         namespace = load_generated_script(emit_scaffold_script(self.manifest))
         all_paths = sorted(namespace["COMPONENT_PATHS"])
@@ -494,7 +576,7 @@ class ScriptEmissionTests(unittest.TestCase):
         app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
         state = {"edited": False}
         namespace["_active_design"] = lambda: (app, design)
-        namespace["_ensure_component_path"] = lambda root, path: []
+        namespace["_ensure_component_path"] = lambda root, path: ([], [])
         namespace["_root_context_occurrence_map"] = lambda root: (
             (all_paths, {}, {}) if state["edited"] else ([], {}, {})
         )
@@ -537,6 +619,27 @@ class ScriptEmissionTests(unittest.TestCase):
         )
         mismatches = namespace["_parameter_mismatches"](user_parameters)
         self.assertTrue(any(row["reason"] == "missing" for row in mismatches))
+
+        unitless_manifest_data = self.manifest.to_dict()
+        unitless_manifest_data["parameters"][0]["units"] = ""
+        unitless_namespace = load_generated_script(
+            emit_verification_script(Manifest.from_data(unitless_manifest_data))
+        )
+        unitless_spec = unitless_namespace["PARAMETER_SPECS"][0]
+        dimensional = SimpleNamespace(expression=unitless_spec["expression"], unit="mm")
+        unitless_parameters = SimpleNamespace(
+            itemByName=lambda name: dimensional if name == unitless_spec["name"] else None
+        )
+        unitless_mismatches = unitless_namespace["_parameter_mismatches"](unitless_parameters)
+        self.assertIn(
+            {
+                "name": unitless_spec["name"],
+                "reason": "units",
+                "expected": "",
+                "actual": "mm",
+            },
+            unitless_mismatches,
+        )
 
 
 if __name__ == "__main__":

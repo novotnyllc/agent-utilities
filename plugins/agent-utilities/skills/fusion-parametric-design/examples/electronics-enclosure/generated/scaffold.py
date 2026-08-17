@@ -258,14 +258,16 @@ def _find_child(parent_component, name):
 def _ensure_component_attribute(component, name, value):
     existing = component.attributes.itemByName(ATTRIBUTE_GROUP, name)
     if existing and existing.value == value:
-        return
+        return False
     if not component.attributes.add(ATTRIBUTE_GROUP, name, value):
         raise RuntimeError("Fusion failed to write component attribute " + name)
+    return True
 
 
 def _ensure_component_path(root_component, path):
     parent = root_component
     created = []
+    attribute_updates = []
     current_parts = []
     for name in [part for part in path.split("/") if part]:
         current_parts.append(name)
@@ -276,10 +278,18 @@ def _ensure_component_path(root_component, path):
                 raise RuntimeError("Fusion failed to create component path " + "/".join(current_parts))
             occurrence.component.name = name
             created.append("/".join(current_parts))
-        _ensure_component_attribute(occurrence.component, "managed", "true")
-        _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256)
+        changed_attributes = []
+        if _ensure_component_attribute(occurrence.component, "managed", "true"):
+            changed_attributes.append("managed")
+        if _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256):
+            changed_attributes.append("manifest_sha256")
+        if changed_attributes:
+            attribute_updates.append({
+                "component_path": "/".join(current_parts),
+                "attributes": changed_attributes,
+            })
         parent = occurrence.component
-    return created
+    return created, attribute_updates
 
 
 def run(context):
@@ -298,13 +308,17 @@ def run(context):
                 "project": PROJECT_NAME,
                 "manifest_sha256": MANIFEST_SHA256,
                 "created": [],
+                "attribute_updates": [],
                 "duplicate_semantic_paths": preexisting_duplicate_semantic_paths,
                 "ok": False,
             }, report_run_id)
             raise RuntimeError("Semantic component paths are already ambiguous; refusing to scaffold into an ambiguous tree.")
         created = []
+        attribute_updates = []
         for index, path in enumerate(sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item))):
-            created.extend(_ensure_component_path(design.rootComponent, path))
+            path_created, path_attribute_updates = _ensure_component_path(design.rootComponent, path)
+            created.extend(path_created)
+            attribute_updates.extend(path_attribute_updates)
             _pump_events_periodically(app, design, target_document, index)
         _pump_events(app, design, target_document)
         compute_invoked = design.computeAll()
@@ -319,6 +333,7 @@ def run(context):
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
             "created": sorted(set(created)),
+            "attribute_updates": attribute_updates,
             "component_paths": component_paths,
             "missing_component_paths": missing_component_paths,
             "duplicate_semantic_paths": duplicate_semantic_paths,
