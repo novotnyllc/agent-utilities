@@ -80,6 +80,36 @@ class ScriptEmissionTests(unittest.TestCase):
                 self.assert_compiles_when_wrapped(source)
                 self.assertNotIn("from __future__ import", source)
 
+    def test_generated_scripts_use_fusion_compatible_report_id_generation(self) -> None:
+        for emitter in (
+            emit_inventory_script,
+            emit_parameter_sync_script,
+            emit_scaffold_script,
+            emit_verification_script,
+        ):
+            with self.subTest(emitter=emitter.__name__):
+                source = emitter(self.manifest)
+                self.assertNotIn("secrets", source)
+
+                namespace = load_generated_script(source)
+                report_run_id = namespace["_new_report_run_id"]()
+                self.assertRegex(report_run_id, r"\A[0-9a-f]{64}\Z")
+
+    def test_checked_in_example_scripts_match_canonical_emitters(self) -> None:
+        generated = ROOT / "examples" / "electronics-enclosure" / "generated"
+        emitted = {
+            "inventory.py": emit_inventory_script,
+            "sync_parameters.py": emit_parameter_sync_script,
+            "scaffold.py": emit_scaffold_script,
+            "verify.py": emit_verification_script,
+        }
+        for filename, emitter in emitted.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    emitter(self.manifest),
+                    (generated / filename).read_text(encoding="utf-8"),
+                )
+
     def test_report_path_and_run_id_must_be_paired(self) -> None:
         with self.assertRaisesRegex(ValueError, "supplied together"):
             emit_inventory_script(self.manifest, "/private/tmp/inventory.json")
@@ -586,6 +616,7 @@ class ScriptEmissionTests(unittest.TestCase):
             namespace["run"](None)
         report = next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
         self.assertTrue(report["ok"])
+        self.assertEqual("component-scaffold", report["kind"])
         self.assertEqual(all_paths, report["component_paths"])
         self.assertEqual([], report["missing_component_paths"])
         self.assertTrue(report["report_run_id"])

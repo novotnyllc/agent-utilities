@@ -68,40 +68,43 @@ scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
 scripts/fusion-design diff-reports <before.json> <after.json>
+scripts/fusion-design prepare-report-session <manifest> <kind>
+scripts/fusion-design verify-report-session <session.json>
+scripts/fusion-design cleanup-report-session <session.json>
 ```
 
-When an MCP execution result drops stdout, each `emit-*` command accepts the
-paired `--report-path /absolute/path/report.json --report-run-id <opaque-id>`
-fallback. The caller must create a cryptographically random run ID and a new
-private directory and choose a report filename that does not already exist for
-**every execution**. The path and ID are validated while generating the script
-and embedded for the Fusion host; without both, reports remain stdout-only.
-With them, `_emit` writes the same JSON atomically without replacing an
-existing target. The CLI and Fusion process must share that filesystem; a
-localhost MCP connection does not copy files between hosts.
+When an MCP execution result drops stdout, use `prepare-report-session` for the
+report-file fallback. It creates a new private directory, cryptographically
+random run ID, absent report target, and one generated script bound to that
+session. The CLI and Fusion process must share that filesystem; a localhost MCP
+connection does not copy files between hosts.
+
+The report-file fallback requires POSIX file semantics and fails closed when
+they are unavailable. Direct stdout execution, the host CLI, and the rest of
+this skill remain cross-platform.
 
 ```bash
-report_dir="$(mktemp -d)"
-report_path="$report_dir/inventory.json"
-report_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-./scripts/fusion-design emit-inventory examples/electronics-enclosure/fusion-project.json \
-  --report-path "$report_path" --report-run-id "$report_run_id" -o build/inventory.py
+session_json="$(./scripts/fusion-design prepare-report-session \
+  examples/electronics-enclosure/fusion-project.json inventory)"
+session_file="$(printf '%s\n' "$session_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["session_file"])')"
+script_file="$(printf '%s\n' "$session_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["script"])')"
+# Send the contents of "$script_file" through the dynamically discovered
+# Fusion Python-execution capability, then verify and clean up the session.
+./scripts/fusion-design verify-report-session "$session_file"
+./scripts/fusion-design cleanup-report-session "$session_file"
 ```
 
-After execution, parse the file as one JSON object and accept it only when its
-`report_run_id` equals `$report_run_id`, its `kind` is `inventory`, and its
-`manifest_sha256` equals the manifest hash embedded in the script. Then remove
-only the exact report and exact private directory:
+The execution step must happen before verification. Verify accepts only one
+JSON object whose `report_run_id`, `kind`, and `manifest_sha256` match the
+prepared session. Verification never deletes artifacts. Cleanup removes only
+the exact session files and empty private directory; it rejects symlinks,
+hard-link aliases, path aliases, escapes, and unexpected entries. A failed or
+missing report is a failed transaction, not a silent stdout-only fallback.
 
-```bash
-rm -f -- "$report_path"
-rmdir -- "$report_dir"
-```
-
-Use a distinct directory, report file, and run ID for every later transaction.
-Do not follow report-path symlinks, reuse a report target, or delete a broader
-parent directory. A missing, malformed, mismatched, or inaccessible report is
-a failed transaction; it never silently falls back to stdout-only capture.
+Use a distinct prepared session for every later transaction. Do not reuse a
+report target or delete a broader parent directory.
 
 ## Connect Fusion MCP
 

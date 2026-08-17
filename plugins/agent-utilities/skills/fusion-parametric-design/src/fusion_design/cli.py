@@ -10,6 +10,11 @@ from typing import Callable
 
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .planner import build_plan
+from .report_session import (
+    cleanup_report_session,
+    prepare_report_session,
+    verify_report_session,
+)
 from .report_diff import diff_reports
 from .scripts import (
     emit_inventory_script,
@@ -82,6 +87,21 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prepare_report_session(args: argparse.Namespace) -> int:
+    print(json.dumps(prepare_report_session(args.manifest, args.kind), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_verify_report_session(args: argparse.Namespace) -> int:
+    print(json.dumps(verify_report_session(args.session), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_cleanup_report_session(args: argparse.Namespace) -> int:
+    print(json.dumps(cleanup_report_session(args.session), indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fusion-design",
@@ -121,6 +141,28 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("before")
     diff.add_argument("after")
     diff.set_defaults(handler=_cmd_diff)
+
+    prepare = subparsers.add_parser(
+        "prepare-report-session",
+        help="Create a private report directory, bound Fusion script, and session metadata.",
+    )
+    prepare.add_argument("manifest")
+    prepare.add_argument("kind", choices=("inventory", "parameter-sync", "scaffold", "verification"))
+    prepare.set_defaults(handler=_cmd_prepare_report_session)
+
+    verify = subparsers.add_parser(
+        "verify-report-session",
+        help="Verify and print one report produced by a prepared session.",
+    )
+    verify.add_argument("session")
+    verify.set_defaults(handler=_cmd_verify_report_session)
+
+    cleanup = subparsers.add_parser(
+        "cleanup-report-session",
+        help="Remove only the exact files and private directory of a report session.",
+    )
+    cleanup.add_argument("session")
+    cleanup.set_defaults(handler=_cmd_cleanup_report_session)
     return parser
 
 
