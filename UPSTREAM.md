@@ -12,7 +12,7 @@ only when an imported path changes.
 The agent-scripts imports were most recently reviewed against:
 
 - Repository: `https://github.com/steipete/agent-scripts`
-- Commit: `c46ea65b6323e8a2b6f441f8b6449ae731bc8f81`
+- Commit: `dc4f583a2c1a6f3a93e81a972eee89f59aca32f7`
 - License: MIT
 
 Oracle, the thermos family, and the delivery/orchestration skills moved to
