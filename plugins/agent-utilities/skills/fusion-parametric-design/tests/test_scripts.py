@@ -37,6 +37,7 @@ def load_generated_script(source: str) -> dict:
         UnknownFeatureHealthState="unknown",
     )
     core.ValueInput = SimpleNamespace(createByString=lambda expression: expression)
+    core.Matrix3D = SimpleNamespace(create=lambda: SimpleNamespace())
     modules = {"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion}
     previous = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -131,7 +132,8 @@ class ScriptEmissionTests(unittest.TestCase):
             computeAll=lambda: True,
         )
         namespace = load_generated_script(source)
-        namespace["_active_design"] = lambda: (SimpleNamespace(), design)
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        namespace["_active_design"] = lambda: (app, design)
         output = StringIO()
         with redirect_stdout(output):
             namespace["run"](None)
@@ -186,7 +188,7 @@ class ScriptEmissionTests(unittest.TestCase):
             computeAll=lambda: True,
         )
         conflict_namespace = load_generated_script(source)
-        conflict_namespace["_active_design"] = lambda: (SimpleNamespace(), conflict_design)
+        conflict_namespace["_active_design"] = lambda: (app, conflict_design)
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "unit mismatch"):
             conflict_namespace["run"](None)
         self.assertEqual("unchanged-on-error", early.expression)
@@ -212,10 +214,15 @@ class ScriptEmissionTests(unittest.TestCase):
             computeAll=lambda: True,
         )
         text_namespace = load_generated_script(text_source)
-        text_namespace["_active_design"] = lambda: (SimpleNamespace(), text_design)
+        text_namespace["_active_design"] = lambda: (app, text_design)
         with redirect_stdout(StringIO()):
             text_namespace["run"](None)
         self.assertIn("''", text_parameters.initial_expressions)
+
+        wrong_document = SimpleNamespace(activeDocument=SimpleNamespace(name="Different design"))
+        namespace["_active_design"] = lambda: (wrong_document, design)
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "does not match manifest target"):
+            namespace["run"](None)
 
     def test_scaffold_ensures_component_paths_without_deleting_existing_geometry(self) -> None:
         source = emit_scaffold_script(self.manifest)
@@ -225,13 +232,22 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("preexisting_duplicate_semantic_paths", source)
         self.assertIn("missing_component_paths", source)
         self.assertIn("not duplicate_semantic_paths and not missing_component_paths", source)
+        self.assertIn("compute_invoked = design.computeAll()", source)
+        self.assertIn('timeline["unhealthy"]', source)
         self.assertLess(source.index("preexisting_duplicate_semantic_paths"), source.index("created = []", source.index("def run(context):")))
         self.assertNotIn("deleteMe", source)
 
         namespace = load_generated_script(source)
-        design = SimpleNamespace(designType="parametric", rootComponent=SimpleNamespace())
+        real_ensure_component_path = namespace["_ensure_component_path"]
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=SimpleNamespace(),
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
         observations = iter([([], {}, {}), ([], {}, {})])
-        namespace["_active_design"] = lambda: (SimpleNamespace(), design)
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        namespace["_active_design"] = lambda: (app, design)
         namespace["_root_context_occurrence_map"] = lambda root: next(observations)
         namespace["_ensure_component_path"] = lambda root, path: []
         output = StringIO()
@@ -240,6 +256,81 @@ class ScriptEmissionTests(unittest.TestCase):
         report = next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
         self.assertFalse(report["ok"])
         self.assertEqual(sorted(namespace["COMPONENT_PATHS"]), report["missing_component_paths"])
+
+        all_paths = sorted(namespace["COMPONENT_PATHS"])
+        design.computeAll = lambda: False
+        observations = iter([([], {}, {}), (all_paths, {}, {})])
+        namespace["_root_context_occurrence_map"] = lambda root: next(observations)
+        compute_output = StringIO()
+        with redirect_stdout(compute_output), self.assertRaisesRegex(RuntimeError, "Compute All did not complete"):
+            namespace["run"](None)
+        compute_report = next(
+            json.loads(line) for line in compute_output.getvalue().splitlines() if line.startswith("{")
+        )
+        self.assertFalse(compute_report["ok"])
+
+        design.computeAll = lambda: True
+        observations = iter([([], {}, {}), (all_paths, {}, {})])
+        namespace["_root_context_occurrence_map"] = lambda root: next(observations)
+        namespace["_timeline_health"] = lambda current: {
+            "count": 1,
+            "unhealthy": [{"index": 0, "health_state": "error"}],
+            "informational": [],
+        }
+        timeline_output = StringIO()
+        with redirect_stdout(timeline_output), self.assertRaisesRegex(RuntimeError, "unhealthy timeline"):
+            namespace["run"](None)
+        timeline_report = next(
+            json.loads(line) for line in timeline_output.getvalue().splitlines() if line.startswith("{")
+        )
+        self.assertFalse(timeline_report["ok"])
+
+        class RetryAttributes:
+            def __init__(self):
+                self.values = {}
+                self.fail_writes = True
+
+            def itemByName(self, group, name):
+                value = self.values.get((group, name))
+                return SimpleNamespace(value=value) if value is not None else None
+
+            def add(self, group, name, value):
+                if self.fail_writes:
+                    return None
+                self.values[(group, name)] = value
+                return SimpleNamespace(value=value)
+
+        retry_attributes = RetryAttributes()
+        child = SimpleNamespace(component=SimpleNamespace(name="", attributes=retry_attributes))
+
+        class Occurrences:
+            def __init__(self):
+                self.values = []
+
+            @property
+            def count(self):
+                return len(self.values)
+
+            def item(self, index):
+                return self.values[index]
+
+            def addNewComponent(self, matrix):
+                self.values.append(child)
+                return child
+
+        occurrences = Occurrences()
+        parent = SimpleNamespace(occurrences=occurrences)
+        with self.assertRaisesRegex(RuntimeError, "failed to write component attribute managed"):
+            real_ensure_component_path(parent, "NEW_COMPONENT")
+        retry_attributes.fail_writes = False
+        self.assertEqual([], real_ensure_component_path(parent, "NEW_COMPONENT"))
+        self.assertEqual("true", retry_attributes.values[("fusion_parametric_design", "managed")])
+        self.assertIn(("fusion_parametric_design", "manifest_sha256"), retry_attributes.values)
+
+        wrong_document = SimpleNamespace(activeDocument=SimpleNamespace(name="Different design"))
+        namespace["_active_design"] = lambda: (wrong_document, design)
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "does not match manifest target"):
+            namespace["run"](None)
 
     def test_verification_script_checks_distance_interference_and_timeline_health(self) -> None:
         source = emit_verification_script(self.manifest)

@@ -29,6 +29,7 @@ import adsk.core
 import adsk.fusion
 
 PROJECT_NAME = {manifest.project_name!r}
+FUSION_DOCUMENT_NAME = {manifest.fusion_document!r}
 MANIFEST_SHA256 = {_manifest_hash(manifest)!r}
 REPORT_BEGIN = {REPORT_BEGIN!r}
 REPORT_END = {REPORT_END!r}
@@ -46,6 +47,16 @@ def _active_design():
     if not design:
         raise RuntimeError("The active Fusion product is not a Design.")
     return app, design
+
+
+def _require_target_document(app):
+    active_document = app.activeDocument
+    active_name = active_document.name if active_document else None
+    if active_name != FUSION_DOCUMENT_NAME:
+        raise RuntimeError(
+            "Active Fusion document " + repr(active_name)
+            + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
+        )
 
 
 def _walk_component(component, prefix=""):
@@ -293,6 +304,7 @@ def run(context):
     reported = False
     try:
         app, design = _active_design()
+        _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError(
                 "This workflow requires a parametric Fusion design. Refusing to switch design type because doing so can remove history."
@@ -389,6 +401,14 @@ def _find_child(parent_component, name):
     return None
 
 
+def _ensure_component_attribute(component, name, value):
+    existing = component.attributes.itemByName(ATTRIBUTE_GROUP, name)
+    if existing and existing.value == value:
+        return
+    if not component.attributes.add(ATTRIBUTE_GROUP, name, value):
+        raise RuntimeError("Fusion failed to write component attribute " + name)
+
+
 def _ensure_component_path(root_component, path):
     parent = root_component
     created = []
@@ -401,9 +421,9 @@ def _ensure_component_path(root_component, path):
             if not occurrence:
                 raise RuntimeError("Fusion failed to create component path " + "/".join(current_parts))
             occurrence.component.name = name
-            occurrence.component.attributes.add(ATTRIBUTE_GROUP, "managed", "true")
-            occurrence.component.attributes.add(ATTRIBUTE_GROUP, "manifest_sha256", MANIFEST_SHA256)
             created.append("/".join(current_parts))
+        _ensure_component_attribute(occurrence.component, "managed", "true")
+        _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256)
         parent = occurrence.component
     return created
 
@@ -412,6 +432,7 @@ def run(context):
     reported = False
     try:
         app, design = _active_design()
+        _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError("Component scaffolding requires a parametric design; refusing a destructive design-type change.")
         _, _, preexisting_duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
@@ -431,6 +452,8 @@ def run(context):
             created.extend(_ensure_component_path(design.rootComponent, path))
         component_paths, _, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
         missing_component_paths = sorted(set(COMPONENT_PATHS) - set(component_paths))
+        compute_invoked = design.computeAll()
+        timeline = _timeline_health(design)
         report = {{
             "kind": "component-scaffold",
             "project": PROJECT_NAME,
@@ -439,10 +462,16 @@ def run(context):
             "component_paths": component_paths,
             "missing_component_paths": missing_component_paths,
             "duplicate_semantic_paths": duplicate_semantic_paths,
-            "ok": not duplicate_semantic_paths and not missing_component_paths,
+            "compute_invoked": compute_invoked,
+            "timeline": timeline,
+            "ok": bool(compute_invoked) and not timeline["unhealthy"] and not duplicate_semantic_paths and not missing_component_paths,
         }}
         _emit(report)
         reported = True
+        if not compute_invoked:
+            raise RuntimeError("Fusion Compute All did not complete; see the emitted report.")
+        if timeline["unhealthy"]:
+            raise RuntimeError("Compute completed with unhealthy timeline objects; see the emitted report.")
         if missing_component_paths:
             raise RuntimeError("Declared component paths are still missing; see the emitted report.")
         if duplicate_semantic_paths:

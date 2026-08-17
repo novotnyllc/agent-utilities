@@ -72,6 +72,10 @@ class Manifest:
         return str(self.data.get("project", {}).get("name", ""))
 
     @property
+    def fusion_document(self) -> str:
+        return str(self.data.get("project", {}).get("fusion_document", ""))
+
+    @property
     def parameters(self) -> list[dict[str, Any]]:
         return list(self.data.get("parameters", []))
 

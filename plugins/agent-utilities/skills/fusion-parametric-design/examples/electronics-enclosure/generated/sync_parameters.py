@@ -6,6 +6,7 @@ import adsk.core
 import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
+FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
@@ -23,6 +24,16 @@ def _active_design():
     if not design:
         raise RuntimeError("The active Fusion product is not a Design.")
     return app, design
+
+
+def _require_target_document(app):
+    active_document = app.activeDocument
+    active_name = active_document.name if active_document else None
+    if active_name != FUSION_DOCUMENT_NAME:
+        raise RuntimeError(
+            "Active Fusion document " + repr(active_name)
+            + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
+        )
 
 
 def _walk_component(component, prefix=""):
@@ -182,6 +193,7 @@ def run(context):
     reported = False
     try:
         app, design = _active_design()
+        _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError(
                 "This workflow requires a parametric Fusion design. Refusing to switch design type because doing so can remove history."
