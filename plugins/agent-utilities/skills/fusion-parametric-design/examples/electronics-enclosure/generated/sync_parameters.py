@@ -168,7 +168,14 @@ ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
 def _set_attribute(entity, name, value):
-    entity.attributes.add(ATTRIBUTE_GROUP, name, str(value))
+    desired = str(value)
+    existing = entity.attributes.itemByName(ATTRIBUTE_GROUP, name)
+    if existing and existing.value == desired:
+        return False
+    updated = entity.attributes.add(ATTRIBUTE_GROUP, name, desired)
+    if not updated:
+        raise RuntimeError("Fusion failed to write parameter attribute " + name)
+    return True
 
 
 def run(context):
@@ -216,16 +223,20 @@ def run(context):
             if existing.comment != spec["comment"]:
                 existing.comment = spec["comment"]
                 changed_fields.append("comment")
+            for attribute_name, attribute_value in (
+                ("role", spec["role"]),
+                ("source_id", spec["source_id"]),
+                ("provisional", str(spec["provisional"]).lower()),
+                ("critical", str(spec["critical"]).lower()),
+                ("manifest_sha256", MANIFEST_SHA256),
+            ):
+                if _set_attribute(existing, attribute_name, attribute_value):
+                    changed_fields.append("attribute:" + attribute_name)
+
             if spec["name"] in created_names:
                 operation = "created"
             else:
                 operation = "updated" if changed_fields else "unchanged"
-
-            _set_attribute(existing, "role", spec["role"])
-            _set_attribute(existing, "source_id", spec["source_id"])
-            _set_attribute(existing, "provisional", str(spec["provisional"]).lower())
-            _set_attribute(existing, "critical", str(spec["critical"]).lower())
-            _set_attribute(existing, "manifest_sha256", MANIFEST_SHA256)
             changes.append({"name": spec["name"], "operation": operation, "fields": changed_fields})
 
         compute_invoked = design.computeAll()

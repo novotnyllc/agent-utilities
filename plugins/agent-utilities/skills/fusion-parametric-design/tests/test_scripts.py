@@ -85,7 +85,18 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertNotIn("design.designType =", source)
 
         class Attributes:
+            def __init__(self):
+                self.values = {}
+                self.fail_writes = False
+
+            def itemByName(self, group, name):
+                value = self.values.get((group, name))
+                return SimpleNamespace(value=value) if value is not None else None
+
             def add(self, group, name, value):
+                if self.fail_writes:
+                    return None
+                self.values[(group, name)] = value
                 return (group, name, value)
 
         class Parameter:
@@ -137,6 +148,26 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertEqual(first_add_count, user_parameters.add_count)
         self.assertTrue(reports[0]["ok"])
         self.assertTrue(all(change["operation"] == "unchanged" for change in reports[1]["changes"]))
+
+        first_parameter = user_parameters.values[namespace["PARAMETER_SPECS"][0]["name"]]
+        first_parameter.attributes.values[("fusion_parametric_design", "role")] = "stale"
+        attribute_output = StringIO()
+        with redirect_stdout(attribute_output):
+            namespace["run"](None)
+        attribute_report = next(
+            json.loads(line) for line in attribute_output.getvalue().splitlines() if line.startswith("{")
+        )
+        first_change = next(
+            change for change in attribute_report["changes"] if change["name"] == first_parameter.name
+        )
+        self.assertEqual("updated", first_change["operation"])
+        self.assertIn("attribute:role", first_change["fields"])
+
+        first_parameter.attributes.values[("fusion_parametric_design", "role")] = "stale-again"
+        first_parameter.attributes.fail_writes = True
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "failed to write parameter attribute"):
+            namespace["run"](None)
+        first_parameter.attributes.fail_writes = False
 
         design.computeAll = lambda: False
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "Compute All did not complete"):
@@ -192,8 +223,23 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("addNewComponent", source)
         self.assertIn("_ensure_component_path", source)
         self.assertIn("preexisting_duplicate_semantic_paths", source)
+        self.assertIn("missing_component_paths", source)
+        self.assertIn("not duplicate_semantic_paths and not missing_component_paths", source)
         self.assertLess(source.index("preexisting_duplicate_semantic_paths"), source.index("created = []", source.index("def run(context):")))
         self.assertNotIn("deleteMe", source)
+
+        namespace = load_generated_script(source)
+        design = SimpleNamespace(designType="parametric", rootComponent=SimpleNamespace())
+        observations = iter([([], {}, {}), ([], {}, {})])
+        namespace["_active_design"] = lambda: (SimpleNamespace(), design)
+        namespace["_root_context_occurrence_map"] = lambda root: next(observations)
+        namespace["_ensure_component_path"] = lambda root, path: []
+        output = StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, "component paths are still missing"):
+            namespace["run"](None)
+        report = next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
+        self.assertFalse(report["ok"])
+        self.assertEqual(sorted(namespace["COMPONENT_PATHS"]), report["missing_component_paths"])
 
     def test_verification_script_checks_distance_interference_and_timeline_health(self) -> None:
         source = emit_verification_script(self.manifest)

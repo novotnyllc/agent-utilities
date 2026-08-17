@@ -279,7 +279,14 @@ ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
 def _set_attribute(entity, name, value):
-    entity.attributes.add(ATTRIBUTE_GROUP, name, str(value))
+    desired = str(value)
+    existing = entity.attributes.itemByName(ATTRIBUTE_GROUP, name)
+    if existing and existing.value == desired:
+        return False
+    updated = entity.attributes.add(ATTRIBUTE_GROUP, name, desired)
+    if not updated:
+        raise RuntimeError("Fusion failed to write parameter attribute " + name)
+    return True
 
 
 def run(context):
@@ -327,16 +334,20 @@ def run(context):
             if existing.comment != spec["comment"]:
                 existing.comment = spec["comment"]
                 changed_fields.append("comment")
+            for attribute_name, attribute_value in (
+                ("role", spec["role"]),
+                ("source_id", spec["source_id"]),
+                ("provisional", str(spec["provisional"]).lower()),
+                ("critical", str(spec["critical"]).lower()),
+                ("manifest_sha256", MANIFEST_SHA256),
+            ):
+                if _set_attribute(existing, attribute_name, attribute_value):
+                    changed_fields.append("attribute:" + attribute_name)
+
             if spec["name"] in created_names:
                 operation = "created"
             else:
                 operation = "updated" if changed_fields else "unchanged"
-
-            _set_attribute(existing, "role", spec["role"])
-            _set_attribute(existing, "source_id", spec["source_id"])
-            _set_attribute(existing, "provisional", str(spec["provisional"]).lower())
-            _set_attribute(existing, "critical", str(spec["critical"]).lower())
-            _set_attribute(existing, "manifest_sha256", MANIFEST_SHA256)
             changes.append({{"name": spec["name"], "operation": operation, "fields": changed_fields}})
 
         compute_invoked = design.computeAll()
@@ -419,17 +430,21 @@ def run(context):
         for path in sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item)):
             created.extend(_ensure_component_path(design.rootComponent, path))
         component_paths, _, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
+        missing_component_paths = sorted(set(COMPONENT_PATHS) - set(component_paths))
         report = {{
             "kind": "component-scaffold",
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
             "created": sorted(set(created)),
             "component_paths": component_paths,
+            "missing_component_paths": missing_component_paths,
             "duplicate_semantic_paths": duplicate_semantic_paths,
-            "ok": not duplicate_semantic_paths,
+            "ok": not duplicate_semantic_paths and not missing_component_paths,
         }}
         _emit(report)
         reported = True
+        if missing_component_paths:
+            raise RuntimeError("Declared component paths are still missing; see the emitted report.")
         if duplicate_semantic_paths:
             raise RuntimeError("Semantic component paths are ambiguous; rename duplicate managed occurrences.")
     except Exception as error:
