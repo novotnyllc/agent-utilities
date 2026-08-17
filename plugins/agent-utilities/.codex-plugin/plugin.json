@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.6.6",
-  "description": "The toolbox: self-contained craft skills for any single agent session — browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, and optional chezmoi reconciliation.",
+  "version": "0.6.7",
+  "description": "The toolbox: self-contained craft skills for any single agent session — browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, and Fusion parametric CAD.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -19,13 +19,15 @@
     "cli",
     "frontend",
     "skills",
+    "fusion",
+    "cad",
     "chezmoi"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Agent Utilities",
-    "shortDescription": "Browser, CLI design, frontend, profiling, 1Password, and skill auditing craft skills",
-    "longDescription": "The toolbox plugin: self-contained craft skills any single agent session can use — browser automation, CLI UX design, frontend design, Instruments profiling, native app performance, 1Password secret workflows, skill auditing, and optional chezmoi reconciliation through roundhouse. Delivery/orchestration lives in railyard; machine and infrastructure administration in roundhouse.",
+    "shortDescription": "Browser, CLI, frontend, profiling, Fusion CAD, 1Password, and skill auditing craft skills",
+    "longDescription": "The toolbox plugin: self-contained craft skills any single agent session can use — browser automation, CLI UX design, frontend design, Instruments profiling, native app performance, Fusion parametric CAD, 1Password secret workflows, skill auditing, and optional chezmoi reconciliation through roundhouse. Delivery/orchestration lives in railyard; machine and infrastructure administration in roundhouse.",
     "developerName": "Claire Novotny LLC",
     "category": "Productivity",
     "capabilities": [
