@@ -43,7 +43,10 @@ class ReportDiffTests(unittest.TestCase):
         }
         result = diff_reports(before, after)
         self.assertEqual(
-            {"before": "2 mm", "after": "2.4 mm"},
+            {
+                "before": {"expression": "2 mm"},
+                "after": {"expression": "2.4 mm"},
+            },
             result["parameters_changed"]["fab_wall_thickness"],
         )
         self.assertEqual(["10_PRODUCT/PROD__LID"], result["components_added"])
@@ -66,6 +69,17 @@ class ReportDiffTests(unittest.TestCase):
         self.assertEqual(
             [{"index": 7, "health_state": "error"}],
             result["timeline_unhealthy_added"],
+        )
+
+    def test_diff_reports_preserves_unit_and_comment_only_parameter_changes(self) -> None:
+        before = {"parameters": {"src_width": {"expression": "10 mm", "units": "mm", "comment": "draft"}}}
+        after = {"parameters": {"src_width": {"expression": "10 mm", "units": "cm", "comment": "verified"}}}
+
+        result = diff_reports(before, after)
+
+        self.assertEqual(
+            {"before": before["parameters"]["src_width"], "after": after["parameters"]["src_width"]},
+            result["parameters_changed"]["src_width"],
         )
 
 

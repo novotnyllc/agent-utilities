@@ -292,34 +292,45 @@ def run(context):
             )
 
         user_parameters = design.userParameters
-        changes = []
+        existing_parameters = {{}}
         for spec in PARAMETER_SPECS:
             existing = user_parameters.itemByName(spec["name"])
-            if existing:
-                changed_fields = []
-                if spec["units"] and existing.unit != spec["units"]:
-                    raise RuntimeError(
-                        "Existing parameter unit mismatch for "
-                        + spec["name"]
-                        + ": Fusion has "
-                        + repr(existing.unit)
-                        + ", manifest requires "
-                        + repr(spec["units"])
-                    )
-                if existing.expression != spec["expression"]:
-                    existing.expression = spec['expression']
-                    changed_fields.append("expression")
-                if existing.comment != spec["comment"]:
-                    existing.comment = spec["comment"]
-                    changed_fields.append("comment")
-                operation = "updated" if changed_fields else "unchanged"
-            else:
-                value = adsk.core.ValueInput.createByString(spec["expression"])
+            if existing and spec["units"] and existing.unit != spec["units"]:
+                raise RuntimeError(
+                    "Existing parameter unit mismatch for "
+                    + spec["name"]
+                    + ": Fusion has "
+                    + repr(existing.unit)
+                    + ", manifest requires "
+                    + repr(spec["units"])
+                )
+            existing_parameters[spec["name"]] = existing
+
+        created_names = set()
+        for spec in PARAMETER_SPECS:
+            if not existing_parameters[spec["name"]]:
+                neutral_expression = "''" if spec["units"].lower() == "text" else "0"
+                value = adsk.core.ValueInput.createByString(neutral_expression)
                 existing = user_parameters.add(spec["name"], value, spec["units"], spec["comment"])
                 if not existing:
                     raise RuntimeError("Fusion failed to create user parameter " + spec["name"])
-                changed_fields = ["created"]
+                existing_parameters[spec["name"]] = existing
+                created_names.add(spec["name"])
+
+        changes = []
+        for spec in PARAMETER_SPECS:
+            existing = existing_parameters[spec["name"]]
+            changed_fields = ["created"] if spec["name"] in created_names else []
+            if existing.expression != spec["expression"]:
+                existing.expression = spec["expression"]
+                changed_fields.append("expression")
+            if existing.comment != spec["comment"]:
+                existing.comment = spec["comment"]
+                changed_fields.append("comment")
+            if spec["name"] in created_names:
                 operation = "created"
+            else:
+                operation = "updated" if changed_fields else "unchanged"
 
             _set_attribute(existing, "role", spec["role"])
             _set_attribute(existing, "source_id", spec["source_id"])

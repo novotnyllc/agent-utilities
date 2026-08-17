@@ -8,7 +8,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 import unittest
 
-from fusion_design.manifest import load_manifest
+from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.scripts import (
     emit_inventory_script,
     emit_parameter_sync_script,
@@ -74,7 +74,7 @@ class ScriptEmissionTests(unittest.TestCase):
         source = emit_parameter_sync_script(self.manifest)
         self.assert_compiles(source)
         self.assertIn("itemByName", source)
-        self.assertIn("existing.expression = spec['expression']", source)
+        self.assertIn('existing.expression = spec["expression"]', source)
         self.assertIn("user_parameters.add", source)
         self.assertIn("HealthyFeatureHealthState", source)
         self.assertIn("reported = False", source)
@@ -100,12 +100,14 @@ class ScriptEmissionTests(unittest.TestCase):
             def __init__(self):
                 self.values = {}
                 self.add_count = 0
+                self.initial_expressions = []
 
             def itemByName(self, name):
                 return self.values.get(name)
 
             def add(self, name, expression, unit, comment):
                 self.add_count += 1
+                self.initial_expressions.append(expression)
                 parameter = Parameter(name, expression, unit, comment)
                 self.values[name] = parameter
                 return parameter
@@ -131,6 +133,7 @@ class ScriptEmissionTests(unittest.TestCase):
             if line.startswith("{")
         ]
         self.assertGreater(first_add_count, 0)
+        self.assertEqual({"0"}, set(user_parameters.initial_expressions))
         self.assertEqual(first_add_count, user_parameters.add_count)
         self.assertTrue(reports[0]["ok"])
         self.assertTrue(all(change["operation"] == "unchanged" for change in reports[1]["changes"]))
@@ -138,6 +141,50 @@ class ScriptEmissionTests(unittest.TestCase):
         design.computeAll = lambda: False
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "Compute All did not complete"):
             namespace["run"](None)
+
+        first_spec = namespace["PARAMETER_SPECS"][0]
+        last_spec = namespace["PARAMETER_SPECS"][-1]
+        conflict_parameters = UserParameters()
+        early = Parameter(first_spec["name"], "unchanged-on-error", first_spec["units"], first_spec["comment"])
+        late = Parameter(last_spec["name"], last_spec["expression"], "wrong-unit", last_spec["comment"])
+        conflict_parameters.values = {first_spec["name"]: early, last_spec["name"]: late}
+        conflict_design = SimpleNamespace(
+            designType="parametric",
+            userParameters=conflict_parameters,
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
+        conflict_namespace = load_generated_script(source)
+        conflict_namespace["_active_design"] = lambda: (SimpleNamespace(), conflict_design)
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "unit mismatch"):
+            conflict_namespace["run"](None)
+        self.assertEqual("unchanged-on-error", early.expression)
+
+        text_manifest_data = self.manifest.to_dict()
+        text_manifest_data["parameters"].append(
+            {
+                "name": "des_label",
+                "expression": "'hello'",
+                "units": "Text",
+                "role": "design",
+                "critical": False,
+                "provisional": False,
+                "description": "User-visible label.",
+            }
+        )
+        text_source = emit_parameter_sync_script(Manifest.from_data(text_manifest_data))
+        text_parameters = UserParameters()
+        text_design = SimpleNamespace(
+            designType="parametric",
+            userParameters=text_parameters,
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
+        text_namespace = load_generated_script(text_source)
+        text_namespace["_active_design"] = lambda: (SimpleNamespace(), text_design)
+        with redirect_stdout(StringIO()):
+            text_namespace["run"](None)
+        self.assertIn("''", text_parameters.initial_expressions)
 
     def test_scaffold_ensures_component_paths_without_deleting_existing_geometry(self) -> None:
         source = emit_scaffold_script(self.manifest)

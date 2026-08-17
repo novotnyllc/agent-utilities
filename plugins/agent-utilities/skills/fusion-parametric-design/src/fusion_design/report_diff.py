@@ -24,9 +24,7 @@ def diff_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
         before_value = before_parameters.get(name)
         after_value = after_parameters.get(name)
         if before_value != after_value:
-            before_expression = before_value.get("expression") if isinstance(before_value, dict) else None
-            after_expression = after_value.get("expression") if isinstance(after_value, dict) else None
-            parameter_changes[name] = {"before": before_expression, "after": after_expression}
+            parameter_changes[name] = {"before": before_value, "after": after_value}
 
     before_components = set(before.get("component_paths", []) or [])
     after_components = set(after.get("component_paths", []) or [])
