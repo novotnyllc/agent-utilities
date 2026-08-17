@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fusion-parametric-design/fusion-project.schema.json",
+  "title": "Fusion Parametric Design Project Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project",
+    "sources",
+    "parameters",
+    "component_tree",
+    "references",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "units",
+        "process",
+        "material",
+        "fusion_document"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "units": {
+          "type": "string",
+          "minLength": 1
+        },
+        "process": {
+          "type": "string",
+          "minLength": 1
+        },
+        "material": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fusion_document": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/parameter"
+      }
+    },
+    "component_tree": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/reference"
+      }
+    },
+    "verification": {
+      "$ref": "#/$defs/verification"
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "locator",
+        "revision",
+        "confidence",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "kind": {
+          "enum": [
+            "manufacturer_cad",
+            "manufacturer_drawing",
+            "standard",
+            "authorized_distributor",
+            "third_party_cad",
+            "user_measurement",
+            "scan",
+            "conservative_proxy"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "enum": [
+            "published",
+            "verified_cad",
+            "measured",
+            "provisional",
+            "coupon_verified"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "expression",
+        "units",
+        "role",
+        "critical",
+        "provisional",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "units": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "source",
+            "clearance",
+            "fabrication",
+            "design",
+            "packing",
+            "derived"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "critical": {
+          "type": "boolean"
+        },
+        "provisional": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_id",
+        "authoring_component",
+        "packing_component",
+        "representation",
+        "keepout_components"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "authoring_component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packing_component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "representation": {
+          "enum": [
+            "native_parametric_plus_exact_brep",
+            "parametric_proxy_plus_conservative_pack",
+            "parametric_proxy_plus_mesh_reference",
+            "linked_native_component"
+          ]
+        },
+        "keepout_components": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "no_keepout_rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "keepout_components": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "required": [
+                "no_keepout_rationale"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "clearance_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "one",
+        "two",
+        "minimum_mm"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "one": {
+          "type": "string",
+          "minLength": 1
+        },
+        "two": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimum_mm": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "interference_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "one",
+        "two",
+        "allow_interference"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "one": {
+          "type": "string",
+          "minLength": 1
+        },
+        "two": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allow_interference": {
+          "type": "boolean"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_components",
+        "clearance_checks",
+        "interference_checks",
+        "expected_print_parts"
+      ],
+      "properties": {
+        "required_components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "clearance_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/clearance_check"
+          }
+        },
+        "interference_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interference_check"
+          }
+        },
+        "expected_print_parts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

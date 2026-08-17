@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "wearable-controller-pod",
+    "units": "mm",
+    "process": "FDM",
+    "material": "PETG",
+    "fusion_document": "Wearable Controller Pod"
+  },
+  "sources": [
+    {
+      "id": "pd_trigger_board_measurement",
+      "kind": "user_measurement",
+      "locator": "design-brief://pd-trigger-board",
+      "revision": "2026-08-17 sample A",
+      "confidence": "measured",
+      "notes": "Caliper measurements supplied in the design brief."
+    },
+    {
+      "id": "ekylin_converter_measurement",
+      "kind": "user_measurement",
+      "locator": "design-brief://ekylin-20v-to-12v",
+      "revision": "2026-08-17 sample A",
+      "confidence": "measured",
+      "notes": "Converter body dimensions; wire and bend zones are separate keep-outs."
+    }
+  ],
+  "parameters": [
+    {
+      "name": "src_pd_board_length",
+      "expression": "35 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured PD trigger board length."
+    },
+    {
+      "name": "src_pd_board_width",
+      "expression": "13 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured PD trigger board width."
+    },
+    {
+      "name": "src_pd_board_height",
+      "expression": "5 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured rigid board-and-component height."
+    },
+    {
+      "name": "src_ekylin_length",
+      "expression": "62 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body length, excluding flexible leads."
+    },
+    {
+      "name": "src_ekylin_width",
+      "expression": "31 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body width."
+    },
+    {
+      "name": "src_ekylin_height",
+      "expression": "27 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body height."
+    },
+    {
+      "name": "clr_rigid_xy",
+      "expression": "0.5 mm",
+      "units": "mm",
+      "role": "clearance",
+      "critical": true,
+      "provisional": false,
+      "description": "Per-side clearance around rigid electronic bodies."
+    },
+    {
+      "name": "clr_rigid_z",
+      "expression": "1 mm",
+      "units": "mm",
+      "role": "clearance",
+      "critical": true,
+      "provisional": false,
+      "description": "Vertical clearance above rigid electronic bodies."
+    },
+    {
+      "name": "fab_wall_thickness",
+      "expression": "2 mm",
+      "units": "mm",
+      "role": "fabrication",
+      "critical": true,
+      "provisional": false,
+      "description": "Nominal PETG enclosure wall thickness."
+    },
+    {
+      "name": "fab_fit_clearance",
+      "expression": "0.35 mm",
+      "units": "mm",
+      "role": "fabrication",
+      "critical": true,
+      "provisional": false,
+      "description": "Per-side printed sliding-fit clearance."
+    },
+    {
+      "name": "des_corner_radius",
+      "expression": "5 mm",
+      "units": "mm",
+      "role": "design",
+      "critical": false,
+      "provisional": false,
+      "description": "Exterior corner radius; adjustable without changing fit evidence."
+    },
+    {
+      "name": "pack_usb_c_straight_departure",
+      "expression": "20 mm",
+      "units": "mm",
+      "role": "packing",
+      "critical": true,
+      "provisional": true,
+      "description": "Conservative initial straight cable-departure keep-out; confirm with the actual cable."
+    }
+  ],
+  "component_tree": [
+    "00_REFERENCES",
+    "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC",
+    "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
+    "00_REFERENCES/KEEP__USB_C_INSERTION",
+    "00_REFERENCES/REF__EKYLIN__PARAMETRIC",
+    "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE",
+    "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS",
+    "10_PRODUCT",
+    "10_PRODUCT/PROD__BASE",
+    "10_PRODUCT/PROD__LID",
+    "20_FIXTURES",
+    "90_VALIDATION",
+    "90_VALIDATION/VAL__PD_FIT_COUPON"
+  ],
+  "references": [
+    {
+      "id": "pd_trigger",
+      "source_id": "pd_trigger_board_measurement",
+      "authoring_component": "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC",
+      "packing_component": "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
+      "representation": "parametric_proxy_plus_conservative_pack",
+      "keepout_components": [
+        "00_REFERENCES/KEEP__USB_C_INSERTION"
+      ]
+    },
+    {
+      "id": "ekylin_converter",
+      "source_id": "ekylin_converter_measurement",
+      "authoring_component": "00_REFERENCES/REF__EKYLIN__PARAMETRIC",
+      "packing_component": "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE",
+      "representation": "parametric_proxy_plus_conservative_pack",
+      "keepout_components": [
+        "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS"
+      ]
+    }
+  ],
+  "verification": {
+    "required_components": [
+      "10_PRODUCT/PROD__BASE",
+      "10_PRODUCT/PROD__LID",
+      "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
+      "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"
+    ],
+    "clearance_checks": [
+      {
+        "id": "pd-to-lid-clearance",
+        "one": "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
+        "two": "10_PRODUCT/PROD__LID",
+        "minimum_mm": 1.0
+      }
+    ],
+    "interference_checks": [
+      {
+        "id": "usb-c-insertion-zone",
+        "one": "00_REFERENCES/KEEP__USB_C_INSERTION",
+        "two": "10_PRODUCT/PROD__BASE",
+        "allow_interference": false
+      },
+      {
+        "id": "ekylin-wire-bend-zone",
+        "one": "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS",
+        "two": "10_PRODUCT/PROD__LID",
+        "allow_interference": false
+      }
+    ],
+    "expected_print_parts": [
+      "10_PRODUCT/PROD__BASE",
+      "10_PRODUCT/PROD__LID",
+      "90_VALIDATION/VAL__PD_FIT_COUPON"
+    ]
+  }
+}
