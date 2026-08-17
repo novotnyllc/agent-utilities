@@ -16,7 +16,7 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | `nurb scan` | Import immutable mesh evidence, record units/registration/provenance, derive only needed datums or sections, and build a conservative B-Rep checking envelope | Partial; general scan cleanup/section extraction may be external |
 | `nurb rules` | `design-doctrine.md`, the main skill, and `verification-contract.md` | Supported |
 | `nurb api` | Discover the connected MCP schema and query current Fusion API documentation before scripting | Supported when those dynamic MCP capabilities are present |
-| `nurb skill` | Install this versioned skill directory with `scripts/install-skill.sh` | Supported for local installation; no runtime printer of the skill |
+| `nurb skill` | Install or update the Agent Utilities plugin, or install this skill through the agent harness's skill manager | Supported through the harness; no runtime printer of the skill |
 | `nurb update` | Update the package from its versioned source, rerun tests, then reinstall the skill | Manual/version-control workflow; no automatic self-updater |
 | `nurb card` | `DESIGN-STATE.md`, manifest source records, Fusion attributes, and generated inventory/verification reports | Supported as a workflow; no single auto-regenerated card command |
 | `nurb diff` | Deterministic before/after semantic report diff for parameters, component paths, bodies, and unhealthy timeline items | Supported; not a complete B-Rep or feature-history diff |

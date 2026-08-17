@@ -24,12 +24,12 @@ Fusion is already the long-lived interactive CAD host. Start Fusion normally, en
 
 **Status:** Unsupported automation.
 
-`scripts/install-skill.sh` installs the checked-out skill, but it does not phone home, overwrite local changes, or silently update itself. Recommended release discipline:
+Install and update this skill through the agent harness's plugin or skill manager. The skill does not phone home, overwrite local changes, or silently update itself. Recommended release discipline:
 
 1. obtain a tagged or commit-pinned package;
 2. review its change log and diff;
 3. run `./scripts/test.sh`;
-4. reinstall the skill explicitly;
+4. update the plugin or skill through the harness;
 5. record the package version or commit in project evidence.
 
 ## Batch variant runner

@@ -10,9 +10,6 @@ Python emitted by this package is limited to small, idempotent transactions that
 
 Project-specific geometry transactions are intentionally created against the connected Fusion release and its current API documentation; the host CLI does not ship a generic sketch/extrude generator that would become a second CAD source of truth.
 
-`SHA256SUMS.source` retains the verified checksum manifest supplied with the
-original Downloads package.
-
 ## Package contents
 
 ```text
@@ -105,16 +102,6 @@ Use a distinct directory, report file, and run ID for every later transaction.
 Do not follow report-path symlinks, reuse a report target, or delete a broader
 parent directory. A missing, malformed, mismatched, or inaccessible report is
 a failed transaction; it never silently falls back to stdout-only capture.
-
-## Install the skill
-
-Use the safe installer with the skills directory used by the agent harness:
-
-```bash
-./scripts/install-skill.sh ~/.agents/skills
-```
-
-The installer refuses to replace an existing copy. After reviewing package changes, use `--force` for an explicit replacement. Keep the `references/` directory beside `SKILL.md`; the main skill intentionally delegates detailed doctrine and gap handling to those files.
 
 ## Connect Fusion MCP
 
