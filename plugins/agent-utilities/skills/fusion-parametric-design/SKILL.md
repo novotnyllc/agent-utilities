@@ -352,7 +352,19 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" prepare-report-session <manifest> <kind>
 "$SKILL_DIR/scripts/fusion-design" verify-report-session <session.json>
 "$SKILL_DIR/scripts/fusion-design" cleanup-report-session <session.json>
+"$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
+"$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
+
+When a Fusion transaction needs reusable custom code, use
+`prepare-module-bundle` on a pure-Python package and execute the output of
+`emit-module-bootstrap`. The content-addressed cache is persistent and outside
+project repositories; `FUSION_MCP_MODULE_CACHE` may override its platform
+user-cache location with an absolute path. It requires POSIX owner/permission
+semantics and fails closed on native Windows. Emission and the generated
+bootstrap verify the cached bundle before import. Do not bypass it, edit cache contents, call
+`importlib.invalidate_caches()`, or place data/native modules in the bundle.
+See `references/mcp-adapter.md` for the exact contract.
 
 When a host-side JSON file is needed, `prepare-report-session` creates the
 private directory, cryptographically random run ID, previously nonexistent

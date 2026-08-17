@@ -118,6 +118,29 @@ raw MCP response for evidence and do not force cleanup.
 
 **Pass:** validation reports `ok: true`; the plan has nine phases and is not blocked; all four scripts are emitted.
 
+### Pure-Python module cache smoke
+
+Create a temporary package containing `__init__.py`, `helper.py`, and an
+`entry.py` whose `run(context)` imports `helper.py` relatively and prints a
+unique sentinel. Create a fresh disposable cache root outside every repository,
+set its mode to 0700, and pass it with `--cache-root`. Run
+`prepare-module-bundle <package> entry`, then
+`emit-module-bootstrap <bundle.json>` and execute that bootstrap through the
+discovered Fusion Python capability. Execute the same verified bootstrap a
+second time, then change `helper.py`, prepare again, and execute the new
+bundle. This direct sentinel smoke applies only to the stdout-working branch.
+On an empty-stdout build, record the transport limitation and exercise cached
+code only as a helper from a report-capable top-level transaction.
+
+**Pass:** both executions of the unchanged bundle return the first sentinel;
+the changed source produces a different digest/package and returns the new
+sentinel; relative imports succeed; no package entry remains in `sys.modules`;
+no `__pycache__` is created; and the active document is unchanged. Tampering
+with one `.py` file in this disposable cache must make
+`emit-module-bootstrap` fail before Fusion execution. After recording the
+result, remove only that exact disposable cache root; never tamper with or
+delete the persistent default cache.
+
 For the stdout-working branch, the steps below run the emitted scripts directly
 and retain their MCP responses. For the empty-stdout branch, each occurrence
 of a report-producing run below means: prepare a fresh session for that kind,

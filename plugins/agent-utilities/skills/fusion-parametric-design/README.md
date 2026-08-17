@@ -71,7 +71,19 @@ scripts/fusion-design diff-reports <before.json> <after.json>
 scripts/fusion-design prepare-report-session <manifest> <kind>
 scripts/fusion-design verify-report-session <session.json>
 scripts/fusion-design cleanup-report-session <session.json>
+scripts/fusion-design prepare-module-bundle <package-dir> <entry-module>
+scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
+
+For reusable pure-Python helpers, prepare a content-addressed module bundle and
+send the verified emitted bootstrap through Fusion's Python-execution
+capability. The persistent cache is outside project repositories: on macOS it
+defaults to `~/Library/Caches/fusion-parametric-design/mcp-modules`, and on
+other POSIX systems to `$XDG_CACHE_HOME` or `~/.cache`. Set
+`FUSION_MCP_MODULE_CACHE` to an absolute path to override it. The cache requires
+POSIX owner/permission semantics and fails closed on native Windows. Bundles
+accept regular `.py` files only; install native or third-party dependencies in
+the host environment and pass only their results into Fusion.
 
 When an MCP execution result drops stdout, use `prepare-report-session` for the
 report-file fallback. It creates a new private directory, cryptographically
