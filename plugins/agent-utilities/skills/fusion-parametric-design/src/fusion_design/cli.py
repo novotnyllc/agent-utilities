@@ -9,6 +9,7 @@ import sys
 from typing import Callable
 
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
+from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
 from .report_session import (
     cleanup_report_session,
@@ -102,6 +103,17 @@ def _cmd_cleanup_report_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prepare_module_bundle(args: argparse.Namespace) -> int:
+    result = prepare_module_bundle(args.source_package, args.entry_module, args.cache_root)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_emit_module_bootstrap(args: argparse.Namespace) -> int:
+    _write_output(emit_module_bootstrap(args.bundle, args.output), args.output)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fusion-design",
@@ -163,6 +175,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cleanup.add_argument("session")
     cleanup.set_defaults(handler=_cmd_cleanup_report_session)
+
+    prepare_modules = subparsers.add_parser(
+        "prepare-module-bundle",
+        help="Cache a pure-Python package for use by Fusion MCP execution.",
+    )
+    prepare_modules.add_argument("source_package")
+    prepare_modules.add_argument("entry_module")
+    prepare_modules.add_argument("--cache-root")
+    prepare_modules.set_defaults(handler=_cmd_prepare_module_bundle)
+
+    emit_bootstrap = subparsers.add_parser(
+        "emit-module-bootstrap",
+        help="Verify a cached module bundle and emit its Fusion bootstrap.",
+    )
+    emit_bootstrap.add_argument("bundle")
+    emit_bootstrap.add_argument("-o", "--output")
+    emit_bootstrap.set_defaults(handler=_cmd_emit_module_bootstrap)
     return parser
 
 

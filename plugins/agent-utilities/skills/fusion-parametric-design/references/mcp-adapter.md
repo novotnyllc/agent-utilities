@@ -58,19 +58,42 @@ non-Fusion processing in the host environment and pass only its result into
 Fusion.
 
 Autodesk's [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm)
-guidance about copying pure-Python modules beside a script and importing them
-relatively applies to a maintained installed script or add-in. A live
-read-only MCP probe showed that API `execute` code strings run with
-`__file__ = None`, `__package__ = None`, `__spec__ = None`, and cwd `/`, even
-though `sys.path` includes Fusion site-packages and MyScripts directories.
-Therefore package-relative imports such as `from .Modules import xlrd` do not
-directly work in one-shot MCP code strings. Keep those code strings
-self-contained or run the dependency in the host environment. If in-process
-reuse is necessary, use a maintained installed Fusion script/add-in with the
-pure-Python module vendored locally; do not assume an automatic installer or
-add dependencies to the one-shot MCP path. Compiled/native extensions are
-version- and architecture-sensitive and are outside this skill's supported
-scope.
+guidance about copying pure-Python modules beside a script does not directly
+apply to API `execute` strings: a live probe found `__file__`, `__package__`,
+and `__spec__` unset. For reusable pure-Python code, prepare a package bundle:
+
+```bash
+bundle_json="$("$SKILL_DIR/scripts/fusion-design" prepare-module-bundle ./my_package entry)"
+bundle_file="$(printf '%s\n' "$bundle_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["bundle_file"])')"
+"$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap "$bundle_file" -o bootstrap.py
+```
+
+The source directory must be a package with `__init__.py`; `entry` identifies
+`entry.py` (or a dotted submodule) defining `run(context)`. Send the emitted
+bootstrap source through the dynamically discovered Python execution
+capability. It temporarily adds the content-addressed package to `sys.path`,
+supports relative imports, disables bytecode writes, and restores `sys.path`,
+the bytecode flag, and its `sys.modules` entries even on failure. Emission
+verifies every cached module before generating the bootstrap; the emitted
+bootstrap rechecks the exact module inventory and hashes immediately before
+import. Do not edit cached bundles.
+
+The cache persists across projects and MCP sessions outside repositories. Its
+platform user-cache default can be overridden only with an absolute
+`FUSION_MCP_MODULE_CACHE`. This cache requires POSIX owner/permission semantics
+and fails closed on native Windows. Only regular `.py` files are supported;
+data files, symlinks, hard links, package-manager installation, and
+compiled/native extensions are intentionally excluded. Do not call
+`importlib.invalidate_caches()`; it triggered an unavailable
+`importlib.metadata` import in the observed Fusion runtime. Run heavy mesh or
+other non-Fusion processing in the host environment and pass only its result
+into Fusion.
+
+The bundle solves imports, not result transport. On a build where the stdout
+sentinel is missing, use cached packages only as helpers from a top-level
+transaction that implements the verified report-file protocol; do not treat a
+direct bootstrap's empty response as machine-readable success.
 
 ## Read → decide → write → prove loop
 
