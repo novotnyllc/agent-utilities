@@ -1,6 +1,5 @@
 import json
 import os
-import secrets
 import sys
 import tempfile
 import traceback
@@ -21,7 +20,7 @@ class ReportDeliveryError(RuntimeError):
 
 
 def _new_report_run_id():
-    return REPORT_RUN_ID or secrets.token_hex(32)
+    return REPORT_RUN_ID or os.urandom(32).hex()
 
 
 def _emit(report, report_run_id=None):

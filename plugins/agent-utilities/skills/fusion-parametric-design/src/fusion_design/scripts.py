@@ -16,7 +16,8 @@ def _json_literal(value: Any) -> str:
     return repr(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
-def _manifest_hash(manifest: Manifest) -> str:
+def manifest_sha256(manifest: Manifest) -> str:
+    """Return the canonical hash embedded in every generated transaction."""
     encoded = json.dumps(manifest.data, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -58,7 +59,6 @@ def _script_prelude(
         raise ValueError("report path and report run ID must be supplied together")
     return f'''import json
 import os
-import secrets
 import sys
 import tempfile
 import traceback
@@ -67,7 +67,7 @@ import adsk.fusion
 
 PROJECT_NAME = {manifest.project_name!r}
 FUSION_DOCUMENT_NAME = {manifest.fusion_document!r}
-MANIFEST_SHA256 = {_manifest_hash(manifest)!r}
+MANIFEST_SHA256 = {manifest_sha256(manifest)!r}
 REPORT_BEGIN = {REPORT_BEGIN!r}
 REPORT_END = {REPORT_END!r}
 REPORT_PATH = {report_path!r}
@@ -79,7 +79,7 @@ class ReportDeliveryError(RuntimeError):
 
 
 def _new_report_run_id():
-    return REPORT_RUN_ID or secrets.token_hex(32)
+    return REPORT_RUN_ID or os.urandom(32).hex()
 
 
 def _emit(report, report_run_id=None):

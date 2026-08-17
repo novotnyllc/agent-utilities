@@ -1,6 +1,10 @@
-# Live Fusion MCP acceptance procedure
+# Manual live Fusion MCP smoke and acceptance procedure
 
-The host package and generated scripts are verified offline, but final compatibility must be exercised in the connected Fusion release because the MCP tools and Fusion API surface are dynamic. Use a new, saved, disposable parametric design.
+The host package and generated scripts are verified offline, but final compatibility must be exercised in the connected Fusion release because the MCP tools and Fusion API surface are dynamic. Use a new, disposable parametric design.
+
+This is a manual-only smoke/acceptance procedure. It requires a person at the
+Fusion machine and is intentionally not a CI gate: CI has no running Fusion
+application, its UI event loop, or its local MCP server.
 
 Resolve `SKILL_DIR` to the directory containing the installed skill's
 `SKILL.md`; the user's project directory may be elsewhere.
@@ -13,36 +17,45 @@ Record:
 - local Fusion MCP server version or capability inventory;
 - agent/client and connection endpoint;
 - package version/commit;
-- document name and saved version;
+- document name and version, if one is saved;
 - each emitted report and screenshot;
 - any API/schema difference and the smallest adapter change.
 
 ## 1. Discover and checkpoint
 
 1. Enable the local Fusion MCP server.
-2. Discover tools, resources, prompts, schemas, permissions, and current API-documentation access.
-3. Bind the discovered operations to the abstract capabilities in `references/mcp-adapter.md`.
-4. Execute a read-only Python script that prints a unique sentinel. If the MCP
-   reports success with empty stdout, use a new private temporary directory,
-   previously nonexistent report filename, and cryptographically random
-   `--report-run-id` for each remaining acceptance script.
-5. Create and save a new parametric Design document.
-6. Capture the initial document inventory and viewport.
+2. Through the connected client, dynamically discover tools, resources, prompts,
+   schemas, permissions, and current API-documentation access. Bind the result
+   to the abstract capabilities in `references/mcp-adapter.md`; never assume a
+   remembered or hard-coded Fusion tool name.
+3. Execute a mandatory read-only Python script that prints a unique sentinel
+   such as `FUSION_STDOUT_PROBE_<random>`. Record the complete raw MCP response.
+   If the exact sentinel is returned, select the stdout-working branch. If
+   execution succeeds but stdout is empty, record that as the known stdout
+   limitation and select the empty-stdout branch below. If the probe cannot be
+   run or its result is otherwise unusable, do not assume stdout works: use the
+   report-file fallback only where its platform and shared-filesystem checks
+   pass, or stop the acceptance with explicit failure evidence.
+4. Create a new parametric Design document whose document name exactly matches
+   `project.fusion_document` in the manifest. Do not run this smoke against an
+   existing user document. Do not save or version the document unless the user
+   expressly instructed that action.
+5. Capture the initial document inventory and viewport, or record the exact
+   unavailable capability.
 
 **Pass:** the client can read the active design, execute a read-only Python
-script, capture output/errors, and save or version the document. Either the
-sentinel is returned on stdout, or the generated script produces fresh valid
-JSON at the explicitly selected report path; an empty successful MCP response
-alone does not pass.
+script, and capture output/errors. Either the sentinel is returned on stdout,
+or every report-producing transaction produces fresh valid JSON at its
+explicitly selected report path; an empty successful MCP response alone does
+not pass.
 
-For the report-file fallback, accept the JSON only when `report_run_id` equals
-the ID supplied for that exact execution, `kind` equals the expected
-transaction, and `manifest_sha256` equals the generated script's manifest
-hash. After retaining the parsed report, remove that exact file and `rmdir` its
-exact empty private directory. Never reuse a report directory, run ID, or
-target filename across acceptance transactions.
+For the report-file fallback, use the report-session helper below. The helper
+is POSIX-only and fails closed when its required file semantics are unavailable.
+Accept JSON only when `report_run_id`, `kind`, and `manifest_sha256` match the prepared
+session. Never reuse a report directory, run ID, or target filename across
+acceptance transactions.
 
-## 2. Validate and emit
+## 2. Validate and prepare one report session
 
 From the package root:
 
@@ -55,30 +68,73 @@ From the package root:
 "$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
 ```
 
-If the sentinel preflight found dropped stdout, replace each emission above
-with a distinct report-file invocation. For example, the inventory execution
-uses one private directory, one previously nonexistent target, and one random
-run ID:
+The stdout-working branch runs each emitted script directly through the
+discovered Fusion Python tool and parses its delimited response. The
+empty-stdout branch runs the complete report-session sequence below
+independently for `inventory`, `parameter-sync`, `scaffold`, and
+`verification`. Every transaction gets a fresh session; no stdout-only step is
+required in this branch.
+
+For each transaction, call `prepare-report-session` with that transaction's
+kind, send the returned script to Fusion, then verify and clean up the exact
+session in that order. It creates a private 0700 directory, 0600
+metadata/script files, a strict random run ID, and an absent report target.
+Keep the returned metadata path; do not reconstruct any paths or IDs by hand:
 
 ```bash
-report_dir="$(mktemp -d)"
-report_path="$report_dir/inventory.json"
-report_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-"$SKILL_DIR/scripts/fusion-design" emit-inventory examples/electronics-enclosure/fusion-project.json \
-  --report-path "$report_path" --report-run-id "$report_run_id" -o build/inventory.py
+set -euo pipefail
+manifest="examples/electronics-enclosure/fusion-project.json"
+session_json="$("$SKILL_DIR/scripts/fusion-design" \
+  prepare-report-session "$manifest" inventory)"
+session_file="$(printf '%s\n' "$session_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["session_file"])')"
+script_file="$(printf '%s\n' "$session_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["script"])')"
+printf '%s\n' "$session_json"
 ```
 
-Run Fusion, parse and identity-check this report as described above, then run
-`rm -f -- "$report_path"` and `rmdir -- "$report_dir"`. Repeat with a new
-directory, target, and ID for every other transaction.
+Send the contents of `"$script_file"` to the dynamically discovered Fusion
+Python tool, and retain its complete raw response. Then verify and clean up
+through the helper, in that order:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" verify-report-session "$session_file" \
+  > inventory-report.json
+"$SKILL_DIR/scripts/fusion-design" cleanup-report-session "$session_file"
+```
+
+Repeat that complete sequence three more times with fresh values for
+`parameter-sync`, `scaffold`, and `verification` (and distinct report output
+files). The CLI's `scaffold` session is verified under the canonical report
+kind `component-scaffold`. Never reuse a session file, generated script, run
+ID, report path, or report directory between transactions.
+
+`verify-report-session` accepts exactly one JSON object only when its
+`report_run_id`, `kind`, and `manifest_sha256` match the prepared session. It
+never deletes artifacts. Cleanup removes only the exact generated files and
+empty private directory; it rejects symlinks, hard-link aliases, path aliases,
+escapes, and unexpected entries. If verification fails, retain the session and
+raw MCP response for evidence and do not force cleanup.
 
 **Pass:** validation reports `ok: true`; the plan has nine phases and is not blocked; all four scripts are emitted.
+
+For the stdout-working branch, the steps below run the emitted scripts directly
+and retain their MCP responses. For the empty-stdout branch, each occurrence
+of a report-producing run below means: prepare a fresh session for that kind,
+send its generated script to Fusion, verify the exact session, retain the
+report, and then clean up that session. Do not substitute an empty MCP
+response or a stdout-only check.
 
 ## 3. Read-only inventory
 
 Run `inventory.py` through the discovered Fusion Python-execution capability.
 
-**Pass:** exactly one JSON object appears between the report delimiters; it reports a parametric design, document name, parameters, component paths, geometry/bounds, duplicate semantic paths, and timeline health. Running inventory must not create a parameter, component, body, feature, or timeline item.
+**Pass:** in the stdout-working branch, exactly one JSON object appears between
+the report delimiters; in the empty-stdout branch, `verify-report-session`
+returns exactly one identity-matching JSON object. It reports a parametric
+design, document name, parameters, component paths, geometry/bounds, duplicate
+semantic paths, and timeline health. Running inventory must not create a
+parameter, component, body, feature, or timeline item.
 
 ## 4. Parameter synchronization and idempotence
 

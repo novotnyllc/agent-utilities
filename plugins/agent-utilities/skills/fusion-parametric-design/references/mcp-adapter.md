@@ -45,6 +45,33 @@ Revalidate the same active document and Design after every yield; queued UI work
 
 Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm), [TypeScript-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/TypeScriptSpecific_UM.htm), and [working in a separate thread](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/Threading_UM.htm).
 
+## Python modules and dependencies
+
+Fusion's embedded Python is its own runtime; do not assume that a module
+available to the host Python is importable in Fusion. In the current live MCP
+session, `os`, `tempfile`, `hashlib`, and `uuid` imported successfully, while
+`secrets`, `sqlite3`, `numpy`, and `requests` did not. This is live evidence
+for that Fusion installation, not a universal module inventory. Probe an
+optional import in the live session before relying on it, and keep one-shot
+MCP scripts to modules already proven there. Put heavy mesh or other
+non-Fusion processing in the host environment and pass only its result into
+Fusion.
+
+Autodesk's [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm)
+guidance about copying pure-Python modules beside a script and importing them
+relatively applies to a maintained installed script or add-in. A live
+read-only MCP probe showed that API `execute` code strings run with
+`__file__ = None`, `__package__ = None`, `__spec__ = None`, and cwd `/`, even
+though `sys.path` includes Fusion site-packages and MyScripts directories.
+Therefore package-relative imports such as `from .Modules import xlrd` do not
+directly work in one-shot MCP code strings. Keep those code strings
+self-contained or run the dependency in the host environment. If in-process
+reuse is necessary, use a maintained installed Fusion script/add-in with the
+pure-Python module vendored locally; do not assume an automatic installer or
+add dependencies to the one-shot MCP path. Compiled/native extensions are
+version- and architecture-sensitive and are outside this skill's supported
+scope.
+
 ## Read → decide → write → prove loop
 
 1. **Read:** inventory, documentation, manifest, and current visual state.
@@ -67,17 +94,20 @@ The agent should parse and retain that JSON. Do not rely only on prose emitted a
 
 Preflight the execution capability with a unique printed sentinel. Some Fusion
 MCP builds acknowledge successful Python execution while returning empty
-stdout. When that exact failure is observed, make a new private directory on
-the shared local filesystem for **each execution**, select a previously
-nonexistent report filename inside it, and create a cryptographically random
-caller-supplied `report_run_id`. Emit with the paired `--report-path` and
-`--report-run-id` arguments. The generated script atomically publishes one
-JSON object and refuses existing targets and symlinks. Parse the file and
-accept it only if its `report_run_id`, expected transaction `kind`, and
-`manifest_sha256` all match. Retain the parsed report, then remove the exact
-report file and `rmdir` the exact empty private directory. Treat a missing,
+stdout. When that exact failure is observed, use the canonical helper flow for
+each transaction: `prepare-report-session <manifest> <kind>`, execute the
+generated `script` through the discovered Fusion Python capability, then run
+`verify-report-session <session.json>` and `cleanup-report-session <session.json>`
+in that order. The helper creates the private directory, random run ID, absent
+report target, metadata, and generated script; verification accepts the report
+only when `report_run_id`, `kind`, and `manifest_sha256` match. Cleanup removes
+only the exact generated files and empty private directory. Treat a missing,
 stale, malformed, mismatched, symlinked, or non-local report file as a failed
 transaction. Do not encode exceptions as successful reports.
+
+The report-file fallback is POSIX-only: its helper fails closed when required
+file primitives or owner/no-follow semantics are unavailable. Normal stdout
+execution and the rest of this skill remain cross-platform.
 
 ## Permission policy
 
