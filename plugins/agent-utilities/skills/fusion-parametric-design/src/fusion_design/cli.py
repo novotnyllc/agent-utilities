@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Callable
@@ -27,9 +28,35 @@ def _write_output(content: str, output: str | None) -> None:
         print(content)
 
 
+def _same_path(left: str, right: str) -> bool:
+    return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+
+
+def _validate_emit_paths(args: argparse.Namespace) -> None:
+    report_path = args.report_path
+    report_run_id = args.report_run_id
+    if (report_path is None) != (report_run_id is None):
+        raise ValueError("--report-path and --report-run-id must be supplied together")
+
+    named_paths = [("manifest", args.manifest)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    if report_path:
+        named_paths.append(("report path", report_path))
+
+    for index, (left_name, left_path) in enumerate(named_paths):
+        for right_name, right_path in named_paths[index + 1 :]:
+            if _same_path(left_path, right_path):
+                raise ValueError(f"{left_name} and {right_name} must name different files")
+
+    if report_path and os.path.lexists(report_path):
+        raise ValueError("report path must name a previously nonexistent file")
+
+
 def _manifest_command(args: argparse.Namespace, function: Callable) -> int:
+    _validate_emit_paths(args)
     manifest = load_manifest(args.manifest)
-    _write_output(function(manifest), args.output)
+    _write_output(function(manifest, args.report_path, args.report_run_id), args.output)
     return 0
 
 
@@ -80,6 +107,14 @@ def build_parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, help=f"Emit the {name.removeprefix('emit-')} Fusion Python script.")
         command.add_argument("manifest")
         command.add_argument("-o", "--output")
+        command.add_argument(
+            "--report-path",
+            help="Embed an absolute host-local JSON report path in the generated script.",
+        )
+        command.add_argument(
+            "--report-run-id",
+            help="Opaque caller-created identifier required with --report-path.",
+        )
         command.set_defaults(handler=lambda args, fn=emitter: _manifest_command(args, fn))
 
     diff = subparsers.add_parser("diff-reports", help="Diff two machine-readable Fusion inventory/verification reports.")
@@ -97,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     except ManifestValidationError as error:
         print(str(error), file=sys.stderr)
         return 2
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, json.JSONDecodeError) as error:
         print(str(error), file=sys.stderr)
         return 2
 

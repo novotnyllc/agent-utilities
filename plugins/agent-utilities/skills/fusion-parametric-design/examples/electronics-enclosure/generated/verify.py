@@ -1,20 +1,71 @@
-from __future__ import annotations
-
 import json
+import os
+import secrets
+import sys
+import tempfile
 import traceback
 import adsk.core
 import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
+FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+REPORT_PATH = None
+REPORT_RUN_ID = None
 
 
-def _emit(report):
-    print(REPORT_BEGIN)
-    print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
-    print(REPORT_END)
+class ReportDeliveryError(RuntimeError):
+    pass
+
+
+def _new_report_run_id():
+    return REPORT_RUN_ID or secrets.token_hex(32)
+
+
+def _emit(report, report_run_id=None):
+    report_run_id = report_run_id or _new_report_run_id()
+    envelope = dict(report)
+    envelope["report_run_id"] = report_run_id
+    payload = json.dumps(envelope, sort_keys=True, separators=(",", ":"), default=str)
+
+    temporary_path = None
+    temporary_fd = None
+    try:
+        if REPORT_PATH:
+            if os.path.lexists(REPORT_PATH):
+                raise FileExistsError("report path already exists")
+            temporary_fd, temporary_path = tempfile.mkstemp(
+                prefix=".fusion-design-report-", dir=os.path.dirname(REPORT_PATH)
+            )
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as report_file:
+                temporary_fd = None
+                report_file.write(payload)
+                report_file.write("\n")
+                report_file.flush()
+                os.fsync(report_file.fileno())
+            os.link(temporary_path, REPORT_PATH)
+            os.unlink(temporary_path)
+            temporary_path = None
+        print(REPORT_BEGIN)
+        print(payload)
+        print(REPORT_END)
+    except Exception as error:
+        if temporary_fd is not None:
+            try:
+                os.close(temporary_fd)
+            except OSError:
+                pass
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        destination = REPORT_PATH or "stdout"
+        message = "Failed to deliver Fusion JSON report to " + destination + ": " + str(error)
+        print(message, file=sys.stderr)
+        raise ReportDeliveryError(message) from error
 
 
 def _active_design():
@@ -23,6 +74,34 @@ def _active_design():
     if not design:
         raise RuntimeError("The active Fusion product is not a Design.")
     return app, design
+
+
+def _require_target_document(app):
+    active_document = app.activeDocument
+    active_name = active_document.name if active_document else None
+    if active_name != FUSION_DOCUMENT_NAME:
+        raise RuntimeError(
+            "Active Fusion document " + repr(active_name)
+            + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
+        )
+    return active_document
+
+
+def _pump_events(app, design, target_document):
+    adsk.doEvents()
+    active_app, active_design = _active_design()
+    if (
+        active_app != app
+        or app.activeDocument != target_document
+        or target_document.name != FUSION_DOCUMENT_NAME
+        or active_design != design
+    ):
+        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+
+
+def _pump_events_periodically(app, design, target_document, index):
+    if (index + 1) % 10 == 0:
+        _pump_events(app, design, target_document)
 
 
 def _walk_component(component, prefix=""):
@@ -219,10 +298,16 @@ def _parameter_mismatches(user_parameters):
 
 
 def run(context):
-    reported = False
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
+        target_document = _require_target_document(app)
+        _pump_events(app, design, target_document)
         compute_invoked = design.computeAll()
+        _pump_events(app, design, target_document)
+        # All following reads form one report snapshot.  Yielding after a read
+        # would make a same-document edit appear as an authoritative result.
         root_component = design.rootComponent
         component_paths, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(
             root_component
@@ -384,11 +469,15 @@ def run(context):
             "clearance_results": clearance_results,
             "interference_results": interference_results,
         }
-        _emit(report)
-        reported = True
+        report_attempted = True
+        _emit(report, report_run_id)
         if failures:
             raise RuntimeError("Fusion design verification failed: " + ", ".join(failures))
     except Exception as error:
-        if not reported:
-            _emit({"kind": "verification", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({"kind": "verification", "ok": False, "error": str(error), "traceback": traceback.format_exc()}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise

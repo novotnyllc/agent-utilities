@@ -1,6 +1,8 @@
-from __future__ import annotations
-
 import json
+import os
+import secrets
+import sys
+import tempfile
 import traceback
 import adsk.core
 import adsk.fusion
@@ -10,12 +12,60 @@ FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+REPORT_PATH = None
+REPORT_RUN_ID = None
 
 
-def _emit(report):
-    print(REPORT_BEGIN)
-    print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
-    print(REPORT_END)
+class ReportDeliveryError(RuntimeError):
+    pass
+
+
+def _new_report_run_id():
+    return REPORT_RUN_ID or secrets.token_hex(32)
+
+
+def _emit(report, report_run_id=None):
+    report_run_id = report_run_id or _new_report_run_id()
+    envelope = dict(report)
+    envelope["report_run_id"] = report_run_id
+    payload = json.dumps(envelope, sort_keys=True, separators=(",", ":"), default=str)
+
+    temporary_path = None
+    temporary_fd = None
+    try:
+        if REPORT_PATH:
+            if os.path.lexists(REPORT_PATH):
+                raise FileExistsError("report path already exists")
+            temporary_fd, temporary_path = tempfile.mkstemp(
+                prefix=".fusion-design-report-", dir=os.path.dirname(REPORT_PATH)
+            )
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as report_file:
+                temporary_fd = None
+                report_file.write(payload)
+                report_file.write("\n")
+                report_file.flush()
+                os.fsync(report_file.fileno())
+            os.link(temporary_path, REPORT_PATH)
+            os.unlink(temporary_path)
+            temporary_path = None
+        print(REPORT_BEGIN)
+        print(payload)
+        print(REPORT_END)
+    except Exception as error:
+        if temporary_fd is not None:
+            try:
+                os.close(temporary_fd)
+            except OSError:
+                pass
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        destination = REPORT_PATH or "stdout"
+        message = "Failed to deliver Fusion JSON report to " + destination + ": " + str(error)
+        print(message, file=sys.stderr)
+        raise ReportDeliveryError(message) from error
 
 
 def _active_design():
@@ -34,6 +84,24 @@ def _require_target_document(app):
             "Active Fusion document " + repr(active_name)
             + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
         )
+    return active_document
+
+
+def _pump_events(app, design, target_document):
+    adsk.doEvents()
+    active_app, active_design = _active_design()
+    if (
+        active_app != app
+        or app.activeDocument != target_document
+        or target_document.name != FUSION_DOCUMENT_NAME
+        or active_design != design
+    ):
+        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+
+
+def _pump_events_periodically(app, design, target_document, index):
+    if (index + 1) % 10 == 0:
+        _pump_events(app, design, target_document)
 
 
 def _walk_component(component, prefix=""):
@@ -189,11 +257,17 @@ def _set_attribute(entity, name, value):
     return True
 
 
+def _attribute_value(entity, name):
+    attribute = entity.attributes.itemByName(ATTRIBUTE_GROUP, name)
+    return attribute.value if attribute else None
+
+
 def run(context):
-    reported = False
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
-        _require_target_document(app)
+        target_document = _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError(
                 "This workflow requires a parametric Fusion design. Refusing to switch design type because doing so can remove history."
@@ -215,7 +289,7 @@ def run(context):
             existing_parameters[spec["name"]] = existing
 
         created_names = set()
-        for spec in PARAMETER_SPECS:
+        for index, spec in enumerate(PARAMETER_SPECS):
             if not existing_parameters[spec["name"]]:
                 neutral_expression = "''" if spec["units"].lower() == "text" else "0"
                 value = adsk.core.ValueInput.createByString(neutral_expression)
@@ -224,9 +298,11 @@ def run(context):
                     raise RuntimeError("Fusion failed to create user parameter " + spec["name"])
                 existing_parameters[spec["name"]] = existing
                 created_names.add(spec["name"])
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
 
         changes = []
-        for spec in PARAMETER_SPECS:
+        for index, spec in enumerate(PARAMETER_SPECS):
             existing = existing_parameters[spec["name"]]
             changed_fields = ["created"] if spec["name"] in created_names else []
             if existing.expression != spec["expression"]:
@@ -250,8 +326,34 @@ def run(context):
             else:
                 operation = "updated" if changed_fields else "unchanged"
             changes.append({"name": spec["name"], "operation": operation, "fields": changed_fields})
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
 
         compute_invoked = design.computeAll()
+        _pump_events(app, design, target_document)
+        verification_failures = []
+        verified_user_parameters = design.userParameters
+        for spec in PARAMETER_SPECS:
+            verified = verified_user_parameters.itemByName(spec["name"])
+            if not verified:
+                verification_failures.append(spec["name"] + ":missing")
+                continue
+            expected_attributes = (
+                ("role", str(spec["role"])),
+                ("source_id", str(spec["source_id"])),
+                ("provisional", str(spec["provisional"]).lower()),
+                ("critical", str(spec["critical"]).lower()),
+                ("manifest_sha256", MANIFEST_SHA256),
+            )
+            if verified.expression != spec["expression"]:
+                verification_failures.append(spec["name"] + ":expression")
+            if verified.unit != spec["units"]:
+                verification_failures.append(spec["name"] + ":unit")
+            if verified.comment != spec["comment"]:
+                verification_failures.append(spec["name"] + ":comment")
+            for attribute_name, expected_value in expected_attributes:
+                if _attribute_value(verified, attribute_name) != expected_value:
+                    verification_failures.append(spec["name"] + ":attribute:" + attribute_name)
         timeline = _timeline_health(design)
         report = {
             "kind": "parameter-sync",
@@ -259,16 +361,23 @@ def run(context):
             "manifest_sha256": MANIFEST_SHA256,
             "compute_invoked": compute_invoked,
             "changes": changes,
+            "verification_failures": verification_failures,
             "timeline": timeline,
-            "ok": bool(compute_invoked) and len(timeline["unhealthy"]) == 0,
+            "ok": bool(compute_invoked) and not verification_failures and len(timeline["unhealthy"]) == 0,
         }
-        _emit(report)
-        reported = True
+        report_attempted = True
+        _emit(report, report_run_id)
         if not compute_invoked:
             raise RuntimeError("Fusion Compute All did not complete; see the emitted report.")
         if timeline["unhealthy"]:
             raise RuntimeError("Compute completed with unhealthy timeline objects; see the emitted report.")
+        if verification_failures:
+            raise RuntimeError("Managed parameters changed while Fusion processed events; see the emitted report.")
     except Exception as error:
-        if not reported:
-            _emit({"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise

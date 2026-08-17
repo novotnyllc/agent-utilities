@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.scripts import (
@@ -27,6 +30,7 @@ def load_generated_script(source: str) -> dict:
     fusion = ModuleType("adsk.fusion")
     adsk.core = core
     adsk.fusion = fusion
+    adsk.doEvents = lambda: None
     fusion.DesignTypes = SimpleNamespace(ParametricDesignType="parametric")
     fusion.FeatureHealthStates = SimpleNamespace(
         HealthyFeatureHealthState="healthy",
@@ -60,14 +64,128 @@ class ScriptEmissionTests(unittest.TestCase):
     def assert_compiles(self, source: str) -> None:
         compile(source, "<generated-fusion-script>", "exec")
 
+    def assert_compiles_when_wrapped(self, source: str) -> None:
+        wrapped = "WRAPPER_CONTEXT = None\n" + source + "\nrun(WRAPPER_CONTEXT)\n"
+        compile(wrapped, "<wrapped-fusion-script>", "exec")
+
+    def test_all_emitters_compile_under_reference_wrapper(self) -> None:
+        for emitter in (
+            emit_inventory_script,
+            emit_parameter_sync_script,
+            emit_scaffold_script,
+            emit_verification_script,
+        ):
+            with self.subTest(emitter=emitter.__name__):
+                source = emitter(self.manifest)
+                self.assert_compiles_when_wrapped(source)
+                self.assertNotIn("from __future__ import", source)
+
+    def test_report_path_and_run_id_must_be_paired(self) -> None:
+        with self.assertRaisesRegex(ValueError, "supplied together"):
+            emit_inventory_script(self.manifest, "/private/tmp/inventory.json")
+        with self.assertRaisesRegex(ValueError, "supplied together"):
+            emit_inventory_script(self.manifest, report_run_id="test-run")
+
+    def test_report_path_is_absolute_and_emitted_atomically(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            emit_inventory_script(self.manifest, "reports/inventory.json")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "inventory.json"
+            source = emit_inventory_script(self.manifest, report_path, "test-run")
+            self.assert_compiles(source)
+            self.assertIn(f"REPORT_PATH = {str(report_path)!r}", source)
+
+            namespace = load_generated_script(source)
+            output = StringIO()
+            with redirect_stdout(output):
+                namespace["_emit"]({"kind": "test", "ok": True}, "test-run")
+
+            self.assertEqual(
+                {"kind": "test", "ok": True, "report_run_id": "test-run"},
+                json.loads(report_path.read_text()),
+            )
+            self.assertIn("FUSION_DESIGN_REPORT_BEGIN", output.getvalue())
+            self.assertLess(
+                source.index("os.link(temporary_path, REPORT_PATH)"), source.index("print(REPORT_BEGIN)")
+            )
+            self.assertEqual([], list(Path(temporary).glob(".fusion-design-report-*")))
+
+    def test_report_write_failure_is_visible_and_cleans_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_directory = Path(temporary) / "missing"
+            report_path = report_directory / "inventory.json"
+            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
+            output = StringIO()
+            errors = StringIO()
+            with redirect_stdout(output), redirect_stderr(errors), self.assertRaisesRegex(
+                RuntimeError, "Failed to deliver Fusion JSON report"
+            ):
+                namespace["_emit"]({"kind": "test"}, "test-run")
+            self.assertIn("Failed to deliver Fusion JSON report", errors.getvalue())
+            self.assertEqual("", output.getvalue())
+
+    def test_report_path_never_clobbers_existing_or_symlink_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            report_path = directory / "inventory.json"
+            report_path.write_text("original")
+            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
+                RuntimeError, "already exists"
+            ):
+                namespace["_emit"]({"kind": "test"}, "test-run")
+            self.assertEqual("original", report_path.read_text())
+            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
+
+            report_path.unlink()
+            report_path.symlink_to(directory / "missing-target")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
+                RuntimeError, "already exists"
+            ):
+                namespace["_emit"]({"kind": "test"}, "test-run")
+            self.assertTrue(report_path.is_symlink())
+            self.assertFalse(os.path.exists(report_path))
+            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
+
+    def test_report_delivery_failure_after_temp_creation_cleans_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            report_path = directory / "inventory.json"
+            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
+            with patch.object(namespace["os"], "link", side_effect=OSError("link denied")):
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
+                    RuntimeError, "link denied"
+                ):
+                    namespace["_emit"]({"kind": "test"}, "test-run")
+            self.assertFalse(report_path.exists())
+            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
+
+    def test_report_delivery_failure_does_not_replace_domain_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "inventory.json"
+            report_path.write_text("original")
+            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
+            wrong_app = SimpleNamespace(activeDocument=SimpleNamespace(name="Different design"))
+            namespace["_active_design"] = lambda: (wrong_app, SimpleNamespace())
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
+                RuntimeError, "does not match manifest target"
+            ):
+                namespace["run"](None)
+            self.assertEqual("original", report_path.read_text())
+            self.assertEqual([], list(Path(temporary).glob(".fusion-design-report-*")))
+
     def test_inventory_script_is_read_only_and_compiles(self) -> None:
         source = emit_inventory_script(self.manifest)
         self.assert_compiles(source)
+        self.assert_compiles_when_wrapped(source)
+        self.assertNotIn("from __future__ import", source)
         self.assertIn("FUSION_DESIGN_REPORT_BEGIN", source)
         self.assertIn("root_component.allOccurrences", source)
         self.assertIn("fullPathName", source)
         self.assertIn("duplicate_semantic_paths", source)
         self.assertIn("AllEntitiesBoundingBoxEntityType", source)
+        self.assertIn("adsk.doEvents()", source)
         self.assertNotIn("addNewComponent", source)
         self.assertNotIn("userParameters.add", source)
 
@@ -78,10 +196,11 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn('existing.expression = spec["expression"]', source)
         self.assertIn("user_parameters.add", source)
         self.assertIn("HealthyFeatureHealthState", source)
-        self.assertIn("reported = False", source)
+        self.assertIn("report_attempted = False", source)
         self.assertIn("existing.unit != spec[\"units\"]", source)
         self.assertIn("Existing parameter unit mismatch", source)
         self.assertIn('"ok": bool(compute_invoked)', source)
+        self.assertIn("adsk.doEvents()", source)
         self.assertNotIn("deleteAllAfterMarker", source)
         self.assertNotIn("design.designType =", source)
 
@@ -165,6 +284,18 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertEqual("updated", first_change["operation"])
         self.assertIn("attribute:role", first_change["fields"])
 
+        namespace["adsk"].doEvents = lambda: setattr(first_parameter, "expression", "tampered")
+        design.computeAll = lambda: True
+        tampered_output = StringIO()
+        with redirect_stdout(tampered_output), self.assertRaisesRegex(RuntimeError, "changed while Fusion processed events"):
+            namespace["run"](None)
+        tampered_report = next(
+            json.loads(line) for line in tampered_output.getvalue().splitlines() if line.startswith("{")
+        )
+        self.assertFalse(tampered_report["ok"])
+        self.assertIn(first_parameter.name + ":expression", tampered_report["verification_failures"])
+        namespace["adsk"].doEvents = lambda: None
+
         first_parameter.attributes.values[("fusion_parametric_design", "role")] = "stale-again"
         first_parameter.attributes.fail_writes = True
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "failed to write parameter attribute"):
@@ -227,6 +358,7 @@ class ScriptEmissionTests(unittest.TestCase):
     def test_scaffold_ensures_component_paths_without_deleting_existing_geometry(self) -> None:
         source = emit_scaffold_script(self.manifest)
         self.assert_compiles(source)
+        self.assertIn("adsk.doEvents()", source)
         self.assertIn("addNewComponent", source)
         self.assertIn("_ensure_component_path", source)
         self.assertIn("preexisting_duplicate_semantic_paths", source)
@@ -327,14 +459,59 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertEqual("true", retry_attributes.values[("fusion_parametric_design", "managed")])
         self.assertIn(("fusion_parametric_design", "manifest_sha256"), retry_attributes.values)
 
+        target_document = SimpleNamespace(name=self.manifest.fusion_document)
+        app = SimpleNamespace(activeDocument=target_document)
+        namespace["_active_design"] = lambda: (app, design)
+        observations = iter([([], {}, {})])
+        namespace["_root_context_occurrence_map"] = lambda root: next(observations)
+        namespace["_ensure_component_path"] = lambda root, path: []
+        event_pumps = []
+
+        def switch_document():
+            event_pumps.append(True)
+            app.activeDocument = SimpleNamespace(name="Different design")
+
+        namespace["adsk"].doEvents = switch_document
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "document changed"):
+            namespace["run"](None)
+        self.assertEqual([True], event_pumps)
+        namespace["adsk"].doEvents = lambda: None
+
         wrong_document = SimpleNamespace(activeDocument=SimpleNamespace(name="Different design"))
         namespace["_active_design"] = lambda: (wrong_document, design)
         with redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "does not match manifest target"):
             namespace["run"](None)
 
+    def test_scaffold_success_uses_same_document_snapshot_after_event_pump(self) -> None:
+        namespace = load_generated_script(emit_scaffold_script(self.manifest))
+        all_paths = sorted(namespace["COMPONENT_PATHS"])
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=SimpleNamespace(),
+            timeline=SimpleNamespace(count=0),
+            computeAll=lambda: True,
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        state = {"edited": False}
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_ensure_component_path"] = lambda root, path: []
+        namespace["_root_context_occurrence_map"] = lambda root: (
+            (all_paths, {}, {}) if state["edited"] else ([], {}, {})
+        )
+        namespace["adsk"].doEvents = lambda: state.update(edited=True)
+        output = StringIO()
+        with redirect_stdout(output):
+            namespace["run"](None)
+        report = next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
+        self.assertTrue(report["ok"])
+        self.assertEqual(all_paths, report["component_paths"])
+        self.assertEqual([], report["missing_component_paths"])
+        self.assertTrue(report["report_run_id"])
+
     def test_verification_script_checks_distance_interference_and_timeline_health(self) -> None:
         source = emit_verification_script(self.manifest)
         self.assert_compiles(source)
+        self.assertIn("adsk.doEvents()", source)
         self.assertIn("root_component.allOccurrences", source)
         self.assertIn("fullPathName", source)
         self.assertIn("measureMinimumDistance", source)
@@ -348,7 +525,7 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("positive-volume root-context B-Rep", source)
         self.assertNotIn("def _has_brep", source)
         self.assertIn("ambiguous_component_paths", source)
-        self.assertIn("reported = False", source)
+        self.assertIn("report_attempted = False", source)
         self.assertIn('failures.append("compute-all")', source)
         self.assertIn('failures.append("parameters")', source)
 

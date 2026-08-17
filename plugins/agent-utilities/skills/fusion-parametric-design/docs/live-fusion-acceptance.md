@@ -22,10 +22,25 @@ Record:
 1. Enable the local Fusion MCP server.
 2. Discover tools, resources, prompts, schemas, permissions, and current API-documentation access.
 3. Bind the discovered operations to the abstract capabilities in `references/mcp-adapter.md`.
-4. Create and save a new parametric Design document.
-5. Capture the initial document inventory and viewport.
+4. Execute a read-only Python script that prints a unique sentinel. If the MCP
+   reports success with empty stdout, use a new private temporary directory,
+   previously nonexistent report filename, and cryptographically random
+   `--report-run-id` for each remaining acceptance script.
+5. Create and save a new parametric Design document.
+6. Capture the initial document inventory and viewport.
 
-**Pass:** the client can read the active design, execute a read-only Python script, capture output/errors, and save or version the document.
+**Pass:** the client can read the active design, execute a read-only Python
+script, capture output/errors, and save or version the document. Either the
+sentinel is returned on stdout, or the generated script produces fresh valid
+JSON at the explicitly selected report path; an empty successful MCP response
+alone does not pass.
+
+For the report-file fallback, accept the JSON only when `report_run_id` equals
+the ID supplied for that exact execution, `kind` equals the expected
+transaction, and `manifest_sha256` equals the generated script's manifest
+hash. After retaining the parsed report, remove that exact file and `rmdir` its
+exact empty private directory. Never reuse a report directory, run ID, or
+target filename across acceptance transactions.
 
 ## 2. Validate and emit
 
@@ -39,6 +54,23 @@ From the package root:
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold examples/electronics-enclosure/fusion-project.json -o build/scaffold.py
 "$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
 ```
+
+If the sentinel preflight found dropped stdout, replace each emission above
+with a distinct report-file invocation. For example, the inventory execution
+uses one private directory, one previously nonexistent target, and one random
+run ID:
+
+```bash
+report_dir="$(mktemp -d)"
+report_path="$report_dir/inventory.json"
+report_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+"$SKILL_DIR/scripts/fusion-design" emit-inventory examples/electronics-enclosure/fusion-project.json \
+  --report-path "$report_path" --report-run-id "$report_run_id" -o build/inventory.py
+```
+
+Run Fusion, parse and identity-check this report as described above, then run
+`rm -f -- "$report_path"` and `rmdir -- "$report_dir"`. Repeat with a new
+directory, target, and ID for every other transaction.
 
 **Pass:** validation reports `ok: true`; the plan has nine phases and is not blocked; all four scripts are emitted.
 

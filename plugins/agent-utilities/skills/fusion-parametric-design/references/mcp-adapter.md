@@ -35,6 +35,16 @@ Every mutation transaction must:
 
 Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one tested Fusion script can atomically create the group. Conversely, do not pack the entire product into one opaque script.
 
+## Main-thread responsiveness
+
+Fusion runs both Python and TypeScript API scripts on its main thread. In bounded generated transactions, call `adsk.doEvents()` between coherent phases or top-level feature groups so Fusion can process queued display and UI messages. Do not yield halfway through creating or updating one managed entity.
+
+Revalidate the same active document and Design after every yield; queued UI work can switch context while the transaction is paused. A single `computeAll()` remains blocking, so pump immediately before and after it rather than claiming progress within it.
+
+`doEvents()` is not a design for an unbounded watcher, polling loop, or background job. Autodesk warns that repeatedly pumping events in a long-running loop can destabilize Fusion. Work that must remain alive should be a deliberate add-in using a worker thread for non-Fusion computation and a custom event to return API work to Fusion's main thread; never call Fusion API objects from the worker thread.
+
+Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm), [TypeScript-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/TypeScriptSpecific_UM.htm), and [working in a separate thread](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/Threading_UM.htm).
+
 ## Read → decide → write → prove loop
 
 1. **Read:** inventory, documentation, manifest, and current visual state.
@@ -54,6 +64,20 @@ FUSION_DESIGN_REPORT_END
 ```
 
 The agent should parse and retain that JSON. Do not rely only on prose emitted around it.
+
+Preflight the execution capability with a unique printed sentinel. Some Fusion
+MCP builds acknowledge successful Python execution while returning empty
+stdout. When that exact failure is observed, make a new private directory on
+the shared local filesystem for **each execution**, select a previously
+nonexistent report filename inside it, and create a cryptographically random
+caller-supplied `report_run_id`. Emit with the paired `--report-path` and
+`--report-run-id` arguments. The generated script atomically publishes one
+JSON object and refuses existing targets and symlinks. Parse the file and
+accept it only if its `report_run_id`, expected transaction `kind`, and
+`manifest_sha256` all match. Retain the parsed report, then remove the exact
+report file and `rmdir` the exact empty private directory. Treat a missing,
+stale, malformed, mismatched, symlinked, or non-local report file as a failed
+transaction. Do not encode exceptions as successful reports.
 
 ## Permission policy
 

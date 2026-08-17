@@ -73,6 +73,39 @@ scripts/fusion-design emit-verification <manifest> [-o file.py]
 scripts/fusion-design diff-reports <before.json> <after.json>
 ```
 
+When an MCP execution result drops stdout, each `emit-*` command accepts the
+paired `--report-path /absolute/path/report.json --report-run-id <opaque-id>`
+fallback. The caller must create a cryptographically random run ID and a new
+private directory and choose a report filename that does not already exist for
+**every execution**. The path and ID are validated while generating the script
+and embedded for the Fusion host; without both, reports remain stdout-only.
+With them, `_emit` writes the same JSON atomically without replacing an
+existing target. The CLI and Fusion process must share that filesystem; a
+localhost MCP connection does not copy files between hosts.
+
+```bash
+report_dir="$(mktemp -d)"
+report_path="$report_dir/inventory.json"
+report_run_id="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+./scripts/fusion-design emit-inventory examples/electronics-enclosure/fusion-project.json \
+  --report-path "$report_path" --report-run-id "$report_run_id" -o build/inventory.py
+```
+
+After execution, parse the file as one JSON object and accept it only when its
+`report_run_id` equals `$report_run_id`, its `kind` is `inventory`, and its
+`manifest_sha256` equals the manifest hash embedded in the script. Then remove
+only the exact report and exact private directory:
+
+```bash
+rm -f -- "$report_path"
+rmdir -- "$report_dir"
+```
+
+Use a distinct directory, report file, and run ID for every later transaction.
+Do not follow report-path symlinks, reuse a report target, or delete a broader
+parent directory. A missing, malformed, mismatched, or inaccessible report is
+a failed transaction; it never silently falls back to stdout-only capture.
+
 ## Install the skill
 
 Use the safe installer with the skills directory used by the agent harness:

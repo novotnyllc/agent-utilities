@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from .manifest import Manifest
@@ -20,10 +21,46 @@ def _manifest_hash(manifest: Manifest) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _script_prelude(manifest: Manifest) -> str:
-    return f'''from __future__ import annotations
+def _validate_report_path(report_path: str | Path | None) -> str | None:
+    if report_path is None:
+        return None
+    try:
+        path = Path(report_path)
+    except (TypeError, ValueError) as error:
+        raise ValueError("report path must be a valid absolute file path") from error
+    if "\x00" in str(path):
+        raise ValueError("report path must not contain NUL characters")
+    if not path.is_absolute():
+        raise ValueError("report path must be absolute")
+    if path.exists() and path.is_dir():
+        raise ValueError("report path must name a file, not a directory")
+    if path.parent.exists() and not path.parent.is_dir():
+        raise ValueError("report path parent must be a directory")
+    return str(path)
 
-import json
+
+def _validate_report_run_id(report_run_id: str | None) -> str | None:
+    if report_run_id is None:
+        return None
+    if not isinstance(report_run_id, str) or not report_run_id:
+        raise ValueError("report run ID must be a non-empty string")
+    return report_run_id
+
+
+def _script_prelude(
+    manifest: Manifest,
+    report_path: str | Path | None = None,
+    report_run_id: str | None = None,
+) -> str:
+    report_path = _validate_report_path(report_path)
+    report_run_id = _validate_report_run_id(report_run_id)
+    if (report_path is None) != (report_run_id is None):
+        raise ValueError("report path and report run ID must be supplied together")
+    return f'''import json
+import os
+import secrets
+import sys
+import tempfile
 import traceback
 import adsk.core
 import adsk.fusion
@@ -33,12 +70,60 @@ FUSION_DOCUMENT_NAME = {manifest.fusion_document!r}
 MANIFEST_SHA256 = {_manifest_hash(manifest)!r}
 REPORT_BEGIN = {REPORT_BEGIN!r}
 REPORT_END = {REPORT_END!r}
+REPORT_PATH = {report_path!r}
+REPORT_RUN_ID = {report_run_id!r}
 
 
-def _emit(report):
-    print(REPORT_BEGIN)
-    print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
-    print(REPORT_END)
+class ReportDeliveryError(RuntimeError):
+    pass
+
+
+def _new_report_run_id():
+    return REPORT_RUN_ID or secrets.token_hex(32)
+
+
+def _emit(report, report_run_id=None):
+    report_run_id = report_run_id or _new_report_run_id()
+    envelope = dict(report)
+    envelope["report_run_id"] = report_run_id
+    payload = json.dumps(envelope, sort_keys=True, separators=(",", ":"), default=str)
+
+    temporary_path = None
+    temporary_fd = None
+    try:
+        if REPORT_PATH:
+            if os.path.lexists(REPORT_PATH):
+                raise FileExistsError("report path already exists")
+            temporary_fd, temporary_path = tempfile.mkstemp(
+                prefix=".fusion-design-report-", dir=os.path.dirname(REPORT_PATH)
+            )
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as report_file:
+                temporary_fd = None
+                report_file.write(payload)
+                report_file.write("\\n")
+                report_file.flush()
+                os.fsync(report_file.fileno())
+            os.link(temporary_path, REPORT_PATH)
+            os.unlink(temporary_path)
+            temporary_path = None
+        print(REPORT_BEGIN)
+        print(payload)
+        print(REPORT_END)
+    except Exception as error:
+        if temporary_fd is not None:
+            try:
+                os.close(temporary_fd)
+            except OSError:
+                pass
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        destination = REPORT_PATH or "stdout"
+        message = "Failed to deliver Fusion JSON report to " + destination + ": " + str(error)
+        print(message, file=sys.stderr)
+        raise ReportDeliveryError(message) from error
 
 
 def _active_design():
@@ -57,6 +142,24 @@ def _require_target_document(app):
             "Active Fusion document " + repr(active_name)
             + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
         )
+    return active_document
+
+
+def _pump_events(app, design, target_document):
+    adsk.doEvents()
+    active_app, active_design = _active_design()
+    if (
+        active_app != app
+        or app.activeDocument != target_document
+        or target_document.name != FUSION_DOCUMENT_NAME
+        or active_design != design
+    ):
+        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+
+
+def _pump_events_periodically(app, design, target_document, index):
+    if (index + 1) % 10 == 0:
+        _pump_events(app, design, target_document)
 
 
 def _walk_component(component, prefix=""):
@@ -200,19 +303,29 @@ def _timeline_health(design):
 '''
 
 
-def emit_inventory_script(manifest: Manifest) -> str:
+def emit_inventory_script(
+    manifest: Manifest,
+    report_path: str | Path | None = None,
+    report_run_id: str | None = None,
+) -> str:
     expected = manifest.component_tree
-    return _script_prelude(manifest) + f'''EXPECTED_COMPONENT_PATHS = json.loads({_json_literal(expected)})
+    return _script_prelude(manifest, report_path, report_run_id) + f'''EXPECTED_COMPONENT_PATHS = json.loads({_json_literal(expected)})
 
 
 def run(context):
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
-        component_paths, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(
-            design.rootComponent
-        )
-        parameters = {{}}
+        target_document = _require_target_document(app)
         user_parameters = design.userParameters
+        for index in range(user_parameters.count):
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
+
+        # The report snapshot intentionally follows the last event pump.  Do not
+        # retain observations made before a yield: same-document UI edits are valid.
+        parameters = {{}}
         for index in range(user_parameters.count):
             parameter = user_parameters.item(index)
             parameters[parameter.name] = {{
@@ -220,7 +333,9 @@ def run(context):
                 "units": parameter.unit,
                 "comment": parameter.comment,
             }}
-
+        component_paths, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(
+            design.rootComponent
+        )
         bounding_boxes = {{}}
         brep_bounding_boxes = {{}}
         geometry = {{}}
@@ -254,9 +369,15 @@ def run(context):
             "geometry": geometry,
             "timeline": _timeline_health(design),
         }}
-        _emit(report)
+        report_attempted = True
+        _emit(report, report_run_id)
     except Exception as error:
-        _emit({{"kind": "inventory", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({{"kind": "inventory", "ok": False, "error": str(error), "traceback": traceback.format_exc()}}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise
 '''
 
@@ -283,9 +404,13 @@ def _parameter_specs(manifest: Manifest) -> list[dict[str, Any]]:
     return specs
 
 
-def emit_parameter_sync_script(manifest: Manifest) -> str:
+def emit_parameter_sync_script(
+    manifest: Manifest,
+    report_path: str | Path | None = None,
+    report_run_id: str | None = None,
+) -> str:
     specs = _parameter_specs(manifest)
-    return _script_prelude(manifest) + f'''PARAMETER_SPECS = json.loads({_json_literal(specs)})
+    return _script_prelude(manifest, report_path, report_run_id) + f'''PARAMETER_SPECS = json.loads({_json_literal(specs)})
 ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
@@ -300,11 +425,17 @@ def _set_attribute(entity, name, value):
     return True
 
 
+def _attribute_value(entity, name):
+    attribute = entity.attributes.itemByName(ATTRIBUTE_GROUP, name)
+    return attribute.value if attribute else None
+
+
 def run(context):
-    reported = False
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
-        _require_target_document(app)
+        target_document = _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError(
                 "This workflow requires a parametric Fusion design. Refusing to switch design type because doing so can remove history."
@@ -326,7 +457,7 @@ def run(context):
             existing_parameters[spec["name"]] = existing
 
         created_names = set()
-        for spec in PARAMETER_SPECS:
+        for index, spec in enumerate(PARAMETER_SPECS):
             if not existing_parameters[spec["name"]]:
                 neutral_expression = "''" if spec["units"].lower() == "text" else "0"
                 value = adsk.core.ValueInput.createByString(neutral_expression)
@@ -335,9 +466,11 @@ def run(context):
                     raise RuntimeError("Fusion failed to create user parameter " + spec["name"])
                 existing_parameters[spec["name"]] = existing
                 created_names.add(spec["name"])
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
 
         changes = []
-        for spec in PARAMETER_SPECS:
+        for index, spec in enumerate(PARAMETER_SPECS):
             existing = existing_parameters[spec["name"]]
             changed_fields = ["created"] if spec["name"] in created_names else []
             if existing.expression != spec["expression"]:
@@ -361,8 +494,34 @@ def run(context):
             else:
                 operation = "updated" if changed_fields else "unchanged"
             changes.append({{"name": spec["name"], "operation": operation, "fields": changed_fields}})
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
 
         compute_invoked = design.computeAll()
+        _pump_events(app, design, target_document)
+        verification_failures = []
+        verified_user_parameters = design.userParameters
+        for spec in PARAMETER_SPECS:
+            verified = verified_user_parameters.itemByName(spec["name"])
+            if not verified:
+                verification_failures.append(spec["name"] + ":missing")
+                continue
+            expected_attributes = (
+                ("role", str(spec["role"])),
+                ("source_id", str(spec["source_id"])),
+                ("provisional", str(spec["provisional"]).lower()),
+                ("critical", str(spec["critical"]).lower()),
+                ("manifest_sha256", MANIFEST_SHA256),
+            )
+            if verified.expression != spec["expression"]:
+                verification_failures.append(spec["name"] + ":expression")
+            if verified.unit != spec["units"]:
+                verification_failures.append(spec["name"] + ":unit")
+            if verified.comment != spec["comment"]:
+                verification_failures.append(spec["name"] + ":comment")
+            for attribute_name, expected_value in expected_attributes:
+                if _attribute_value(verified, attribute_name) != expected_value:
+                    verification_failures.append(spec["name"] + ":attribute:" + attribute_name)
         timeline = _timeline_health(design)
         report = {{
             "kind": "parameter-sync",
@@ -370,25 +529,36 @@ def run(context):
             "manifest_sha256": MANIFEST_SHA256,
             "compute_invoked": compute_invoked,
             "changes": changes,
+            "verification_failures": verification_failures,
             "timeline": timeline,
-            "ok": bool(compute_invoked) and len(timeline["unhealthy"]) == 0,
+            "ok": bool(compute_invoked) and not verification_failures and len(timeline["unhealthy"]) == 0,
         }}
-        _emit(report)
-        reported = True
+        report_attempted = True
+        _emit(report, report_run_id)
         if not compute_invoked:
             raise RuntimeError("Fusion Compute All did not complete; see the emitted report.")
         if timeline["unhealthy"]:
             raise RuntimeError("Compute completed with unhealthy timeline objects; see the emitted report.")
+        if verification_failures:
+            raise RuntimeError("Managed parameters changed while Fusion processed events; see the emitted report.")
     except Exception as error:
-        if not reported:
-            _emit({{"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({{"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()}}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise
 '''
 
 
-def emit_scaffold_script(manifest: Manifest) -> str:
+def emit_scaffold_script(
+    manifest: Manifest,
+    report_path: str | Path | None = None,
+    report_run_id: str | None = None,
+) -> str:
     paths = manifest.component_tree
-    return _script_prelude(manifest) + f'''COMPONENT_PATHS = json.loads({_json_literal(paths)})
+    return _script_prelude(manifest, report_path, report_run_id) + f'''COMPONENT_PATHS = json.loads({_json_literal(paths)})
 ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
@@ -429,14 +599,16 @@ def _ensure_component_path(root_component, path):
 
 
 def run(context):
-    reported = False
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
-        _require_target_document(app)
+        target_document = _require_target_document(app)
         if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
             raise RuntimeError("Component scaffolding requires a parametric design; refusing a destructive design-type change.")
         _, _, preexisting_duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
         if preexisting_duplicate_semantic_paths:
+            report_attempted = True
             _emit({{
                 "kind": "component-scaffold",
                 "project": PROJECT_NAME,
@@ -444,15 +616,19 @@ def run(context):
                 "created": [],
                 "duplicate_semantic_paths": preexisting_duplicate_semantic_paths,
                 "ok": False,
-            }})
-            reported = True
+            }}, report_run_id)
             raise RuntimeError("Semantic component paths are already ambiguous; refusing to scaffold into an ambiguous tree.")
         created = []
-        for path in sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item)):
+        for index, path in enumerate(sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item))):
             created.extend(_ensure_component_path(design.rootComponent, path))
+            _pump_events_periodically(app, design, target_document, index)
+        _pump_events(app, design, target_document)
+        compute_invoked = design.computeAll()
+        _pump_events(app, design, target_document)
+        # Read the post-yield state once; pre-compute observations can be stale
+        # when a user edit changes this same document during event processing.
         component_paths, _, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
         missing_component_paths = sorted(set(COMPONENT_PATHS) - set(component_paths))
-        compute_invoked = design.computeAll()
         timeline = _timeline_health(design)
         report = {{
             "kind": "component-scaffold",
@@ -466,8 +642,8 @@ def run(context):
             "timeline": timeline,
             "ok": bool(compute_invoked) and not timeline["unhealthy"] and not duplicate_semantic_paths and not missing_component_paths,
         }}
-        _emit(report)
-        reported = True
+        report_attempted = True
+        _emit(report, report_run_id)
         if not compute_invoked:
             raise RuntimeError("Fusion Compute All did not complete; see the emitted report.")
         if timeline["unhealthy"]:
@@ -477,19 +653,27 @@ def run(context):
         if duplicate_semantic_paths:
             raise RuntimeError("Semantic component paths are ambiguous; rename duplicate managed occurrences.")
     except Exception as error:
-        if not reported:
-            _emit({{"kind": "component-scaffold", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({{"kind": "component-scaffold", "ok": False, "error": str(error), "traceback": traceback.format_exc()}}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise
 '''
 
 
-def emit_verification_script(manifest: Manifest) -> str:
+def emit_verification_script(
+    manifest: Manifest,
+    report_path: str | Path | None = None,
+    report_run_id: str | None = None,
+) -> str:
     verification = manifest.verification
     parameter_specs = [
         {"name": spec["name"], "expression": spec["expression"], "units": spec["units"]}
         for spec in _parameter_specs(manifest)
     ]
-    return _script_prelude(manifest) + f'''VERIFICATION = json.loads({_json_literal(verification)})
+    return _script_prelude(manifest, report_path, report_run_id) + f'''VERIFICATION = json.loads({_json_literal(verification)})
 PARAMETER_SPECS = json.loads({_json_literal(parameter_specs)})
 
 
@@ -545,10 +729,16 @@ def _parameter_mismatches(user_parameters):
 
 
 def run(context):
-    reported = False
+    report_run_id = _new_report_run_id()
+    report_attempted = False
     try:
         app, design = _active_design()
+        target_document = _require_target_document(app)
+        _pump_events(app, design, target_document)
         compute_invoked = design.computeAll()
+        _pump_events(app, design, target_document)
+        # All following reads form one report snapshot.  Yielding after a read
+        # would make a same-document edit appear as an authoritative result.
         root_component = design.rootComponent
         component_paths, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(
             root_component
@@ -710,12 +900,16 @@ def run(context):
             "clearance_results": clearance_results,
             "interference_results": interference_results,
         }}
-        _emit(report)
-        reported = True
+        report_attempted = True
+        _emit(report, report_run_id)
         if failures:
             raise RuntimeError("Fusion design verification failed: " + ", ".join(failures))
     except Exception as error:
-        if not reported:
-            _emit({{"kind": "verification", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
+        if not report_attempted:
+            report_attempted = True
+            try:
+                _emit({{"kind": "verification", "ok": False, "error": str(error), "traceback": traceback.format_exc()}}, report_run_id)
+            except ReportDeliveryError:
+                pass
         raise
 '''
