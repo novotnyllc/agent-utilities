@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion-parametric-design-tooling"
+version = "0.1.0"
+description = "Manifest, planning, and Fusion Python transaction tooling for the fusion-parametric-design skill."
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "OpenAI"}]
+dependencies = []
+
+[project.scripts]
+fusion-design = "fusion_design.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

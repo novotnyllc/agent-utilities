@@ -1,0 +1,127 @@
+# Fusion MCP adapter contract
+
+Autodesk's Fusion MCP advertises dynamic tools. This skill therefore defines capabilities, not fixed tool names.
+
+## Capability binding
+
+At session start, discover and record the current tool/resource schemas. Bind tools only when their documented semantics match:
+
+| Capability | Required behavior | Safe fallback |
+|---|---|---|
+| `READ_DOCUMENTATION` | Search/read current Fusion API documentation | Official Autodesk web documentation |
+| `READ_ACTIVE_DOCUMENT` | Inspect active document/product/design state | Execute the read-only inventory script |
+| `EXECUTE_FUSION_PYTHON` | Run Python in the active Fusion session and return output/errors | No safe modeling fallback; provide script for manual run |
+| `CAPTURE_VIEW` | Return current or requested canvas image | Ask user for a Fusion screenshot |
+| `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | User saves manually before mutation |
+| `UNDO_REDO` | Undo/redo recent document operations | Restore saved version/checkpoint |
+| `IMPORT_EXPORT` | Import reference data or export manufacturing files | User performs the documented Fusion command |
+| `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | User opens the intended document manually |
+
+Do not bind a tool by name alone. Read its current schema, side effects, permissions, and result format.
+
+## Transaction rules
+
+Every mutation transaction must:
+
+1. state its narrow goal;
+2. verify the active design and target component;
+3. refuse destructive design-type conversion;
+4. find existing managed entities before creating new ones;
+5. change only the required parameters/features;
+6. run `Compute All`;
+7. report changed entities and unhealthy timeline items;
+8. preserve enough output for audit and diff;
+9. be safe to run a second time.
+
+Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one tested Fusion script can atomically create the group. Conversely, do not pack the entire product into one opaque script.
+
+## Main-thread responsiveness
+
+Fusion runs both Python and TypeScript API scripts on its main thread. In bounded generated transactions, call `adsk.doEvents()` between coherent phases or top-level feature groups so Fusion can process queued display and UI messages. Do not yield halfway through creating or updating one managed entity.
+
+Revalidate the same active document and Design after every yield; queued UI work can switch context while the transaction is paused. A single `computeAll()` remains blocking, so pump immediately before and after it rather than claiming progress within it.
+
+`doEvents()` is not a design for an unbounded watcher, polling loop, or background job. Autodesk warns that repeatedly pumping events in a long-running loop can destabilize Fusion. Work that must remain alive should be a deliberate add-in using a worker thread for non-Fusion computation and a custom event to return API work to Fusion's main thread; never call Fusion API objects from the worker thread.
+
+Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm), [TypeScript-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/TypeScriptSpecific_UM.htm), and [working in a separate thread](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/Threading_UM.htm).
+
+## Python modules and dependencies
+
+Fusion's embedded Python is its own runtime; do not assume that a module
+available to the host Python is importable in Fusion. In the current live MCP
+session, `os`, `tempfile`, `hashlib`, and `uuid` imported successfully, while
+`secrets`, `sqlite3`, `numpy`, and `requests` did not. This is live evidence
+for that Fusion installation, not a universal module inventory. Probe an
+optional import in the live session before relying on it, and keep one-shot
+MCP scripts to modules already proven there. Put heavy mesh or other
+non-Fusion processing in the host environment and pass only its result into
+Fusion.
+
+Autodesk's [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm)
+guidance about copying pure-Python modules beside a script and importing them
+relatively applies to a maintained installed script or add-in. A live
+read-only MCP probe showed that API `execute` code strings run with
+`__file__ = None`, `__package__ = None`, `__spec__ = None`, and cwd `/`, even
+though `sys.path` includes Fusion site-packages and MyScripts directories.
+Therefore package-relative imports such as `from .Modules import xlrd` do not
+directly work in one-shot MCP code strings. Keep those code strings
+self-contained or run the dependency in the host environment. If in-process
+reuse is necessary, use a maintained installed Fusion script/add-in with the
+pure-Python module vendored locally; do not assume an automatic installer or
+add dependencies to the one-shot MCP path. Compiled/native extensions are
+version- and architecture-sensitive and are outside this skill's supported
+scope.
+
+## Read → decide → write → prove loop
+
+1. **Read:** inventory, documentation, manifest, and current visual state.
+2. **Decide:** identify one behavior or feature group and its measurable acceptance criteria.
+3. **Write:** run the smallest idempotent transaction.
+4. **Prove:** recompute, inspect health, measure, check interference, and capture visual evidence.
+5. **Diff:** compare inventory reports when unintended scope is possible.
+
+## Report protocol
+
+Generated scripts print exactly delimited JSON:
+
+```text
+FUSION_DESIGN_REPORT_BEGIN
+{...}
+FUSION_DESIGN_REPORT_END
+```
+
+The agent should parse and retain that JSON. Do not rely only on prose emitted around it.
+
+Preflight the execution capability with a unique printed sentinel. Some Fusion
+MCP builds acknowledge successful Python execution while returning empty
+stdout. When that exact failure is observed, use the canonical helper flow for
+each transaction: `prepare-report-session <manifest> <kind>`, execute the
+generated `script` through the discovered Fusion Python capability, then run
+`verify-report-session <session.json>` and `cleanup-report-session <session.json>`
+in that order. The helper creates the private directory, random run ID, absent
+report target, metadata, and generated script; verification accepts the report
+only when `report_run_id`, `kind`, and `manifest_sha256` match. Cleanup removes
+only the exact generated files and empty private directory. Treat a missing,
+stale, malformed, mismatched, symlinked, or non-local report file as a failed
+transaction. Do not encode exceptions as successful reports.
+
+The report-file fallback is POSIX-only: its helper fails closed when required
+file primitives or owner/no-follow semantics are unavailable. Normal stdout
+execution and the rest of this skill remain cross-platform.
+
+## Permission policy
+
+The local Fusion MCP has access to the live design session. Ask for the minimum persistent permissions that avoid repetitive prompts, typically documentation read, active-document read, Python execution, view capture, save/version, and undo. Keep file-system and network permissions separate from Fusion permissions.
+
+## Error handling
+
+When an API call fails:
+
+1. inspect the returned exception and traceback;
+2. query current official API documentation through the MCP;
+3. inventory the target entity and design type;
+4. reproduce with the smallest test geometry when safe;
+5. fix one behavior;
+6. rerun from the saved checkpoint when the failed transaction left partial geometry.
+
+Do not guess at an obsolete API signature.
