@@ -34,6 +34,13 @@ class ManifestValidationTests(unittest.TestCase):
         issues = validate_manifest_data(data)
         self.assertIn("parameter-prefix-mismatch", {issue.code for issue in issues})
 
+    def test_every_parameter_requires_a_nonempty_expression(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["parameters"][-1]["critical"] = False
+        data["parameters"][-1]["expression"] = "   "
+        issues = validate_manifest_data(data)
+        self.assertIn("parameter-expression-required", {issue.code for issue in issues})
+
     def test_reference_requires_authoring_and_packing_models(self) -> None:
         data = copy.deepcopy(self.data)
         data["references"][0].pop("packing_component")

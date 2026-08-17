@@ -314,12 +314,12 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
             )
 
-        if critical and not expression:
+        if not expression:
             issues.append(
                 ValidationIssue(
-                    "critical-parameter-missing-expression",
+                    "parameter-expression-required",
                     f"{path}.expression",
-                    f"Critical parameter {name!r} has no expression.",
+                    f"Parameter {name!r} must have a non-empty Fusion expression.",
                 )
             )
         if critical and role == "source" and not source_id:
