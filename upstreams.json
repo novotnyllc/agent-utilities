@@ -6,7 +6,7 @@
       "name": "browser-use",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/browser-use",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -14,7 +14,7 @@
       "name": "create-cli",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/create-cli",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -22,7 +22,7 @@
       "name": "frontend-design",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/frontend-design",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "Apache-2.0"
     },
@@ -30,7 +30,7 @@
       "name": "instruments-profiling",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/instruments-profiling",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -38,7 +38,7 @@
       "name": "native-app-performance",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/native-app-performance",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -46,7 +46,7 @@
       "name": "one-password",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/one-password",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -54,7 +54,7 @@
       "name": "skill-cleaner",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/skill-cleaner",
-      "commit": "c46ea65b6323e8a2b6f441f8b6449ae731bc8f81",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
       "track": "refs/heads/main",
       "license": "MIT"
     }
