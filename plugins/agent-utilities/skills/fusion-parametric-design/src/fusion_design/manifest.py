@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Iterable
@@ -718,7 +719,16 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
 
                 if check_kind == "clearance":
                     minimum = raw_check.get("minimum_mm")
-                    if isinstance(minimum, bool) or not isinstance(minimum, (int, float)) or minimum < 0:
+                    try:
+                        finite_minimum = math.isfinite(float(minimum))
+                    except (OverflowError, TypeError, ValueError):
+                        finite_minimum = False
+                    if (
+                        isinstance(minimum, bool)
+                        or not isinstance(minimum, (int, float))
+                        or not finite_minimum
+                        or minimum < 0
+                    ):
                         issues.append(
                             ValidationIssue(
                                 "invalid-clearance-minimum",

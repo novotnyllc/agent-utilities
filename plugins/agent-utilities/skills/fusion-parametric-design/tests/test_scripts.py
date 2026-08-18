@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from io import StringIO
 import json
-import os
 from pathlib import Path
 import sys
-import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch
 
 from fusion_design.manifest import Manifest, load_manifest
+from fusion_design.positive_control import emit_positive_control_script
 from fusion_design.scripts import (
     emit_inventory_script,
     emit_parameter_sync_script,
@@ -41,7 +39,9 @@ def load_generated_script(source: str) -> dict:
         UnknownFeatureHealthState="unknown",
     )
     core.ValueInput = SimpleNamespace(createByString=lambda expression: expression)
-    core.Matrix3D = SimpleNamespace(create=lambda: SimpleNamespace())
+    core.Matrix3D = SimpleNamespace(
+        create=lambda: SimpleNamespace(asArray=lambda: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    )
     modules = {"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion}
     previous = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -80,21 +80,6 @@ class ScriptEmissionTests(unittest.TestCase):
                 self.assert_compiles_when_wrapped(source)
                 self.assertNotIn("from __future__ import", source)
 
-    def test_generated_scripts_use_fusion_compatible_report_id_generation(self) -> None:
-        for emitter in (
-            emit_inventory_script,
-            emit_parameter_sync_script,
-            emit_scaffold_script,
-            emit_verification_script,
-        ):
-            with self.subTest(emitter=emitter.__name__):
-                source = emitter(self.manifest)
-                self.assertNotIn("secrets", source)
-
-                namespace = load_generated_script(source)
-                report_run_id = namespace["_new_report_run_id"]()
-                self.assertRegex(report_run_id, r"\A[0-9a-f]{64}\Z")
-
     def test_checked_in_example_scripts_match_canonical_emitters(self) -> None:
         generated = ROOT / "examples" / "electronics-enclosure" / "generated"
         emitted = {
@@ -110,100 +95,21 @@ class ScriptEmissionTests(unittest.TestCase):
                     (generated / filename).read_text(encoding="utf-8"),
                 )
 
-    def test_report_path_and_run_id_must_be_paired(self) -> None:
-        with self.assertRaisesRegex(ValueError, "supplied together"):
-            emit_inventory_script(self.manifest, "/private/tmp/inventory.json")
-        with self.assertRaisesRegex(ValueError, "supplied together"):
-            emit_inventory_script(self.manifest, report_run_id="test-run")
+    def test_positive_control_cleanup_detects_remaining_entities(self) -> None:
+        namespace = load_generated_script(emit_positive_control_script(self.manifest))
 
-    def test_report_path_is_absolute_and_emitted_atomically(self) -> None:
-        with self.assertRaisesRegex(ValueError, "absolute"):
-            emit_inventory_script(self.manifest, "reports/inventory.json")
+        class Entity:
+            def __init__(self, deletes: bool):
+                self.deletes = deletes
+                self.isValid = True
 
-        with tempfile.TemporaryDirectory() as temporary:
-            report_path = Path(temporary) / "inventory.json"
-            source = emit_inventory_script(self.manifest, report_path, "test-run")
-            self.assert_compiles(source)
-            self.assertIn(f"REPORT_PATH = {str(report_path)!r}", source)
+            def deleteMe(self):
+                if self.deletes:
+                    self.isValid = False
+                return self.deletes
 
-            namespace = load_generated_script(source)
-            output = StringIO()
-            with redirect_stdout(output):
-                namespace["_emit"]({"kind": "test", "ok": True}, "test-run")
-
-            self.assertEqual(
-                {"kind": "test", "ok": True, "report_run_id": "test-run"},
-                json.loads(report_path.read_text()),
-            )
-            self.assertIn("FUSION_DESIGN_REPORT_BEGIN", output.getvalue())
-            self.assertLess(
-                source.index("os.link(temporary_path, REPORT_PATH)"), source.index("print(REPORT_BEGIN)")
-            )
-            self.assertEqual([], list(Path(temporary).glob(".fusion-design-report-*")))
-
-    def test_report_write_failure_is_visible_and_cleans_up(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            report_directory = Path(temporary) / "missing"
-            report_path = report_directory / "inventory.json"
-            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
-            output = StringIO()
-            errors = StringIO()
-            with redirect_stdout(output), redirect_stderr(errors), self.assertRaisesRegex(
-                RuntimeError, "Failed to deliver Fusion JSON report"
-            ):
-                namespace["_emit"]({"kind": "test"}, "test-run")
-            self.assertIn("Failed to deliver Fusion JSON report", errors.getvalue())
-            self.assertEqual("", output.getvalue())
-
-    def test_report_path_never_clobbers_existing_or_symlink_targets(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            report_path = directory / "inventory.json"
-            report_path.write_text("original")
-            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
-                RuntimeError, "already exists"
-            ):
-                namespace["_emit"]({"kind": "test"}, "test-run")
-            self.assertEqual("original", report_path.read_text())
-            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
-
-            report_path.unlink()
-            report_path.symlink_to(directory / "missing-target")
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
-                RuntimeError, "already exists"
-            ):
-                namespace["_emit"]({"kind": "test"}, "test-run")
-            self.assertTrue(report_path.is_symlink())
-            self.assertFalse(os.path.exists(report_path))
-            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
-
-    def test_report_delivery_failure_after_temp_creation_cleans_up(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            report_path = directory / "inventory.json"
-            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
-            with patch.object(namespace["os"], "link", side_effect=OSError("link denied")):
-                with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
-                    RuntimeError, "link denied"
-                ):
-                    namespace["_emit"]({"kind": "test"}, "test-run")
-            self.assertFalse(report_path.exists())
-            self.assertEqual([], list(directory.glob(".fusion-design-report-*")))
-
-    def test_report_delivery_failure_does_not_replace_domain_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            report_path = Path(temporary) / "inventory.json"
-            report_path.write_text("original")
-            namespace = load_generated_script(emit_inventory_script(self.manifest, report_path, "test-run"))
-            wrong_app = SimpleNamespace(activeDocument=SimpleNamespace(name="Different design"))
-            namespace["_active_design"] = lambda: (wrong_app, SimpleNamespace())
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()), self.assertRaisesRegex(
-                RuntimeError, "does not match manifest target"
-            ):
-                namespace["run"](None)
-            self.assertEqual("original", report_path.read_text())
-            self.assertEqual([], list(Path(temporary).glob(".fusion-design-report-*")))
+        self.assertEqual([], namespace["_cleanup_pair"](Entity(True), None))
+        self.assertRegex(namespace["_cleanup_pair"](Entity(False), None)[0], "body")
 
     def test_inventory_script_is_read_only_and_compiles(self) -> None:
         source = emit_inventory_script(self.manifest)
@@ -211,6 +117,7 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assert_compiles_when_wrapped(source)
         self.assertNotIn("from __future__ import", source)
         self.assertIn("FUSION_DESIGN_REPORT_BEGIN", source)
+        self.assertIn('"ok": True', source)
         self.assertIn("root_component.allOccurrences", source)
         self.assertIn("fullPathName", source)
         self.assertIn("duplicate_semantic_paths", source)
@@ -619,7 +526,6 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertEqual("component-scaffold", report["kind"])
         self.assertEqual(all_paths, report["component_paths"])
         self.assertEqual([], report["missing_component_paths"])
-        self.assertTrue(report["report_run_id"])
 
     def test_verification_script_checks_distance_interference_and_timeline_health(self) -> None:
         source = emit_verification_script(self.manifest)

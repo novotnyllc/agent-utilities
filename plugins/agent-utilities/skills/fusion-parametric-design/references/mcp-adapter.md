@@ -90,10 +90,9 @@ compiled/native extensions are intentionally excluded. Do not call
 other non-Fusion processing in the host environment and pass only its result
 into Fusion.
 
-The bundle solves imports, not result transport. On a build where the stdout
-sentinel is missing, use cached packages only as helpers from a top-level
-transaction that implements the verified report-file protocol; do not treat a
-direct bootstrap's empty response as machine-readable success.
+The bundle solves imports, not result transport. If the stdout sentinel is
+missing, stop; do not treat a direct bootstrap's empty response as
+machine-readable success.
 
 ## Read → decide → write → prove loop
 
@@ -115,22 +114,10 @@ FUSION_DESIGN_REPORT_END
 
 The agent should parse and retain that JSON. Do not rely only on prose emitted around it.
 
-Preflight the execution capability with a unique printed sentinel. Some Fusion
-MCP builds acknowledge successful Python execution while returning empty
-stdout. When that exact failure is observed, use the canonical helper flow for
-each transaction: `prepare-report-session <manifest> <kind>`, execute the
-generated `script` through the discovered Fusion Python capability, then run
-`verify-report-session <session.json>` and `cleanup-report-session <session.json>`
-in that order. The helper creates the private directory, random run ID, absent
-report target, metadata, and generated script; verification accepts the report
-only when `report_run_id`, `kind`, and `manifest_sha256` match. Cleanup removes
-only the exact generated files and empty private directory. Treat a missing,
-stale, malformed, mismatched, symlinked, or non-local report file as a failed
-transaction. Do not encode exceptions as successful reports.
-
-The report-file fallback is POSIX-only: its helper fails closed when required
-file primitives or owner/no-follow semantics are unavailable. Normal stdout
-execution and the rest of this skill remain cross-platform.
+Preflight the execution capability with a unique printed sentinel. If the
+exact sentinel is absent, stop and report the transport failure. Do not encode
+exceptions as successful reports or treat an empty success response as proof
+that a transaction ran.
 
 ## Permission policy
 

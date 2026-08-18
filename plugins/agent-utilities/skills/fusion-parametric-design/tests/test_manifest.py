@@ -121,6 +121,13 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIn("invalid-clearance-minimum", codes)
         self.assertIn("expected-print-part-not-in-tree", codes)
 
+    def test_clearance_minimum_must_be_finite(self) -> None:
+        for minimum in (float("nan"), 10**400):
+            with self.subTest(minimum=minimum):
+                data = copy.deepcopy(self.data)
+                data["verification"]["clearance_checks"][0]["minimum_mm"] = minimum
+                self.assertIn("invalid-clearance-minimum", {issue.code for issue in validate_manifest_data(data)})
+
     def test_component_paths_must_have_declared_parents_and_unambiguous_names(self) -> None:
         data = copy.deepcopy(self.data)
         data["component_tree"].extend(

@@ -1,7 +1,4 @@
 import json
-import os
-import sys
-import tempfile
 import traceback
 import adsk.core
 import adsk.fusion
@@ -11,60 +8,11 @@ FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
-REPORT_PATH = None
-REPORT_RUN_ID = None
 
-
-class ReportDeliveryError(RuntimeError):
-    pass
-
-
-def _new_report_run_id():
-    return REPORT_RUN_ID or os.urandom(32).hex()
-
-
-def _emit(report, report_run_id=None):
-    report_run_id = report_run_id or _new_report_run_id()
-    envelope = dict(report)
-    envelope["report_run_id"] = report_run_id
-    payload = json.dumps(envelope, sort_keys=True, separators=(",", ":"), default=str)
-
-    temporary_path = None
-    temporary_fd = None
-    try:
-        if REPORT_PATH:
-            if os.path.lexists(REPORT_PATH):
-                raise FileExistsError("report path already exists")
-            temporary_fd, temporary_path = tempfile.mkstemp(
-                prefix=".fusion-design-report-", dir=os.path.dirname(REPORT_PATH)
-            )
-            with os.fdopen(temporary_fd, "w", encoding="utf-8") as report_file:
-                temporary_fd = None
-                report_file.write(payload)
-                report_file.write("\n")
-                report_file.flush()
-                os.fsync(report_file.fileno())
-            os.link(temporary_path, REPORT_PATH)
-            os.unlink(temporary_path)
-            temporary_path = None
-        print(REPORT_BEGIN)
-        print(payload)
-        print(REPORT_END)
-    except Exception as error:
-        if temporary_fd is not None:
-            try:
-                os.close(temporary_fd)
-            except OSError:
-                pass
-        if temporary_path:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-        destination = REPORT_PATH or "stdout"
-        message = "Failed to deliver Fusion JSON report to " + destination + ": " + str(error)
-        print(message, file=sys.stderr)
-        raise ReportDeliveryError(message) from error
+def _emit(report):
+    print(REPORT_BEGIN)
+    print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
+    print(REPORT_END)
 
 
 def _active_design():
@@ -262,7 +210,6 @@ def _attribute_value(entity, name):
 
 
 def run(context):
-    report_run_id = _new_report_run_id()
     report_attempted = False
     try:
         app, design = _active_design()
@@ -365,7 +312,7 @@ def run(context):
             "ok": bool(compute_invoked) and not verification_failures and len(timeline["unhealthy"]) == 0,
         }
         report_attempted = True
-        _emit(report, report_run_id)
+        _emit(report)
         if not compute_invoked:
             raise RuntimeError("Fusion Compute All did not complete; see the emitted report.")
         if timeline["unhealthy"]:
@@ -375,8 +322,5 @@ def run(context):
     except Exception as error:
         if not report_attempted:
             report_attempted = True
-            try:
-                _emit({"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()}, report_run_id)
-            except ReportDeliveryError:
-                pass
+            _emit({"kind": "parameter-sync", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
         raise

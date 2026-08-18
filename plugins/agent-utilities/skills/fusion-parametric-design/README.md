@@ -68,9 +68,6 @@ scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
 scripts/fusion-design diff-reports <before.json> <after.json>
-scripts/fusion-design prepare-report-session <manifest> <kind>
-scripts/fusion-design verify-report-session <session.json>
-scripts/fusion-design cleanup-report-session <session.json>
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module>
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
@@ -85,38 +82,9 @@ POSIX owner/permission semantics and fails closed on native Windows. Bundles
 accept regular `.py` files only; install native or third-party dependencies in
 the host environment and pass only their results into Fusion.
 
-When an MCP execution result drops stdout, use `prepare-report-session` for the
-report-file fallback. It creates a new private directory, cryptographically
-random run ID, absent report target, and one generated script bound to that
-session. The CLI and Fusion process must share that filesystem; a localhost MCP
-connection does not copy files between hosts.
-
-The report-file fallback requires POSIX file semantics and fails closed when
-they are unavailable. Direct stdout execution, the host CLI, and the rest of
-this skill remain cross-platform.
-
-```bash
-session_json="$(./scripts/fusion-design prepare-report-session \
-  examples/electronics-enclosure/fusion-project.json inventory)"
-session_file="$(printf '%s\n' "$session_json" | python3 -c \
-  'import json,sys; print(json.load(sys.stdin)["session_file"])')"
-script_file="$(printf '%s\n' "$session_json" | python3 -c \
-  'import json,sys; print(json.load(sys.stdin)["script"])')"
-# Send the contents of "$script_file" through the dynamically discovered
-# Fusion Python-execution capability, then verify and clean up the session.
-./scripts/fusion-design verify-report-session "$session_file"
-./scripts/fusion-design cleanup-report-session "$session_file"
-```
-
-The execution step must happen before verification. Verify accepts only one
-JSON object whose `report_run_id`, `kind`, and `manifest_sha256` match the
-prepared session. Verification never deletes artifacts. Cleanup removes only
-the exact session files and empty private directory; it rejects symlinks,
-hard-link aliases, path aliases, escapes, and unexpected entries. A failed or
-missing report is a failed transaction, not a silent stdout-only fallback.
-
-Use a distinct prepared session for every later transaction. Do not reuse a
-report target or delete a broader parent directory.
+Generated transactions print one delimited JSON report to stdout. Preflight
+the Fusion execution capability with a unique sentinel and stop if the exact
+sentinel is absent; an empty success response is not execution proof.
 
 ## Connect Fusion MCP
 

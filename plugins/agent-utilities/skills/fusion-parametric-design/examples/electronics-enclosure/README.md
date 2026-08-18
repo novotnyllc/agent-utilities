@@ -25,4 +25,4 @@ Generate the scripts:
 
 Run them through the Python-execution capability discovered from the live Fusion MCP. The scaffold intentionally creates empty components; native sketches/features must then be authored in Fusion according to the skill.
 
-The `generated/` directory contains a reproducible emitted copy of all four transactions. They are syntax-checked offline but still require the live Fusion acceptance procedure. Copy `../../templates/DESIGN-STATE.md` into the working project when starting a real design.
+The `generated/` directory contains a reproducible emitted copy of all four transactions plus `positive_control.py`, a deliberately simple live-only box builder for this fixture. After parameter sync and scaffolding in a new disposable document, run verification once to prove the expected empty-model failure, run `positive_control.py` twice to prove creation and idempotence, then run verification again to prove the complete positive path. These scripts are syntax- and contract-checked offline but still require the live Fusion acceptance procedure. Copy `../../templates/DESIGN-STATE.md` into the working project when starting a real design.
