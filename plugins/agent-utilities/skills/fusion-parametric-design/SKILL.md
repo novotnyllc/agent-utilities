@@ -349,9 +349,6 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json>
-"$SKILL_DIR/scripts/fusion-design" prepare-report-session <manifest> <kind>
-"$SKILL_DIR/scripts/fusion-design" verify-report-session <session.json>
-"$SKILL_DIR/scripts/fusion-design" cleanup-report-session <session.json>
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
@@ -366,28 +363,12 @@ bootstrap verify the cached bundle before import. Do not bypass it, edit cache c
 `importlib.invalidate_caches()`, or place data/native modules in the bundle.
 See `references/mcp-adapter.md` for the exact contract.
 
-When a host-side JSON file is needed, `prepare-report-session` creates the
-private directory, cryptographically random run ID, previously nonexistent
-report target, metadata, and generated script as one bound session. The CLI and
-Fusion process must share the filesystem (the localhost MCP transport does not
-copy files between hosts). The generated transaction refuses an existing or
-symlinked report target and atomically publishes exactly one JSON object.
-
 Pass emitted Fusion Python through the live MCP's discovered script-execution capability. Do not assume an execution tool name or argument schema. Capture the text between `FUSION_DESIGN_REPORT_BEGIN` and `FUSION_DESIGN_REPORT_END` as the machine-readable report.
 
 Before the first real transaction, execute a tiny script that prints a unique
-sentinel. If the MCP reports success but returns no stdout, prepare a new
-report session for each transaction. Run the generated script, pass the exact
-session metadata path to `verify-report-session`, and only then call
-`cleanup-report-session`. Verification accepts the report only when
-`report_run_id`, `kind`, and `manifest_sha256` match; it never deletes
-artifacts. Cleanup removes only the exact generated files and empty private
-directory, rejecting symlinks, hard-link aliases, path aliases, escapes, and
-unexpected entries. Do not use this fallback unless Fusion and the MCP client
-are confirmed to share the same local filesystem. The report-file fallback is
-POSIX-only and fails closed when its required file semantics are unavailable;
-normal stdout execution, the host CLI, and the rest of this skill remain
-cross-platform. The complete manual, UI-responsiveness acceptance sequence is
-in `docs/live-fusion-acceptance.md`.
+sentinel. If execution succeeds but the exact sentinel is absent, stop and
+report the transport failure; do not treat an empty success response as proof
+that a transaction ran. The complete manual, UI-responsiveness acceptance
+sequence is in `docs/live-fusion-acceptance.md`.
 
 The scripts intentionally refuse destructive design-type changes and contain no whole-timeline rebuild operation.

@@ -30,12 +30,8 @@ Record:
    remembered or hard-coded Fusion tool name.
 3. Execute a mandatory read-only Python script that prints a unique sentinel
    such as `FUSION_STDOUT_PROBE_<random>`. Record the complete raw MCP response.
-   If the exact sentinel is returned, select the stdout-working branch. If
-   execution succeeds but stdout is empty, record that as the known stdout
-   limitation and select the empty-stdout branch below. If the probe cannot be
-   run or its result is otherwise unusable, do not assume stdout works: use the
-   report-file fallback only where its platform and shared-filesystem checks
-   pass, or stop the acceptance with explicit failure evidence.
+   If the exact sentinel is absent, stop the acceptance with the raw response;
+   an empty success response is not proof that a transaction ran.
 4. Create a new parametric Design document whose document name exactly matches
    `project.fusion_document` in the manifest. Do not run this smoke against an
    existing user document. Do not save or version the document unless the user
@@ -44,18 +40,9 @@ Record:
    unavailable capability.
 
 **Pass:** the client can read the active design, execute a read-only Python
-script, and capture output/errors. Either the sentinel is returned on stdout,
-or every report-producing transaction produces fresh valid JSON at its
-explicitly selected report path; an empty successful MCP response alone does
-not pass.
+script, capture output/errors, and return the exact sentinel on stdout.
 
-For the report-file fallback, use the report-session helper below. The helper
-is POSIX-only and fails closed when its required file semantics are unavailable.
-Accept JSON only when `report_run_id`, `kind`, and `manifest_sha256` match the prepared
-session. Never reuse a report directory, run ID, or target filename across
-acceptance transactions.
-
-## 2. Validate and prepare one report session
+## 2. Validate and emit transactions
 
 From the package root:
 
@@ -68,55 +55,14 @@ From the package root:
 "$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
 ```
 
-The stdout-working branch runs each emitted script directly through the
-discovered Fusion Python tool and parses its delimited response. The
-empty-stdout branch runs the complete report-session sequence below
-independently for `inventory`, `parameter-sync`, `scaffold`, and
-`verification`. Every transaction gets a fresh session; no stdout-only step is
-required in this branch.
+Run each emitted script directly through the discovered Fusion Python tool and
+retain its complete raw response. Accept exactly one JSON object between the
+report delimiters and require its `kind`, `manifest_sha256`, and success state
+to match the transaction.
 
-For each transaction, call `prepare-report-session` with that transaction's
-kind, send the returned script to Fusion, then verify and clean up the exact
-session in that order. It creates a private 0700 directory, 0600
-metadata/script files, a strict random run ID, and an absent report target.
-Keep the returned metadata path; do not reconstruct any paths or IDs by hand:
-
-```bash
-set -euo pipefail
-manifest="examples/electronics-enclosure/fusion-project.json"
-session_json="$("$SKILL_DIR/scripts/fusion-design" \
-  prepare-report-session "$manifest" inventory)"
-session_file="$(printf '%s\n' "$session_json" | python3 -c \
-  'import json,sys; print(json.load(sys.stdin)["session_file"])')"
-script_file="$(printf '%s\n' "$session_json" | python3 -c \
-  'import json,sys; print(json.load(sys.stdin)["script"])')"
-printf '%s\n' "$session_json"
-```
-
-Send the contents of `"$script_file"` to the dynamically discovered Fusion
-Python tool, and retain its complete raw response. Then verify and clean up
-through the helper, in that order:
-
-```bash
-"$SKILL_DIR/scripts/fusion-design" verify-report-session "$session_file" \
-  > inventory-report.json
-"$SKILL_DIR/scripts/fusion-design" cleanup-report-session "$session_file"
-```
-
-Repeat that complete sequence three more times with fresh values for
-`parameter-sync`, `scaffold`, and `verification` (and distinct report output
-files). The CLI's `scaffold` session is verified under the canonical report
-kind `component-scaffold`. Never reuse a session file, generated script, run
-ID, report path, or report directory between transactions.
-
-`verify-report-session` accepts exactly one JSON object only when its
-`report_run_id`, `kind`, and `manifest_sha256` match the prepared session. It
-never deletes artifacts. Cleanup removes only the exact generated files and
-empty private directory; it rejects symlinks, hard-link aliases, path aliases,
-escapes, and unexpected entries. If verification fails, retain the session and
-raw MCP response for evidence and do not force cleanup.
-
-**Pass:** validation reports `ok: true`; the plan has nine phases and is not blocked; all four scripts are emitted.
+**Pass:** validation reports `ok: true`; the plan has nine phases and is not
+blocked; all four general transactions are emitted and the checked-in
+example-specific positive-control script compiles.
 
 ### Pure-Python module cache smoke
 
@@ -128,9 +74,7 @@ set its mode to 0700, and pass it with `--cache-root`. Run
 `emit-module-bootstrap <bundle.json>` and execute that bootstrap through the
 discovered Fusion Python capability. Execute the same verified bootstrap a
 second time, then change `helper.py`, prepare again, and execute the new
-bundle. This direct sentinel smoke applies only to the stdout-working branch.
-On an empty-stdout build, record the transport limitation and exercise cached
-code only as a helper from a report-capable top-level transaction.
+bundle.
 
 **Pass:** both executions of the unchanged bundle return the first sentinel;
 the changed source produces a different digest/package and returns the new
@@ -141,23 +85,17 @@ with one `.py` file in this disposable cache must make
 result, remove only that exact disposable cache root; never tamper with or
 delete the persistent default cache.
 
-For the stdout-working branch, the steps below run the emitted scripts directly
-and retain their MCP responses. For the empty-stdout branch, each occurrence
-of a report-producing run below means: prepare a fresh session for that kind,
-send its generated script to Fusion, verify the exact session, retain the
-report, and then clean up that session. Do not substitute an empty MCP
-response or a stdout-only check.
+The steps below run emitted scripts directly and retain their MCP responses.
 
 ## 3. Read-only inventory
 
 Run `inventory.py` through the discovered Fusion Python-execution capability.
 
-**Pass:** in the stdout-working branch, exactly one JSON object appears between
-the report delimiters; in the empty-stdout branch, `verify-report-session`
-returns exactly one identity-matching JSON object. It reports a parametric
-design, document name, parameters, component paths, geometry/bounds, duplicate
-semantic paths, and timeline health. Running inventory must not create a
-parameter, component, body, feature, or timeline item.
+**Pass:** exactly one JSON object appears between the report delimiters. It
+reports a parametric design, document name, parameters, component paths,
+geometry/bounds, duplicate semantic paths, and timeline health. Running
+inventory must not create a parameter, component, body, feature, or timeline
+item.
 
 ## 4. Parameter synchronization and idempotence
 
@@ -190,7 +128,7 @@ Run `verify.py` immediately after scaffolding.
 
 ## 7. Positive control geometry
 
-Create simple native, positive-volume test solids in these components, using root-coordinate placements that make the example contract pass:
+Run `examples/electronics-enclosure/generated/positive_control.py` through the discovered Fusion Python capability. It creates simple native, positive-volume test solids in these components, using root-coordinate placements that make the example contract pass:
 
 - `PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE`: a 35 × 13 × 5 mm box;
 - `PACK__EKYLIN__EXACT_OR_CONSERVATIVE`: a 62 × 31 × 27 mm box, far from the PD box;
@@ -198,15 +136,16 @@ Create simple native, positive-volume test solids in these components, using roo
 - `KEEP__EKYLIN_WIRE_BENDS`: a solid keep-out separated from `PROD__LID`;
 - `PROD__BASE`, `PROD__LID`, and `VAL__PD_FIT_COUPON`: one solid each.
 
-Place the lid so its nearest point is at least 1.0 mm from the PD packing solid. Keep both forbidden keep-outs disjoint from their paired product component.
+The script places the lid so its nearest point is at least 1.0 mm from the PD packing solid and keeps both forbidden keep-outs disjoint from their paired product component. These boxes are acceptance geometry, not a product design.
 
-Run Compute All, inventory, and verification.
+Run `positive_control.py` a second time, then run inventory and verification.
 
-**Pass:** verification reports positive-volume solids, no relevant path ambiguity, no unhealthy timeline item, clearance at or above 1.0 mm, zero forbidden interference, and overall `ok: true`.
+**Pass:** the first positive-control report lists all seven paths under `created`; the second lists them under `reused` with no duplicate bodies; verification reports positive-volume solids, no relevant path ambiguity, no unhealthy timeline item, clearance at or above 1.0 mm, zero forbidden interference, and overall `ok: true`.
 
 ## 8. Negative controls
 
-Run each fault independently and restore the saved passing state between faults.
+Run each fault independently and undo it or recreate the disposable passing
+document between faults; do not save the acceptance document.
 
 ### Clearance fault
 
@@ -253,6 +192,15 @@ Retain passing inventory as `before.json`; change one user parameter or product 
 Use the discovered export capability or Fusion UI to export the selected print bodies. Hash the outputs and complete `DESIGN-STATE.md`.
 
 **Pass:** the handoff records the Fusion version, manifest hash, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
+
+## 11. Restore the Fusion session
+
+Close the disposable acceptance document without saving, reactivate the
+document that was active before the smoke test, and read the open-document
+inventory again.
+
+**Pass:** the disposable document is closed, the prior document is active, and
+its saved/modified state is unchanged from the initial checkpoint.
 
 ## Acceptance boundary
 
