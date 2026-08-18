@@ -20,6 +20,7 @@ Set `SKILL_DIR` to the absolute directory containing this loaded `SKILL.md`; the
 - Live console OpenAPI spec: `/usr/lib/unifi/webapps/ROOT/api-docs/integration.json` on the user-configured `UNIFI_SSH_TARGET`.
 - Saved snapshot: `references/current-openapi.json` from the operator's UDM Pro, currently Network `10.5.67`.
 - Notes and examples: `references/api-usage.md`.
+- Multicast, mDNS, and IGMP debugging: `references/multicast-troubleshooting.md`.
 
 Before relying on a schema, prefer refreshing or checking the live console spec:
 

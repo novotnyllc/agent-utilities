@@ -84,6 +84,7 @@ Important endpoint set:
 ## Guardrails
 
 - Prefer managed API changes over UI automation, direct database writes, or shell hooks.
+- When dumping controller collections, strip secret-bearing fields by name as well as by the `x_` prefix: `server_certificate_key` (a RADIUS private key) and `doh` `custom_servers[].sdns_stamp` (embeds the operator's personal resolver ID) both evade an `x_`-prefix filter. Treat controller exports and `.unf` backups as secret material.
 - Do not use global CyberSecure region blocking when the user asks for a host-specific block.
 - Do not create broad network blocks when the user asks for a specific host, service, or zone.
 - For allow-then-block patterns, verify the allow policy has a lower index than the block policy.
