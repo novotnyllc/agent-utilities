@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.6.10",
-  "description": "The toolbox: self-contained craft skills for any single agent session — browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, and Fusion parametric CAD.",
+  "version": "0.6.11",
+  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, and Fusion parametric CAD.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
