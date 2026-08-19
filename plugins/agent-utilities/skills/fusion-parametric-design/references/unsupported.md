@@ -59,7 +59,45 @@ Fusion can expose B-Rep geometry, face normals, bounds, and measurements, but ro
 
 **Status:** External.
 
-Fusion exports manufacturing geometry but is not a replacement for the printer's slicer. Use PrusaSlicer, OrcaSlicer, Bambu Studio, CuraEngine, or another supported command-line/profile workflow where available. When no reliable CLI/profile is present, report that the estimate was not produced.
+Fusion exports manufacturing geometry but is not a replacement for the printer's slicer. Use PrusaSlicer, OrcaSlicer, Bambu Studio, CuraEngine, or another command-line/profile workflow where available. PrusaSlicer's CLI is usable on this host and this package drives it directly — see the next section — so these numbers come from a real headless slice bound to the project hash. Only PrusaSlicer has been exercised here; nothing has been tested about the others either way, and no adapter is bundled for them. Where no slicer runs, report that the estimate was not produced rather than inventing one.
+
+## Headless slicing from the PrusaSlicer CLI
+
+**Status:** Supported, opt-in — *provided the whole profile set is passed*.
+
+The earlier conclusion recorded here ("PrusaSlicer 2.9.6 segfaults during headless slicing, so the binary is never executed") was wrong about the cause and therefore wrong about the capability. The segfault is triggered by an **incomplete profile set**, not by headless slicing:
+
+| invocation | result |
+| --- | --- |
+| `--printer-profile` alone | exit 139 (SIGSEGV), no output, no G-code |
+| `--printer-profile` + `--print-profile` + `--material-profile` + `--datadir` | exit 0, valid G-code |
+
+`PrusaSlicer --help` states the requirement outright: *"To load configuration from profiles, you need to set whole banch of presets"* (sic). Verified on this host against both the user's real presets and built-in defaults, PrusaSlicer 2.9.6.
+
+So `fusion-design prusaslicer-project --slice` runs the slicer and reports what the G-code says:
+
+```json
+{"slice": {"supported": true, "attempted": true, "ok": true,
+           "exit_code": 0, "slicer_version": "PrusaSlicer 2.9.6",
+           "project_sha256": "...", "gcode_sha256": "...", "gcode_byte_size": 228122,
+           "presets": {"printer": "...", "print": "...", "filament": "..."},
+           "statistics": {"estimated_printing_time_normal": "17m 59s",
+                          "filament_used_g_total": 4.69, "filament_used_mm_total": 1536.63},
+           "absent_statistics": [], "warnings": []}}
+```
+
+How the boundary is held:
+
+- **The incomplete profile set is refused, not attempted.** `require_complete_profile_set` raises before anything is executed when printer, print, or filament is missing. That refusal is the fix for the crash, and it is tested by name.
+- **Execution is confined to one module.** `prusaslicer_slice.py` is the only file in the package permitted to touch a process-execution API; project construction (`prusaslicer_project.py`, `cli.py`, everything `build_project` calls) still contains none, and a structural AST test enforces exactly that split.
+- **`subprocess.run` with an argument list.** No `shell=True`, no string interpolation into a shell, and a timeout so a hung slicer cannot block forever.
+- **Statistics come only from the produced G-code.** Anything the G-code does not state is listed in `absent_statistics`. Nothing is inferred, estimated, or interpolated from the project file, the mesh, or a previous print.
+- **`--binary-gcode=0` is forced.** The Original Prusa XL presets default to binary G-code, whose statistics are not readable as `; ` comments.
+- **Failure is structured, never a fabricated number.** A non-zero exit (139/SIGSEGV included), a timeout, or a missing output file yields `ok: false` with the exit status and stderr tail, and the CLI exits 2.
+
+Without `--slice`, nothing is executed and the block reads `{"supported": true, "attempted": false, ...}`.
+
+Where PrusaSlicer is not installed, `slice_project` returns an explicit unavailable result; obtain the numbers from a manual GUI slice and record them against the project's `sha256` instead.
 
 ## FDM-specific structural load rating
 

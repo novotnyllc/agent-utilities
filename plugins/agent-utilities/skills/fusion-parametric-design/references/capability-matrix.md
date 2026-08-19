@@ -20,7 +20,7 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | `nurb update` | Update the package from its versioned source, rerun tests, then reinstall the skill | Manual/version-control workflow; no automatic self-updater |
 | `nurb card` | `DESIGN-STATE.md`, manifest source records, Fusion attributes, and generated inventory/verification reports | Supported as a workflow; no single auto-regenerated card command |
 | `nurb diff` | Deterministic before/after semantic report diff for parameters, component paths, bodies, and unhealthy timeline items | Supported; not a complete B-Rep or feature-history diff |
-| `nurb slice` | Export exact print bodies to 3MF/STL and invoke a configured external slicer/profile | External dependency |
+| `nurb slice` | Export exact print bodies to 3MF/STL, then `fusion-design prusaslicer-project` builds a PrusaSlicer project 3MF (objects, orientation, plate grouping, presets by identifier, justified overrides) from the verified index | Supported, including a real headless slice with `--slice`, which reports the produced G-code's print time and filament use bound to the project and G-code hashes. The full printer/print/filament preset set is required — a partial set segfaults PrusaSlicer (exit 139), so the adapter refuses to invoke it that way |
 | `nurb stress` | Fusion simulation where appropriate, conservative FDM assumptions, coupons, and proof testing | Not equivalent in core tooling |
 | `nurb verify` | Run inventory and verification transactions, preserve machine-readable reports, collect required screenshots/sections, and complete the handoff ledger | Partial; print-specific and physical gates remain external/manual |
 | `nurb render` | Capture the live Fusion viewport through MCP screenshot capability; use section analysis and component visibility for diagnostic views | Partial and capability-dependent; no bundled headless renderer |
@@ -40,6 +40,8 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | Variants | Fusion Configurations when available, or named parameter sets captured in the manifest and applied one at a time | Partial; no batch variant runner in the host CLI |
 | `printer.toml` and global printer profile | Slicer-native machine/material profile plus project handoff metadata | External; do not duplicate a slicer's authoritative profile incompletely |
 | STEP/3MF output | Fusion B-Rep/mesh export with exact print-body selection and recorded hashes | Supported when the connected export capability exists |
+| PrusaSlicer project handoff | `fusion-design prusaslicer-project` writes a deterministic project 3MF from the verified export index plus declared intent, binding it to the index and per-artifact hashes | Supported; presets are named, never cloned, and project construction launches no process at all |
+| PrusaSlicer headless slicing (`--export-gcode`) | `fusion-design prusaslicer-project --slice` runs the binary and reports the G-code's own statistics with the project sha256, G-code sha256/size, preset identifiers, slicer version, and exit code | Supported, opt-in. Requires the whole preset set: `--printer-profile` alone exits 139 (SIGSEGV), all three plus `--datadir` exit 0, so an incomplete set is refused before execution. Failures are structured; statistics absent from the G-code are reported absent, never estimated |
 
 ## Parity boundary
 
