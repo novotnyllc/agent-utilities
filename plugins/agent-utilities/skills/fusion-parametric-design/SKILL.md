@@ -70,7 +70,8 @@ A project should have `fusion-project.json` and a copy of `templates/DESIGN-STAT
 - editable reference models, packing models, and keep-outs;
 - required component paths;
 - clearances and forbidden interferences;
-- expected printable parts and fit coupons.
+- expected printable parts and fit coupons;
+- slicer-neutral manufacturing intent per printable part (`printable_parts`): stable id, quantity, `print_as` separate/assembled, build orientation (contact face + rationale + allowed alternatives), support policy (`none`, `build-plate-only`, `everywhere`, or explicit enforcer/blocker regions), strength intent (minimum perimeters + infill target/range), protected features supports must not scar, and the material assumption with its provisional/coupon-verified status. When present, its paths must exactly match `verification.expected_print_parts`, and the export handoff index carries the intent per artifact for downstream slicer adapters. This is intent, never a printer/filament/process profile — those stay in the slicer.
 
 Run the host tooling before modeling:
 
