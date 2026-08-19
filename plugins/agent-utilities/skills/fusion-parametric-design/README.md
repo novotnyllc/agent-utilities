@@ -73,6 +73,10 @@ scripts/fusion-design emit-mesh-extract <manifest> --mesh-source-id <id> --class
 scripts/fusion-design emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 scripts/fusion-design emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
 scripts/fusion-design plan-reconstruction <manifest> --fit-record <fit.json> --program-spec <program-spec.json> [-o program.json]
+scripts/fusion-design emit-mesh-rebuild <manifest> --mesh-source-id <id> --classification <classification.json> --program <program.json> --rebuild-spec <rebuild.json> [-o file.py]
+scripts/fusion-design replan-without <program.json> --refusal <refusal-report.json> [-o program-2.json]
+scripts/fusion-design emit-mesh-editability <manifest> --rebuild-record <rebuild-report.json> --editability-spec <editability.json> [-o file.py]
+scripts/fusion-design check-editability --rebuild-record <rebuild-report.json> --editability-report <report.json> --editability-nonce <nonce>
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
@@ -85,8 +89,17 @@ scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 The mesh commands implement the reconstruction gate in
 `references/mesh-reconstruction.md`: capture is read-only and re-verifies every
 declared source hash before emitting, and `emit-mesh-extract`,
-`emit-mesh-convert` and `emit-mesh-deviation` all refuse unless a recorded
-classification chose a path they implement, for that exact mesh source.
+`emit-mesh-convert`, `emit-mesh-deviation` and `emit-mesh-rebuild` all refuse
+unless a recorded classification chose a path they implement, for that exact
+mesh source.
+
+`emit-mesh-rebuild` sections the mesh dump the program was fitted from to derive
+its sketch profiles, and reads that dump only after its bytes hash to the
+program's recorded `dump_sha256`. `emit-mesh-editability` then proves the result
+is editable rather than asserting it: each parameter is perturbed, its declared
+observable (`volume`, `centroid` or `bbox`) must move, and the model must return
+within the declared epsilon on restore. `check-editability` is the gate — it
+cannot pass a report that asserts more than the run performed.
 
 `emit-capability-probe` is the cheapest thing to run against a live Fusion: it
 creates nothing and starts no process. It records the embedded interpreter's

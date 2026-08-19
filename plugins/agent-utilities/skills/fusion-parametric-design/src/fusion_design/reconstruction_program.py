@@ -1391,6 +1391,10 @@ _PROGRAM_FIELDS = {
     "relationships",
     "covered_area_fraction",
     "profile_note",
+    # Present only on a program produced by `replan-without` (U4/D8): it records
+    # which program this one was derived from and which refusal caused the drop,
+    # so a second emission run is traceable to the first one's failure.
+    "replanned_from",
     "program_sha256",
 }
 

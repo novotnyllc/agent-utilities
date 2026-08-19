@@ -222,3 +222,48 @@ After two or more parts reveal genuinely shared logic, refactor into shared user
 **Status:** Unsupported by design.
 
 The MCP server executes explicit requests; the agent/skill owns the plan, checkpoints, decisions, and loop. Keep state in the manifest, Fusion document, reports, and `DESIGN-STATE.md`.
+
+## Oblique sketch planes in a parametric reconstruction
+
+**Status:** Unsupported in v1; bounded by the Fusion API.
+
+`ConstructionPlaneInput.setByPlane` is direct-edit-only, so in a parametric
+design every sketch plane must be an origin plane or an offset from one. A
+reconstruction whose cap plane is oblique to every datum axis is declared
+`plane-unmappable` host-side, before any transaction exists, and its regions
+become unreconstructed with that gate named.
+
+The escape hatch is known and deliberately not attempted: a scaffold sketch
+carrying three points, with a construction plane through them. It is future
+work rather than an improvisation, because a scaffold sketch is itself geometry
+that would have to be planned, constrained and verified.
+
+## Hole and fillet emission from a reconstruction program
+
+**Status:** Not yet emitted.
+
+`hole` and `fillet` are in the program's archetype vocabulary and the planner
+assigns neither: hole classification needs triangle winding to tell a bore from
+a boss, and that evidence is not in the fit record. `emit-mesh-rebuild`
+therefore builds `sketch-extrude` and `revolve`, and refuses any other kind by
+name (`archetype-kind-unsupported`) rather than half-building it.
+
+## Adopted 3-D relationships as sketch constraints
+
+**Status:** Carried as evidence, not enforced.
+
+The reconstruction program names its adopted relationships by region hash. A
+mesh section returns points, not regions, and the emitter receives the program
+and the dump but never the fit record — so nothing in it can say which sketch
+entity came from which region. Adopted constraints are carried into the report
+with `localized: false` and are never claimed to have been enforced. The sketch
+constraints that *are* applied were measured independently from the 2-D section,
+each recording the deviation it snapped from.
+
+## Joint-parameter interaction in the editability proof
+
+**Status:** Not exercised.
+
+The perturbation loop changes one parameter at a time and reports
+`interactions_exercised: false`. Pairwise perturbation is the same loop run
+n-squared times; it is deferred for run time, not for difficulty.

@@ -21,7 +21,12 @@ from .mesh_datum import ReconstructionRefused, parse_fit_record
 from .reconstruction_program import build_reconstruction_program
 from .mesh_deviation import emit_mesh_deviation_script
 from .mesh_dump import read_mesh_dump
+from .mesh_editability import (
+    emit_mesh_editability_script,
+    validate_editability_report,
+)
 from .mesh_extract import emit_mesh_extract_script
+from .mesh_rebuild import emit_mesh_rebuild_script, load_program, replan_without
 from .mesh_segmentation import fit_regions, load_spec
 from .mesh_probe import emit_capability_probe_script
 from .mesh_source import (
@@ -239,6 +244,102 @@ def _cmd_plan_reconstruction(args: argparse.Namespace) -> int:
         print(json.dumps(refused.to_dict(), indent=2, sort_keys=True))
         return 2
     _write_output(json.dumps(program, indent=2, sort_keys=True), args.output)
+    return 0
+
+
+def _cmd_emit_mesh_rebuild(args: argparse.Namespace) -> int:
+    named_paths = [
+        ("manifest", args.manifest),
+        ("classification", args.classification),
+        ("program", args.program),
+        ("rebuild-spec", args.rebuild_spec),
+    ]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    verify_manifest_mesh_sources(manifest, args.manifest)
+    classification = json.loads(Path(args.classification).read_text(encoding="utf-8"))
+    program = load_program(args.program)
+    spec = json.loads(Path(args.rebuild_spec).read_text(encoding="utf-8"))
+    source_record = mesh_source_record(manifest, args.mesh_source_id)
+    # Minted here, never derived from the program: only a report produced by
+    # running this exact script can echo it back.
+    nonce = secrets.token_hex(16)
+    try:
+        source = emit_mesh_rebuild_script(
+            manifest, classification, source_record, program, spec, nonce
+        )
+    except ReconstructionRefused as refused:
+        print(json.dumps(refused.to_dict(), indent=2, sort_keys=True))
+        return 2
+    _write_output(source, args.output)
+    print(
+        f"rebuild nonce: {nonce}\n"
+        "The rebuild report echoes it back; emit-mesh-editability binds to that report. "
+        "Re-emitting mints a new nonce and invalidates this one.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_emit_mesh_editability(args: argparse.Namespace) -> int:
+    named_paths = [
+        ("manifest", args.manifest),
+        ("rebuild-record", args.rebuild_record),
+        ("editability-spec", args.editability_spec),
+    ]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    record = json.loads(Path(args.rebuild_record).read_text(encoding="utf-8"))
+    spec = json.loads(Path(args.editability_spec).read_text(encoding="utf-8"))
+    nonce = secrets.token_hex(16)
+    try:
+        source = emit_mesh_editability_script(manifest, record, spec, nonce)
+    except ManifestValidationError as invalid:
+        print(
+            json.dumps(
+                {"ok": False, "issues": [asdict(issue) for issue in invalid.issues]},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    _write_output(source, args.output)
+    print(
+        f"editability nonce: {nonce}\n"
+        "Pass it to check-editability once this script has run in Fusion and its report is saved.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_check_editability(args: argparse.Namespace) -> int:
+    _validate_named_paths(
+        [("rebuild-record", args.rebuild_record), ("editability-report", args.editability_report)]
+    )
+    record = json.loads(Path(args.rebuild_record).read_text(encoding="utf-8"))
+    report = json.loads(Path(args.editability_report).read_text(encoding="utf-8"))
+    verdict = validate_editability_report(
+        report, nonce=args.editability_nonce, rebuild_record=record
+    )
+    print(json.dumps(verdict, indent=2, sort_keys=True))
+    return 0 if verdict["ok"] else 2
+
+
+def _cmd_replan_without(args: argparse.Namespace) -> int:
+    named_paths = [("program", args.program), ("refusal", args.refusal)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+    program = load_program(args.program)
+    refusal_report = json.loads(Path(args.refusal).read_text(encoding="utf-8"))
+    replanned = replan_without(program, refusal_report)
+    _write_output(json.dumps(replanned, indent=2, sort_keys=True), args.output)
     return 0
 
 
@@ -628,6 +729,96 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_reconstruction.add_argument("-o", "--output")
     plan_reconstruction.set_defaults(handler=_cmd_plan_reconstruction)
+
+    mesh_rebuild = subparsers.add_parser(
+        "emit-mesh-rebuild",
+        help=(
+            "Emit the parametric rebuild transaction from a reconstruction program and its bound "
+            "mesh dump. Requires a parametric-rebuild classification for this exact mesh source."
+        ),
+    )
+    mesh_rebuild.add_argument("manifest")
+    mesh_rebuild.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being rebuilt; the classification must agree with it.",
+    )
+    mesh_rebuild.add_argument(
+        "--classification", required=True, help="Path to the recorded classification JSON."
+    )
+    mesh_rebuild.add_argument(
+        "--program",
+        required=True,
+        help="Path to the reconstruction program JSON produced by plan-reconstruction.",
+    )
+    mesh_rebuild.add_argument(
+        "--rebuild-spec",
+        required=True,
+        help=(
+            "Path to the rebuild spec JSON: the component name, the path to the mesh dump the "
+            "program was fitted from, and the declared emission thresholds with their rationales."
+        ),
+    )
+    mesh_rebuild.add_argument("-o", "--output")
+    mesh_rebuild.set_defaults(handler=_cmd_emit_mesh_rebuild)
+
+    mesh_editability = subparsers.add_parser(
+        "emit-mesh-editability",
+        help=(
+            "Emit the editability proof: perturb each rebuilt parameter, assert its declared "
+            "observable moved, restore, and assert the model returned."
+        ),
+    )
+    mesh_editability.add_argument("manifest")
+    mesh_editability.add_argument(
+        "--rebuild-record",
+        required=True,
+        help="Path to the saved report the rebuild transaction wrote.",
+    )
+    mesh_editability.add_argument(
+        "--editability-spec",
+        required=True,
+        help=(
+            "Path to the editability spec JSON: per-parameter perturbation, expected observable, "
+            "minimum observable change and rationale, plus the restore epsilon per observable."
+        ),
+    )
+    mesh_editability.add_argument("-o", "--output")
+    mesh_editability.set_defaults(handler=_cmd_emit_mesh_editability)
+
+    check_editability = subparsers.add_parser(
+        "check-editability",
+        help=(
+            "Validate a saved editability report against its nonce and hash chain. This is the "
+            "gate: it cannot pass a report that asserts more than the run performed."
+        ),
+    )
+    check_editability.add_argument(
+        "--rebuild-record", required=True, help="Path to the saved rebuild report."
+    )
+    check_editability.add_argument(
+        "--editability-report", required=True, help="Path to the saved editability report."
+    )
+    check_editability.add_argument(
+        "--editability-nonce",
+        required=True,
+        help="The nonce emit-mesh-editability printed for the script that produced this report.",
+    )
+    check_editability.set_defaults(handler=_cmd_check_editability)
+
+    replan = subparsers.add_parser(
+        "replan-without",
+        help=(
+            "Move the archetype a rebuild refusal named into unreconstructed and re-hash the "
+            "program, so a second emission run is one explicit, recorded command away."
+        ),
+    )
+    replan.add_argument("program")
+    replan.add_argument(
+        "--refusal", required=True, help="Path to the saved refusal report from the rebuild run."
+    )
+    replan.add_argument("-o", "--output")
+    replan.set_defaults(handler=_cmd_replan_without)
 
     emit_export = subparsers.add_parser(
         "emit-export",
