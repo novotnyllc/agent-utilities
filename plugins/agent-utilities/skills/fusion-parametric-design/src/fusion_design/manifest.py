@@ -95,6 +95,21 @@ ROLE_PREFIXES: dict[str, str] = {
     "derived": "calc_",
 }
 
+# Which roles must cite something when the parameter is critical. The split is
+# whether the value is a claim about the world or a choice the author made:
+#
+#   source      a measured or published dimension of a real object;
+#   clearance   functional spacing -- a fit claim against something real;
+#   fabrication process capability, where "2 mm wall" is folklore until a nozzle
+#               and a load say otherwise (references/design-doctrine.md);
+#   packing     dynamic/service space -- a physical envelope.
+#
+# design owns preference: a corner radius is measured against nothing, and
+# demanding a source_id for it is the false positive that gets the whole rule
+# switched off. derived computes from other parameters, so its provenance is its
+# inputs, and citing a source there would duplicate rather than record it.
+PROVENANCE_REQUIRED_ROLES = {"source", "clearance", "fabrication", "packing"}
+
 _VALID_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
@@ -519,12 +534,16 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Parameter {name!r} must have a non-empty Fusion expression.",
                 )
             )
-        if critical and role == "source" and not source_id:
+        # Not gated on `provisional`: provisional means "not settled yet", not
+        # "unsourced". A provisional critical dimension still has to say what
+        # the starting assumption rests on.
+        if critical and role in PROVENANCE_REQUIRED_ROLES and not source_id:
             issues.append(
                 ValidationIssue(
                     "critical-parameter-missing-source",
                     f"{path}.source_id",
-                    f"Critical source parameter {name!r} has no provenance source.",
+                    f"Critical {role} parameter {name!r} has no provenance source; a {role} value is a claim "
+                    "about the physical world and must cite one.",
                 )
             )
         if source_id and (not valid_name.fullmatch(source_id) or source_id != raw_parameter.get("source_id")):

@@ -351,7 +351,35 @@
           "type": "string",
           "minLength": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "critical": {
+                "const": true
+              },
+              "role": {
+                "enum": [
+                  "source",
+                  "clearance",
+                  "fabrication",
+                  "packing"
+                ]
+              }
+            },
+            "required": [
+              "critical",
+              "role"
+            ]
+          },
+          "then": {
+            "required": [
+              "source_id"
+            ]
+          }
+        }
+      ]
     },
     "reference": {
       "type": "object",

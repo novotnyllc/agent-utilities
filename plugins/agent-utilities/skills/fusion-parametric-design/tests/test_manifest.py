@@ -1333,6 +1333,88 @@ class ManifestValidationTests(unittest.TestCase):
         ] = "coupon_verified"
         self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
 
+    def test_which_roles_must_cite_provenance_when_critical(self) -> None:
+        """The per-role table. A critical value is either a claim about the
+        world (cite something) or a choice the author made (nothing to cite).
+
+        This is the documentation for the decision: change the table here and
+        in PROVENANCE_REQUIRED_ROLES together, or not at all.
+        """
+        from fusion_design.manifest import PROVENANCE_REQUIRED_ROLES, ROLE_PREFIXES
+
+        requires_provenance = {
+            "source": True,  # a measured or published dimension
+            "clearance": True,  # functional spacing: a fit claim against something real
+            "fabrication": True,  # process capability; "2 mm wall" is folklore alone
+            "packing": True,  # dynamic/service space: a physical envelope
+            "design": False,  # preference; a corner radius is measured against nothing
+            "derived": False,  # computed, so its provenance is its inputs
+        }
+        # Every role is covered, and the table is the constant.
+        self.assertEqual(set(ROLE_PREFIXES), set(requires_provenance))
+        self.assertEqual(
+            {role for role, required in requires_provenance.items() if required},
+            PROVENANCE_REQUIRED_ROLES,
+        )
+
+        for role, required in requires_provenance.items():
+            for provisional in (False, True):
+                with self.subTest(role=role, provisional=provisional):
+                    data = copy.deepcopy(self.data)
+                    data["parameters"] = [
+                        {
+                            "name": f"{ROLE_PREFIXES[role]}probe",
+                            "expression": "1 mm",
+                            "units": "mm",
+                            "role": role,
+                            "critical": True,
+                            "provisional": provisional,
+                            "description": "Probe parameter carrying no source_id.",
+                        }
+                    ]
+                    codes = self._codes(data)
+                    # provisional must not buy an exemption: "not settled yet"
+                    # is not the same claim as "rests on nothing".
+                    self.assertEqual(
+                        required,
+                        "critical-parameter-missing-source" in codes,
+                        f"role={role} provisional={provisional} -> {sorted(codes)}",
+                    )
+
+        # Not critical: nothing is required of any role.
+        for role in requires_provenance:
+            with self.subTest(role=role, critical=False):
+                data = copy.deepcopy(self.data)
+                data["parameters"] = [
+                    {
+                        "name": f"{ROLE_PREFIXES[role]}probe",
+                        "expression": "1 mm",
+                        "units": "mm",
+                        "role": role,
+                        "critical": False,
+                        "provisional": False,
+                        "description": "Probe parameter carrying no source_id.",
+                    }
+                ]
+                self.assertNotIn("critical-parameter-missing-source", self._codes(data))
+
+    def test_empty_string_source_id_is_not_provenance(self) -> None:
+        # The shape the #36 reviewer proved loads, validates and plans clean.
+        data = copy.deepcopy(self.data)
+        data["parameters"] = [
+            {
+                "name": "clr_probe",
+                "expression": "1 mm",
+                "units": "mm",
+                "role": "clearance",
+                "source_id": "",
+                "critical": True,
+                "provisional": False,
+                "description": "Critical clearance citing an empty source id.",
+            }
+        ]
+        self.assertIn("critical-parameter-missing-source", self._codes(data))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CLAIM_CONFIDENCE_RANK,
@@ -1346,6 +1428,7 @@ class ManifestValidationTests(unittest.TestCase):
             PRINTABLE_PART_FIELDS,
             PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
+            PROVENANCE_REQUIRED_ROLES,
             REFERENCE_REPRESENTATIONS,
             ROLE_PREFIXES,
             SOURCE_CONFIDENCES,
@@ -1369,6 +1452,10 @@ class ManifestValidationTests(unittest.TestCase):
             set(schema["$defs"]["reference"]["properties"]["representation"]["enum"]),
         )
         self.assertEqual(set(ROLE_PREFIXES), set(schema["$defs"]["parameter"]["properties"]["role"]["enum"]))
+        self.assertEqual(
+            PROVENANCE_REQUIRED_ROLES,
+            set(schema["$defs"]["parameter"]["allOf"][0]["if"]["properties"]["role"]["enum"]),
+        )
         # A zero minimum cannot fail, so the schema must exclude it too.
         self.assertEqual(
             {"type": "number", "exclusiveMinimum": 0},
