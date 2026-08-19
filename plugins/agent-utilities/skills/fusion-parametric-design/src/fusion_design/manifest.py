@@ -7,6 +7,18 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
+# Re-exported so both fusion_design.manifest and fusion_design.mesh_source remain
+# valid import paths for the mesh-source closed-world constants.
+from .mesh_source import (  # noqa: F401
+    BREP_SOURCE_FIELDS,
+    MESH_PROVENANCES,
+    MESH_SOURCE_FIELDS,
+    MESH_UNITS,
+    UNIT_GUESS_FIELDS,
+    UNIT_SOURCES,
+    _validate_mesh_sources,
+)
+
 # Re-exported so both fusion_design.manifest and fusion_design.printable_parts
 # remain valid import paths for the printable-part closed-world constants.
 from .printable_parts import (  # noqa: F401
@@ -138,6 +150,10 @@ class Manifest:
     def variants(self) -> list[dict[str, Any]]:
         return list(self.data.get("variants", []))
 
+    @property
+    def mesh_sources(self) -> list[dict[str, Any]]:
+        return list(self.data.get("mesh_sources", []))
+
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(self.data))
 
@@ -189,6 +205,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             "printable_parts",
             "material_decision",
             "variants",
+            "mesh_sources",
         },
         "",
     )
@@ -881,6 +898,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         data.get("printable_parts"),
     )
     _validate_variants(issues, data.get("variants"), declared_parameter_names)
+    _validate_mesh_sources(issues, data.get("mesh_sources"))
 
     return issues
 

@@ -16,6 +16,13 @@ from .export_handoff import (
     verification_binding_from_report,
 )
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
+from .mesh_convert import emit_mesh_convert_script
+from .mesh_deviation import emit_mesh_deviation_script
+from .mesh_source import (
+    emit_mesh_capture_script,
+    mesh_source_record,
+    verify_manifest_mesh_sources,
+)
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
 from .prusaslicer_project import build_project, resolve_presets
@@ -156,6 +163,39 @@ def _require_live_verification_report(report_data: Any, nonce: str) -> None:
             + "; ".join(missing)
             + "); run the live verification transaction and pass its saved report"
         )
+
+
+def _cmd_emit_mesh_capture(args: argparse.Namespace) -> int:
+    _validate_emit_paths(args)
+    manifest = load_manifest(args.manifest)
+    # The recorded digest is only load-bearing if something re-checks it: a
+    # source swapped after capture must stop the workflow here, not be silently
+    # re-measured by the transaction this command emits.
+    verify_manifest_mesh_sources(manifest, args.manifest)
+    _write_output(emit_mesh_capture_script(manifest), args.output)
+    return 0
+
+
+def _mesh_path_command(args: argparse.Namespace, spec_name: str, function: Callable) -> int:
+    spec_path = getattr(args, spec_name)
+    named_paths = [("manifest", args.manifest), ("classification", args.classification), ("spec", spec_path)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    verify_manifest_mesh_sources(manifest, args.manifest)
+    classification = json.loads(Path(args.classification).read_text(encoding="utf-8"))
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+    if not isinstance(classification, dict):
+        raise ValueError("The classification record must be a JSON object.")
+    # The source is named independently of the record, so the gate's identity
+    # check compares two values that came from different places. Reading the id
+    # out of the record and then looking the record up by it would compare a
+    # value against itself and could never fail.
+    source_record = mesh_source_record(manifest, args.mesh_source_id)
+    _write_output(function(manifest, classification, source_record, spec), args.output)
+    return 0
 
 
 def _cmd_emit_export(args: argparse.Namespace) -> int:
@@ -382,6 +422,73 @@ def build_parser() -> argparse.ArgumentParser:
     emit_verification.add_argument("manifest")
     emit_verification.add_argument("-o", "--output")
     emit_verification.set_defaults(handler=_cmd_emit_verification)
+
+    mesh_capture = subparsers.add_parser(
+        "emit-mesh-capture",
+        help="Emit the read-only immutable mesh capture script, re-verifying every declared source hash.",
+    )
+    mesh_capture.add_argument("manifest")
+    mesh_capture.add_argument("-o", "--output")
+    mesh_capture.set_defaults(handler=_cmd_emit_mesh_capture)
+
+    mesh_convert = subparsers.add_parser(
+        "emit-mesh-convert",
+        help=(
+            "Emit the faceted mesh-to-B-Rep conversion script with its refusal ladder. Refuses unless the "
+            "recorded classification chose faceted-brep for this exact mesh source."
+        ),
+    )
+    mesh_convert.add_argument("manifest")
+    mesh_convert.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_convert.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON; its path must be 'faceted-brep'.",
+    )
+    mesh_convert.add_argument(
+        "--convert-spec",
+        required=True,
+        help="Path to the conversion spec JSON: component_path, body_name, max_faces_per_face_group.",
+    )
+    mesh_convert.add_argument("-o", "--output")
+    mesh_convert.set_defaults(
+        handler=lambda args: _mesh_path_command(args, "convert_spec", emit_mesh_convert_script)
+    )
+
+    mesh_deviation = subparsers.add_parser(
+        "emit-mesh-deviation",
+        help=(
+            "Emit the deviation script and its asymmetric verdict against the immutable source. Requires a "
+            "classification of faceted-brep or parametric-rebuild for this exact mesh source."
+        ),
+    )
+    mesh_deviation.add_argument("manifest")
+    mesh_deviation.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_deviation.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON for the mesh source being graded.",
+    )
+    mesh_deviation.add_argument(
+        "--deviation-spec",
+        required=True,
+        help=(
+            "Path to the deviation spec JSON: source and reconstruction body bindings, declared "
+            "thresholds_mm, and the rationale for those thresholds."
+        ),
+    )
+    mesh_deviation.add_argument("-o", "--output")
+    mesh_deviation.set_defaults(
+        handler=lambda args: _mesh_path_command(args, "deviation_spec", emit_mesh_deviation_script)
+    )
 
     emit_export = subparsers.add_parser(
         "emit-export",

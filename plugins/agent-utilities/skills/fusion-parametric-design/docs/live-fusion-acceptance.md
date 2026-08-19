@@ -297,7 +297,87 @@ variants: two enclosure sizes and one deliberately broken one.
 the run reported failure rather than "2 of 3 passed", and the document is
 verifiably back on the state it started from.
 
-## 13. Restore the Fusion session
+## 13. Mesh reconstruction — a marketplace STL with a dimensional modification
+
+Only when a mesh workflow is being accepted. Use a downloaded marketplace STL (a
+bracket or mount with at least one dimension to change), copied into the project
+beside the manifest. **Record the Fusion version with every report in this
+section: every mesh API used here is preview.**
+
+1. Add a `mesh_sources` record for the file — `sha256` of the bytes, `units` with
+   its `unit_source` (a marketplace STL is almost always `declared` or `guess`,
+   never `file`), `provenance: designed_export` for a modelled download or
+   `capture` for a scan, and the identity `alignment_transform`. Then:
+   `scripts/fusion-design emit-mesh-capture fusion-project.json -o build/mesh-capture.py`
+   **Pass:** emission succeeds. Now change one byte of the STL and re-emit.
+   **Pass:** the CLI exits 2 with `mesh-source-hash-mismatch` and writes nothing.
+   Restore the file.
+2. Insert the mesh into the document and execute `build/mesh-capture.py`.
+   **Pass:** `kind: mesh-capture`, `ok: true`, the Fusion version is recorded, and
+   every body reports a triangle count and `isClosed`. Note the body's component
+   path and name — this is the binding no manifest field supplies.
+   **Negative control:** insert the same mesh a second time under a duplicated
+   component path and re-run. **Pass:** the capture fails closed with
+   `ambiguous-component-paths` rather than reporting a partial body list.
+3. Record the classification from the capture's own numbers (`watertight` from
+   `isClosed`, `facet_count` from the triangle count) for a `dimensional` edit.
+   **Pass:** the recorded path is `parametric-rebuild`, written before any
+   geometry operation runs.
+4. **Negative control on the gate.** Emit a faceted conversion against that
+   record:
+   `scripts/fusion-design emit-mesh-convert fusion-project.json --mesh-source-id <id> --classification build/classification.json --convert-spec build/convert.json`
+   **Pass:** exit 2 with `classification-path-forbids-operation`; nothing is
+   emitted. Then hand-edit the record's `path` to `faceted-brep` without touching
+   its inputs. **Pass:** exit 2 with `classification-path-contradicts-inputs`.
+   Finally point a valid record at a different `mesh_sources` entry. **Pass:**
+   exit 2 with `classification-source-mismatch`.
+5. **The faceted ladder, on purpose.** Classify a `boolean-mechanical` edit with a
+   declared `facet_budget` above the mesh's facet count, emit the conversion, and
+   execute it. **Pass:** either `ok: true` with `"label": "faceted"` and
+   `"parametric": false`, or a refusal naming its reason *and* its alternative
+   with no B-Rep body left in the document. If Fusion complains, its own
+   `errorOrWarningMessage` must appear verbatim in the report — confirm no facet
+   ceiling number originates from this package. Confirm the source mesh body is
+   still present and unmodified.
+6. Rebuild the dimension the edit requires as native Fusion sketches and
+   features, working from the immutable mesh. Fusion's Mesh Section Sketch and
+   Fit Curves are UI-only and have no API, so any sectioning done through this
+   package is host-side arithmetic; sketch emission from a fit is **not built**,
+   so this step is authored in Fusion.
+7. Grade the rebuild:
+   `scripts/fusion-design emit-mesh-deviation fusion-project.json --mesh-source-id <id> --classification build/classification.json --deviation-spec build/deviation.json`
+   with thresholds declared for *this* part and a stated rationale. Execute it.
+   **Pass, in one of three honest forms:**
+   - `ok: true` with **both** directions reported separately, each carrying the
+     question it answers, the declared thresholds echoed, and the omitted-detail
+     finding advisory rather than fatal;
+   - `ok: false` with `invented-material` and the coordinates of the offending
+     points;
+   - `ok: false` with `deviation-capability` (naming `PolygonMesh.compareWith`,
+     `BRepBody.pointContainment` or a `PointContainment` member, plus the Fusion
+     version), `deviation-unsigned-comparison`, or
+     `sign-convention-unestablished` — each with the invented-material verdict
+     reported `not-established` and carrying no `count` or `max_mm`.
+
+   When the verdict passes, record the `sign_convention` it observed and its
+   `sign_probe` tally. **This is the reading to sanity-check by hand once per
+   Fusion version:** the polarity is measured against `BRepBody.pointContainment`
+   rather than assumed, so confirm it matches a case you can see.
+
+   **Fail** if any report states a single combined deviation number, if a missing
+   `compareWith` or `PointContainment` is silently skipped, if an unsigned
+   comparison is reported as a pass, or if `severity: "pass"` appears alongside
+   an unestablished sign convention.
+8. Confirm `DESIGN-STATE.md` records the mesh source, its hash, the recorded
+   path with its rationale, the bound Fusion body, and both deviation directions
+   with the question each answers.
+
+**Pass:** the source file is byte-identical to its recorded hash at the end of
+the run, the source mesh body is unmodified, no faceted result is described as
+parametric anywhere, and a fit coupon is still outstanding before any mating
+claim.
+
+## 14. Restore the Fusion session
 
 Close the disposable acceptance document without saving, reactivate the
 document that was active before the smoke test, and read the open-document

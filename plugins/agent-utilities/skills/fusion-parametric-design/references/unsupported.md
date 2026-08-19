@@ -144,6 +144,36 @@ The skill can request Fusion viewport screenshots and section views when the con
 
 Import the scan as immutable mesh reference, establish coordinate system and scale, extract only needed sections/datums, rebuild native sketches/features, and validate with a fit coupon. Use external mesh tools for cleaning, registration, or cross-section extraction when Fusion API coverage is insufficient.
 
+What this package *does* supply is in `references/mesh-reconstruction.md`: immutable capture bound by SHA-256, an enforced three-way classification gate, the faceted refusal ladder, offline sectioning and primitive fitting, design-intent proposals, and the asymmetric deviation verdict. What it deliberately does not supply:
+
+- whole-part auto-conversion — the abandoned upstream fitter and both commercial references agree this is where the difficulty sits;
+- organic and freeform surface recovery;
+- automatic assertion of design intent — coaxiality, perpendicularity, symmetry and nominal-value snapping are surfaced as proposals carrying their measured deviation, never applied silently;
+- coordinate-frame derivation from the fitted primitives — **not implemented**, despite being how both reference tools establish their frame;
+- Sketch API emission from the fits — **not implemented**; the fits and proposals stay host-side data today.
+
+## Fusion Mesh Section Sketch and Fit Curves to Mesh Section
+
+**Status:** UI-only. No API exists, so a skill driving Fusion over MCP cannot use them.
+
+`Create Mesh Section Sketch` and `Fit Curves to Mesh Section` are Fusion's only native parametric route from a mesh, and both are UI-only: there is no `MeshSectionSketch` class, nothing on `Sketch` that creates one, and no `MeshPlaneCutFeature`. Never emit a script that calls them.
+
+The raw material *is* scriptable, which is why the fallback is our own arithmetic rather than an external tool: `MeshBody.mesh` returns a `PolygonMesh` exposing `nodeCoordinates`, `triangleNodeIndices` and `triangleFaceGroupTempIds` — Fusion's own segmentation, readable per triangle. Plane–mesh intersection and least-squares primitive fitting over that data live in `src/fusion_design/mesh_fitting.py` and are fully testable offline against synthetic meshes with known analytic answers. Fusion fits primitives internally for `MeshGenerateFaceGroupsFeature` but never exposes the fit, only the grouping.
+
+## Mesh deviation comparison (`PolygonMesh.compareWith`)
+
+**Status:** Supported where present, and **preview-gated**.
+
+`PolygonMesh.compareWith(other, transform, transformOther)` (July 2026) returns the signed distance from every node of one mesh to the closest point on another, in centimetres. It is the **only** API-level deviation mechanism in Fusion, it has no UI equivalent, and like every mesh feature class it is flagged preview — Autodesk's own guidance is never to deliver programs that use preview capabilities.
+
+`fusion-design emit-mesh-deviation` therefore fails closed rather than degrading:
+
+- when `compareWith` is absent, the report is `deviation-capability` with the API name and the connected Fusion version — never a silent skip and never a fabricated number;
+- when the connected Fusion returns only unsigned magnitudes, or when the sign convention cannot be established by probing `BRepBody.pointContainment` against the returned signs, invented material cannot be separated from omitted detail, so the invented-material verdict is reported `not-established` rather than as a pass. The polarity is never assumed: nothing documents it, and assuming it turns invented material into a pass under an inverted convention;
+- the two directions are reported as distinct questions and are never collapsed into a single "deviation: X mm". A small maximum deviation from the reconstruction to the scan does not establish that the reconstruction captured every scanned feature.
+
+Facet ceilings are likewise never hardcoded: the widely-cited 10,000/50,000 numbers are unverified and version-specific, so the faceted refusal ladder quotes `errorOrWarningMessage`/`healthState` from Fusion itself. `MeshConvertFeatures.add` and `MeshGenerateFaceGroupsFeatures.add` are documented to return null for non-parametric operations even when the operation succeeded, and the emitted transaction handles that rather than assuming a feature object.
+
 ## Editable arbitrary downloaded mesh
 
 **Status:** Unsupported in the sense users usually mean.

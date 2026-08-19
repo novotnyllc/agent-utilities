@@ -94,6 +94,12 @@
       "items": {
         "$ref": "#/$defs/variant"
       }
+    },
+    "mesh_sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mesh_source"
+      }
     }
   },
   "$defs": {
@@ -415,6 +421,135 @@
           ]
         }
       ]
+    },
+    "mesh_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "sha256",
+        "units",
+        "unit_source",
+        "provenance",
+        "alignment_transform"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unit_source": {
+                "const": "guess"
+              }
+            },
+            "required": [
+              "unit_source"
+            ]
+          },
+          "then": {
+            "required": [
+              "unit_guess"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "unit_guess"
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "units": {
+          "enum": [
+            "mm",
+            "cm",
+            "m",
+            "in",
+            "ft"
+          ]
+        },
+        "unit_source": {
+          "enum": [
+            "declared",
+            "file",
+            "guess"
+          ]
+        },
+        "unit_guess": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "heuristic",
+            "threshold"
+          ],
+          "properties": {
+            "heuristic": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threshold": {
+              "type": "number"
+            }
+          }
+        },
+        "provenance": {
+          "enum": [
+            "designed_export",
+            "capture"
+          ]
+        },
+        "brep_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "trusted",
+            "rationale"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "trusted": {
+              "type": "boolean"
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "alignment_transform": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "printable_part": {
       "type": "object",
