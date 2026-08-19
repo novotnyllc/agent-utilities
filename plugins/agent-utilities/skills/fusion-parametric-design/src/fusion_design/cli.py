@@ -27,6 +27,7 @@ from .mesh_editability import (
     validate_editability_report,
 )
 from .mesh_extract import emit_mesh_extract_script
+from .mesh_face_groups import emit_mesh_face_groups_script
 from .mesh_rebuild import emit_mesh_rebuild_script, load_program, replan_without
 from .mesh_segmentation import fit_regions, load_spec
 from .mesh_probe import emit_capability_probe_script
@@ -676,6 +677,43 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_extract.add_argument("-o", "--output")
     mesh_extract.set_defaults(
         handler=lambda args: _mesh_path_command(args, "extract_spec", emit_mesh_extract_script)
+    )
+
+    mesh_face_groups = subparsers.add_parser(
+        "emit-mesh-face-groups",
+        help=(
+            "Emit the segmentation script: runs MeshGenerateFaceGroups on the mesh body with the "
+            "accurate method set explicitly, then reads the per-triangle grouping and per-group "
+            "metadata back. Run this before emit-mesh-extract, which reads the grouping and never "
+            "generates one. Requires a classification of parametric-rebuild for this exact mesh "
+            "source."
+        ),
+    )
+    mesh_face_groups.add_argument("manifest")
+    mesh_face_groups.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_face_groups.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON; its path must be 'parametric-rebuild'.",
+    )
+    mesh_face_groups.add_argument(
+        "--face-group-spec",
+        required=True,
+        help=(
+            "Path to the face-group spec JSON: the body binding. The grouping method is not a spec "
+            "field -- the fast method is measurably wrong on real parts, so only the accurate one is "
+            "offered."
+        ),
+    )
+    mesh_face_groups.add_argument("-o", "--output")
+    mesh_face_groups.set_defaults(
+        handler=lambda args: _mesh_path_command(
+            args, "face_group_spec", emit_mesh_face_groups_script
+        )
     )
 
     mesh_convert = subparsers.add_parser(

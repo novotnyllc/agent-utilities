@@ -109,7 +109,22 @@ In all three the invented-material verdict is `not-established`, never a pass, a
 
 ## What the reconstruction pipeline builds
 
-Host-side, with no Fusion running: `fit-regions` segments a hash-bound mesh dump and fits primitives behind disproof gates; `plan-reconstruction` derives a datum frame from the accepted fits and assigns them to archetypes; `reconstruction-coverage` composes the final account. Inside Fusion: `emit-mesh-rebuild` builds the timeline, `emit-mesh-editability` proves each parameter drives it, and `emit-mesh-deviation` grades the result against the immutable source.
+Inside Fusion, first: `emit-mesh-face-groups` runs `MeshGenerateFaceGroups` on the mesh body with `AccurateGenerateFaceGroupsType` set explicitly, and `emit-mesh-extract` then writes the hash-bound dump carrying that grouping, one id per triangle. Host-side, with no Fusion running: `fit-regions` fits an analytic primitive to each of those groups behind the disproof gates; `plan-reconstruction` derives a datum frame from the accepted fits and assigns them to archetypes; `reconstruction-coverage` composes the final account. Back inside Fusion: `emit-mesh-rebuild` builds the timeline, `emit-mesh-editability` proves each parameter drives it, and `emit-mesh-deviation` grades the result against the immutable source.
+
+**The regions come from Fusion; the judgement does not.** Both paths were run end to end over the same dumps of the same 11 production STLs, at the same declared thresholds:
+
+| | RANSAC/ICM (deleted) | face groups, accurate |
+| --- | --- | --- |
+| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) |
+| regions accepted through every gate | 38 | 268 |
+| area-weighted coverage, 11 parts | **41.7%** | **62.5%** |
+| cylinders accepted, 11 parts | 0 | 4 |
+| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% |
+| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% |
+
+So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
+
+**Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
 
 The archetype vocabulary is closed and all four kinds now emit:
 
@@ -118,7 +133,7 @@ The archetype vocabulary is closed and all four kinds now emit:
 | `sketch-extrude` | two parallel cap planes, with side surfaces perpendicular to them | a sketch on an origin plane or a parameter-driven offset from one, then an extrude |
 | `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore | a half-profile sketch containing the axis, then a revolve |
 | `hole` | an accepted cylinder whose `orientation.material_side` is `"inside"`, lying wholly within one extruded body, its axis along that body's extrusion direction | a placement point dimensioned to the sketch origin, then a hole feature with parametric diameter and depth |
-| `fillet` | an accepted torus adjacent to exactly two non-torus primaries, both of which this program rebuilt | a constant-radius fillet on the edge those two features share |
+| `fillet` | an accepted blend — a torus, or a cylinder sweeping less arc than the declared `max_fillet_arc_deg` — adjacent to exactly two non-blend primaries, both of which this program rebuilt | a constant-radius fillet on the edge those two features share |
 
 ### What makes a bore a bore
 

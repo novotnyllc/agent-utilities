@@ -363,7 +363,7 @@ class PlannerTests(unittest.TestCase):
             "z_axis": [1.0, 0.0, 0.0],
             "evidence": {},
         }
-        vertices, triangles = fx.box_mesh()
+        vertices, triangles, groups = fx.box_mesh()
         # The mesh body itself sits 5 cm along world X.
         dump = make_dump(
             vertices,
@@ -387,7 +387,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual((7.0, 2.0, 3.0), apply((0.0, 0.0, 1.0)))
 
     def test_the_overlay_transform_never_claims_alignment_it_cannot_establish(self):
-        vertices, triangles = fx.box_mesh()
+        vertices, triangles, groups = fx.box_mesh()
         from test_mesh_segmentation import make_dump
 
         dump = make_dump(vertices, triangles, transform=None, transform_source="unavailable")
@@ -657,8 +657,14 @@ def _manifest_hash(manifest):
 def _dump_bytes(dump):
     from fusion_design.mesh_dump import pack_mesh_dump
 
+    # Round-trips the grouping too: a dump written without it would not hash to
+    # the dump the program was fitted from, and would refuse a stage later for
+    # the wrong reason.
     return pack_mesh_dump(
-        dump.metadata, list(dump.vertices_mm), list(dump.triangles), None
+        dump.metadata,
+        list(dump.vertices_mm),
+        list(dump.triangles),
+        None if dump.face_group_ids is None else list(dump.face_group_ids),
     )
 
 

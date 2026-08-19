@@ -22,11 +22,15 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from fusion_design.cli import main
 from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
-from fusion_design.mesh_dump import pack_mesh_dump
+from fusion_design.mesh_dump import pack_mesh_dump, read_mesh_dump
+from fusion_design.mesh_extract import emit_mesh_extract_script
+from fusion_design.mesh_face_groups import emit_mesh_face_groups_script
+from fusion_design.mesh_reconstruction import classify
 from fusion_design.mesh_editability import (
     emit_mesh_editability_script,
     validate_editability_report,
@@ -40,6 +44,11 @@ import fakes_fusion_rebuild as fakes
 import fixtures_fit_record as fxr
 import fixtures_rebuild as fx
 import test_mesh_editability as te
+import test_mesh_extract as tme
+import test_mesh_face_groups as tfg
+import test_mesh_reconstruction as tmr
+import test_mesh_source as tms
+from test_scripts import load_generated_script
 import test_mesh_segmentation as ts
 from test_mesh_rebuild import (
     NONCE,
@@ -62,8 +71,10 @@ def brick_dump():
     unambiguous primary and secondary axis, so the run reaches the archetypes
     instead of refusing `frame-ambiguous` on a tie.
     """
-    vertices, triangles = ts.box_mesh(size=20.0, divisions=6)
-    return ts.make_dump([(x * 0.5, y, z * 0.75) for x, y, z in vertices], triangles)
+    vertices, triangles, groups = ts.box_mesh(size=20.0, divisions=6)
+    return ts.make_dump(
+        [(x * 0.5, y, z * 0.75) for x, y, z in vertices], triangles, face_groups=groups
+    )
 
 
 def fitted(dump=None):
@@ -159,6 +170,220 @@ class FitToPlanSeamTests(unittest.TestCase):
             program = json.loads((root / "program.json").read_text(encoding="utf-8"))
             self.assertEqual(dump.sha256, program["dump_sha256"])
             self.assertTrue(program["archetypes"])
+
+
+class GroupingToFitSeamTests(unittest.TestCase):
+    """The new first seam: Fusion groups the mesh, extraction carries the grouping.
+
+    Both transactions are the real emitted source, run against Fusion doubles.
+    The face-group transaction applies the grouping to the body; the extraction
+    transaction reads whatever grouping the body carries and writes the dump;
+    `fit-regions` reads that dump off disk and fits it. No fixture record and no
+    hand-built grouping crosses any of those boundaries -- which is the point,
+    because the grouping *is* the segmentation now.
+    """
+
+    def setUp(self) -> None:
+        self.source = tms.mesh_source(provenance="designed_export")
+        self.manifest = tmr._manifest(self.source)
+        self.classification = classify(tmr.request(edit_kind="dimensional"), self.source).to_dict()
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        # The brick, in Fusion's internal centimetres, with the analytic grouping
+        # the accurate method returns for it.
+        vertices, triangles, groups = ts.box_mesh(size=20.0, divisions=6)
+        self.vertices_cm = [(x * 0.05, y * 0.1, z * 0.075) for x, y, z in vertices]
+        self.triangles = triangles
+        self.groups = groups
+
+    def _body(self):
+        return tfg._Bodies, tfg._Features
+
+    def _run(self, script, body, *, failure=None):
+        namespace = load_generated_script(script)
+        component = SimpleNamespace(
+            meshBodies=tfg._Bodies([body]),
+            features=SimpleNamespace(meshGenerateFaceGroupsFeatures=body._features),
+        )
+        design = SimpleNamespace(rootComponent=component)
+        app = SimpleNamespace(
+            version="2.0.20000",
+            activeDocument=SimpleNamespace(name=self.manifest.fusion_document),
+        )
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        output = io.StringIO()
+        with redirect_stdout(output):
+            namespace["run"](None)
+        return [
+            json.loads(line)
+            for line in output.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+
+    def _mesh_body(self):
+        """A mesh body whose grouping does not exist until the feature applies it."""
+
+        class _Mesh:
+            triangleCount = len(self.triangles)
+            triangleFaceGroupTempIds = None
+            nodeCoordinates = [
+                SimpleNamespace(x=p[0], y=p[1], z=p[2]) for p in self.vertices_cm
+            ]
+            triangleNodeIndices = [i for t in self.triangles for i in t]
+
+        mesh = _Mesh()
+        groups = self.groups
+
+        class _Applying(tfg._Features):
+            def add(self, group_input):
+                self.added_with = group_input.meshGenerateFaceGroupsMethodType
+                # Fusion's own temp ids: arbitrary, not zero-based, not stable.
+                mesh.triangleFaceGroupTempIds = [40 + 3 * g for g in groups]
+                return None
+
+        body = SimpleNamespace(
+            name=self.source["body_name"] if "body_name" in self.source else "bracket_scan",
+            mesh=mesh,
+            isValid=True,
+            faceGroups=tfg._Bodies([]),
+            transform=SimpleNamespace(
+                asArray=lambda: [
+                    1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0,
+                ]
+            ),
+        )
+        body._features = _Applying(mesh)
+        return body
+
+    def _extract_spec(self):
+        spec = dict(tme.EXTRACT_SPEC)
+        spec["body_name"] = "bracket_scan"
+        spec["dump_dir"] = str(self.root / "dumps")
+        return spec
+
+    def test_extraction_without_the_grouping_stage_produces_a_dump_that_refuses(self) -> None:
+        """The reason the two stages are ordered, stated as a run rather than a comment."""
+        body = self._mesh_body()
+        report = self._run(
+            emit_mesh_extract_script(
+                self.manifest, self.classification, self.source, self._extract_spec()
+            ),
+            body,
+        )[0]
+        self.assertTrue(report["ok"], report)
+        self.assertEqual("absent", report["face_groups"]["source"])
+        dump = read_mesh_dump(report["dump_path"], report["dump_sha256"])
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertEqual("face-groups-absent", record["refusal"]["reason"])
+        self.assertIn("emit-mesh-face-groups", record["refusal"]["alternative"])
+
+    def test_the_grouping_transaction_feeds_extraction_which_feeds_the_fitters(self) -> None:
+        body = self._mesh_body()
+        grouping = self._run(
+            emit_mesh_face_groups_script(
+                self.manifest,
+                self.classification,
+                self.source,
+                {"component_path": "", "body_name": "bracket_scan"},
+            ),
+            body,
+        )[0]
+        self.assertTrue(grouping["ok"], grouping)
+        self.assertEqual("AccurateGenerateFaceGroupsType", grouping["applied_method"])
+        self.assertEqual(6, grouping["group_count"])
+
+        extraction = self._run(
+            emit_mesh_extract_script(
+                self.manifest, self.classification, self.source, self._extract_spec()
+            ),
+            body,
+        )[0]
+        self.assertTrue(extraction["ok"], extraction)
+        self.assertEqual("triangleFaceGroupTempIds", extraction["face_groups"]["source"])
+        # The grouping the first transaction applied is the grouping the second
+        # one wrote, group for group.
+        self.assertEqual(
+            grouping["triangles_per_group"], extraction["face_groups"]["histogram"]
+        )
+
+        dump = read_mesh_dump(extraction["dump_path"], extraction["dump_sha256"])
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        self.assertEqual(6, record["face_groups"]["group_count"])
+        self.assertEqual(
+            ["plane"] * 6, sorted(r["fit"]["kind"] for r in record["regions"] if r["accepted"])
+        )
+        self.assertAlmostEqual(1.0, record["covered_area_fraction"], places=6)
+        # Fusion's temp ids are temp ids. They partitioned the triangles and then
+        # stopped existing: nothing in the record is keyed by, or carries, one.
+        payload = json.dumps(record)
+        self.assertNotIn("temp_id", payload)
+        self.assertNotIn("tempId", payload)
+        # Re-numbering every group without moving a triangle leaves the same
+        # partition, which is the property the hash has to have.
+        renumbered = ts.make_dump(
+            [tuple(c * 10.0 for c in p) for p in self.vertices_cm],
+            self.triangles,
+            face_groups=[900 - 5 * g for g in self.groups],
+            **{
+                key: dump.metadata[key]
+                for key in ("mesh_source_id", "mesh_source_sha256", "manifest_sha256")
+            },
+        )
+        again = seg.fit_regions(renumbered, ts.spec())
+        self.assertEqual(
+            sorted(sorted(r["triangle_indices"]) for r in record["regions"]),
+            sorted(sorted(r["triangle_indices"]) for r in again["regions"]),
+        )
+
+        # And the record a real grouping produced plans a real program.
+        program = planned(record, self.manifest)
+        self.assertEqual(["sketch-extrude"], [g["kind"] for g in program["archetypes"]])
+        self.assertEqual(dump.sha256, program["dump_sha256"])
+
+    def test_a_grouping_that_did_not_stick_never_reaches_a_dump(self) -> None:
+        """Fast is the default, so a method that did not apply must stop the run."""
+        body = self._mesh_body()
+
+        class _Stubborn(tfg._Features):
+            def createInput(self, mesh_body):
+                return tfg._Input(keeps=False)
+
+        body._features = _Stubborn(body.mesh)
+        namespace = load_generated_script(
+            emit_mesh_face_groups_script(
+                self.manifest,
+                self.classification,
+                self.source,
+                {"component_path": "", "body_name": "bracket_scan"},
+            )
+        )
+        component = SimpleNamespace(
+            meshBodies=tfg._Bodies([body]),
+            features=SimpleNamespace(meshGenerateFaceGroupsFeatures=body._features),
+        )
+        design = SimpleNamespace(rootComponent=component)
+        app = SimpleNamespace(
+            version="2.0.20000",
+            activeDocument=SimpleNamespace(name=self.manifest.fusion_document),
+        )
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(RuntimeError):
+            namespace["run"](None)
+        report = [
+            json.loads(line)
+            for line in output.getvalue().splitlines()
+            if line.startswith("{")
+        ][0]
+        self.assertEqual(["face-group-method-not-applied"], report["failures"])
+        self.assertIsNone(body.mesh.triangleFaceGroupTempIds)
 
 
 class PlanToRebuildSeamTests(unittest.TestCase):

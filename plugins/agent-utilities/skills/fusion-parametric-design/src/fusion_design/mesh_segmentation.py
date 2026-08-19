@@ -1,42 +1,41 @@
-"""Robust primitive detection over a mesh dump, and the disproof-gated fit record.
+"""The disproof-gated fit record, over Fusion's own face-group segmentation.
 
 Host-side crux of the mesh-to-parametric pipeline. It takes the hash-bound dump
 ``mesh_dump`` reads, welds it under a declared tolerance, measures its own noise,
-detects analytic primitives in it, tries to *falsify* every one, and emits the
-fit record U3 consumes. It needs no Fusion, imports no ``adsk``, and is provable
-in full under ``scripts/test.sh`` against synthetic meshes with known analytic
-answers. That total offline testability is why the architecture puts the
-numerics here, so nothing in this module may acquire a live-session dependency.
+fits an analytic primitive to each of the dump's face groups, tries to *falsify*
+every one, and emits the fit record U3 consumes. It needs no Fusion, imports no
+``adsk``, and is provable in full under ``scripts/test.sh`` against synthetic
+meshes with known analytic answers. That total offline testability is why the
+architecture puts the numerics here, so nothing in this module may acquire a
+live-session dependency.
 
 Implements ``docs/plans/2026-08-19-007-research-reconstruction-algorithms.md``
-sections 2-6 and 10. The mathematics and its citations live there; this file
+sections 2-4 and 10. The mathematics and its citations live there; this file
 carries the reasons a reader of the *code* needs.
 
-**Why detection-first rather than crease-threshold region growing.** Thresholding
-the dihedral angle at each edge makes a hard, irreversible decision from one
-noisy local measurement, so its accuracy is bounded by the noisiest triangle in
-the mesh. Per-triangle normal jitter is about ``2.3 sigma/l`` radians (spec 3.1)
--- 13 degrees at the contested 0.05 mm noise on 0.5 mm triangles -- which swamps
-any crease threshold worth setting. But that is an *estimator* property, not a
-property of the data: trimmed PCA over a neighbourhood of radius ``h`` drops it
-to ``2 sigma/(h sqrt(k))`` (spec 4.1), about 1 degree at h = 1.25 mm on the same
-mesh. Averaging first is the whole argument. Detection then runs on normals that
-are twenty times better than the ones a crease threshold would have used, and
-Schnabel/Wahl/Klein's Efficient RANSAC (CGF 26:2, 2007) does the rest.
+**Where the regions come from, and why they no longer come from here.** This
+module used to segment the mesh itself: Efficient RANSAC (Schnabel/Wahl/Klein,
+CGF 26:2, 2007) over oriented points, then a Potts energy minimized by ICM over
+triangles. It was measured against Fusion's own ``MeshGenerateFaceGroups`` on
+real production STLs and lost outright -- on POD-A2-BASE it claimed 8 regions
+and 27.4% of the area and found *zero* cylinders, where Fusion's grouping under
+``AccurateGenerateFaceGroupsType`` returned 151 regions covering 100%, and our
+exact fitters then accepted a fit on all 1,908 groups across 11 parts. So the
+segmentation layer is deleted and the regions arrive in the dump, one face-group
+id per triangle. ``references/unsupported.md`` records the measurement.
 
-So refusal moves rather than disappearing. It is no longer "the noise floor
-approached a threshold"; it is ``feature-scale-below-noise`` -- the recoverable
-feature size, about ten sigma, has risen above the smallest feature the caller
-declared they need. That is a statement about information content, and it is
-reported as a budget the caller can check before asking.
+What does *not* move is the judgement. Fusion has no opinion about whether a fit
+is justified, and a grouping is not a fit: every region it delivers still passes
+support floors, residual structure by Moran's I on the mesh graph, a spatially
+blocked held-out refit, a nested-kind parsimony F test, and the parameter
+uncertainty gate. A fit that fails is recorded with the gate that killed it,
+never dropped, and a dump that carries no grouping is refused rather than
+segmented by a fallback nobody measured.
 
-**Consensus size is not proof.** RANSAC always returns something, and its score
-measures agreement with the model it was told to look for. Every accepted fit
-therefore also passes three disproof gates -- support span, residual structure by
-Moran's I on the mesh graph, and spatially blocked held-out residual -- plus a
-nested-kind parsimony F test that refuses a richer primitive that has not earned
-its extra parameters. A fit that fails is recorded with the gate that killed it,
-never dropped.
+Refusal is therefore about information, not thresholds: ``feature-scale-below-noise``
+says the recoverable feature size, about ten sigma, has risen above the smallest
+feature the caller declared they need -- a budget the caller can check before
+asking -- and ``face-groups-absent`` says the segmentation stage was never run.
 
 **Welding is this module's responsibility and it is fail-closed.** An unwelded
 mesh repeats a position under separate node indices, so two triangles that touch
@@ -53,20 +52,17 @@ constants are structural minima (a least-squares fit needs four points),
 published calibration constants with their source named, or float-noise floors,
 and each says which where it is defined.
 
-Determinism: each stage draws from its own ``random.Random`` seeded from the dump
-hash and the stage name, iteration is over sorted keys or index order, and region
-identity is a hash of sorted triangle indices bound to the dump -- never a Fusion
-face-group temp id, which is not stable across sessions. The same dump gives a
-bit-identical record.
+Determinism: nothing here samples, iteration is over sorted keys or index order,
+and region identity is a hash of sorted triangle indices bound to the dump --
+never a Fusion face-group temp id, which is a *temp* id and is not stable across
+sessions. The same dump gives a bit-identical record.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 import math
-import random
-import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .manifest import ValidationIssue, _in_closed_set, _reject_unknown_fields
@@ -75,13 +71,11 @@ from .mesh_fitting import (
     PrimitiveFit,
     Vec3,
     _add,
-    _canonical_direction,
     _centroid,
     _covariance,
     _cross,
     _dot,
     _extent,
-    _fit_circle_2d,
     _frame,
     _length,
     _raw_fit,
@@ -93,6 +87,7 @@ from .mesh_fitting import (
     _surface_normal,
     _symmetric_eigen,
     _unit,
+    fit_face_group,
     fit_primitive,
     parameter_uncertainty,
 )
@@ -107,6 +102,7 @@ REFUSAL_REASONS = {
     "mesh-degenerate",
     "mesh-not-welded",
     "feature-scale-below-noise",
+    "face-groups-absent",
     "segmentation-coverage-insufficient",
     "fit-record-stage-failed",
 }
@@ -130,14 +126,10 @@ STAGES = (
     "feature-scale",
     "normals",
     "curvature",
-    "detection",
-    "segmentation",
+    "face-groups",
     "disproof",
-    "face-group-agreement",
     "coverage",
 )
-
-_SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
 # Structural minima, not tuning knobs: a least-squares primitive fit needs four
 # points and its minimal sets need up to four oriented ones.
@@ -189,17 +181,6 @@ _MORAN_MIN_POINTS = 12            # below this the variance formula is not meani
 # they exist so a band or a determinant comparison stays meaningful on an
 # exactly-planar synthetic mesh.
 _BAND_FLOOR_RATIO = 1e-9
-_DEGENERATE_SINE = 1e-2           # spec 5.1: parallel normals, axis unobservable
-_DEGENERATE_DENOMINATOR = 1e-4    # spec 5.1: sphere centre unobservable
-_DEGENERATE_DETERMINANT = 1e-12
-# The torus axis construction's structural conditions. Neither is a tuning knob:
-# one bounds an alternating solve, the other asks whether a null direction is
-# unique at all.
-_TORUS_AXIS_PASSES = 6
-# The axis is the null direction of the samples' moment scatter. If the second
-# eigenvalue is not clearly larger, that direction is not unique and the sample
-# is describing a cylinder or a sphere, not a torus.
-_TORUS_AXIS_UNIQUENESS = 4.0
 
 
 # --------------------------------------------------------------------------
@@ -245,11 +226,6 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
         "the smallest feature this part actually has that the caller needs recovered",
     ),
     # noise, normals, curvature
-    "epsilon_sigmas": (
-        "float",
-        _positive,
-        "how many measured sigmas wide the RANSAC consensus band is",
-    ),
     "normal_alpha_deg": (
         "float",
         lambda v: 0.0 < v < 90.0,
@@ -260,39 +236,18 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
         _positive,
         "how many estimator sigmas of curvature read as zero when ranking candidate kinds",
     ),
-    # RANSAC
-    "ransac_eta_extract": (
+    # kind selection over a face group
+    "cylinder_normal_perpendicular_deg": (
         "float",
-        _probability,
-        "the miss probability at which the best candidate is good enough to extract",
+        lambda v: 0.0 < v < 90.0,
+        "how far a facet normal may sit from perpendicular to a cylinder's axis and still be "
+        "evidence of a cylinder rather than the sphere that fits the same vertices",
     ),
-    "ransac_eta_stop": (
+    "max_fillet_arc_deg": (
         "float",
-        _probability,
-        "the miss probability at which no interesting shape is likely left undiscovered",
-    ),
-    "max_candidate_rounds": (
-        "int",
-        lambda v: v >= 1,
-        "the hard ceiling on sampling rounds, so the search always terminates",
-    ),
-    "score_sample_size": ("int", lambda v: v >= 16, "how many points a candidate is lazily scored against"),
-    "refine_iterations": ("int", lambda v: 1 <= v <= 64, "how many fit/inlier/refit rounds sharpen the estimate"),
-    "max_primitives": ("int", lambda v: 1 <= v <= 4096, "the ceiling on detected features"),
-    "min_inlier_area_fraction": (
-        "float",
-        _unit_fraction,
-        "the smallest share of the part that is worth calling a feature",
-    ),
-    "rng_seed": ("int", _non_negative, "why this seed, and that reruns must reproduce it"),
-    # segmentation (Potts ICM)
-    "icm_sweeps": ("int", lambda v: 1 <= v <= 64, "how many relabelling sweeps before the labelling is called settled"),
-    "icm_smoothness": ("float", _non_negative, "how much a label boundary costs, in units of one typical edge"),
-    "icm_normal_weight": ("float", _non_negative, "how much normal disagreement counts against distance agreement"),
-    "icm_unclaimed_chi2": (
-        "float",
-        _positive,
-        "how badly a triangle must fit every primitive before unclaimed is the honest label",
+        lambda v: 0.0 < v <= 360.0,
+        "how much arc a cylindrical region may sweep and still be an edge round rather than a "
+        "bore or a boss",
     ),
     # exact-fit gates (passed through to mesh_fitting)
     "max_relative_residual": ("float", _positive, "the residual gate, relative to sampled extent"),
@@ -373,32 +328,11 @@ _FIT_GATE_NAMES = (
 )
 
 #: Besl and Jain (PAMI 1988): the (sgn H, sgn K) pair classifies the local
-#: surface type. Used to *rank* which minimal-set constructions are worth trying
-#: for a given seed, and to say what an unclaimed region actually looks like.
-#: Never a veto: the signature is per-seed, the dead zones already encode how
-#: noisy it is, and an ambiguous signature prunes nothing.
+#: surface type. Never a veto and never a kind selector -- curvature at scan
+#: noise is not accurate enough to be either. It says what an unfitted or
+#: unclaimed region actually *looks* like, so the record can report "saddle, and
+#: no supported primitive fits a saddle" rather than "nothing fit".
 CURVATURE_CLASSES = {"flat", "ridge-valley", "peak-pit", "saddle", "ambiguous"}
-
-#: Every list contains every kind. The signature sets the *order* -- the kinds it
-#: predicts are tried first -- and it never removes one. Pruning was tempting,
-#: because it is where the speed is, and it is wrong: the classifier collapses
-#: toward "flat" exactly when the mesh is coarse or noisy, and a pruning
-#: classifier would then offer RANSAC nothing but planes on precisely the parts
-#: that need a cylinder. Bias, not veto, is what the noise in the signature
-#: licenses. What the ranking still buys is the diagnostic: an unclaimed region
-#: reports its dominant signature, so the record can say "saddle, and no
-#: supported primitive fits a saddle" rather than "nothing fit".
-_RANKED_KINDS: dict[str, tuple[str, ...]] = {
-    "flat": ("plane", "cylinder", "cone", "sphere", "torus"),
-    "ridge-valley": ("cylinder", "cone", "torus", "plane", "sphere"),
-    "peak-pit": ("sphere", "torus", "cone", "cylinder", "plane"),
-    "saddle": ("torus", "cone", "cylinder", "sphere", "plane"),
-    "ambiguous": DETECTED_KINDS,
-}
-
-#: Minimal-set size per kind (spec 5.1), which is also what the (5.1) sampling
-#: probability bound is a function of.
-_MINIMAL_SET_SIZE = {"plane": 3, "sphere": 2, "cylinder": 2, "cone": 3, "torus": 4}
 
 #: Free parameters per kind, for the parsimony F test (spec 10.4).
 _FREE_PARAMETERS = {"plane": 3, "sphere": 4, "cylinder": 5, "cone": 6, "torus": 7}
@@ -740,13 +674,12 @@ def _build_topology(mesh: WeldedMesh) -> _Topology:
 
 
 class _Grid:
-    """Uniform grid over the point set: fixed-radius queries and localized sampling.
+    """Uniform grid over the point set: fixed-radius queries, and block parity.
 
     Spec 11.1 chooses a grid over a kd-tree because the queries here are all
     fixed-radius at a single scale and a grid is O(1) per query with no tree to
-    build. Localized sampling wants a *hierarchy*, and one grid supplies it: a
-    cell at level L is the base cell key right-shifted by L, so L levels cost one
-    dict each and no octree.
+    build. Two survivors of the deleted RANSAC layer use it: neighbourhood
+    normals (``near``) and the held-out gate's checkerboard split (``keys``).
     """
 
     def __init__(self, points: Sequence[Vec3], indices: Sequence[int], cell: float) -> None:
@@ -762,17 +695,6 @@ class _Grid:
             )
             self.keys[index] = key
             self.base.setdefault(key, []).append(index)
-        self.levels: list[dict[tuple[int, int, int], list[int]]] = [self.base]
-
-    def build_levels(self, count: int) -> None:
-        while len(self.levels) < max(1, count):
-            level = len(self.levels)
-            merged: dict[tuple[int, int, int], list[int]] = {}
-            for key, members in self.levels[0].items():
-                merged.setdefault((key[0] >> level, key[1] >> level, key[2] >> level), []).extend(members)
-            for members in merged.values():
-                members.sort()
-            self.levels.append(merged)
 
     def near(self, points: Sequence[Vec3], centre: Vec3, radius: float) -> list[int]:
         span = int(math.ceil(radius / self.cell))
@@ -791,10 +713,6 @@ class _Grid:
         out.sort()
         return out
 
-    def cell_members(self, index: int, level: int) -> list[int]:
-        key = self.keys[index]
-        return self.levels[level].get((key[0] >> level, key[1] >> level, key[2] >> level), [])
-
 
 def _median(values: Sequence[float]) -> float:
     ordered = sorted(values)
@@ -803,12 +721,6 @@ def _median(values: Sequence[float]) -> float:
         return 0.0
     mid = n // 2
     return ordered[mid] if n % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
-
-
-def _stage_rng(dump_sha256: str, stage: str) -> random.Random:
-    """Per-stage seeding, so stages cannot perturb each other's streams (spec 2.3)."""
-    digest = hashlib.sha256(f"{dump_sha256}:{stage}".encode("utf-8")).digest()
-    return random.Random(int.from_bytes(digest[:8], "big"))
 
 
 # --------------------------------------------------------------------------
@@ -1123,562 +1035,13 @@ def _estimate_curvature(
 
 
 # --------------------------------------------------------------------------
-# minimal-set candidate construction (spec 5.1)
+# regions from Fusion's face groups
 # --------------------------------------------------------------------------
-
-_Candidate = tuple[str, dict[str, Any]]
-
-
-def _plane_from(samples: Sequence[tuple[Vec3, Vec3]], epsilon: float, cos_alpha: float) -> _Candidate | None:
-    (p1, n1), (p2, _n2), (p3, _n3) = samples[:3]
-    normal = _unit(_cross(_sub(p2, p1), _sub(p3, p1)))
-    if normal is None:
-        return None
-    # A plane through three points whose measured normals disagree with it is a
-    # chord through curved surface. Rejecting here is what keeps plane candidates
-    # from poisoning cylinders.
-    for _p, n in samples[:3]:
-        if abs(_dot(normal, n)) < cos_alpha:
-            return None
-    canonical = _canonical_direction(normal)
-    return ("plane", {"normal": canonical, "offset": _dot(canonical, p1), "point_on_plane": p1})
-
-
-def _sphere_from(p1: Vec3, n1: Vec3, p2: Vec3, n2: Vec3, epsilon: float) -> _Candidate | None:
-    b = _dot(n1, n2)
-    den = 1.0 - b * b
-    if den < _DEGENERATE_DENOMINATOR:
-        return None
-    d = _sub(p2, p1)
-    t1 = (_dot(n1, d) - b * _dot(n2, d)) / den
-    t2 = (b * _dot(n1, d) - _dot(n2, d)) / den
-    f1 = _add(p1, _scale(n1, t1))
-    f2 = _add(p2, _scale(n2, t2))
-    if _length(_sub(f1, f2)) > 2.0 * epsilon:
-        return None
-    centre = _scale(_add(f1, f2), 0.5)
-    r1, r2 = _length(_sub(centre, p1)), _length(_sub(centre, p2))
-    if abs(r1 - r2) > 2.0 * epsilon:
-        return None
-    radius = 0.5 * (r1 + r2)
-    if not math.isfinite(radius) or radius <= 0.0:
-        return None
-    return ("sphere", {"center": centre, "radius": radius})
-
-
-def _cylinder_from(p1: Vec3, n1: Vec3, p2: Vec3, n2: Vec3, epsilon: float) -> _Candidate | None:
-    normal_cross = _cross(n1, n2)
-    if _length(normal_cross) < _DEGENERATE_SINE:
-        return None
-    axis = _unit(normal_cross)
-    if axis is None:
-        return None
-    u, v = _frame(axis)
-    a2 = (_dot(_sub(p2, p1), u), _dot(_sub(p2, p1), v))
-    d1 = (_dot(n1, u), _dot(n1, v))
-    d2 = (_dot(n2, u), _dot(n2, v))
-    den = -d1[0] * d2[1] + d1[1] * d2[0]
-    if abs(den) < _DEGENERATE_DETERMINANT:
-        return None
-    t = (-a2[0] * d2[1] + a2[1] * d2[0]) / den
-    anchor = _add(p1, _add(_scale(u, t * d1[0]), _scale(v, t * d1[1])))
-    r1 = _axis_distance(p1, anchor, axis)
-    r2 = _axis_distance(p2, anchor, axis)
-    if abs(r1 - r2) > 2.0 * epsilon:
-        return None
-    radius = 0.5 * (r1 + r2)
-    if not math.isfinite(radius) or radius <= 0.0:
-        return None
-    return ("cylinder", {"axis_point": anchor, "axis_direction": _canonical_direction(axis), "radius": radius})
 
 
 def _axis_distance(point: Vec3, anchor: Vec3, axis: Vec3) -> float:
     w = _sub(point, anchor)
     return _length(_sub(w, _scale(axis, _dot(w, axis))))
-
-
-def _cone_from(samples: Sequence[tuple[Vec3, Vec3]], min_half_angle: float) -> _Candidate | None:
-    (p1, n1), (p2, n2), (p3, n3) = samples[:3]
-    apex = _solve([n1, n2, n3], [_dot(n1, p1), _dot(n2, p2), _dot(n3, p3)])
-    if apex is None:
-        # Normals coplanar: this sample describes a cylinder, and a cylinder
-        # candidate from the same sample will find it.
-        return None
-    apex_point: Vec3 = (apex[0], apex[1], apex[2])
-    rays = [_unit(_sub(p, apex_point)) for p, _n in samples[:3]]
-    if any(r is None for r in rays):
-        return None
-    axis = _unit(_cross(_sub(rays[1], rays[0]), _sub(rays[2], rays[0])))  # type: ignore[arg-type]
-    if axis is None:
-        return None
-    if _dot(axis, _add(_add(rays[0], rays[1]), rays[2])) < 0.0:  # type: ignore[arg-type]
-        axis = _scale(axis, -1.0)
-    half = sum(math.acos(max(-1.0, min(1.0, _dot(r, axis)))) for r in rays) / 3.0  # type: ignore[arg-type]
-    if not (min_half_angle < half < math.radians(89.0)):
-        return None
-    return ("cone", {"apex": apex_point, "axis_direction": axis, "half_angle_deg": math.degrees(half)})
-
-
-def _torus_from(
-    samples: Sequence[tuple[Vec3, Vec3]], epsilon: float, extent: float, max_radius_ratio: float
-) -> _Candidate | None:
-    """Every surface normal line of a torus meets its axis. Solve for that axis.
-
-    Spec 5.1 constructs this from the pairwise closest-approach midpoints of four
-    normal lines, rejecting a pair whose gap exceeds ``2 * epsilon``. **That
-    construction cannot fire on a real torus**, and this is measured rather than
-    argued: two normal lines of a torus meet *the axis*, not each other, and they
-    meet each other only when their two points share a tube angle. Over six
-    hundred sampled minimal sets on a clean 110x34 torus it produced zero
-    candidates. Relaxing the gap does not fix it either -- the midpoints are then
-    not axis points and the line through them is not the axis.
-
-    The condition that is actually true of every sample is coplanarity: the axis
-    ``a`` through a point ``c`` satisfies ``det[p_i - c, n_i, a] = 0`` for every
-    oriented sample, because the normal line and the axis must meet. That is four
-    equations, and each unknown is linear when the other is held:
-
-    * given ``c``: ``a . ((p_i - c) x n_i) = 0``, so ``a`` is the null direction
-      of those four vectors -- the smallest eigenvector of their scatter;
-    * given ``a``: ``c . (n_i x a) = p_i . (n_i x a)``, a linear system in ``c``.
-
-    Alternating the two converges in a handful of passes from the sample
-    centroid. Then the torus is a circle in the axial half-plane (spec 5.8), so
-    ``_fit_circle_2d`` over the four ``(rho, t)`` projections finishes it.
-
-    Degeneracies fall through to the simpler kinds rather than becoming a wild
-    torus: normals that give no null direction (a plane), a scatter with no
-    unique smallest eigenvector (a cylinder or sphere), a tube at least as fat as
-    its major radius (a spindle), or a major radius past the flat-strip gate.
-    """
-    if len(samples) < 4:
-        return None
-    points = [p for p, _n in samples[:4]]
-    normals = [n for _p, n in samples[:4]]
-    centre = _centroid(points)
-    axis: Vec3 | None = None
-    for _ in range(_TORUS_AXIS_PASSES):
-        moments = [_cross(_sub(p, centre), n) for p, n in zip(points, normals)]
-        scatter = [[sum(m[i] * m[j] for m in moments) for j in range(3)] for i in range(3)]
-        values, vectors = _symmetric_eigen(scatter)
-        # Eigenvalues ascend, so values[0] is the candidate null direction. It is
-        # only a *direction* if the next one is clearly larger; otherwise the
-        # moments span less than two dimensions and the sample is describing a
-        # cylinder or a sphere, which their own candidates will find.
-        if values[1] <= _TORUS_AXIS_UNIQUENESS * values[0]:
-            # No unique null direction: the normals are already consistent with a
-            # cylinder or a sphere, and those candidates will find it.
-            return None
-        axis = vectors[0]
-        # Solve for the centre *across* the axis only. Every row here is
-        # ``n_i x a``, which is perpendicular to ``a`` by construction, so the
-        # along-axis component of the centre is genuinely undetermined and a 3x3
-        # solve for it is singular every time -- not sometimes. Two unknowns in
-        # the perpendicular frame is the well-posed version of the same equation.
-        u, v = _frame(axis)
-        rows = [[0.0, 0.0], [0.0, 0.0]]
-        rhs = [0.0, 0.0]
-        for p, n in zip(points, normals):
-            row = _cross(n, axis)
-            basis = (_dot(u, row), _dot(v, row))
-            target = _dot(_sub(p, centre), row)
-            for i in range(2):
-                rhs[i] += basis[i] * target
-                for j in range(2):
-                    rows[i][j] += basis[i] * basis[j]
-        solution = _solve(rows, rhs)
-        if solution is None or not all(math.isfinite(c) for c in solution):
-            return None
-        centre = _add(centre, _add(_scale(u, solution[0]), _scale(v, solution[1])))
-    if axis is None:
-        return None
-
-    rhos = [_axis_distance(p, centre, axis) for p in points]
-    ts = [_dot(_sub(p, centre), axis) for p in points]
-    circle = _fit_circle_2d(rhos, ts)
-    if circle is None:
-        return None
-    major, t0, minor = circle
-    if not all(math.isfinite(value) for value in (major, t0, minor)) or minor <= 0.0:
-        return None
-    if minor >= major:
-        return None
-    if major > max_radius_ratio * extent:
-        return None
-    return (
-        "torus",
-        {
-            "center": _add(centre, _scale(axis, t0)),
-            "axis_direction": _canonical_direction(axis),
-            "radius": major,
-            "minor_radius": minor,
-        },
-    )
-
-
-def _construct(
-    kind: str,
-    samples: Sequence[tuple[Vec3, Vec3]],
-    epsilon: float,
-    cos_alpha: float,
-    extent: float,
-    spec: DetectionSpec,
-) -> _Candidate | None:
-    if kind == "plane":
-        return _plane_from(samples, epsilon, cos_alpha)
-    if kind == "sphere":
-        return _sphere_from(samples[0][0], samples[0][1], samples[1][0], samples[1][1], epsilon)
-    if kind == "cylinder":
-        return _cylinder_from(samples[0][0], samples[0][1], samples[1][0], samples[1][1], epsilon)
-    if kind == "cone":
-        return _cone_from(samples, math.atan(float(spec.value("min_taper_ratio"))))
-    return _torus_from(samples, epsilon, extent, float(spec.value("max_radius_ratio")))
-
-
-# --------------------------------------------------------------------------
-# scoring, refinement, extraction cascade (spec 5.5 - 5.8)
-# --------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class _Detected:
-    kind: str
-    parameters: dict[str, Any]
-    points: list[int]
-
-
-def _inliers(
-    candidate: _Candidate,
-    pool: Sequence[int],
-    mesh: WeldedMesh,
-    frame: _PointFrame,
-    edge_adjacent: Sequence[bool],
-    epsilon: float,
-    cos_alpha: float,
-) -> list[int]:
-    """Distance band plus normal agreement (spec 5.5).
-
-    Distance alone is not consensus: a plane cutting through a solid has every
-    triangle it crosses inside the band, and only the normal test tells the
-    surface from the section. Points flagged ``edge_adjacent`` are exempt from
-    the normal test, per spec 4.1.
-    """
-    kind, parameters = candidate
-    points = [mesh.vertices[i] for i in pool]
-    residuals = _residuals(kind, parameters, points)
-    out: list[int] = []
-    for offset, index in enumerate(pool):
-        if abs(residuals[offset]) > epsilon:
-            continue
-        if not edge_adjacent[index]:
-            normal = frame.normals[index]
-            surface = _surface_normal(kind, parameters, points[offset])
-            if normal is None or surface is None or abs(_dot(normal, surface)) < cos_alpha:
-                continue
-        out.append(index)
-    return out
-
-
-def _largest_point_component(indices: Sequence[int], topo: _Topology) -> list[int]:
-    """The biggest mesh-connected run of the inlier set.
-
-    Spec 5.5 rasterizes each kind's own 2-D chart and flood-fills it. This uses
-    the mesh's own adjacency graph instead: it needs no per-kind chart, no
-    wraparound stitching and no octahedral sphere map, and it answers the same
-    question -- is this one piece of surface? -- from real topology rather than
-    from a rasterization of it. The one thing the chart would add is joining two
-    inlier patches across a hole in the mesh, which is not a join we want.
-    ``ponytail:`` chart bitmaps if a real scan shows components split by
-    tessellation artifacts that the mesh graph should have joined.
-    """
-    members = set(indices)
-    best: list[int] = []
-    seen: set[int] = set()
-    for start in indices:
-        if start in seen:
-            continue
-        component = [start]
-        seen.add(start)
-        frontier = [start]
-        while frontier:
-            nxt: list[int] = []
-            for index in frontier:
-                for other in topo.point_neighbours[index]:
-                    if other in members and other not in seen:
-                        seen.add(other)
-                        component.append(other)
-                        nxt.append(other)
-            frontier = nxt
-        if len(component) > len(best):
-            best = component
-    return sorted(best)
-
-
-def _refine(
-    candidate: _Candidate,
-    pool: Sequence[int],
-    mesh: WeldedMesh,
-    topo: _Topology,
-    frame: _PointFrame,
-    edge_adjacent: Sequence[bool],
-    epsilon: float,
-    cos_alpha: float,
-    spec: DetectionSpec,
-) -> _Detected | None:
-    """Propose, refine, iterate to a fixed point (spec 5.8).
-
-    RANSAC's candidate is built from as few as two points; the exact fitters are
-    what give the parameters least-squares meaning. The loop is not monotone --
-    the inlier set is a step function of the parameters -- so the criterion is
-    fixed point or best-seen, bounded. A refit that fails is candidate rejection,
-    never a fallback to the raw RANSAC parameters, which carry no least-squares
-    meaning at all.
-    """
-    kind = candidate[0]
-    current = candidate
-    best: _Detected | None = None
-    best_score = (-1, math.inf)
-    previous: list[int] | None = None
-    for _ in range(int(spec.value("refine_iterations"))):
-        component = _largest_point_component(
-            _inliers(current, pool, mesh, frame, edge_adjacent, epsilon, cos_alpha), topo
-        )
-        if len(component) < _MIN_REGION_POINTS:
-            break
-        points = [mesh.vertices[i] for i in component]
-        extent = _extent(points)
-        if extent <= 0.0:
-            break
-        refit = _raw_fit(
-            points,
-            kind,
-            extent,
-            float(spec.value("min_taper_ratio")),
-            float(spec.value("min_torus_major_ratio")),
-            _fit_axis_hint(current),
-        )
-        # The pair kept is (parameters, the inliers *those* parameters produced).
-        # Pairing the refit's parameters with the pre-refit inlier set is the
-        # subtle version of this loop's only real trap: a refit that wanders then
-        # inherits the previous estimate's support and wins on a count it did not
-        # earn, and every downstream gate is handed a large region whose points
-        # are nowhere near its own surface.
-        residual = _rms(_residuals(current[0], current[1], points))
-        score = (len(component), residual)
-        if score[0] > best_score[0] or (score[0] == best_score[0] and score[1] < best_score[1]):
-            best_score = score
-            best = _Detected(kind=kind, parameters=dict(current[1]), points=component)
-        if not refit.accepted:
-            break
-        if previous is not None and component == previous:
-            break
-        previous = component
-        current = (kind, dict(refit.parameters))
-    return best
-
-
-def _fit_axis_hint(candidate: _Candidate) -> Vec3 | None:
-    return candidate[1].get("axis_direction")
-
-
-def _miss_probability(shape_points: int, live: int, levels: int, minimal_set: int, rounds: int) -> float:
-    """Spec 5.2: (1 - p_hat)^T, with p_hat the localized-sampling lower bound (5.1)."""
-    if live <= 0 or shape_points <= 0 or rounds <= 0:
-        return 1.0
-    p = (shape_points / live) * (1.0 / max(1, levels)) * (0.5 ** (minimal_set - 1))
-    p = min(max(p, 0.0), 1.0)
-    if p <= 0.0:
-        return 1.0
-    return (1.0 - p) ** rounds
-
-
-def _detect(state: dict[str, Any]) -> list[_Detected]:
-    mesh: WeldedMesh = state["mesh"]
-    topo: _Topology = state["topology"]
-    spec: DetectionSpec = state["spec"]
-    frame: _PointFrame = state["frame"]
-    edge_adjacent: list[bool] = state["edge_adjacent"]
-    grid: _Grid = state["grid"]
-    epsilon: float = state["epsilon"]
-    cos_alpha = math.cos(math.radians(state["normals"]["alpha_deg"]))
-    rng = _stage_rng(mesh.dump_sha256, f"detection:{int(spec.value('rng_seed'))}")
-
-    live = sorted(state["live_points"])
-    live_set = set(live)
-    levels = len(grid.levels)
-    detected: list[_Detected] = []
-    minimum_points = max(
-        _MIN_REGION_POINTS,
-        int(float(spec.value("min_inlier_area_fraction")) * len(live)),
-    )
-    rounds = 0
-    max_rounds = int(spec.value("max_candidate_rounds"))
-    eta_extract = float(spec.value("ransac_eta_extract"))
-    eta_stop = float(spec.value("ransac_eta_stop"))
-    sample_size = int(spec.value("score_sample_size"))
-    serial = 0
-    best: tuple[int, int, _Candidate] | None = None  # (score, -serial, candidate)
-
-    while len(detected) < int(spec.value("max_primitives")) and len(live_set) >= minimum_points:
-        pool = sorted(live_set)
-        subsample = sorted(rng.sample(pool, min(sample_size, len(pool))))
-        # The best candidate *per kind*, not one best overall. A minimal set of
-        # four points constrains a plane far better than it constrains a torus,
-        # so raw consensus at proposal time systematically favours the simpler
-        # kinds -- and the whole point of refinement is that a rough candidate of
-        # the right kind beats a sharp candidate of the wrong one once it has
-        # been fitted to its own inliers. Refining one per kind costs at most
-        # five refinements per extraction and is what lets a torus ever win.
-        best_by_kind: dict[str, tuple[int, int, _Candidate]] = {}
-        rounds_this_shape = 0
-        while rounds_this_shape < max_rounds:
-            rounds += 1
-            rounds_this_shape += 1
-            seed = pool[rng.randrange(len(pool))]
-            level = rng.randrange(levels)
-            cell = [i for i in grid.cell_members(seed, level) if i in live_set]
-            picks = [seed]
-            source = cell if len(cell) >= 4 else pool
-            for _ in range(3):
-                picks.append(source[rng.randrange(len(source))])
-            samples: list[tuple[Vec3, Vec3]] = []
-            for index in picks:
-                normal = frame.normals[index]
-                if normal is None:
-                    samples = []
-                    break
-                samples.append((mesh.vertices[index], normal))
-            if len(samples) < 4:
-                continue
-            for kind in _RANKED_KINDS[frame.curvature_class[seed]]:
-                candidate = _construct(kind, samples, epsilon, cos_alpha, topo.extent, spec)
-                if candidate is None:
-                    continue
-                serial += 1
-                hits = len(
-                    _inliers(candidate, subsample, mesh, frame, edge_adjacent, epsilon, cos_alpha)
-                )
-                score = int(hits * len(pool) / max(1, len(subsample)))
-                held = best_by_kind.get(kind)
-                if held is None or score > held[0] or (score == held[0] and -serial > held[1]):
-                    best_by_kind[kind] = (score, -serial, candidate)
-            leader = max((v[0] for v in best_by_kind.values()), default=0)
-            if leader > 0 and _miss_probability(
-                leader, len(live_set), levels, 4, rounds_this_shape
-            ) <= eta_extract:
-                break
-            if _miss_probability(minimum_points, len(live_set), levels, 4, rounds_this_shape) <= eta_stop:
-                break
-        if not best_by_kind:
-            break
-
-        refined_best: _Detected | None = None
-        for kind in DETECTED_KINDS:
-            held = best_by_kind.get(kind)
-            if held is None:
-                continue
-            refined = _refine(
-                held[2], pool, mesh, topo, frame, edge_adjacent, epsilon, cos_alpha, spec
-            )
-            if refined is None:
-                continue
-            if refined_best is None or len(refined.points) > len(refined_best.points):
-                refined_best = refined
-        if refined_best is None or len(refined_best.points) < minimum_points:
-            break
-        detected.append(refined_best)
-        live_set.difference_update(refined_best.points)
-        if not live_set:
-            break
-    state["candidate_rounds"] = rounds
-    return detected
-
-
-# --------------------------------------------------------------------------
-# segmentation as refinement: Potts ICM over triangles (spec 6)
-# --------------------------------------------------------------------------
-
-
-def _label_triangles(state: dict[str, Any], detected: Sequence[_Detected]) -> list[int]:
-    """Assign every triangle to a primitive or to unclaimed, by local energy descent.
-
-    Exact multi-label minimization is graph-cut alpha-expansion, which needs a
-    max-flow solver: implementable in stdlib but large and slow in CPython at
-    200k triangles. ICM is the substitute the spec chooses, and it is a good one
-    here because the data terms are strong -- primitives are 3 sigma apart except
-    in blend bands -- so its local minima are confined to one or two triangles of
-    boundary jitter. ``ponytail:`` alpha-expansion if boundary quality on real
-    scans proves insufficient; cost is a max-flow implementation.
-
-    Reopening assignment globally is also what fixes greedy extraction's known
-    failure: a large plane can steal the flank of an adjacent tangent cylinder
-    during the cascade, so cascade order affects discovery but must not affect
-    the final labelling.
-    """
-    mesh: WeldedMesh = state["mesh"]
-    topo: _Topology = state["topology"]
-    spec: DetectionSpec = state["spec"]
-    epsilon: float = state["epsilon"]
-    # The labelling has to use the same scales detection used, or a triangle that
-    # was an inlier of a surface becomes an outlier of its own label. That means
-    # the *surface* scale -- noise plus discretization -- not the noise alone,
-    # and the agreement half-angle the normal check actually ran at.
-    sigma: float = max(state["noise"]["sigma"], _BAND_FLOOR_RATIO * topo.extent)
-    sigma_theta = max(math.radians(state["normals"]["alpha_deg"]) / 3.0, 1e-9)
-    smoothness = float(spec.value("icm_smoothness"))
-    normal_weight = float(spec.value("icm_normal_weight"))
-    unclaimed_cost = float(spec.value("icm_unclaimed_chi2"))
-    edge_unit = topo.median_edge if topo.median_edge > 0.0 else 1.0
-
-    labels = [-1] * len(mesh.triangles)
-    data: list[dict[int, float]] = [{} for _ in mesh.triangles]
-    for index in topo.valid:
-        centre = topo.centroids[index]
-        corners = [mesh.vertices[v] for v in mesh.triangles[index]]
-        for label, primitive in enumerate(detected):
-            # Measured at the triangle's own vertices, not at its barycenter: a
-            # facet's barycenter sits a sagitta inside the surface its vertices
-            # lie on, and on a coarse mesh that offset is larger than the noise.
-            distance = _rms(_residuals(primitive.kind, primitive.parameters, corners))
-            if distance > 5.0 * epsilon:
-                continue
-            surface = _surface_normal(primitive.kind, primitive.parameters, centre)
-            angle = (
-                math.acos(max(-1.0, min(1.0, abs(_dot(surface, topo.tri_normals[index])))))
-                if surface is not None
-                else math.pi / 2.0
-            )
-            data[index][label] = topo.areas[index] * (
-                (distance / sigma) ** 2 + normal_weight * (angle / sigma_theta) ** 2
-            )
-        best_label, best_cost = -1, topo.areas[index] * unclaimed_cost
-        for label, cost in sorted(data[index].items()):
-            if cost < best_cost:
-                best_label, best_cost = label, cost
-        labels[index] = best_label
-
-    for _sweep in range(int(spec.value("icm_sweeps"))):
-        changed = False
-        for index in topo.valid:
-            options = sorted(data[index]) + [-1]
-            best_label, best_cost = labels[index], math.inf
-            for option in options:
-                cost = (
-                    data[index].get(option, topo.areas[index] * unclaimed_cost)
-                    if option >= 0
-                    else topo.areas[index] * unclaimed_cost
-                )
-                for other in topo.tri_neighbours[index]:
-                    if labels[other] != option:
-                        cost += smoothness * edge_unit
-                if cost < best_cost:
-                    best_label, best_cost = option, cost
-            if best_label != labels[index]:
-                labels[index] = best_label
-                changed = True
-        if not changed:
-            break
-    return labels
 
 
 # --------------------------------------------------------------------------
@@ -2150,7 +1513,6 @@ def _stage_topology(state: dict[str, Any]) -> dict[str, Any] | None:
     live = sorted({v for index in topo.valid for v in mesh.triangles[index]})
     state["live_points"] = live
     state["grid"] = _Grid(mesh.vertices, live, max(2.0 * topo.median_edge, 1e-9))
-    state["grid"].build_levels(max(1, int(math.log2(max(2.0, topo.extent / max(topo.median_edge, 1e-9))))))
     return None
 
 
@@ -2169,16 +1531,6 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     state["noise"] = {"sigma": sigma, "surface_scale": surface_scale}
     if inconsistent:
         state["flags"].append("noise-model-inconsistent")
-    # The band is sized by the *noise*, not the surface scale, because every
-    # point it tests is a mesh vertex and mesh vertices lie on the surface -- the
-    # facet chord sags between them, not at them. Sizing it by the surface scale
-    # instead would set the band by how much the surface curves across a
-    # neighbourhood, which is real geometry rather than error, and a plane
-    # candidate would then harvest a swathe of any gently curved part.
-    state["epsilon"] = max(
-        float(state["spec"].value("epsilon_sigmas")) * sigma,
-        _BAND_FLOOR_RATIO * topo.extent,
-    )
     dihedral = _dihedral_degrees(topo)
     state["record"]["noise"] = {
         "sigma": sigma,
@@ -2190,13 +1542,13 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "sigma_over_median_edge": sigma / topo.median_edge if topo.median_edge > 0.0 else math.inf,
         "median_abs_dihedral_deg": _median(dihedral) if dihedral else None,
         "interior_edge_count": len(dihedral),
-        "consensus_band": state["epsilon"],
         "estimators_consistent": not inconsistent,
         "note": (
             "sigma is measurement noise, estimated about a local quadric so surface curvature "
             "does not read as noise, and cross-checked against the calibrated dihedral median. "
-            "surface_scale adds the mesh's own discretization, and it is what sizes the consensus "
-            "band. Neither decides whether to give up: that is the feature-scale budget."
+            "surface_scale adds the mesh's own discretization; it sizes the power floor below "
+            "which the residual-structure test has nothing to test. Neither decides whether to "
+            "give up: that is the feature-scale budget."
         ),
     }
     return None
@@ -2294,30 +1646,59 @@ def _stage_curvature(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _stage_detection(state: dict[str, Any]) -> dict[str, Any] | None:
-    state["detected"] = _detect(state)
-    state["record"]["detection"] = {
-        "candidate_rounds": state.get("candidate_rounds", 0),
-        "detected": [
-            {"kind": d.kind, "point_count": len(d.points)} for d in state["detected"]
-        ],
-    }
-    return None
+def _stage_face_groups(state: dict[str, Any]) -> dict[str, Any] | None:
+    """The regions, read from the dump. Refused when the dump carries none.
 
+    ``MeshGenerateFaceGroups`` under ``AccurateGenerateFaceGroupsType`` matches
+    mesh faces to analytic primitives, and ``triangleFaceGroupTempIds`` delivers
+    the result as one group id per triangle. That is a complete region
+    assignment, so this stage assigns and does not infer.
 
-def _stage_segmentation(state: dict[str, Any]) -> dict[str, Any] | None:
-    detected: list[_Detected] = state["detected"]
-    labels = _label_triangles(state, detected)
+    There is deliberately no fallback. A dump with no grouping was extracted
+    before the face-group transaction ran, or from a Fusion that reported none,
+    and inventing regions here is exactly the silently-wrong answer the deleted
+    RANSAC layer produced. The refusal names the command that fixes it.
+    """
+    mesh: WeldedMesh = state["mesh"]
     topo: _Topology = state["topology"]
+    record = state["record"]
+    if mesh.face_groups is None:
+        record["face_groups"] = {"present": False, "group_count": 0, "source": None}
+        return _refusal(
+            "face-groups-absent",
+            {"face_groups_source": state["dump"].metadata.get("face_groups_source")},
+            "The regions are Fusion's face groups and this dump carries none. Run "
+            "`emit-mesh-face-groups` against the mesh body, then re-extract: extraction reads "
+            "whatever grouping the body carries and never generates one of its own.",
+        )
     groups: dict[int, list[int]] = {}
     for index in topo.valid:
-        groups.setdefault(labels[index], []).append(index)
-    state["labels"] = labels
-    state["regions_by_label"] = groups
-    state["record"]["segmentation"] = {
-        "method": "Potts energy minimized by ICM over triangles, then connectivity enforced",
-        "labelled_triangles": sum(len(v) for k, v in groups.items() if k >= 0),
-        "unclaimed_triangles": len(groups.get(-1, [])),
+        groups.setdefault(int(mesh.face_groups[index]), []).append(index)
+    # Relabelled to a dense range in sorted temp-id order. The temp id itself is
+    # never carried into the record: it is a *temp* id and does not survive the
+    # session it was read in.
+    state["regions_by_label"] = {
+        label: sorted(groups[temp_id]) for label, temp_id in enumerate(sorted(groups))
+    }
+    record["face_groups"] = {
+        "present": True,
+        "group_count": len(groups),
+        "source": "triangleFaceGroupTempIds",
+        # One group over a whole part is a grouping that failed, and the
+        # face-group transaction refuses it there, where re-running with a
+        # different method is the fix. Here it is simply one region: a fixture of
+        # a single tube honestly *is* one group, and the coverage floor already
+        # decides whether what came back explains enough of the part.
+        "single_group": len(groups) == 1,
+    }
+    record["segmentation"] = {
+        "method": (
+            "Fusion MeshGenerateFaceGroups, read per triangle from triangleFaceGroupTempIds; "
+            "this module fits and disproves, it does not segment"
+        ),
+        "labelled_triangles": sum(len(v) for v in groups.values()),
+        "unclaimed_triangles": 0,
+        "group_count": len(groups),
     }
     return None
 
@@ -2326,16 +1707,22 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
     mesh: WeldedMesh = state["mesh"]
     topo: _Topology = state["topology"]
     spec: DetectionSpec = state["spec"]
-    detected: list[_Detected] = state["detected"]
     groups: dict[int, list[int]] = state["regions_by_label"]
     surface_scale = state["noise"]["surface_scale"]
     grid: _Grid = state["grid"]
     gates = spec.fit_gates()
+    perpendicular = float(spec.value("cylinder_normal_perpendicular_deg"))
 
     regions: list[dict[str, Any]] = []
+    # The residual-structure baseline: how much spatial structure this part's own
+    # planes carry, as a floor under the Moran cap. It needs *two* planes to
+    # exist. With one, the baseline is that plane's own z and the gate licenses
+    # whatever it was about to test -- a 20-degree arc of a cylinder fitted as a
+    # plane raised a Moran z of 15.7 and then raised its own cap to 19.7.
+    plane_zs: list[float] = []
     plane_baseline: float | None = None
     prepared: list[tuple[int, list[int], list[int], PrimitiveFit]] = []
-    for label in sorted(k for k in groups if k >= 0):
+    for label in sorted(groups):
         triangles = sorted(groups[label])
         if len(triangles) < _MIN_REGION_TRIANGLES:
             continue
@@ -2343,25 +1730,33 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
         if len(point_indices) < _MIN_REGION_POINTS:
             continue
         points = [mesh.vertices[i] for i in point_indices]
-        # Seeded with the axis detection already established. Re-deriving it from
-        # the principal axes discards evidence the pipeline paid for, and on a
-        # surface of revolution whose points form a band the principal axes are a
-        # poor start -- which is exactly when the seed matters.
-        fit = fit_primitive(
+        # Every kind, ranked by residual, then the facet normals break the one
+        # tie the vertices cannot: a two-ring bore or round lies exactly on a
+        # sphere as well as on its cylinder. There is no seed axis to pass -- the
+        # deleted detector was where one came from -- so each fitter derives its
+        # own from the group's points, which is what the measurement over the
+        # real STLs exercised.
+        fits = fit_face_group(
             points,
-            detected[label].kind,
-            seed_axis=detected[label].parameters.get("axis_direction"),
+            kinds=DETECTED_KINDS,
+            facet_normals=[topo.tri_normals[t] for t in triangles],
+            cylinder_perpendicular_deg=perpendicular,
             **gates,
         )
+        fit = fits[0]
         prepared.append((label, triangles, point_indices, fit))
         if fit.accepted and fit.kind == "plane":
             structure = _moran_i(list(_residuals(fit.kind, fit.parameters, points)), point_indices, topo)
-            if structure is not None and (plane_baseline is None or structure["z"] < plane_baseline):
-                plane_baseline = structure["z"]
+            if structure is not None:
+                plane_zs.append(structure["z"])
+    if len(plane_zs) >= 2:
+        plane_baseline = min(plane_zs)
 
     for label, triangles, point_indices, fit in prepared:
         points = [mesh.vertices[i] for i in point_indices]
         area = sum(topo.areas[t] for t in triangles)
+        # The kind the ranking selected, before any promotion rebinds ``fit``.
+        selected_kind = fit.kind
         support: dict[str, Any] = dict(fit.support)
         checked: list[str] = list(support.get("checked", ()))
         support["checked"] = checked
@@ -2477,11 +1872,12 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
         if not accepted and fit.accepted and fit.kind in _RICHER_KINDS:
             promoted = _promote(fit, points, spec, support.get("n_eff", float(len(points))))
             if promoted is not None:
+                refused_kind = fit.kind
                 fit, accepted, rejection = promoted, True, None
                 support = dict(fit.support)
                 checked = list(support.get("checked", ()))
                 support["checked"] = checked
-                support["promoted_from"] = detected[label].kind
+                support["promoted_from"] = refused_kind
                 checked.append("kind-promotion")
 
         uncertainty: dict[str, float] = {}
@@ -2521,7 +1917,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 "area": area,
                 "area_fraction": area / topo.total_area if topo.total_area > 0.0 else 0.0,
                 "bounding_box": [list(lo), list(hi)],
-                "detected_kind": detected[label].kind,
+                "detected_kind": selected_kind,
                 "fit": recorded.to_dict(),
                 "accepted": accepted,
                 "dominant_curvature": _dominant_class(state["frame"], point_indices),
@@ -2534,8 +1930,9 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
         "moran_plane_baseline_z": plane_baseline,
         "note": (
             "Every accepted fit survived support floors, Moran's I on the mesh graph, a spatially "
-            "blocked held-out refit, and a nested-kind parsimony F test. A consensus set that "
-            "failed one is kept with the gate that killed it, never dropped."
+            "blocked held-out refit, and a nested-kind parsimony F test. Fusion supplied the "
+            "regions; it has no opinion about whether a fit is justified, so a face group that "
+            "failed a gate is kept with the gate that killed it, never dropped."
         ),
     }
     return None
@@ -2677,60 +2074,6 @@ def _region_hash(dump_sha256: str, indices: Sequence[int]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _stage_face_group_agreement(state: dict[str, Any]) -> dict[str, Any] | None:
-    """Fusion's own grouping as a *checked* input, never a trusted one."""
-    mesh: WeldedMesh = state["mesh"]
-    topo: _Topology = state["topology"]
-    regions: list[dict[str, Any]] = state["regions"]
-    record = state["record"]
-    if mesh.face_groups is None:
-        record["face_groups"] = {
-            "present": False,
-            "agreement": None,
-            "unavailable_reason": "the dump reported no triangleFaceGroupTempIds",
-        }
-        return None
-    distinct = sorted({mesh.face_groups[i] for i in topo.valid})
-    if len(distinct) < 2:
-        record["face_groups"] = {
-            "present": True,
-            "group_count": len(distinct),
-            "degenerate": True,
-            "agreement": None,
-            "unavailable_reason": (
-                "a grouping that puts every triangle in one region is degenerate, not segmentation"
-            ),
-        }
-        return None
-    overlap: dict[tuple[str, int], float] = {}
-    assigned = 0.0
-    for region in regions:
-        for index in region["triangle_indices"]:
-            key = (region["region_hash"], mesh.face_groups[index])
-            overlap[key] = overlap.get(key, 0.0) + topo.areas[index]
-            assigned += topo.areas[index]
-    used_regions: set[str] = set()
-    used_groups: set[int] = set()
-    matched = 0.0
-    # ponytail: greedy matching, not Hungarian. It is a lower bound on the
-    # optimal-assignment agreement, so it can understate but never overstate.
-    for (region_hash, group), area in sorted(overlap.items(), key=lambda kv: (-kv[1], kv[0])):
-        if region_hash in used_regions or group in used_groups:
-            continue
-        used_regions.add(region_hash)
-        used_groups.add(group)
-        matched += area
-    record["face_groups"] = {
-        "present": True,
-        "group_count": len(distinct),
-        "degenerate": False,
-        "agreement": (matched / assigned) if assigned > 0.0 else None,
-        "agreement_method": "greedy overlap matching, area-weighted; a lower bound on optimal",
-        "unavailable_reason": None,
-    }
-    return None
-
-
 def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     topo: _Topology = state["topology"]
     mesh: WeldedMesh = state["mesh"]
@@ -2739,10 +2082,13 @@ def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     frame: _PointFrame = state["frame"]
 
     accepted = [r for r in regions if r["accepted"]]
-    _mark_fillet_candidates(accepted, mesh, topo)
+    _mark_fillet_candidates(accepted, topo, float(state["spec"].value("max_fillet_arc_deg")))
     covered = sum(r["area"] for r in accepted) / topo.total_area if topo.total_area > 0.0 else 0.0
 
-    claimed = {t for r in regions for t in r["triangle_indices"]}
+    # Welded indices on both sides: `topo.valid` is welded, so comparing it
+    # against the dump's own indices would silently mismatch on any mesh where
+    # welding collapsed a triangle.
+    claimed = {t for r in regions for t in r["welded_triangle_indices"]}
     unclaimed = [t for t in topo.valid if t not in claimed]
     record["regions"] = regions
     record["covered_area_fraction"] = covered
@@ -2776,39 +2122,71 @@ def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _mark_fillet_candidates(
-    accepted: Sequence[dict[str, Any]], mesh: WeldedMesh, topo: _Topology
-) -> None:
-    """A torus adjacent to exactly two accepted primary regions is a fillet.
+def _blend_radius(region: dict[str, Any], max_arc_deg: float) -> tuple[float, str] | None:
+    """The radius this region would round an edge with, or ``None`` if it rounds none.
 
-    Emitted downstream as a fillet feature on the shared edge with radius equal
-    to the minor radius -- parametric and editable -- rather than as torus
-    surface geometry, which Fusion has no editable home for. A torus that is not
-    in that adjacency pattern (an O-ring groove, say) is a torus fit and nothing
-    more, and says so.
+    Two shapes qualify. A **torus** is the textbook constant-radius blend and its
+    minor radius is the fillet radius. A **partial-arc cylinder** is what Fusion's
+    face groups actually deliver an edge round as -- the measured segmentation
+    put 298 groups in that bucket, and that is where the fillets are -- and its
+    radius is the fillet radius.
+
+    The arc is what separates a round from a bore, and it is measured, not
+    assumed: a bore or a boss closes on itself, an edge round never does. The
+    ceiling is the caller's. A cylinder whose ``angular_span_deg`` was not
+    measured is not a blend candidate, because an absent span is not a small one.
+    """
+    fit = region["fit"]
+    if fit["kind"] == "torus":
+        return float(fit["parameters"]["minor_radius"]), "the torus minor radius"
+    if fit["kind"] != "cylinder":
+        return None
+    span = fit.get("support", {}).get("angular_span_deg")
+    if not isinstance(span, (int, float)) or isinstance(span, bool):
+        return None
+    if float(span) > max_arc_deg:
+        return None
+    return float(fit["parameters"]["radius"]), "the cylinder radius over a partial arc"
+
+
+def _mark_fillet_candidates(
+    accepted: Sequence[dict[str, Any]], topo: _Topology, max_arc_deg: float
+) -> None:
+    """A blend adjacent to exactly two accepted non-blend regions is a fillet.
+
+    Emitted downstream as a fillet feature on the shared edge -- parametric and
+    editable -- rather than as blend surface geometry, which Fusion has no
+    editable home for. The evidence discipline is unchanged by widening the
+    shapes that qualify: a fillet still needs *two* accepted neighbours that are
+    themselves features, so a blend against one face, or against another blend,
+    stays an ordinary fit and says so.
     """
     owner: dict[int, str] = {}
     for region in accepted:
-        for index in region["triangle_indices"]:
+        # Welded indices, because `topo` is welded. The dump's own indices live
+        # in `triangle_indices` for downstream consumers and are not adjacency.
+        for index in region["welded_triangle_indices"]:
             owner[index] = region["region_hash"]
+    # Resolved for every region first: whether a neighbour is a primary feature
+    # cannot depend on the order regions happen to be visited in.
+    blends = {r["region_hash"]: _blend_radius(r, max_arc_deg) for r in accepted}
     for region in accepted:
         neighbours: set[str] = set()
-        for index in region["triangle_indices"]:
+        for index in region["welded_triangle_indices"]:
             for other in topo.tri_neighbours[index]:
                 target = owner.get(other)
                 if target is not None and target != region["region_hash"]:
                     neighbours.add(target)
         region["adjacent_regions"] = sorted(neighbours)
-        primaries = sorted(
-            n for n in neighbours
-            if next(r["fit"]["kind"] for r in accepted if r["region_hash"] == n) != "torus"
-        )
-        region["fillet_candidate"] = region["fit"]["kind"] == "torus" and len(primaries) == 2
+        primaries = sorted(n for n in neighbours if blends.get(n) is None)
+        blend = blends[region["region_hash"]]
+        region["fillet_candidate"] = blend is not None and len(primaries) == 2
         if region["fillet_candidate"]:
+            radius, source = blend  # type: ignore[misc]
             region["fillet"] = {
-                "radius": region["fit"]["parameters"]["minor_radius"],
+                "radius": radius,
                 "between": primaries,
-                "emission": "filletFeatures on the shared edge, radius = the torus minor radius",
+                "emission": f"filletFeatures on the shared edge, radius = {source}",
             }
 
 
@@ -2878,10 +2256,8 @@ def _stage_runners() -> dict[str, Callable[[dict[str, Any]], dict[str, Any] | No
         "feature-scale": _stage_feature_scale,
         "normals": _stage_normals,
         "curvature": _stage_curvature,
-        "detection": _stage_detection,
-        "segmentation": _stage_segmentation,
+        "face-groups": _stage_face_groups,
         "disproof": _stage_disproof,
-        "face-group-agreement": _stage_face_group_agreement,
         "coverage": _stage_coverage,
     }
 

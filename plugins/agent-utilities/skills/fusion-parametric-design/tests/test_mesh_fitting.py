@@ -494,6 +494,136 @@ class ConeFittingTests(unittest.TestCase):
         self.assertEqual(fit.parameters, {})
 
 
+def corner_round(radius: float = 2.0, half_height: float = 0.8, arc_deg: float = 90.0, steps: int = 10):
+    """The shield's corner round, tessellated the way Fusion delivered it.
+
+    Two vertex rings and no intermediate samples. Every one of these points is
+    exactly ``sqrt(radius^2 + half_height^2)`` from the origin, so a sphere of
+    radius 2.15407 passes through all of them as exactly as the r=2.0 cylinder
+    does. That is the whole defect: the vertices cannot separate the two.
+
+    Returns the points and one outward facet normal per triangle.
+    """
+    points: list[tuple[float, float, float]] = []
+    for z in (-half_height, half_height):
+        for index in range(steps + 1):
+            angle = math.radians(arc_deg) * index / steps
+            points.append((radius * math.cos(angle), radius * math.sin(angle), z))
+    normals: list[tuple[float, float, float]] = []
+    row = steps + 1
+    for index in range(steps):
+        for triangle in ((index, index + 1, row + index + 1), (index, row + index + 1, row + index)):
+            a, b, c = (points[i] for i in triangle)
+            u = tuple(b[k] - a[k] for k in range(3))
+            v = tuple(c[k] - a[k] for k in range(3))
+            cross = (
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            )
+            length = math.sqrt(sum(value * value for value in cross))
+            normals.append(tuple(value / length for value in cross))
+    return points, normals
+
+
+class SphereCylinderTieBreakTests(unittest.TestCase):
+    """367 of 367 measured groups fitted a sphere better, and all 367 were cylinders."""
+
+    def setUp(self) -> None:
+        self.points, self.normals = corner_round()
+        self.kinds = ("plane", "cylinder", "sphere", "cone", "torus")
+
+    def test_the_vertices_alone_hand_the_group_to_the_sphere(self) -> None:
+        fits = fit_face_group(self.points, kinds=self.kinds)
+        self.assertEqual("sphere", fits[0].kind)
+        self.assertTrue(fits[0].accepted)
+        # The sphere the two rings really do lie on: sqrt(2.0^2 + 0.8^2).
+        self.assertAlmostEqual(2.15407, fits[0].parameters["radius"], places=5)
+        cylinder = next(f for f in fits if f.kind == "cylinder")
+        self.assertTrue(cylinder.accepted)
+        # Both accept, and the sphere wins by float noise rather than by evidence.
+        self.assertLess(abs(fits[0].relative_residual - cylinder.relative_residual), 1e-9)
+
+    def test_the_facet_normals_hand_it_back_to_the_cylinder(self) -> None:
+        fits = fit_face_group(
+            self.points,
+            kinds=self.kinds,
+            facet_normals=self.normals,
+            cylinder_perpendicular_deg=5.0,
+        )
+        self.assertEqual("cylinder", fits[0].kind)
+        self.assertAlmostEqual(2.0, fits[0].parameters["radius"], places=9)
+        evidence = fits[0].support["normal_tie_break"]
+        self.assertEqual("sphere", evidence["over"])
+        self.assertLess(evidence["max_deviation_from_perpendicular_deg"], 5.0)
+        self.assertEqual(5.0, evidence["declared_max_deg"])
+        self.assertIn("cylinder-normal-tie-break", fits[0].support["checked"])
+        # Every kind is still reported; nothing is dropped by reordering.
+        self.assertEqual(set(self.kinds), {f.kind for f in fits})
+
+    def test_a_real_sphere_keeps_its_group(self) -> None:
+        """The tie-break has to be evidence, not a preference for cylinders."""
+        points: list[tuple[float, float, float]] = []
+        normals: list[tuple[float, float, float]] = []
+        for i in range(12):
+            for j in range(1, 12):
+                theta = math.radians(180.0) * j / 12.0
+                phi = math.radians(360.0) * i / 12.0
+                point = (
+                    3.0 * math.sin(theta) * math.cos(phi),
+                    3.0 * math.sin(theta) * math.sin(phi),
+                    3.0 * math.cos(theta),
+                )
+                points.append(point)
+                normals.append(tuple(value / 3.0 for value in point))
+        fits = fit_face_group(
+            points,
+            kinds=self.kinds,
+            facet_normals=normals,
+            cylinder_perpendicular_deg=5.0,
+        )
+        self.assertEqual("sphere", fits[0].kind)
+        self.assertNotIn("normal_tie_break", fits[0].support)
+
+    def test_normals_beyond_the_declared_angle_leave_the_ranking_alone(self) -> None:
+        # The same points, but with facets tilted 20 degrees out of the plane
+        # perpendicular to the axis. Nothing in the vertices changed; the
+        # evidence for a cylinder did, and the ranking is left where it was.
+        tilt = math.radians(20.0)
+        tilted = []
+        for x, y, z in self.normals:
+            tilted.append((x * math.cos(tilt), y * math.cos(tilt), math.sin(tilt)))
+        fits = fit_face_group(
+            self.points,
+            kinds=self.kinds,
+            facet_normals=tilted,
+            cylinder_perpendicular_deg=5.0,
+        )
+        self.assertEqual("sphere", fits[0].kind)
+        cylinder = next(f for f in fits if f.kind == "cylinder")
+        self.assertNotIn("normal_tie_break", cylinder.support)
+
+    def test_a_degenerate_facet_normal_refuses_rather_than_reading_as_perpendicular(self) -> None:
+        broken = [(0.0, 0.0, 0.0)] + list(self.normals[1:])
+        fits = fit_face_group(
+            self.points,
+            kinds=self.kinds,
+            facet_normals=broken,
+            cylinder_perpendicular_deg=5.0,
+        )
+        self.assertEqual("sphere", fits[0].kind)
+
+    def test_the_angle_and_the_normals_are_declared_together_or_not_at_all(self) -> None:
+        with self.assertRaises(ValueError):
+            fit_face_group(self.points, facet_normals=self.normals)
+        with self.assertRaises(ValueError):
+            fit_face_group(self.points, cylinder_perpendicular_deg=5.0)
+        with self.assertRaises(ValueError):
+            fit_face_group(
+                self.points, facet_normals=self.normals, cylinder_perpendicular_deg=0.0
+            )
+
+
 class FaceGroupSelectionTests(unittest.TestCase):
     def test_fit_face_group_keeps_rejections_with_their_reasons(self) -> None:
         fits = fit_face_group(flat_plate())

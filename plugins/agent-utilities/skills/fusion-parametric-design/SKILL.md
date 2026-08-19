@@ -281,6 +281,13 @@ Do not convert a dense mesh to B-rep merely to claim parametric editability. Con
   --classification build/classification.json --deviation-spec build/deviation.json -o build/mesh-deviation.py
 ```
 
+**Segment with Fusion, judge with the gates.** A `parametric-rebuild` starts with `emit-mesh-face-groups`, which runs `MeshGenerateFaceGroups` on the mesh body with `AccurateGenerateFaceGroupsType` set explicitly and read back before the feature is added. Never inherit the default: `FastGenerateFaceGroupsType` was measured producing a solid Fusion reported healthy and 7.6% wrong on volume, and that is the silent wrong answer this whole path exists to refuse. `emit-mesh-extract` then carries that grouping into the dump, one id per triangle, and `fit-regions` fits each group and refuses `face-groups-absent` on a dump extracted before the grouping ran. Fusion decides which triangles belong together; nothing about whether a fit is *justified* is delegated to it — support floors, Moran's I, the blocked held-out refit, parsimony and the uncertainty gate all still run per group, and a group that fails one is recorded with the gate that killed it.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-face-groups fusion-project.json --mesh-source-id scan_bracket \
+  --classification build/classification.json --face-group-spec build/face-groups.json -o build/mesh-face-groups.py
+```
+
 **A `parametric-rebuild` produces a timeline, and the claim that it is editable is measured, not asserted.** `plan-reconstruction` decides what will be built before anything is; `emit-mesh-rebuild` sections the mesh dump the program was fitted from — reading it only after its bytes hash to the program's recorded `dump_sha256` — and emits one data-driven transaction that verifies, constructs, measures and reports, making no choices of its own. A feature it cannot build exactly as declared is a named refusal with full rollback and no geometry; `replan-without` then turns that refusal into a smaller program in one explicit, recorded command rather than letting anything improvise inside Fusion.
 
 Then prove the result. `designType == ParametricDesignType` establishes nothing — it is equally true of a faceted body with no timeline. `emit-mesh-editability` perturbs each user parameter one at a time, asserts the observable that parameter *declares* it moves (`volume`, `centroid` or `bbox` — volume alone would report a correct hole-position or plane-offset parameter as dead), restores it, and asserts the model came back within the declared epsilon. A failure names which parameter broke which feature. `check-editability` is the gate and cannot pass a report that asserts more than the run performed.
@@ -454,6 +461,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-face-groups <manifest> --mesh-source-id <id> --classification <classification.json> --face-group-spec <face-groups.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-extract <manifest> --mesh-source-id <id> --classification <classification.json> --extract-spec <extract.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]

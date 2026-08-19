@@ -59,6 +59,10 @@ def load_generated_script(source: str) -> dict:
         SuppressedFeatureHealthState="suppressed",
         UnknownFeatureHealthState="unknown",
     )
+    fusion.MeshGenerateFaceGroupsMethodTypes = SimpleNamespace(
+        FastGenerateFaceGroupsType="fast",
+        AccurateGenerateFaceGroupsType="accurate",
+    )
     fusion.BoundingBoxEntityTypes = SimpleNamespace(
         AllEntitiesBoundingBoxEntityType="all-entities",
     )

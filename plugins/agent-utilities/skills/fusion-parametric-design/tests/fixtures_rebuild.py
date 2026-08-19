@@ -15,24 +15,26 @@ IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0
 
 
 def box_dump(size: float = 20.0, **kwargs: Any):
-    vertices, triangles = box_mesh(size=size, **kwargs)
-    return make_dump(vertices, triangles)
+    vertices, triangles, groups = box_mesh(size=size, **kwargs)
+    return make_dump(vertices, triangles, face_groups=groups)
 
 
 def two_box_dump(size: float = 20.0, gap: float = 40.0):
     """Two disjoint boxes, so any section between their caps closes two loops."""
-    vertices, triangles = box_mesh(size=size)
+    vertices, triangles, groups = box_mesh(size=size)
     count = len(vertices)
     shifted = [(x + gap, y, z) for x, y, z in vertices]
     return make_dump(
         list(vertices) + shifted,
         list(triangles) + [tuple(i + count for i in t) for t in triangles],
+        # The second box's six faces are six more groups, not the same six.
+        face_groups=list(groups) + [g + 6 for g in groups],
     )
 
 
 def cylinder_dump(radius: float = 8.0, height: float = 30.0, **kwargs: Any):
-    vertices, triangles = cylinder_mesh(radius=radius, height=height, **kwargs)
-    return make_dump(vertices, triangles)
+    vertices, triangles, groups = cylinder_mesh(radius=radius, height=height, **kwargs)
+    return make_dump(vertices, triangles, face_groups=groups)
 
 
 def capped_cylinder_mesh(
@@ -76,23 +78,29 @@ def capped_cylinder_mesh(
             vertices.append((r * math.cos(angle), r * math.sin(angle), z))
 
     triangles: list[tuple[int, int, int]] = []
+    # Three analytic faces, which is what Fusion's accurate grouping returns for
+    # this solid: the bottom disc, the cylindrical side, the top disc.
+    groups: list[int] = []
     for j in range(len(profile) - 1):
+        face = 0 if j < steps else (1 if j < 2 * steps else 2)
         for i in range(sides):
             nxt = (i + 1) % sides
             a, b = index[(j, i)], index[(j, nxt)]
             c, d = index[(j + 1, nxt)], index[(j + 1, i)]
             if len({a, b, c}) == 3:
                 triangles.append((a, b, c))
+                groups.append(face)
             if len({a, c, d}) == 3:
                 triangles.append((a, c, d))
-    return vertices, triangles
+                groups.append(face)
+    return vertices, triangles, groups
 
 
 def capped_cylinder_dump(
     radius: float = 8.0, height: float = 30.0, sides: int = 64, steps: int = 6
 ):
-    vertices, triangles = capped_cylinder_mesh(radius, height, sides, steps)
-    return make_dump(vertices, triangles)
+    vertices, triangles, groups = capped_cylinder_mesh(radius, height, sides, steps)
+    return make_dump(vertices, triangles, face_groups=groups)
 
 
 def datum(origin=(0.0, 0.0, 0.0)) -> dict[str, Any]:

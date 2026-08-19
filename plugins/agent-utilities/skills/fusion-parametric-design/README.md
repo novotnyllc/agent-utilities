@@ -69,6 +69,7 @@ scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
 scripts/fusion-design emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 scripts/fusion-design emit-mesh-capture <manifest> [-o file.py]
+scripts/fusion-design emit-mesh-face-groups <manifest> --mesh-source-id <id> --classification <classification.json> --face-group-spec <face-groups.json> [-o file.py]
 scripts/fusion-design emit-mesh-extract <manifest> --mesh-source-id <id> --classification <classification.json> --extract-spec <extract.json> [-o file.py]
 scripts/fusion-design emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 scripts/fusion-design emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
@@ -111,6 +112,16 @@ that body's face-group histogram and whether a file written from Fusion's
 interpreter reads back. Nothing here is hardcoded, because Fusion auto-updates
 its Python and a stale tag fails as `ModuleNotFoundError`, which reads like "not
 installed".
+
+`emit-mesh-face-groups` is the segmentation stage and runs before extraction. It
+sets `meshGenerateFaceGroupsMethodType` to `AccurateGenerateFaceGroupsType`
+explicitly, reads the value back off the input before adding the feature, and
+refuses if it did not stick — the default, Fast, was measured producing a solid
+Fusion reported healthy and 7.6% wrong on volume. The method is not a spec
+field, because the only other value is the one that is wrong. It reports the
+per-triangle grouping and each group's area, centroid, bounding box and
+planarity. `fit-regions` then fits each of those groups and refuses
+`face-groups-absent` on a dump extracted before this ran.
 
 `emit-mesh-extract` writes an indexed mesh dump — millimetre vertices, triangle
 indices, per-triangle face-group ids when Fusion has them — and reports the

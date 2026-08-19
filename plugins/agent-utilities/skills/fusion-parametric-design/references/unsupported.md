@@ -160,9 +160,30 @@ What this package *does* supply is in `references/mesh-reconstruction.md`: immut
 
 The raw material *is* scriptable, which is why the fallback is our own arithmetic rather than an external tool: `MeshBody.mesh` returns a `PolygonMesh` exposing `nodeCoordinates`, `triangleNodeIndices` and `triangleFaceGroupTempIds` — Fusion's own segmentation, readable per triangle. Plane–mesh intersection and least-squares primitive fitting over that data live in `src/fusion_design/mesh_fitting.py` and are fully testable offline against synthetic meshes with known analytic answers. Fusion fits primitives internally for `MeshGenerateFaceGroupsFeature` but never exposes the fit, only the grouping.
 
-## Face-group segmentation: measured, 2026-08-19
+## Face-group segmentation: measured 2026-08-19, and now the segmentation source
 
-**Status:** Supported, cheap, and far better than its default suggests.
+**Status:** Supported, cheap, far better than its default suggests, and adopted.
+
+`emit-mesh-face-groups` runs it and `fit-regions` consumes it. The package's own
+RANSAC/ICM segmentation layer is **deleted** — the numbers below are why — and a
+dump with no grouping is refused `face-groups-absent` rather than segmented by a
+fallback nobody measured. What is *not* delegated is the judgement: every group
+Fusion returns still passes support floors, Moran's I, the blocked held-out
+refit, the parsimony F test and the uncertainty gate before it is a fit.
+
+Re-measured 2026-08-19 with both pipelines run over identical dumps of the same
+11 STLs at the same declared thresholds: area-weighted coverage rose from
+**41.7% to 62.5%**, regions offered to the fitters from 47 to 1,069, regions
+accepted through every gate from 38 to 268, and accepted cylinders from 0 to 4.
+POD-B-BASE went from one region at 2.3% to 188 regions at 69.1%. The remaining
+839 groups of the 1,908 carry fewer than four points, which is below what a
+least-squares fit needs at all, and land in `unclaimed` rather than anywhere
+that could be mistaken for a fit.
+
+`MeshGenerateFaceGroupsFeatures.createInput` takes the **MeshBody itself**, not
+an `ObjectCollection`; a collection raises `2 : InternalValidationError :
+meshBody`. Measured, not inferred from `MeshConvertFeatures`, which does take a
+collection.
 
 `MeshGenerateFaceGroupsFeatureInput.meshGenerateFaceGroupsMethodType` **is
 readable and settable**, and it is the knob that matters. The three numeric
@@ -192,7 +213,16 @@ faster, because it is handed a segmentation instead of having to infer one.
 `PolygonMesh.triangleFaceGroupTempIds` delivers the result as one `FaceGroup`
 tempId per triangle, in `triangleNodeIndices` order, and `MeshBody.faceGroups`
 carries each group's `area`, `centroid`, `boundingBox` and `isPlanar`. That is
-a complete region assignment for our own fitters, with no inference needed.
+a complete region assignment for our own fitters, with no inference needed. The
+tempIds partition the triangles and then stop existing: region identity stays a
+hash of sorted triangle indices bound to the dump, because a temp id is not
+stable across sessions.
+
+The method is set explicitly on every run and read back off the input before the
+feature is added; a release where it does not stick refuses rather than grouping
+by an unannounced Fast. In a direct-modeling design
+`MeshGenerateFaceGroupsFeatures.add()` returns `None` while still applying, so
+the return value is never read.
 
 Fed those regions, `mesh_fitting.fit_primitive` accepted a fit on **1,908 of
 1,908** groups — every group, on every part — and every one of the 383 cylinders
@@ -204,7 +234,30 @@ residual alone, so the sphere wins by the eighth decimal. 367 of 367 such
 groups are cylinders, and the group's own facet normals say so unambiguously —
 every one within 5° of perpendicular to the cylinder axis. **The vertices alone
 cannot separate sphere from cylinder here; the facet normals can.** Any use of
-these regions has to carry that tie-break.
+these regions has to carry that tie-break, and `fit_face_group` now does: given
+the group's facet normals and a caller-declared
+`cylinder_normal_perpendicular_deg`, a sphere that ranks first loses the group to
+an accepted cylinder whose axis every facet normal is perpendicular to. The
+evidence is recorded on the fit (`support.normal_tie_break`), and unreadable or
+tilted normals leave the ranking exactly where it was.
+
+The second thing the grouping changed is where the fillets are. Fusion delivers
+an edge round as a **partial-arc cylinder**, not a torus -- that is the 298-group
+bucket -- so a fillet candidate is a torus *or* a cylinder whose measured
+`angular_span_deg` is inside the declared `max_fillet_arc_deg`. A bore or a boss
+closes on itself and a round never does, which is the measurement that separates
+them. The evidence discipline is unchanged: two accepted non-blend neighbours or
+it is an ordinary fit.
+
+**What the tie-break does not buy, stated plainly.** All 367 groups now select a
+cylinder and carry its true radius, and most are then still refused for support
+span: two rings of vertices and nothing between them determine the *radius*
+without determining the *axis*, and the support floor says so. Only 4 cylinders
+across the 11 parts survive every gate, and only one fillet candidate is found,
+because a blend has to be accepted before it can be adjacent to anything. The
+298-group partial-arc bucket is therefore recognised but largely unrecovered.
+Closing that gap means denser sampling across the round -- a capture problem, not
+a threshold one -- and is not attempted here.
 
 ## Mesh deviation comparison (`PolygonMesh.compareWith`)
 

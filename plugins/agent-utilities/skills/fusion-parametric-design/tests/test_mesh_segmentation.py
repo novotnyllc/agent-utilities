@@ -1,8 +1,16 @@
-"""Segmentation, noise estimation and disproof gates, against known analytic answers.
+"""Region fitting, noise estimation and disproof gates, against known analytic answers.
 
 Every fixture here is a synthetic mesh whose true primitives are known exactly,
 so a fit can be checked against the answer rather than against itself. Noisy
 variants use a seeded RNG, so a failure is reproducible.
+
+Each generator returns ``(vertices, triangles, face_groups)`` -- the third being
+one group id per triangle, exactly as Fusion's ``triangleFaceGroupTempIds``
+delivers them, because the regions are no longer this module's to invent. The
+ids follow the fixture's own analytic faces: six for a box, one for an open
+tube. ``make_dump(*box_mesh())`` therefore builds the dump the real pipeline
+would see, and a call that deliberately withholds the grouping passes
+``face_groups=None`` to test the refusal.
 """
 
 from __future__ import annotations
@@ -75,6 +83,7 @@ def box_mesh(size=20.0, divisions=6, noise=0.0, seed=1):
         return index[key]
 
     triangles: list[tuple[int, int, int]] = []
+    groups: list[int] = []
     n = divisions
     for i in range(n):
         for j in range(n):
@@ -87,9 +96,13 @@ def box_mesh(size=20.0, divisions=6, noise=0.0, seed=1):
             # x = 0 and x = size
             _grid_quad(vertices, triangles, node(0, i, j), node(0, i, j + 1), node(0, i + 1, j + 1), node(0, i + 1, j))
             _grid_quad(vertices, triangles, node(n, i, j), node(n, i + 1, j), node(n, i + 1, j + 1), node(n, i, j + 1))
+            # One group per planar face, in the order the quads were appended,
+            # two triangles each. This is what Fusion's accurate grouping returns
+            # for a box: six analytic faces, six groups.
+            groups.extend([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5])
     if noise > 0.0:
         vertices = [tuple(c + rng.gauss(0.0, noise) for c in p) for p in vertices]
-    return vertices, triangles
+    return vertices, triangles, groups
 
 
 def cylinder_mesh(radius=8.0, height=30.0, sides=48, stacks=12, noise=0.0, seed=2):
@@ -112,7 +125,7 @@ def cylinder_mesh(radius=8.0, height=30.0, sides=48, stacks=12, noise=0.0, seed=
             triangles.append((a, c, d))
     if noise > 0.0:
         vertices = [tuple(c + rng.gauss(0.0, noise) for c in p) for p in vertices]
-    return vertices, triangles
+    return vertices, triangles, [0] * len(triangles)
 
 
 def arc_patch_mesh(radius=8.0, height=30.0, sweep_deg=20.0, sides=12, stacks=10):
@@ -133,7 +146,7 @@ def arc_patch_mesh(radius=8.0, height=30.0, sweep_deg=20.0, sides=12, stacks=10)
             d = (k + 1) * row + i
             triangles.append((a, b, c))
             triangles.append((a, c, d))
-    return vertices, triangles
+    return vertices, triangles, [0] * len(triangles)
 
 
 def shallow_cone_mesh(radius=8.0, height=30.0, taper=0.12, sides=48, stacks=12):
@@ -154,7 +167,7 @@ def shallow_cone_mesh(radius=8.0, height=30.0, taper=0.12, sides=48, stacks=12):
             d = (k + 1) * sides + i
             triangles.append((a, b, c))
             triangles.append((a, c, d))
-    return vertices, triangles
+    return vertices, triangles, [0] * len(triangles)
 
 
 def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0, seed=3):
@@ -177,10 +190,10 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
             triangles.append((a, c, d))
     if noise > 0.0:
         vertices = [tuple(c + rng.gauss(0.0, noise) for c in p) for p in vertices]
-    return vertices, triangles
+    return vertices, triangles, [0] * len(triangles)
 
 
-def unweld(vertices, triangles, jitter=1e-7, seed=9):
+def unweld(vertices, triangles, groups=None, jitter=1e-7, seed=9):
     """Explode a welded mesh: every triangle gets its own three nodes.
 
     The jitter is what makes this a *scanner's* unwelded mesh rather than an
@@ -195,7 +208,7 @@ def unweld(vertices, triangles, jitter=1e-7, seed=9):
         for source in (a, b, c):
             out_v.append(tuple(k + rng.uniform(-jitter, jitter) for k in vertices[source]))
         out_t.append((base, base + 1, base + 2))
-    return out_v, out_t
+    return out_v, out_t, list(groups) if groups is not None else [0] * len(out_t)
 
 
 # --------------------------------------------------------------------------
@@ -206,21 +219,10 @@ REFERENCE = {
     "max_triangles": (200000, "the density above which extra triangles are noise samples, not information"),
     "weld_tolerance": (0.0, "this fixture is exported from a solid modeller, so exact duplicates are the only duplicates"),
     "min_feature_size": (1.0, "the smallest fillet and bore this part family carries is one millimetre"),
-    "epsilon_sigmas": (3.0, "three sigma is the standard consensus band and covers 99.7% of true inliers"),
     "normal_alpha_deg": (25.0, "loose on purpose: the normal check separates surfaces, it does not re-segment"),
     "curvature_dead_zone_sigmas": (2.0, "two estimator sigmas of curvature is indistinguishable from flat"),
-    "ransac_eta_extract": (0.01, "a one-percent chance an undiscovered candidate beats the best one"),
-    "ransac_eta_stop": (0.05, "a five-percent chance an interesting shape remains undiscovered"),
-    "max_candidate_rounds": (60, "the hard ceiling that guarantees termination on this fixture size"),
-    "score_sample_size": (400, "enough points to rank candidates without scoring every one in full"),
-    "refine_iterations": (6, "fixed points are reached in two to four rounds; six is headroom"),
-    "max_primitives": (24, "this part family has fewer than two dozen analytic faces"),
-    "min_inlier_area_fraction": (0.02, "a face under two percent of the part is not a feature we rebuild"),
-    "rng_seed": (0, "the default draw; reruns on the same dump must reproduce the record exactly"),
-    "icm_sweeps": (6, "the labelling settles in two or three sweeps on separated data terms"),
-    "icm_smoothness": (1.0, "one typical edge of boundary costs one unit, the Potts convention"),
-    "icm_normal_weight": (0.25, "normals are supporting evidence for a label, not primary"),
-    "icm_unclaimed_chi2": (9.0, "a triangle worse than three sigma from every primitive prefers unclaimed"),
+    "cylinder_normal_perpendicular_deg": (5.0, "every one of the 367 measured two-ring bores held its facet normals inside five degrees of perpendicular, and no sphere's do"),
+    "max_fillet_arc_deg": (180.0, "a bore or a boss closes on itself; an edge round never sweeps past a half turn"),
     "max_relative_residual": (0.02, "two percent of the sampled extent is the residual gate this skill already uses"),
     "max_radius_ratio": (5.0, "a radius beyond five extents is the near-flat-strip pathology"),
     "bounds_margin_ratio": (1.0, "an anchor one extent outside the part is not describing the part"),
@@ -268,7 +270,7 @@ class SpecTests(unittest.TestCase):
 
     def test_a_bare_number_is_not_a_declared_threshold(self) -> None:
         raw = {name: {"value": value, "rationale": why} for name, (value, why) in REFERENCE.items()}
-        raw["epsilon_sigmas"] = 3.0
+        raw["normal_alpha_deg"] = 25.0
         with self.assertRaises(seg.SegmentationSpecError) as caught:
             seg.load_spec(raw)
         self.assertIn(
@@ -292,7 +294,7 @@ class SpecTests(unittest.TestCase):
     def test_out_of_range_values_are_rejected_per_threshold(self) -> None:
         for name, bad in (
             ("normal_alpha_deg", 120.0),
-            ("ransac_eta_extract", 1.0),
+            ("cylinder_normal_perpendicular_deg", 90.0),
             ("min_torus_major_ratio", 1.0),
             ("heldout_ratio_max", 0.5),
         ):
@@ -316,7 +318,7 @@ class SpecTests(unittest.TestCase):
 
 class WeldTests(unittest.TestCase):
     def test_an_unwelded_mesh_refuses_rather_than_estimating_from_no_adjacency(self) -> None:
-        vertices, triangles = box_mesh()
+        vertices, triangles, groups = box_mesh()
         dump = make_dump(*unweld(vertices, triangles))
         record = seg.fit_regions(dump, spec())
         self.assertEqual("mesh-not-welded", record["refusal"]["reason"])
@@ -326,7 +328,7 @@ class WeldTests(unittest.TestCase):
         self.assertEqual(["triangle-budget"], record["checked"])
 
     def test_welding_with_a_declared_tolerance_recovers_the_unwelded_mesh(self) -> None:
-        vertices, triangles = box_mesh()
+        vertices, triangles, groups = box_mesh()
         dump = make_dump(*unweld(vertices, triangles))
         record = seg.fit_regions(dump, spec(weld_tolerance=1e-5))
         self.assertIsNone(record["refusal"])
@@ -334,7 +336,7 @@ class WeldTests(unittest.TestCase):
         self.assertEqual(len(vertices), record["weld"]["node_count_after"])
 
     def test_weld_reports_how_many_nodes_merged_and_how_many_triangles_collapsed(self) -> None:
-        vertices, triangles = box_mesh(divisions=2)
+        vertices, triangles, groups = box_mesh(divisions=2)
         dump = make_dump(*unweld(vertices, triangles))
         welded = seg.weld_dump(dump, 1e-5)
         self.assertEqual(dump.vertex_count, welded.weld["node_count_before"])
@@ -342,7 +344,7 @@ class WeldTests(unittest.TestCase):
         self.assertEqual(0, welded.weld["triangles_collapsed"])
 
     def test_a_tolerance_that_swallows_the_part_collapses_it_and_refuses(self) -> None:
-        vertices, triangles = box_mesh(divisions=2)
+        vertices, triangles, groups = box_mesh(divisions=2)
         dump = make_dump(vertices, triangles)
         record = seg.fit_regions(dump, spec(weld_tolerance=1000.0))
         self.assertEqual("mesh-degenerate", record["refusal"]["reason"])
@@ -398,10 +400,10 @@ class NoiseTests(unittest.TestCase):
     def test_disagreeing_estimators_flag_rather_than_refuse(self) -> None:
         # A mesh smoothed in one direction only: the local-plane estimator and
         # the dihedral estimator see different things.
-        vertices, triangles = cylinder_mesh(noise=0.0, sides=64, stacks=20)
+        vertices, triangles, groups = cylinder_mesh(noise=0.0, sides=64, stacks=20)
         rng = random.Random(11)
         vertices = [(x, y, z + rng.gauss(0.0, 0.05)) for (x, y, z) in vertices]
-        dump = make_dump(vertices, triangles)
+        dump = make_dump(vertices, triangles, face_groups=groups)
         record = seg.fit_regions(dump, spec(min_feature_size=5.0))
         self.assertIsNone(record["refusal"])
         self.assertIsInstance(record["noise"]["estimators_consistent"], bool)
@@ -502,23 +504,27 @@ class DetectionTests(unittest.TestCase):
     def test_region_identity_is_geometric_and_ignores_face_group_ids(self) -> None:
         """Region identity comes from the triangles, never from a Fusion temp id.
 
-        The hash also binds to the dump digest, so two *different* dumps of the
-        same geometry get different hashes on purpose -- that is the evidence
-        chain, not instability. What must not change is the partition itself.
+        The grouping decides the *partition*; the temp ids that expressed it are
+        not stable across sessions and must not reach the record. Re-numbering
+        every group without moving a triangle therefore has to leave the same
+        partition -- and no temp id anywhere in the JSON.
         """
-        vertices, triangles = cylinder_mesh(sides=48, stacks=16)
-        plain = make_dump(vertices, triangles)
-        grouped = make_dump(vertices, triangles, face_groups=[i % 7 for i in range(len(triangles))])
-        first = seg.fit_regions(plain, spec())
-        second = seg.fit_regions(grouped, spec())
+        vertices, triangles, groups = box_mesh()
+        low = make_dump(vertices, triangles, face_groups=groups)
+        high = make_dump(vertices, triangles, face_groups=[901 + 7 * g for g in groups])
+        first = seg.fit_regions(low, spec())
+        second = seg.fit_regions(high, spec())
         self.assertEqual(
             [r["triangle_indices"] for r in first["regions"]],
             [r["triangle_indices"] for r in second["regions"]],
         )
-        self.assertNotEqual(plain.sha256, grouped.sha256)
+        payload = json.dumps(second)
+        for temp_id in sorted({901 + 7 * g for g in groups}):
+            self.assertNotIn(str(temp_id), payload, temp_id)
+        self.assertNotEqual(low.sha256, high.sha256)
 
     def test_region_hashes_are_stable_across_runs_over_the_same_dump(self) -> None:
-        dump = make_dump(*cylinder_mesh(sides=48, stacks=16))
+        dump = make_dump(*box_mesh())
         first = seg.fit_regions(dump, spec())
         second = seg.fit_regions(dump, spec())
         self.assertEqual(
@@ -527,30 +533,39 @@ class DetectionTests(unittest.TestCase):
         )
         self.assertTrue(first["regions"])
 
-    def test_a_degenerate_face_grouping_is_reported_not_used(self) -> None:
-        vertices, triangles = box_mesh()
+    def test_one_group_over_a_whole_body_is_one_region_and_is_said_so(self) -> None:
+        """Not a refusal here. The transaction refuses it, where re-running fixes it."""
+        vertices, triangles, groups = box_mesh()
         dump = make_dump(vertices, triangles, face_groups=[0] * len(triangles))
         record = seg.fit_regions(dump, spec())
-        self.assertTrue(record["face_groups"]["degenerate"])
-        self.assertIsNone(record["face_groups"]["agreement"])
+        self.assertTrue(record["face_groups"]["single_group"])
+        self.assertEqual(1, record["face_groups"]["group_count"])
+        self.assertEqual(1, len(record["regions"]))
 
-    def test_absent_face_grouping_is_reported_absent_never_fabricated(self) -> None:
-        dump = make_dump(*box_mesh())
+    def test_a_dump_with_no_grouping_refuses_rather_than_segmenting_by_itself(self) -> None:
+        dump = make_dump(*box_mesh()[:2])
         record = seg.fit_regions(dump, spec())
+        self.assertEqual("face-groups-absent", record["refusal"]["reason"])
+        self.assertIn("emit-mesh-face-groups", record["refusal"]["alternative"])
         self.assertFalse(record["face_groups"]["present"])
-        self.assertIsNone(record["face_groups"]["agreement"])
+        self.assertEqual([], record["regions"])
+        # It refused before disproof, so it may not claim disproof ran.
+        self.assertNotIn("disproof", record["checked"])
 
-    def test_a_plausible_face_grouping_produces_an_agreement_statistic(self) -> None:
-        vertices, triangles = box_mesh(divisions=8)
-        groups = []
-        for a, b, c in triangles:
-            centre = [sum(vertices[i][k] for i in (a, b, c)) / 3.0 for k in range(3)]
-            groups.append(int(centre[0] < 1e-9) + 2 * int(centre[2] < 1e-9))
+    def test_the_grouping_is_the_partition_triangle_for_triangle(self) -> None:
+        """Fusion decides which triangles belong together; nothing here re-decides it."""
+        vertices, triangles, groups = box_mesh(divisions=8)
         dump = make_dump(vertices, triangles, face_groups=groups)
         record = seg.fit_regions(dump, spec())
         self.assertTrue(record["face_groups"]["present"])
-        self.assertIsNotNone(record["face_groups"]["agreement"])
-        self.assertGreaterEqual(record["face_groups"]["agreement"], 0.0)
+        self.assertEqual(6, record["face_groups"]["group_count"])
+        expected = {}
+        for index, group in enumerate(groups):
+            expected.setdefault(group, []).append(index)
+        self.assertEqual(
+            sorted(sorted(v) for v in expected.values()),
+            sorted(sorted(r["triangle_indices"]) for r in record["regions"]),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -560,7 +575,7 @@ class DetectionTests(unittest.TestCase):
 
 class TorusTests(unittest.TestCase):
     def test_a_torus_fits_to_its_analytic_radii(self) -> None:
-        vertices, _triangles = torus_mesh(major=12.0, minor=3.0)
+        vertices, _triangles, _groups = torus_mesh(major=12.0, minor=3.0)
         fit = fit_primitive(vertices, "torus")
         self.assertTrue(fit.accepted, fit.rejection)
         self.assertAlmostEqual(12.0, fit.parameters["radius"], places=9)
@@ -568,14 +583,14 @@ class TorusTests(unittest.TestCase):
         self.assertAlmostEqual(1.0, abs(fit.parameters["axis_direction"][2]), places=12)
 
     def test_a_cylinder_does_not_sprout_a_torus(self) -> None:
-        vertices, _triangles = cylinder_mesh(sides=64, stacks=20)
+        vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20)
         fit = fit_primitive(vertices, "torus")
         self.assertFalse(fit.accepted)
         self.assertTrue(fit.rejection)
 
     def test_the_discriminating_test_names_the_simpler_kind(self) -> None:
         """A torus through points a cylinder already explains is refused by name."""
-        vertices, _triangles = cylinder_mesh(sides=64, stacks=20)
+        vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20)
         # Loose enough that a plane does not pre-empt the comparison, tight
         # enough that the torus itself is not simply refused on residual.
         fit = fit_primitive(vertices, "torus", max_relative_residual=0.1)
@@ -610,35 +625,96 @@ class TorusTests(unittest.TestCase):
         self.assertAlmostEqual(1.0, abs(parameters["axis_direction"][2]), places=9)
         self.assertAlmostEqual(1.0, record["covered_area_fraction"], places=6)
 
+    def _region(self, name, index, kind, parameters, span=None):
+        fit = {"kind": kind, "parameters": parameters}
+        if span is not None:
+            fit["support"] = {"angular_span_deg": span}
+        return {
+            "region_hash": name,
+            "triangle_indices": [index],
+            "welded_triangle_indices": [index],
+            "fit": fit,
+        }
+
     def test_a_torus_region_adjacent_to_two_primaries_is_flagged_as_a_fillet(self) -> None:
         accepted = [
-            {
-                "region_hash": "a",
-                "triangle_indices": [0],
-                "fit": {"kind": "plane", "parameters": {}},
-            },
-            {
-                "region_hash": "b",
-                "triangle_indices": [1],
-                "fit": {"kind": "cylinder", "parameters": {}},
-            },
-            {
-                "region_hash": "t",
-                "triangle_indices": [2],
-                "fit": {"kind": "torus", "parameters": {"minor_radius": 2.0}},
-            },
+            self._region("a", 0, "plane", {}),
+            self._region("b", 1, "cylinder", {"radius": 9.0}, span=360.0),
+            self._region("t", 2, "torus", {"minor_radius": 2.0}),
         ]
 
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        mesh = None
-        seg._mark_fillet_candidates(accepted, mesh, _Topo())
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
         blend = accepted[2]
         self.assertTrue(blend["fillet_candidate"])
         self.assertEqual(2.0, blend["fillet"]["radius"])
         self.assertEqual(["a", "b"], blend["fillet"]["between"])
         self.assertFalse(accepted[0]["fillet_candidate"])
+        # The full-circle cylinder is a bore, not a blend, so it is a primary.
+        self.assertFalse(accepted[1]["fillet_candidate"])
+
+    def test_a_partial_arc_cylinder_between_two_faces_is_a_fillet(self) -> None:
+        """The bucket Fusion's grouping actually delivers edge rounds in."""
+        accepted = [
+            self._region("a", 0, "plane", {}),
+            self._region("b", 1, "plane", {}),
+            self._region("r", 2, "cylinder", {"radius": 2.0}, span=90.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2], [2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        blend = accepted[2]
+        self.assertTrue(blend["fillet_candidate"])
+        self.assertEqual(2.0, blend["fillet"]["radius"])
+        self.assertEqual(["a", "b"], blend["fillet"]["between"])
+        self.assertIn("partial arc", blend["fillet"]["emission"])
+
+    def test_a_full_circle_cylinder_is_a_bore_not_a_fillet(self) -> None:
+        accepted = [
+            self._region("a", 0, "plane", {}),
+            self._region("b", 1, "plane", {}),
+            self._region("bore", 2, "cylinder", {"radius": 2.0}, span=355.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2], [2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        self.assertFalse(accepted[2]["fillet_candidate"])
+        self.assertNotIn("fillet", accepted[2])
+
+    def test_a_cylinder_whose_arc_was_never_measured_is_not_a_fillet(self) -> None:
+        """An absent span is not a small one."""
+        accepted = [
+            self._region("a", 0, "plane", {}),
+            self._region("b", 1, "plane", {}),
+            self._region("c", 2, "cylinder", {"radius": 2.0}),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2], [2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        self.assertFalse(accepted[2]["fillet_candidate"])
+
+    def test_a_blend_needs_two_non_blend_neighbours(self) -> None:
+        """Two rounds against each other are not a fillet between two features."""
+        accepted = [
+            self._region("a", 0, "plane", {}),
+            self._region("r1", 1, "cylinder", {"radius": 2.0}, span=90.0),
+            self._region("r2", 2, "cylinder", {"radius": 2.0}, span=90.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[1, 2], [0, 2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        self.assertFalse(accepted[1]["fillet_candidate"])
+        self.assertFalse(accepted[2]["fillet_candidate"])
 
 
 # --------------------------------------------------------------------------
@@ -648,7 +724,7 @@ class TorusTests(unittest.TestCase):
 
 class DisproofTests(unittest.TestCase):
     def test_a_twenty_degree_arc_is_refused_for_support_span(self) -> None:
-        vertices, triangles = arc_patch_mesh(sweep_deg=20.0)
+        vertices, triangles, groups = arc_patch_mesh(sweep_deg=20.0)
         dump = make_dump(vertices, triangles)
         record = seg.fit_regions(dump, spec())
         for region in record["regions"]:
@@ -656,7 +732,7 @@ class DisproofTests(unittest.TestCase):
                 self.assertFalse(region["accepted"], region["fit"].get("rejection"))
 
     def test_the_span_gate_measures_the_arc_it_rejects(self) -> None:
-        vertices, _triangles = arc_patch_mesh(sweep_deg=20.0)
+        vertices, _triangles, _groups = arc_patch_mesh(sweep_deg=20.0)
         fit = fit_primitive(vertices, "cylinder")
         if fit.accepted:
             passed, measured = seg._support_floors(fit, vertices, spec(), 1.0)
@@ -664,7 +740,7 @@ class DisproofTests(unittest.TestCase):
             self.assertLess(measured["angular_span_deg"], 60.0)
 
     def test_a_shallow_cone_fitted_as_a_cylinder_is_caught_by_residual_structure(self) -> None:
-        vertices, triangles = shallow_cone_mesh()
+        vertices, triangles, groups = shallow_cone_mesh()
         dump = make_dump(vertices, triangles)
         # Force the cylinder hypothesis onto cone data and check the structure
         # test sees it even though the RMS is flattering.
@@ -705,7 +781,7 @@ class DisproofTests(unittest.TestCase):
         self.skipTest("no region reached the held-out gate on this fixture")
 
     def test_the_parsimony_test_refuses_a_richer_kind_that_did_not_earn_it(self) -> None:
-        vertices, _triangles = cylinder_mesh(sides=64, stacks=20, noise=0.02)
+        vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20, noise=0.02)
         fit = fit_primitive(vertices, "cone", max_relative_residual=0.5, min_taper_ratio=1e-9)
         if not fit.accepted:
             self.skipTest("the cone fitter refused this cylinder outright, which is also correct")
@@ -737,7 +813,7 @@ class DisproofTests(unittest.TestCase):
         self.assertFalse(passed)
 
     def test_an_empty_uncertainty_is_a_rejection_never_a_pass(self) -> None:
-        vertices, _triangles = cylinder_mesh(sides=64, stacks=20)
+        vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20)
         fit = fit_primitive(vertices, "cylinder")
         self.assertIsNotNone(seg._uncertainty_gate({}, fit, spec()))
         self.assertIn("not determined", seg._uncertainty_gate({}, fit, spec()))
@@ -815,7 +891,7 @@ class RecordContractTests(unittest.TestCase):
 
     def test_a_bore_and_a_boss_are_distinguishable_on_a_closed_mesh(self) -> None:
         """The winding evidence a hole archetype needs, and its refusal to guess."""
-        vertices, triangles = cylinder_mesh(radius=8.0, height=30.0, sides=64, stacks=20)
+        vertices, triangles, groups = cylinder_mesh(radius=8.0, height=30.0, sides=64, stacks=20)
         outward = seg.fit_regions(make_dump(vertices, triangles), spec())
         for region in outward["regions"]:
             if region["accepted"] and region["fit"]["kind"] == "cylinder":
@@ -834,7 +910,7 @@ class RecordContractTests(unittest.TestCase):
             self.assertEqual(2, len(component["bounding_box"]))
 
     def test_a_rejected_fit_is_kept_with_the_gate_that_killed_it(self) -> None:
-        vertices, triangles = arc_patch_mesh(sweep_deg=20.0)
+        vertices, triangles, groups = arc_patch_mesh(sweep_deg=20.0)
         record = seg.fit_regions(make_dump(vertices, triangles), spec())
         rejected = record["unfitted_regions"]
         if rejected:
@@ -890,7 +966,7 @@ class CheckedListTests(unittest.TestCase):
         self.assertEqual(list(seg.STAGES), record["checked"])
 
     def test_gate_level_checked_lists_follow_the_same_rule(self) -> None:
-        vertices, _triangles = cylinder_mesh(sides=64, stacks=20)
+        vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20)
         accepted = fit_primitive(vertices, "cylinder")
         self.assertIn("relative-residual", accepted.support["checked"])
         # A near-flat strip fits an enormous circle: rejected by the very first
@@ -1014,7 +1090,7 @@ class NoiseCeilingTests(unittest.TestCase):
     )
     def test_benchmark_reports_runtime(self) -> None:  # pragma: no cover - measurement
         for sides, stacks in ((64, 40), (140, 90), (260, 190)):
-            vertices, triangles = cylinder_mesh(sides=sides, stacks=stacks, noise=0.02)
+            vertices, triangles, groups = cylinder_mesh(sides=sides, stacks=stacks, noise=0.02)
             dump = make_dump(vertices, triangles)
             started = time.monotonic()
             record = seg.fit_regions(dump, spec(min_feature_size=5.0))
@@ -1043,10 +1119,11 @@ class CliTests(unittest.TestCase):
         from fusion_design.cli import main
         from fusion_design.mesh_dump import pack_mesh_dump
 
-        vertices, triangles = box_mesh()
+        vertices, triangles, groups = box_mesh()
         meta = _metadata()
+        meta["face_groups_source"] = "triangleFaceGroupTempIds"
         data = pack_mesh_dump(
-            meta, [c for p in vertices for c in p], [i for t in triangles for i in t], None
+            meta, [c for p in vertices for c in p], [i for t in triangles for i in t], groups
         )
         digest = hashlib.sha256(data).hexdigest()
         with tempfile.TemporaryDirectory() as raw:
@@ -1101,7 +1178,7 @@ class CliTests(unittest.TestCase):
         from fusion_design.cli import main
         from fusion_design.mesh_dump import pack_mesh_dump
 
-        vertices, triangles = box_mesh(divisions=8)
+        vertices, triangles, groups = box_mesh(divisions=8)
         data = pack_mesh_dump(
             _metadata(),
             [c for p in vertices for c in p],
