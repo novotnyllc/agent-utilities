@@ -99,7 +99,7 @@ Each entry states what the family does to geometry. Numbers come from the formul
 - `formulation` — the specific product, or null when only the family is settled. Never a guess.
 - `source_id` — the declared source the decision rests on: the data sheet, the standard, the coupon record, or the user's stated requirement.
 - `confidence` — from the same vocabulary as every other source. `provisional` until something measured supports it.
-- `coupon_component` — the `VAL__` article that will settle the material-dependent fits.
+- `coupon_component` — the declared component that will settle the material-dependent fits; by convention a `VAL__` article, though the validator accepts any path in the component tree.
 - `rationale` — why this family, in terms of the requirement it satisfies. For TPU, this must state the hardness or flex behavior.
 - `unresolved_risks` — what is still unproven. Filled and hygroscopic families must carry either a risk or an explicit `printer_requirements` string naming the abrasion-resistant nozzle, and drying for the polyamides.
 - `printer_requirements` — nozzle, drying, enclosure, ventilation. Constraints on the machine, not a slicer profile: printer, filament, and process profiles stay in the slicer.

@@ -42,7 +42,18 @@ MATERIAL_DECISION_FIELDS = {
 # change what actually prints. Both must be declared, not assumed away.
 FILLED_FAMILIES = {family for family in MATERIAL_FAMILIES if family.endswith("_CF")} | {"PA"}
 
-_ABRASION_TERMS = ("harden", "abrasion", "ruby", "steel", "tungsten", "carbide")
+# No bare "steel": a stainless steel bed or a steel frame is not an
+# abrasion-resistant nozzle, and "harden" already covers "hardened steel", which
+# is the phrasing references/material-selection.md prescribes.
+_ABRASION_TERMS = ("harden", "abrasion", "ruby", "tungsten", "carbide")
+# The abrasion term has to qualify the nozzle, not merely share the string with
+# it: "Brass nozzle is fine, stainless steel bed." discharges nothing.
+_ABRASION_NOZZLE_RE = re.compile(
+    r"(?:{terms})[^.;]{{0,40}}nozzle|nozzle[^.;]{{0,40}}(?:{terms})".format(
+        terms="|".join(_ABRASION_TERMS)
+    ),
+    re.IGNORECASE,
+)
 _DRYING_TERMS = ("dry", "desiccant")
 # R4: "TPU" alone is not a decision — the rationale has to say how hard or how
 # flexible the part needs to be.
@@ -55,7 +66,27 @@ def _text(value: Any) -> str:
 
 
 def _normalized(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    """Lowercase, with hyphens folded onto the enum's own underscore.
+
+    "PA-CF" and "PA_CF" have to normalize identically, and the joiner has to stay
+    a ``\\w`` character: collapsing it to a space would let the word-run match in
+    :func:`_names` find the unfilled family ``PA`` inside the filled ``PA_CF``,
+    which is exactly the mismatch R6 exists to catch.
+    """
+    return re.sub(r"[^a-z0-9_]+", " ", value.lower().replace("-", "_")).strip()
+
+
+def _needle_pattern(normalized_needle: str) -> str:
+    """Regex for the needle where each segment may carry a numeric grade suffix.
+
+    ``PA12`` and ``PA6`` are how the industry spells polyamide grades, so family
+    ``PA`` names them; ``pa\\d*`` still refuses ``pa_cf``, whose next character is
+    a ``\\w``.
+    """
+    parts = re.split(r"([_ ]+)", normalized_needle)
+    return "".join(
+        part if index % 2 else re.escape(part) + r"\d*" for index, part in enumerate(parts)
+    )
 
 
 def _names(haystack: str, needle: str) -> bool:
@@ -67,7 +98,7 @@ def _names(haystack: str, needle: str) -> bool:
     normalized_needle = _normalized(needle)
     if not normalized_needle:
         return False
-    pattern = rf"(?<!\w){re.escape(normalized_needle)}(?!\w)"
+    pattern = rf"(?<!\w){_needle_pattern(normalized_needle)}(?!\w)"
     return re.search(pattern, _normalized(haystack)) is not None
 
 
@@ -221,9 +252,7 @@ def _validate_material_decision(
         # Either route is acceptable: an open risk keeps the decision honest, and
         # a printer_requirements string discharges it only when it actually names
         # the abrasion-resistant nozzle (plus drying, for the PA families).
-        guarded_by_requirements = _mentions(requirements, ("nozzle",)) and _mentions(
-            requirements, _ABRASION_TERMS
-        )
+        guarded_by_requirements = _ABRASION_NOZZLE_RE.search(requirements) is not None
         if guarded_by_requirements and family.startswith("PA"):
             guarded_by_requirements = _mentions(requirements, _DRYING_TERMS)
         if not risks and not guarded_by_requirements:
@@ -287,8 +316,18 @@ def _validate_part_material_consistency(
             continue
         assumption = _text(material.get("assumption"))
         if not assumption:
+            # A missing or non-string assumption is already reported as
+            # printable-part-invalid-material; a mismatch on top of it would be
+            # noise, not a second finding.
             continue
-        if _names(assumption, family) or _names(assumption, formulation):
+        # Bidirectional on the formulation: R6 asks that the part not name a
+        # *different* material, not that it repeat the decision verbatim, so a
+        # shortened product name ("PET-CF17" under "Fiberon PET-CF17") is a match.
+        if (
+            _names(assumption, family)
+            or _names(assumption, formulation)
+            or _names(formulation, assumption)
+        ):
             continue
         issues.append(
             ValidationIssue(

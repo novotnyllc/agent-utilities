@@ -141,6 +141,9 @@ class SkillContractTests(unittest.TestCase):
         # Ordered-list markers are the only digits the document may contain.
         body = re.sub(r"(?m)^\d+\. ", "", doctrine)
         self.assertNotRegex(body, r"\d")
+        # A spelled-out property value is the same violation with no digit in it,
+        # so guard the unit and property tokens that would have to accompany one.
+        self.assertNotRegex(body.lower(), r"°|\b(degrees?|mpa|psi|gpa|percent|mm)\b")
 
     def test_all_declared_reference_files_exist(self) -> None:
         text = SKILL.read_text(encoding="utf-8")

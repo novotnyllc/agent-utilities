@@ -509,6 +509,39 @@ class ManifestValidationTests(unittest.TestCase):
         )
         self.assertNotIn("material-decision-filled-material-unguarded", self._codes(with_drying))
 
+        # PA_CF takes the same drying sub-requirement as plain PA.
+        cf_nozzle_only = self._with_decision(
+            family="PA_CF",
+            formulation="Some PA-CF",
+            unresolved_risks=[],
+            printer_requirements="Hardened steel nozzle required for the abrasive fill.",
+        )
+        self.assertIn("material-decision-filled-material-unguarded", self._codes(cf_nozzle_only))
+        cf_with_drying = self._with_decision(
+            family="PA_CF",
+            formulation="Some PA-CF",
+            unresolved_risks=[],
+            printer_requirements="Hardened steel nozzle; dry the spool before printing.",
+        )
+        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(cf_with_drying))
+
+        # The AND boundary: half a guard is not a guard, and the abrasion term
+        # has to qualify the nozzle rather than merely share the string with it.
+        for label, requirements in (
+            ("abrasion term, no nozzle", "Hardened steel tip required for the abrasive fill."),
+            ("nozzle, no abrasion term", "Use a brass nozzle."),
+            ("abrasion term on other hardware", "Brass nozzle is fine, stainless steel bed."),
+            ("abrasion term in another clause", "Any nozzle. Hardened tooling for post-processing."),
+        ):
+            with self.subTest(case=label):
+                half = self._with_decision(
+                    family="PET_CF",
+                    formulation="Some PET-CF",
+                    unresolved_risks=[],
+                    printer_requirements=requirements,
+                )
+                self.assertIn("material-decision-filled-material-unguarded", self._codes(half))
+
         # Unfilled families are not asked for either guard.
         self.assertEqual([], validate_manifest_data(self._with_decision()))
 
@@ -586,6 +619,55 @@ class ManifestValidationTests(unittest.TestCase):
         substring_only["printable_parts"][0]["material"]["assumption"] = "opaque PETG"
         self.assertIn("material-decision-part-mismatch", self._codes(substring_only))
 
+    def test_part_assumption_may_not_name_a_filled_sibling_of_the_decided_family(self) -> None:
+        """A compound family is not its own prefix: PA_CF under PA is a mismatch."""
+        for family, assumption in (
+            ("PA", "PA-CF filament, dry storage"),
+            ("PA", "PA_CF filament"),
+            ("PLA", "PLA-SILK, gloss finish"),
+            ("PC", "PC-CF spool"),
+        ):
+            with self.subTest(family=family, assumption=assumption):
+                data = self._with_decision(
+                    family=family,
+                    formulation=None,
+                    unresolved_risks=["Drying unverified."],
+                )
+                for part in data["printable_parts"]:
+                    part["material"]["assumption"] = assumption
+                self.assertIn("material-decision-part-mismatch", self._codes(data))
+
+    def test_part_assumption_may_carry_a_grade_suffix_or_shorten_the_formulation(self) -> None:
+        """R6 rejects a *different* material, not a differently spelled same one."""
+        for label, overrides, assumption in (
+            ("digit-suffixed grade", {"family": "PA", "formulation": None}, "PA6, dried"),
+            (
+                "digit-suffixed filled grade",
+                {"family": "PA_CF", "formulation": None},
+                "PA12-CF",
+            ),
+            (
+                "shortened formulation under OTHER",
+                {"family": "OTHER", "formulation": "Fiberon PET-CF17"},
+                "PET-CF17",
+            ),
+            (
+                "formulation longer than the assumption",
+                {"family": "PETG", "formulation": "Prusament PETG"},
+                "Prusament",
+            ),
+        ):
+            with self.subTest(case=label):
+                data = self._with_decision(
+                    unresolved_risks=["Drying and abrasion unverified."], **overrides
+                )
+                for part in data["printable_parts"]:
+                    part["material"]["assumption"] = assumption
+                self.assertNotIn("material-decision-part-mismatch", self._codes(data))
+
+    def test_printer_requirements_may_be_null(self) -> None:
+        self.assertEqual([], validate_manifest_data(self._with_decision(printer_requirements=None)))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CONTACT_FACES,
@@ -624,6 +706,18 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual(MATERIAL_DECISION_FIELDS, set(decision["properties"]))
         self.assertEqual(MATERIAL_FAMILIES, set(decision["properties"]["family"]["enum"]))
         self.assertEqual(SOURCE_CONFIDENCES, set(decision["properties"]["confidence"]["enum"]))
+        # Property names and enums are not enough: the coupon-verified /
+        # coupon_verified drift got through a check that pinned only those. Pin
+        # requiredness against what the validator actually rejects when absent.
+        required_by_validator = {
+            field
+            for field in MATERIAL_DECISION_FIELDS
+            if any(
+                issue.path.startswith("material_decision")
+                for issue in validate_manifest_data(self._with_decision(**{field: _OMIT}))
+            )
+        }
+        self.assertEqual(set(decision["required"]), required_by_validator)
 
     def test_load_manifest_raises_with_all_issues(self) -> None:
         data = copy.deepcopy(self.data)
