@@ -59,7 +59,28 @@ Fusion can expose B-Rep geometry, face normals, bounds, and measurements, but ro
 
 **Status:** External.
 
-Fusion exports manufacturing geometry but is not a replacement for the printer's slicer. Use PrusaSlicer, OrcaSlicer, Bambu Studio, CuraEngine, or another supported command-line/profile workflow where available. When no reliable CLI/profile is present, report that the estimate was not produced.
+Fusion exports manufacturing geometry but is not a replacement for the printer's slicer. Use PrusaSlicer, OrcaSlicer, Bambu Studio, CuraEngine, or another supported command-line/profile workflow where available. When no reliable CLI/profile is present, report that the estimate was not produced. On this host no slicer CLI is usable — see the next section — so these numbers currently come only from a manual GUI slice.
+
+## Headless slicing from the PrusaSlicer CLI
+
+**Status:** Unsupported on this host; the binary is never executed.
+
+PrusaSlicer 2.9.6 segfaults during headless slicing on this machine: `Slic3r::CLI::process_actions` → `Print::export_gcode` → `EXC_BAD_ACCESS` in `optional<ConflictResult>::operator=`. Four crash reports were produced before probing stopped. The `fusion-design prusaslicer-project` adapter therefore contains **no process-execution API at all** — not `subprocess`, not `os.system`, not `Popen`, not even `--help` — and its result always carries:
+
+```json
+{"slice": {"supported": false, "reason": "...", "detail": "..."}}
+```
+
+What is supported is project *generation*: the adapter builds a PrusaSlicer project `.3mf` from the verified export index plus declared `manufacturing_intent`, with one object per printable part, the declared build orientation applied, declared plate grouping, presets selected by identifier only, and only per-object overrides that declared intent justifies.
+
+Fallback for print time, filament mass, supports, and G-code statistics:
+
+1. generate the project with `fusion-design prusaslicer-project`;
+2. open that `.3mf` in the PrusaSlicer GUI by hand;
+3. slice there and read the statistics from the application;
+4. record them in the handoff against the project's recorded `sha256`.
+
+Never infer, estimate, or interpolate those numbers from the project file, the mesh, or a previous print.
 
 ## FDM-specific structural load rating
 

@@ -329,6 +329,23 @@ Fusion export is not the slicer. Print time, filament mass, supports, and machin
 
 Re-run verification after any change that affects fit, geometry, print orientation, support, or export bodies.
 
+### Optional PrusaSlicer project adapter
+
+When the user runs PrusaSlicer, the export index plus its declared `manufacturing_intent` can be turned into a real PrusaSlicer project `.3mf`:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project fusion-project.json \
+  --export-index export-index__<run>.json \
+  --output build/project.3mf \
+  --printer "<installed printer preset>" \
+  --filament "<installed filament preset>" \
+  --print "<installed print preset>"
+```
+
+The adapter re-verifies every referenced artifact against its recorded `sha256` and byte size, writes one object per printable part (never a merged mesh), applies the declared build orientation, honors declared plate grouping, sets `instances_count` from the declared quantity, and emits only the per-object overrides that declared intent justifies (support policy, infill target, minimum perimeters). Presets are selected **by identifier only** — the user's printer, filament, and process profiles stay in PrusaSlicer and are never cloned into our artifacts. Output is deterministic: the same index and intent produce byte-identical bytes, and an existing output is never overwritten.
+
+**The adapter does not slice.** It builds a project file; it never executes the PrusaSlicer binary. Its result always carries `"slice": {"supported": false, ...}` because headless slicing segfaults in `Print::export_gcode` on PrusaSlicer 2.9.6 on this host. Print time, filament mass, and G-code statistics therefore remain external evidence: open the generated project in PrusaSlicer, slice there, and record the result against the project's `sha256`. Never infer or estimate those numbers. See `references/unsupported.md`.
+
 ## 15. Handoff and persistent design state
 
 Before handoff, create or update `DESIGN-STATE.md` using the included `templates/DESIGN-STATE.md` structure, with:
@@ -359,6 +376,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json>
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]

@@ -17,6 +17,7 @@ from .export_handoff import (
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
+from .prusaslicer_project import build_project, resolve_presets
 from .report_diff import diff_reports
 from .scripts import (
     emit_inventory_script,
@@ -102,6 +103,40 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
     return 0
 
 
+# The slice step is never attempted: PrusaSlicer 2.9.6 crashes during headless
+# slicing on this host, so the adapter reports the boundary instead of guessing
+# past it. This block is constant on purpose -- there is no success branch.
+SLICE_UNSUPPORTED = {
+    "supported": False,
+    "reason": (
+        "Headless slicing is unavailable on this host: PrusaSlicer 2.9.6 segfaults in "
+        "Print::export_gcode (via Slic3r::CLI::process_actions), so this adapter never "
+        "executes the PrusaSlicer binary."
+    ),
+    "detail": (
+        "Print time, filament mass, and G-code statistics therefore remain external evidence "
+        "and must not be inferred, estimated, or interpolated from this project. Obtain them by "
+        "opening the generated project in the PrusaSlicer GUI and slicing there, then record the "
+        "result against this project's sha256."
+    ),
+}
+
+
+def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
+    _validate_named_paths(
+        [("manifest", args.manifest), ("export-index", args.export_index), ("output", args.output)]
+    )
+    load_manifest(args.manifest)
+    presets = resolve_presets(
+        {"printer": args.printer, "filament": args.filament, "print": args.print_preset},
+        args.config_root,
+    )
+    result = build_project(args.export_index, args.output, presets)
+    result["slice"] = SLICE_UNSUPPORTED
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def _cmd_diff(args: argparse.Namespace) -> int:
     before = json.loads(Path(args.before).read_text(encoding="utf-8"))
     after = json.loads(Path(args.after).read_text(encoding="utf-8"))
@@ -171,6 +206,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     emit_export.add_argument("-o", "--output")
     emit_export.set_defaults(handler=_cmd_emit_export)
+
+    prusaslicer = subparsers.add_parser(
+        "prusaslicer-project",
+        help="Build a PrusaSlicer project 3MF from a verified export index. Never slices.",
+    )
+    prusaslicer.add_argument("manifest")
+    prusaslicer.add_argument(
+        "--export-index",
+        required=True,
+        help="Path to the export-handoff index JSON; its 3MF artifacts are re-verified by hash and byte size.",
+    )
+    prusaslicer.add_argument(
+        "--output",
+        required=True,
+        help="Project .3mf to create. An existing path is never overwritten.",
+    )
+    prusaslicer.add_argument("--printer", help="Installed PrusaSlicer printer preset name.")
+    prusaslicer.add_argument("--filament", help="Installed PrusaSlicer filament preset name.")
+    prusaslicer.add_argument("--print", dest="print_preset", help="Installed PrusaSlicer print preset name.")
+    prusaslicer.add_argument(
+        "--config-root",
+        help="PrusaSlicer configuration directory. Defaults to the platform user configuration location.",
+    )
+    prusaslicer.set_defaults(handler=_cmd_prusaslicer_project)
 
     diff = subparsers.add_parser("diff-reports", help="Diff two machine-readable Fusion inventory/verification reports.")
     diff.add_argument("before")

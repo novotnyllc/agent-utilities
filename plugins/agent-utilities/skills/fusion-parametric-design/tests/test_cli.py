@@ -7,9 +7,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import fusion_design.cli as cli_module
 from fusion_design.cli import main
 from fusion_design.export_handoff import example_verification_report
 from fusion_design.manifest import load_manifest
+from test_prusaslicer_project import _Fixture, _config_root, _intent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +202,140 @@ class EmitExportCliTests(unittest.TestCase):
                             "obj",
                         ]
                     )
+
+
+class PrusaSlicerProjectCliTests(unittest.TestCase):
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        output = io.StringIO()
+        errors = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def _handoff(self, root: Path) -> tuple[Path, Path]:
+        fixture = _Fixture(root)
+        fixture.add_part("Widget/Base", intent=_intent(print_as="assembled"), with_step=True)
+        fixture.add_part(
+            "Widget/Lid",
+            intent=_intent(
+                print_as="assembled",
+                quantity=2,
+                orientation={"contact_face": "+Z", "rationale": "declared", "allowed_alternatives": []},
+                support_policy="build-plate-only",
+            ),
+        )
+        return fixture.write_index(), _config_root(root)
+
+    def _argv(self, index: Path, output: Path, config: Path, *extra: str) -> list[str]:
+        return [
+            "prusaslicer-project",
+            str(EXAMPLE),
+            "--export-index",
+            str(index),
+            "--output",
+            str(output),
+            "--config-root",
+            str(config),
+            *extra,
+        ]
+
+    def test_project_is_written_and_hashes_are_reported(self) -> None:
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            output = root / "project.3mf"
+            code, stdout, errors = self._run(self._argv(index, output, config))
+            self.assertEqual(0, code, errors)
+            payload = json.loads(stdout)
+
+            self.assertTrue(output.is_file())
+            self.assertEqual(str(output), payload["project_path"])
+            self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), payload["project_sha256"])
+            self.assertEqual(output.stat().st_size, payload["project_byte_size"])
+            self.assertEqual(hashlib.sha256(index.read_bytes()).hexdigest(), payload["export_index_sha256"])
+            self.assertEqual(
+                [{"plate": 1, "part_paths": ["Widget/Base", "Widget/Lid"]}], payload["plates"]
+            )
+            lid = next(obj for obj in payload["objects"] if obj["part_path"] == "Widget/Lid")
+            self.assertEqual({"contact_face": "+Z", "axis": "X", "degrees": 180}, lid["applied_rotation"])
+            self.assertEqual(2, lid["instances_count"])
+            self.assertEqual(1, lid["plate"])
+            self.assertEqual("1", lid["overrides"]["support_material_buildplate_only"])
+            self.assertEqual(
+                {"printer", "filament", "print"}, set(payload["presets"]), payload["presets"]
+            )
+
+    def test_slice_block_is_always_unsupported_and_carries_no_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            code, stdout, errors = self._run(self._argv(index, root / "p.3mf", config))
+            self.assertEqual(0, code, errors)
+            slice_block = json.loads(stdout)["slice"]
+            self.assertEqual({"supported", "reason", "detail"}, set(slice_block))
+            self.assertIs(False, slice_block["supported"])
+            self.assertIn("segfault", slice_block["reason"].lower())
+            self.assertIn("Print::export_gcode", slice_block["reason"])
+            self.assertIn("must not be inferred", slice_block["detail"])
+            for banned in ("print_time", "estimated_time", "filament_used", "gcode_statistics", "grams"):
+                self.assertNotIn(banned, stdout, banned)
+
+    def test_unknown_preset_exits_two_and_names_what_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            output = root / "p.3mf"
+            code, _, errors = self._run(
+                self._argv(index, output, config, "--printer", "Bambu X1C")
+            )
+            self.assertEqual(2, code)
+            self.assertIn("'Bambu X1C' is not installed", errors)
+            self.assertIn("Original Prusa XL - 5T", errors)
+            self.assertFalse(output.exists())
+
+    def test_missing_or_unreadable_index_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, config = self._handoff(root)
+            code, _, errors = self._run(self._argv(root / "absent.json", root / "a.3mf", config))
+            self.assertEqual(2, code)
+            self.assertIn("is not a file", errors)
+
+            unreadable = root / "broken.json"
+            unreadable.write_text("{not json", encoding="utf-8")
+            code, _, errors = self._run(self._argv(unreadable, root / "b.3mf", config))
+            self.assertEqual(2, code)
+            self.assertIn("not readable JSON", errors)
+
+    def test_output_aliasing_manifest_or_index_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            code, _, errors = self._run(self._argv(index, EXAMPLE, config))
+            self.assertEqual(2, code)
+            self.assertIn("manifest and output must name different files", errors)
+
+            code, _, errors = self._run(self._argv(index, index, config))
+            self.assertEqual(2, code)
+            self.assertIn("export-index and output must name different files", errors)
+
+    def test_existing_output_is_never_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            output = root / "p.3mf"
+            output.write_bytes(b"prior")
+            code, _, errors = self._run(self._argv(index, output, config))
+            self.assertEqual(2, code)
+            self.assertIn("Refusing to overwrite", errors)
+            self.assertEqual(b"prior", output.read_bytes())
+
+    def test_cli_module_contains_no_process_execution_api(self) -> None:
+        source = Path(cli_module.__file__).read_text(encoding="utf-8")
+        for token in ("subprocess", "os.system", "Popen", "os.exec", "os.spawn", "pty.spawn"):
+            self.assertNotIn(token, source, f"{token} must never appear in the fusion-design CLI")
 
 
 if __name__ == "__main__":
