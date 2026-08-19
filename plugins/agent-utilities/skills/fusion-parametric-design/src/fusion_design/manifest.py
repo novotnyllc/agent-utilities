@@ -21,6 +21,17 @@ from .printable_parts import (  # noqa: F401
     _validate_printable_parts,
 )
 
+# Same re-export contract for the project-level material decision.
+from .material_decision import (  # noqa: F401
+    ABRASION_RESISTANT_NOZZLES,
+    DRYING_STATES,
+    FILLED_FAMILIES,
+    MATERIAL_DECISION_FIELDS,
+    MATERIAL_FAMILIES,
+    NOZZLE_MATERIALS,
+    _validate_material_decision,
+)
+
 
 SOURCE_KINDS = {
     "manufacturer_cad",
@@ -108,6 +119,11 @@ class Manifest:
     def printable_parts(self) -> list[dict[str, Any]]:
         return list(self.data.get("printable_parts", []))
 
+    @property
+    def material_decision(self) -> dict[str, Any]:
+        decision = self.data.get("material_decision")
+        return dict(decision) if isinstance(decision, dict) else {}
+
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(self.data))
 
@@ -157,6 +173,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             "references",
             "verification",
             "printable_parts",
+            "material_decision",
         },
         "",
     )
@@ -794,6 +811,13 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         component_path_set,
         expected_print_part_paths,
         source_map,
+    )
+    _validate_material_decision(
+        issues,
+        data.get("material_decision"),
+        component_path_set,
+        source_map,
+        data.get("printable_parts"),
     )
 
     return issues

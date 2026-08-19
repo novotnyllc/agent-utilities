@@ -6,6 +6,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -29,6 +30,16 @@ from test_scripts import load_generated_script
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 
+MATERIAL_DECISION = {
+    "family": "PETG",
+    "formulation": "Prusament PETG",
+    "source_id": "pd_trigger_board_measurement",
+    "confidence": "provisional",
+    "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+    "rationale": "The snap-fit lid needs PETG toughness; PLA would fail brittle at the snap.",
+    "unresolved_risks": ["Snap strain is unverified until the coupon prints."],
+}
+
 FORBIDDEN_CLAIM_KEYS = {
     "slicing",
     "print_time",
@@ -49,9 +60,24 @@ FORBIDDEN_CLAIM_KEYS = {
 # else inside it is still subject to the forbidden-claim gate.
 INTENT_EXEMPT_KEYS = frozenset({"support_policy"})
 
+# Keys are not the only channel: a whole slicer preset pasted into a prose field
+# (printer_requirements, a rationale, a risk) reaches the index as a string value
+# and reads to a key-only sweep as nothing at all. Each pattern reports the
+# forbidden claim it is evidence of, so the existing key assertions catch it.
+# Naming the product on the spool is what `formulation` is for, so a brand name
+# is not a claim; a machine model and a process preset are.
+FORBIDDEN_CLAIM_VALUE_PATTERNS = (
+    ("printer", r"\bmk\d|\bbambu\w*|\bender\b|\bvoron\b|\bx1c\b|\bp1s\b"),
+    ("filament", r"\bfilament[ _-](?:profile|preset)"),
+    (
+        "process_profile",
+        r"process profile|print profile|\bpreset\w*|\bperimeters\b|\binfill\b|layer height|\bgyroid\b|prusaslicer",
+    ),
+)
+
 
 def _collect_keys(value, keys, exempt=frozenset()):
-    """Collect every key that would read as a slicer claim.
+    """Collect every key — and every string value — that reads as a slicer claim.
 
     manufacturing_intent is descended into, exempting only its own declared
     support_policy, so a planted printer/filament/slicing key still trips.
@@ -64,6 +90,10 @@ def _collect_keys(value, keys, exempt=frozenset()):
     elif isinstance(value, list):
         for child in value:
             _collect_keys(child, keys, exempt)
+    elif isinstance(value, str):
+        for claim, pattern in FORBIDDEN_CLAIM_VALUE_PATTERNS:
+            if re.search(pattern, value, re.IGNORECASE):
+                keys.add(claim)
 
 
 class FakeBody:
@@ -223,6 +253,39 @@ class ExportHandoffEmitterTests(unittest.TestCase):
             planted,
         )
         self.assertEqual({"printer"}, planted & FORBIDDEN_CLAIM_KEYS)
+
+    def test_forbidden_claim_gate_inspects_inside_material_decision(self) -> None:
+        planted: set = set()
+        _collect_keys(
+            {"material_decision": {**MATERIAL_DECISION, "filament": "some-filament", "process_profile": "0.2 fast"}},
+            planted,
+        )
+        self.assertEqual({"filament", "process_profile"}, planted & FORBIDDEN_CLAIM_KEYS)
+        legitimate: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "printer_requirements": "Any nozzle."}}, legitimate)
+        self.assertFalse(legitimate & FORBIDDEN_CLAIM_KEYS)
+
+    def test_forbidden_claim_gate_inspects_string_values_not_only_keys(self) -> None:
+        """A slicer preset is a forbidden claim wherever it is written, key or value."""
+        preset = (
+            "Prusa MK4S with a hardened steel nozzle; Prusament PA11CF Carbon Fiber; "
+            "STRUCTURAL process profile, five perimeters, gyroid infill."
+        )
+        for field in ("printer_requirements", "rationale"):
+            with self.subTest(field=field):
+                planted: set = set()
+                _collect_keys({"material_decision": {**MATERIAL_DECISION, field: preset}}, planted)
+                self.assertEqual(
+                    {"printer", "process_profile"}, planted & FORBIDDEN_CLAIM_KEYS
+                )
+        # The brand name alone is legitimate: naming the product on the spool is
+        # exactly what `formulation` is for.
+        legitimate: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "formulation": "Prusament PETG"}}, legitimate)
+        self.assertFalse(legitimate & FORBIDDEN_CLAIM_KEYS)
+        nested: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "unresolved_risks": [preset]}}, nested)
+        self.assertTrue(nested & FORBIDDEN_CLAIM_KEYS)
 
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")
@@ -503,6 +566,46 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         keys: set = set()
         _collect_keys(index, keys)
         self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_carries_material_decision_once_at_index_level(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        declared["material_decision"] = json.loads(json.dumps(MATERIAL_DECISION))
+        self.manifest = Manifest.from_data(declared)
+
+        report = self._run(self._namespace())[0]
+        self.assertEqual(MATERIAL_DECISION, report["material_decision"])
+        for artifact in report["artifacts"]:
+            self.assertNotIn("material_decision", artifact)
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(MATERIAL_DECISION, index["material_decision"])
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_carries_the_example_manifests_own_decision(self) -> None:
+        declared = self.manifest.material_decision
+        self.assertEqual("PETG", declared["family"])
+        report = self._run(self._namespace())[0]
+        self.assertEqual(declared, report["material_decision"])
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(declared, index["material_decision"])
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_omits_material_decision_when_manifest_declares_none(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        stripped = self.manifest.to_dict()
+        stripped.pop("material_decision")
+        self.manifest = Manifest.from_data(stripped)
+        self.assertEqual({}, self.manifest.material_decision)
+        report = self._run(self._namespace())[0]
+        self.assertNotIn("material_decision", report)
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertNotIn("material_decision", index)
 
     def test_index_carries_explicit_support_regions(self) -> None:
         from fusion_design.manifest import Manifest
