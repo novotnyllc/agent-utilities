@@ -549,6 +549,16 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("report_attempted = False", source)
         self.assertIn('failures.append("compute-all")', source)
         self.assertIn('failures.append("parameters")', source)
+        self.assertIn("occurrence_transforms", source)
+        self.assertIn("transform2", source)
+
+        namespace = load_generated_script(source)
+        with_transform = SimpleNamespace(
+            transform2=SimpleNamespace(asArray=lambda: [1.0] + [0.0] * 15)
+        )
+        without_transform = SimpleNamespace(transform2=None)
+        self.assertEqual([1.0] + [0.0] * 15, namespace["_occurrence_transform"](with_transform))
+        self.assertIsNone(namespace["_occurrence_transform"](without_transform))
 
         namespace = load_generated_script(source)
         first_spec = namespace["PARAMETER_SPECS"][0]
@@ -579,6 +589,38 @@ class ScriptEmissionTests(unittest.TestCase):
             },
             unitless_mismatches,
         )
+
+    def test_verification_run_reports_occurrence_transforms(self) -> None:
+        namespace = load_generated_script(emit_verification_script(self.manifest))
+        identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        placed = "10_PRODUCT/PROD__BASE"
+        unplaced = "10_PRODUCT/PROD__LID"
+        occurrences = {
+            placed: SimpleNamespace(transform2=SimpleNamespace(asArray=lambda: identity)),
+            unplaced: SimpleNamespace(transform2=None),
+        }
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=SimpleNamespace(),
+            computeAll=lambda: True,
+            userParameters=SimpleNamespace(itemByName=lambda name: None),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_pump_events"] = lambda app, design, target_document: None
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), [])
+        namespace["_timeline_health"] = lambda design: {"unhealthy": [], "informational": []}
+        namespace["_body_summary"] = lambda occurrence: {"has_positive_solid": True}
+        namespace["_all_geometry_bbox_mm"] = lambda occurrence: {}
+        namespace["_bbox_mm"] = lambda occurrence: {}
+
+        output = StringIO()
+        # Missing required components make the run fail; the report is emitted first.
+        with redirect_stdout(output), self.assertRaises(RuntimeError):
+            namespace["run"](None)
+        report = next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
+        self.assertEqual({placed: identity, unplaced: None}, report["occurrence_transforms"])
+        self.assertEqual(16, len(report["occurrence_transforms"][placed]))
 
 
 if __name__ == "__main__":

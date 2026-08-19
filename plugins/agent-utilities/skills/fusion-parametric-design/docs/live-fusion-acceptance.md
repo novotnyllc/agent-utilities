@@ -198,7 +198,8 @@ Run the deterministic export transaction against the verified document:
 3. Append the report's `design_state_rows` to `DESIGN-STATE.md` `## Exports`.
 4. Re-run the same script unchanged. **Pass:** it fails closed with `output-exists` and no file's bytes change.
 5. Negative test: duplicate a body name inside one print-part component (or add a second solid body), re-emit, and run. **Pass:** the report fails with `ambiguous-body` and no file is written.
-6. Confirm the index contains no slicing, print-time, mass, support, or physical-fit claims — those remain external evidence.
+6. Confirm the index contains no slicing, print-time, mass, or physical-fit claims outside each artifact's declared `manufacturing_intent` — actual slicing results remain external evidence.
+7. Confirm each artifact's `manufacturing_intent` matches the manifest's `printable_parts` entry and that the three example parts carry their differing intent (base `-Z`/no supports, lid `+Z`/build-plate-only, coupon `-Z`/protected fit surfaces), and that the verification report recorded `occurrence_transforms` for all three.
 
 **Pass:** the handoff records the Fusion version (or explicit `unsaved`), manifest hash, verification-report hash, export run ID, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
 

@@ -11,6 +11,8 @@ A release passes only the checks applicable to its intended use. “Generated su
 - Required parameter names and expressions match the manifest.
 - Managed components and print parts exist once at the intended paths.
 - Each printable part has the intended positive-volume B-rep body count.
+- The verification report records each checked part's root-context occurrence transform (`occurrence_transforms`: raw Fusion `transform2.asArray()`, translation components in centimetres — deliberately unconverted, unlike the `*_mm` keys; the export index's per-artifact `transform` uses the same convention).
+- When the manifest declares `printable_parts`, its paths exactly match `verification.expected_print_parts`, and a declared `body_name` matches the resolved solid at export (`body-name-mismatch` fails closed).
 - No accidental visibility/selection state is being used as a substitute for geometry.
 
 ## Fit and packing

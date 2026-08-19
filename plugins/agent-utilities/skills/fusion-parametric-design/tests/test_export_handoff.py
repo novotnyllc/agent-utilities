@@ -39,17 +39,31 @@ FORBIDDEN_CLAIM_KEYS = {
     "support_policy",
     "physical_fit",
     "fit",
+    "printer",
+    "filament",
+    "process_profile",
 }
 
 
-def _collect_keys(value, keys):
+# manufacturing_intent legitimately declares its own support_policy; everything
+# else inside it is still subject to the forbidden-claim gate.
+INTENT_EXEMPT_KEYS = frozenset({"support_policy"})
+
+
+def _collect_keys(value, keys, exempt=frozenset()):
+    """Collect every key that would read as a slicer claim.
+
+    manufacturing_intent is descended into, exempting only its own declared
+    support_policy, so a planted printer/filament/slicing key still trips.
+    """
     if isinstance(value, dict):
         for key, child in value.items():
-            keys.add(key)
-            _collect_keys(child, keys)
+            if key not in exempt:
+                keys.add(key)
+            _collect_keys(child, keys, INTENT_EXEMPT_KEYS if key == "manufacturing_intent" else frozenset())
     elif isinstance(value, list):
         for child in value:
-            _collect_keys(child, keys)
+            _collect_keys(child, keys, exempt)
 
 
 class FakeBody:
@@ -165,9 +179,55 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing for print parts"):
             emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, partial_bounds))
 
+    def test_padded_manifest_paths_still_carry_manufacturing_intent(self) -> None:
+        from fusion_design.manifest import Manifest, validate_manifest_data
+
+        # The validator strips printable-part paths before matching them against
+        # verification.expected_print_parts, so the emitter must strip too or the
+        # export index silently drops the intent for a padded part.
+        data = self.manifest.to_dict()
+        part = data["printable_parts"][0]
+        part["path"] = "  " + part["path"] + "  "
+        part["body_name"] = "  " + (part.get("body_name") or "PADDED_BODY") + "  "
+        self.assertEqual([], validate_manifest_data(data))
+
+        padded = Manifest.from_data(data)
+        config = self._config("/tmp/example-exports")
+        specs = load_generated_script(emit_export_script(padded, config))["EXPORT_SPECS"]
+        by_path = {spec["path"]: spec for spec in specs["parts"]}
+        self.assertEqual(set(self.print_parts), set(by_path))
+        for path in self.print_parts:
+            self.assertIn("manufacturing_intent", by_path[path])
+        self.assertEqual(
+            part["body_name"].strip(),
+            by_path[part["path"].strip()]["expected_body_name"],
+        )
+
+    def test_incomplete_manufacturing_intent_coverage_fails_closed(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        data = self.manifest.to_dict()
+        dropped = data["printable_parts"].pop()["path"]
+        # validate=False on purpose: the validator rejects this manifest, and the
+        # guard exists for exactly the un-validated construction path.
+        partial = Manifest.from_data(data, validate=False)
+        with self.assertRaises(ValueError) as ctx:
+            emit_export_script(partial, self._config("/tmp/example-exports"))
+        self.assertIn("Manufacturing intent is missing for print parts", str(ctx.exception))
+        self.assertIn(dropped, str(ctx.exception))
+
+    def test_forbidden_claim_gate_inspects_inside_manufacturing_intent(self) -> None:
+        planted: set = set()
+        _collect_keys(
+            {"artifacts": [{"manufacturing_intent": {"printer": "some-printer", "support_policy": "none"}}]},
+            planted,
+        )
+        self.assertEqual({"printer"}, planted & FORBIDDEN_CLAIM_KEYS)
+
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")
         colliding = json.loads(json.dumps(self.manifest.to_dict()))
+        colliding.pop("printable_parts", None)
         # Two component paths whose slugs collide (lowercase folding).
         colliding["component_tree"].extend(["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"])
         colliding["verification"]["expected_print_parts"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
@@ -415,6 +475,132 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         namespace = self._namespace(export_dir=self.export_dir / "does-not-exist")
         reports = self._run_expect_failure(namespace, "missing-output-dir")
         self.assertEqual(["missing-output-dir"], reports[0]["failures"])
+
+    def test_index_carries_manufacturing_intent_from_manifest(self) -> None:
+        namespace = self._namespace()
+        report = self._run(namespace)[0]
+        intent_by_path = {part["path"]: part for part in self.manifest.printable_parts}
+        for artifact in report["artifacts"]:
+            intent = artifact["manufacturing_intent"]
+            declared = intent_by_path[artifact["part_path"]]
+            # The manifest entry also carries manifest-only keys (path, body_name);
+            # every key the intent does carry must match the declaration exactly.
+            self.assertEqual({key: declared[key] for key in intent}, intent)
+            self.assertEqual(
+                {
+                    "id",
+                    "quantity",
+                    "print_as",
+                    "orientation",
+                    "support_policy",
+                    "strength",
+                    "protected_features",
+                    "material",
+                },
+                set(intent),
+            )
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_carries_explicit_support_regions(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        regions = [
+            {"kind": "enforcer", "description": "Support the USB-C port ceiling."},
+            {"kind": "blocker", "description": "Keep supports out of the sealing groove."},
+        ]
+        declared["printable_parts"][0]["support_policy"] = "explicit-regions"
+        declared["printable_parts"][0]["support_regions"] = regions
+        part_path = declared["printable_parts"][0]["path"]
+        self.manifest = Manifest.from_data(declared)
+
+        report = self._run(self._namespace())[0]
+        matching = [
+            artifact for artifact in report["artifacts"] if artifact["part_path"] == part_path
+        ]
+        self.assertTrue(matching)
+        for artifact in matching:
+            self.assertEqual("explicit-regions", artifact["manufacturing_intent"]["support_policy"])
+            self.assertEqual(regions, artifact["manufacturing_intent"]["support_regions"])
+        for artifact in report["artifacts"]:
+            if artifact["part_path"] != part_path:
+                self.assertNotIn("support_regions", artifact["manufacturing_intent"])
+
+    def test_index_omits_intent_when_manifest_has_none(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        stripped = self.manifest.to_dict()
+        stripped.pop("printable_parts")
+        intentless = Manifest.from_data(stripped)
+        report_data = example_verification_report(intentless)
+        bounds = verification_binding_from_report(intentless, report_data)
+        config = ExportConfig(
+            export_dir=str(self.export_dir),
+            formats=("step", "3mf"),
+            verification_report_sha256=hashlib.sha256(b"x" * 10).hexdigest(),
+            expected_bounds_mm=bounds,
+        )
+        source = emit_export_script(intentless, config)
+        namespace = load_generated_script(source)
+        occurrences = {
+            path: FakeOccurrence([FakeBody("BODY")], bounds[path]) for path in self.print_parts
+        }
+        manager = FakeExportManager()
+        design = SimpleNamespace(
+            exportManager=manager,
+            rootComponent=SimpleNamespace(),
+            unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=intentless.fusion_document, isSaved=False))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), {})
+        namespace["_bbox_mm"] = lambda occurrence: occurrence.bounds
+        report = self._run(namespace)[0]
+        for artifact in report["artifacts"]:
+            self.assertNotIn("manufacturing_intent", artifact)
+
+    def test_declared_body_name_mismatch_fails_closed(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        declared["printable_parts"][0]["body_name"] = "EXPECTED_BODY"
+        manifest = Manifest.from_data(declared)
+        report_data = example_verification_report(manifest)
+        bounds = verification_binding_from_report(manifest, report_data)
+        config = ExportConfig(
+            export_dir=str(self.export_dir),
+            formats=("step", "3mf"),
+            verification_report_sha256=hashlib.sha256(b"y" * 10).hexdigest(),
+            expected_bounds_mm=bounds,
+        )
+        source = emit_export_script(manifest, config)
+        self.assertIn("body-name-mismatch", source)
+        namespace = load_generated_script(source)
+        occurrences = {
+            path: FakeOccurrence([FakeBody("SOME_OTHER_NAME")], bounds[path]) for path in self.print_parts
+        }
+        design = SimpleNamespace(
+            exportManager=FakeExportManager(),
+            rootComponent=SimpleNamespace(),
+            unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=manifest.fusion_document, isSaved=False))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), {})
+        namespace["_bbox_mm"] = lambda occurrence: occurrence.bounds
+        reports = self._run_expect_failure(namespace, "body-name-mismatch")
+        self.assertIn("body-name-mismatch", reports[0]["failures"])
+        self.assertEqual([], list(self.export_dir.iterdir()))
+
+        matching = {
+            path: FakeOccurrence([FakeBody("EXPECTED_BODY")], bounds[path]) for path in self.print_parts
+        }
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(matching), dict(matching), {})
+        report = self._run(namespace)[0]
+        self.assertTrue(report["ok"])
 
     def test_saved_document_records_version_identity(self) -> None:
         namespace = self._namespace()

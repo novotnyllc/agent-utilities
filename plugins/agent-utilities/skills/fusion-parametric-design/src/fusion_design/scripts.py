@@ -605,6 +605,13 @@ def _has_positive_solid_brep(occurrence):
     return False
 
 
+def _occurrence_transform(occurrence):
+    transform = getattr(occurrence, "transform2", None)
+    if not transform:
+        return None
+    return [float(value) for value in transform.asArray()]
+
+
 def _parameter_mismatches(user_parameters):
     mismatches = []
     for spec in PARAMETER_SPECS:
@@ -662,11 +669,13 @@ def run(context):
         bounding_boxes = {{}}
         brep_bounding_boxes = {{}}
         geometry = {{}}
+        occurrence_transforms = {{}}
         for path in sorted(relevant_paths):
             occurrence = occurrence_map.get(path)
             if not occurrence:
                 continue
             geometry[path] = _body_summary(occurrence)
+            occurrence_transforms[path] = _occurrence_transform(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
             except Exception as error:
@@ -796,6 +805,7 @@ def run(context):
             "timeline": timeline,
             "bounding_boxes_mm": bounding_boxes,
             "brep_bounding_boxes_mm": brep_bounding_boxes,
+            "occurrence_transforms": occurrence_transforms,
             "geometry": geometry,
             "clearance_results": clearance_results,
             "interference_results": interference_results,

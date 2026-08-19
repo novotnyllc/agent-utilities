@@ -7,6 +7,20 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
+# Re-exported so both fusion_design.manifest and fusion_design.printable_parts
+# remain valid import paths for the printable-part closed-world constants.
+from .printable_parts import (  # noqa: F401
+    CONTACT_FACES,
+    MATERIAL_STATUSES,
+    PRINT_AS_VALUES,
+    PRINTABLE_PART_FIELDS,
+    PROTECTED_FEATURE_KINDS,
+    SUPPORT_POLICIES,
+    SUPPORT_REGION_KINDS,
+    _in_closed_set,
+    _validate_printable_parts,
+)
+
 
 SOURCE_KINDS = {
     "manufacturer_cad",
@@ -36,6 +50,8 @@ ROLE_PREFIXES: dict[str, str] = {
     "packing": "pack_",
     "derived": "calc_",
 }
+
+_VALID_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +104,10 @@ class Manifest:
     def verification(self) -> dict[str, Any]:
         return dict(self.data.get("verification", {}))
 
+    @property
+    def printable_parts(self) -> list[dict[str, Any]]:
+        return list(self.data.get("printable_parts", []))
+
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(self.data))
 
@@ -128,7 +148,16 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
     _reject_unknown_fields(
         issues,
         data,
-        {"schema_version", "project", "sources", "parameters", "component_tree", "references", "verification"},
+        {
+            "schema_version",
+            "project",
+            "sources",
+            "parameters",
+            "component_tree",
+            "references",
+            "verification",
+            "printable_parts",
+        },
         "",
     )
 
@@ -179,7 +208,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         issues.append(ValidationIssue("duplicate-source-id", "sources", f"Source id {duplicate!r} is duplicated."))
 
     source_map: dict[str, dict[str, Any]] = {}
-    valid_name = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+    valid_name = _VALID_NAME_RE
     for index, raw_source in enumerate(sources):
         path = f"sources[{index}]"
         if not isinstance(raw_source, dict):
@@ -212,7 +241,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     )
                 )
         kind = raw_source.get("kind")
-        if kind not in SOURCE_KINDS:
+        if not _in_closed_set(kind, SOURCE_KINDS):
             issues.append(
                 ValidationIssue(
                     "unknown-source-kind",
@@ -221,7 +250,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
             )
         confidence = raw_source.get("confidence")
-        if confidence not in SOURCE_CONFIDENCES:
+        if not _in_closed_set(confidence, SOURCE_CONFIDENCES):
             issues.append(
                 ValidationIssue(
                     "unknown-source-confidence",
@@ -470,7 +499,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         authoring = reference_string("authoring_component")
         packing = reference_string("packing_component")
         representation = reference_string("representation")
-        if representation not in REFERENCE_REPRESENTATIONS:
+        if not _in_closed_set(representation, REFERENCE_REPRESENTATIONS):
             issues.append(
                 ValidationIssue(
                     "unknown-reference-representation",
@@ -753,6 +782,19 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Verification check id {duplicate!r} is duplicated.",
                 )
             )
+
+    expected_print_part_paths: list[str] | None = None
+    if isinstance(verification, dict):
+        raw_expected = verification.get("expected_print_parts")
+        if isinstance(raw_expected, list) and all(isinstance(value, str) for value in raw_expected):
+            expected_print_part_paths = list(raw_expected)
+    _validate_printable_parts(
+        issues,
+        data.get("printable_parts"),
+        component_path_set,
+        expected_print_part_paths,
+        source_map,
+    )
 
     return issues
 
