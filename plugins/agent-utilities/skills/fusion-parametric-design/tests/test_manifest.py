@@ -750,6 +750,153 @@ class ManifestValidationTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(expected, self._codes(self._with_decision(**{field: padded})))
 
+    def _with_variants(self, *variants):
+        data = copy.deepcopy(self.data)
+        data["variants"] = list(variants)
+        return data
+
+    def test_two_whitespace_equivalent_base_parameters_are_one_duplicate(self) -> None:
+        # A variant strips the names it overrides, so it cannot tell these two
+        # apart: one override would be substituted into both parameter entries
+        # and restoration would write one captured expression to both.
+        data = self._with_variants(
+            {"id": "small", "description": "Compact.", "parameters": {"des_corner_radius": "3 mm"}}
+        )
+        twin = copy.deepcopy(
+            next(entry for entry in data["parameters"] if entry["name"] == "des_corner_radius")
+        )
+        twin["name"] = " des_corner_radius "
+        data["parameters"].append(twin)
+
+        issues = validate_manifest_data(data)
+        self.assertIn("duplicate-parameter-name", [issue.code for issue in issues])
+        self.assertIn(
+            "'des_corner_radius' is duplicated",
+            " ".join(issue.message for issue in issues),
+        )
+
+    def test_manifest_without_variants_is_still_valid(self) -> None:
+        self.assertNotIn("variants", self.data)
+        self.assertEqual([], validate_manifest_data(self.data))
+
+    def test_parameter_set_and_configuration_variants_both_validate(self) -> None:
+        data = self._with_variants(
+            {"id": "small", "description": "Compact enclosure.", "parameters": {"des_corner_radius": "3 mm"}},
+            {"id": "family_a", "description": "Named Fusion configuration.", "configuration": "Family A"},
+        )
+        self.assertEqual([], validate_manifest_data(data))
+
+    def test_a_variant_declares_exactly_one_source(self) -> None:
+        both = self._with_variants(
+            {
+                "id": "small",
+                "description": "Both sources.",
+                "parameters": {"des_corner_radius": "3 mm"},
+                "configuration": "Family A",
+            }
+        )
+        self.assertIn("variant-source-ambiguous", self._codes(both))
+
+        neither = self._with_variants({"id": "small", "description": "No source."})
+        self.assertIn("variant-source-missing", self._codes(neither))
+
+        empty = self._with_variants({"id": "small", "description": "Empty override.", "parameters": {}})
+        self.assertIn("variant-source-missing", self._codes(empty))
+
+    def test_variant_identity_rules(self) -> None:
+        duplicate = self._with_variants(
+            {"id": "small", "description": "One.", "parameters": {"des_corner_radius": "3 mm"}},
+            {"id": "small", "description": "Two.", "parameters": {"des_corner_radius": "8 mm"}},
+        )
+        self.assertIn("variant-duplicate-id", self._codes(duplicate))
+
+        bad_id = self._with_variants(
+            {"id": "not-a-name", "description": "One.", "parameters": {"des_corner_radius": "3 mm"}}
+        )
+        self.assertIn("invalid-variant-id", self._codes(bad_id))
+
+        for field in ("id", "description"):
+            missing = self._with_variants(
+                {"id": "small", "description": "One.", "parameters": {"des_corner_radius": "3 mm"}}
+            )
+            missing["variants"][0][field] = "  "
+            self.assertIn("variant-field-required", self._codes(missing), field)
+
+    def test_a_variant_may_not_introduce_or_break_a_parameter(self) -> None:
+        unknown = self._with_variants(
+            {"id": "small", "description": "One.", "parameters": {"des_invented": "3 mm"}}
+        )
+        self.assertIn("variant-unknown-parameter", self._codes(unknown))
+
+        for expression in ("   ", 3, None, {"value": "3 mm"}):
+            blank = self._with_variants(
+                {"id": "small", "description": "One.", "parameters": {"des_corner_radius": expression}}
+            )
+            self.assertIn("variant-invalid-expression", self._codes(blank), repr(expression))
+
+    def test_variant_structure_is_a_closed_world(self) -> None:
+        unknown_field = self._with_variants(
+            {
+                "id": "small",
+                "description": "One.",
+                "parameters": {"des_corner_radius": "3 mm"},
+                "surprise": True,
+            }
+        )
+        self.assertIn("unknown-manifest-field", self._codes(unknown_field))
+
+        data = copy.deepcopy(self.data)
+        data["variants"] = {"not": "a list"}
+        self.assertIn("variants-must-be-list", self._codes(data))
+
+        self.assertIn("variant-must-be-object", self._codes(self._with_variants("small")))
+
+        not_an_object = self._with_variants({"id": "small", "description": "One.", "parameters": ["a"]})
+        self.assertIn("variant-parameters-must-be-object", self._codes(not_an_object))
+
+        blank_configuration = self._with_variants(
+            {"id": "small", "description": "One.", "configuration": "  "}
+        )
+        self.assertIn("variant-invalid-configuration", self._codes(blank_configuration))
+
+    def test_variant_parameter_names_are_normalized_the_same_on_both_sides(self) -> None:
+        from fusion_design.variants import variant_parameter_overrides
+
+        variant = {
+            "id": "small",
+            "description": "Padded name.",
+            "parameters": {" des_corner_radius ": "3 mm"},
+        }
+        self.assertNotIn("variant-unknown-parameter", self._codes(self._with_variants(variant)))
+        self.assertEqual({"des_corner_radius": "3 mm"}, variant_parameter_overrides(variant))
+
+        collapsing = self._with_variants(
+            {
+                "id": "small",
+                "description": "Two names, one parameter.",
+                "parameters": {"des_corner_radius": "3 mm", "des_corner_radius ": "8 mm"},
+            }
+        )
+        self.assertIn("variant-duplicate-parameter", self._codes(collapsing))
+
+    def test_variant_enum_fields_reject_unhashable_values_without_crashing(self) -> None:
+        # A dict where a parameter name belongs must be a validation issue, not
+        # a TypeError escaping the CLI's ok/issues contract.
+        data = self._with_variants(
+            {"id": "small", "description": "One.", "parameters": {"des_corner_radius": {"a": 1}}}
+        )
+        self.assertIn("variant-invalid-expression", self._codes(data))
+
+    def test_a_matrix_larger_than_the_declared_maximum_is_rejected(self) -> None:
+        from fusion_design.manifest import MAXIMUM_VARIANTS
+
+        variants = [
+            {"id": f"v{index}", "description": "One.", "parameters": {"des_corner_radius": f"{index + 1} mm"}}
+            for index in range(MAXIMUM_VARIANTS + 1)
+        ]
+        self.assertIn("variants-exceed-maximum", self._codes(self._with_variants(*variants)))
+        self.assertNotIn("variants-exceed-maximum", self._codes(self._with_variants(*variants[:-1])))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CONTACT_FACES,
@@ -806,6 +953,17 @@ class ManifestValidationTests(unittest.TestCase):
             )
         }
         self.assertEqual(set(decision["required"]), required_by_validator)
+
+        from fusion_design.manifest import MAXIMUM_VARIANTS, VARIANT_FIELDS, VARIANT_SOURCES
+
+        variant = schema["$defs"]["variant"]
+        self.assertIn("variants", schema["properties"])
+        self.assertEqual(MAXIMUM_VARIANTS, schema["properties"]["variants"]["maxItems"])
+        self.assertEqual(VARIANT_FIELDS, set(variant["properties"]))
+        self.assertEqual(
+            VARIANT_SOURCES,
+            {required for branch in variant["oneOf"] for required in branch["required"]},
+        )
 
     def test_load_manifest_raises_with_all_issues(self) -> None:
         data = copy.deepcopy(self.data)

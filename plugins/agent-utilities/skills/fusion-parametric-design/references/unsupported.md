@@ -34,9 +34,29 @@ Install and update this skill through the agent harness's plugin or skill manage
 
 ## Batch variant runner
 
-**Status:** Partial.
+**Status:** Supported and bounded, with two real limits.
 
-Fusion Configurations can represent families where available; named parameter sets can cover simpler cases. The host CLI does not iterate every configuration, regenerate every export, or build a per-variant verification matrix. For release work, activate one named configuration or parameter set at a time, compute, verify, export, hash, and record the results. Add a project-specific batch driver only when the family warrants it.
+`fusion-design plan-variants` runs a declared family: capture the initial state,
+then per variant apply, compute, inventory, verify and optionally export, then
+restore and verify the restoration by read-back. Evidence is additive and
+identity-bound, and the verdict is conjunctive — passing requires every variant.
+Two boundaries remain:
+
+1. **Configuration variants depend on a Fusion API that may be absent.** The
+   activation transaction probes `Design.configurationTable` and its rows'
+   `activate()`, and fails closed with a clear message rather than silently
+   applying nothing. It also fails when a configuration table drives managed
+   parameters away from their manifest expressions, because verification reports
+   that as a parameter mismatch. Declare such a family as parameter-set variants.
+2. **The matrix does not invent variants.** Each entry names its own parameters
+   or configuration, and a manifest may declare at most 16 variants. A 17th is a
+   validation failure (`variants-exceed-maximum`), and the planner refuses the
+   same manifest again even when validation was skipped, so a matrix cannot run
+   unbounded against a live session.
+
+The runner also refuses to start when the initial expression of a parameter some
+variant overrides cannot be read: a run that could not be restored must not
+begin. Sync the base parameters first.
 
 ## Authoritative printer and material profiles
 

@@ -253,7 +253,51 @@ Where PrusaSlicer is not installed, or `--slice` was not used, slice in the GUI 
 
 **Pass:** the user confirms 1–4. This is a human acceptance step; it is never recorded as passing on the agent's own inspection.
 
-## 12. Restore the Fusion session
+## 12. Variant matrix
+
+Prove the family, not one member. Copy the example manifest and add three
+variants: two enclosure sizes and one deliberately broken one.
+
+```json
+"variants": [
+  {"id": "small", "description": "Compact enclosure.", "parameters": {"des_corner_radius": "3 mm"}},
+  {"id": "large", "description": "Large enclosure.", "parameters": {"des_corner_radius": "8 mm"}},
+  {"id": "broken", "description": "Deliberate failure: wall thicker than the corner radius allows.", "parameters": {"fab_wall_thickness": "40 mm"}}
+]
+```
+
+1. Plan the run: `scripts/fusion-design plan-variants build/variants.json --export-dir <fusion-host dir> --on-failure continue -o build/variant-plan.json`.
+   **Pass:** the step order is capture → per variant (apply, inventory, verify,
+   export) → restore → verify-restore; every non-deferred step carries a
+   compilable script; the export steps are deferred with their reason.
+2. Before starting, note the Parameters dialog's expressions for **every**
+   parameter the manifest declares, not just the overridden ones — `apply` runs
+   the parameter sync, which writes all of them. These are the restore target.
+3. Execute each planned step's script through the MCP in order, saving each
+   report to `build/reports/<report_name>`. After each save, re-run
+   `plan-variants ... --reports-dir build/reports` to fold the evidence and get
+   the next step — including the export script, which the runner emits only once
+   that variant's verification report exists.
+   **Pass:** an intermediate fold exits 0 with `failures: []` while nothing has
+   failed, and exits 2 with `variant-failed` from the first fold after `broken`'s
+   verification report is saved — not only at the end. Every incomplete fold
+   reports `restore.ok: false` with a reason saying the document has not been
+   verifiably restored yet.
+4. **Pass:** `small` and `large` produce `ok: true` rows with their own
+   `manifest_sha256`, their own export directory under the export root, and
+   distinct artifact hashes; `broken` produces an `ok: false` row naming the
+   failing step and its verification failure tokens; the earlier rows are still
+   present and unchanged; the overall record is `ok: false` with
+   `variant-failed`; and `restore.verified` is `true` with an empty
+   `mismatches`.
+5. Confirm in the Fusion Parameters dialog by eye that both expressions are back
+   to what step 2 recorded, and that the CLI exit code was 2.
+
+**Pass:** a failing variant did not erase the evidence the passing ones earned,
+the run reported failure rather than "2 of 3 passed", and the document is
+verifiably back on the state it started from.
+
+## 13. Restore the Fusion session
 
 Close the disposable acceptance document without saving, reactivate the
 document that was active before the smoke test, and read the open-document

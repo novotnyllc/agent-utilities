@@ -26,6 +26,15 @@ from .scripts import (
     emit_parameter_sync_script,
     emit_scaffold_script,
     emit_verification_script,
+    manifest_sha256,
+)
+from .variant_matrix import (
+    DEFAULT_SLOW_STEP_SECONDS,
+    FAILURE_POLICIES,
+    MatrixConfig,
+    build_matrix_plan,
+    run_variant_matrix,
+    saved_report_executor,
 )
 
 
@@ -40,6 +49,17 @@ def _write_output(content: str, output: str | None) -> None:
 
 def _same_path(left: str, right: str) -> bool:
     return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+
+
+def _reject_output_inside(directory: str, output: str, label: str) -> None:
+    """An output written into an evidence directory destroys evidence.
+
+    Both sides are resolved first, so a symlink or a ``..`` segment cannot walk
+    into the directory behind the check.
+    """
+    root = Path(directory).resolve(strict=False)
+    if Path(output).resolve(strict=False).is_relative_to(root):
+        raise ValueError(f"output must not be written inside {label}")
 
 
 def _validate_named_paths(named_paths: list[tuple[str, str]]) -> None:
@@ -245,6 +265,50 @@ def _require_comparable_reports(before: Any, after: Any, allow_manifest_change: 
         )
 
 
+def _cmd_plan_variants(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    if args.reports_dir:
+        named_paths.append(("reports-dir", args.reports_dir))
+    _validate_named_paths(named_paths)
+    if args.reports_dir and args.output:
+        # Writing the record over a saved step report either loses that
+        # evidence or feeds the record back to a later fold as evidence.
+        _reject_output_inside(args.reports_dir, args.output, "reports-dir")
+
+    formats = tuple(args.formats or ("step", "3mf"))
+    if len(set(formats)) != len(formats):
+        raise ValueError("--format values must not repeat")
+
+    manifest = load_manifest(args.manifest)
+    config = MatrixConfig(
+        export_dir=args.export_dir,
+        formats=formats,
+        on_failure=args.on_failure,
+        slow_step_seconds=args.slow_step_seconds,
+    )
+    if args.reports_dir:
+        record = run_variant_matrix(manifest, config, saved_report_executor(args.reports_dir))
+        _write_output(json.dumps(record, indent=2, sort_keys=True), args.output)
+        # A run still waiting on reports is incomplete, not failed; only a real
+        # failure — a variant, the capture, or the restore — exits non-zero.
+        return 2 if record["failures"] else 0
+
+    plan = build_matrix_plan(manifest, config)
+    payload = {
+        "kind": "variant-matrix-plan",
+        "project": manifest.project_name,
+        "manifest_sha256": manifest_sha256(manifest),
+        "on_failure": config.on_failure,
+        "slow_step_seconds": float(config.slow_step_seconds),
+        "export_requested": bool(config.export_dir),
+        "steps": [step.to_dict() for step in plan],
+    }
+    _write_output(json.dumps(payload, indent=2, sort_keys=True), args.output)
+    return 0
+
+
 def _cmd_diff(args: argparse.Namespace) -> int:
     before = json.loads(Path(args.before).read_text(encoding="utf-8"))
     after = json.loads(Path(args.after).read_text(encoding="utf-8"))
@@ -341,6 +405,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     emit_export.add_argument("-o", "--output")
     emit_export.set_defaults(handler=_cmd_emit_export)
+
+    plan_variants = subparsers.add_parser(
+        "plan-variants",
+        help="Plan the bounded variant matrix, or fold saved step reports into the run record.",
+    )
+    plan_variants.add_argument("manifest")
+    plan_variants.add_argument(
+        "--export-dir",
+        help=(
+            "Directory on the Fusion host under which each variant gets its own export subdirectory. "
+            "Omit to verify without exporting."
+        ),
+    )
+    plan_variants.add_argument(
+        "--format",
+        action="append",
+        choices=list(ALLOWED_FORMATS),
+        dest="formats",
+        help="Export format (repeatable). Defaults to step plus 3mf; step is always required.",
+    )
+    plan_variants.add_argument(
+        "--on-failure",
+        choices=sorted(FAILURE_POLICIES),
+        default="stop",
+        help="Whether a failing variant stops the run or the matrix continues. The overall run fails either way.",
+    )
+    plan_variants.add_argument(
+        "--slow-step-seconds",
+        type=float,
+        default=DEFAULT_SLOW_STEP_SECONDS,
+        help=(
+            "Elapsed-time threshold above which a step that has already returned is failed as "
+            "untrustworthy. Not a budget: nothing is cancelled, and a hung transaction never returns."
+        ),
+    )
+    plan_variants.add_argument(
+        "--reports-dir",
+        help=(
+            "Directory holding the step reports already executed and saved under their planned report "
+            "names. Given this, the run record is folded from that evidence and names the next step."
+        ),
+    )
+    plan_variants.add_argument("-o", "--output")
+    plan_variants.set_defaults(handler=_cmd_plan_variants)
 
     prusaslicer = subparsers.add_parser(
         "prusaslicer-project",

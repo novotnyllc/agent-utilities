@@ -32,6 +32,15 @@ from .material_decision import (  # noqa: F401
     _validate_material_decision,
 )
 
+# Re-exported for the same reason: fusion_design.manifest stays the one import
+# path callers need for the closed-world constants.
+from .variants import (  # noqa: F401
+    MAXIMUM_VARIANTS,
+    VARIANT_FIELDS,
+    VARIANT_SOURCES,
+    _validate_variants,
+)
+
 
 SOURCE_KINDS = {
     "manufacturer_cad",
@@ -124,6 +133,10 @@ class Manifest:
         decision = self.data.get("material_decision")
         return dict(decision) if isinstance(decision, dict) else {}
 
+    @property
+    def variants(self) -> list[dict[str, Any]]:
+        return list(self.data.get("variants", []))
+
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(self.data))
 
@@ -174,6 +187,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             "verification",
             "printable_parts",
             "material_decision",
+            "variants",
         },
         "",
     )
@@ -286,7 +300,13 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
 
     parameters = _as_list(data.get("parameters"))
     parameter_names = [str(parameter.get("name", "")) for parameter in parameters if isinstance(parameter, dict)]
-    for duplicate in sorted(_duplicates(parameter_names)):
+    # Stripped exactly as the per-parameter loop below strips, so a variant and
+    # its base parameter agree on what the declared name is — and deduplicated
+    # on that same stripped form: two entries a variant cannot tell apart are
+    # one parameter, and one override would otherwise be written to both.
+    normalized_parameter_names = [name.strip() for name in parameter_names]
+    declared_parameter_names = {name for name in normalized_parameter_names if name}
+    for duplicate in sorted(_duplicates(normalized_parameter_names)):
         issues.append(
             ValidationIssue("duplicate-parameter-name", "parameters", f"Parameter {duplicate!r} is duplicated.")
         )
@@ -819,6 +839,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         source_map,
         data.get("printable_parts"),
     )
+    _validate_variants(issues, data.get("variants"), declared_parameter_names)
 
     return issues
 

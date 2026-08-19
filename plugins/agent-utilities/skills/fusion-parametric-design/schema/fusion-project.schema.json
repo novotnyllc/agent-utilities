@@ -87,6 +87,13 @@
     },
     "material_decision": {
       "$ref": "#/$defs/material_decision"
+    },
+    "variants": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/variant"
+      }
     }
   },
   "$defs": {
@@ -178,6 +185,64 @@
             "not_needed",
             null
           ]
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "parameters"
+          ],
+          "not": {
+            "required": [
+              "configuration"
+            ]
+          }
+        },
+        {
+          "required": [
+            "configuration"
+          ],
+          "not": {
+            "required": [
+              "parameters"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "configuration": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
         }
       }
     },
