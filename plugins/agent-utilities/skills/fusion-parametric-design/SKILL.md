@@ -26,6 +26,7 @@ Tell the user to enable Fusion's local MCP server in Fusion under `Preferences >
 Read the reference files beside this skill before substantial work:
 
 - `references/design-doctrine.md`
+- `references/material-selection.md` before choosing or confirming a material
 - `references/mcp-adapter.md`
 - `references/enclosure-workflow.md` for electronics or packed assemblies
 - `references/verification-contract.md`
@@ -71,6 +72,7 @@ A project should have `fusion-project.json` and a copy of `templates/DESIGN-STAT
 - required component paths;
 - clearances and forbidden interferences;
 - expected printable parts and fit coupons;
+- the project's `material_decision`: polymer `family` (closed enum), the specific `formulation` or null, the `source_id` it rests on, `confidence`, a bound `coupon_component`, `rationale`, `unresolved_risks`, and any `printer_requirements`. Per-part `material.assumption` values must name the decided family or formulation;
 - slicer-neutral manufacturing intent per printable part (`printable_parts`): stable id, quantity, `print_as` separate/assembled, build orientation (contact face + rationale + allowed alternatives), support policy (`none`, `build-plate-only`, `everywhere`, or explicit enforcer/blocker regions), strength intent (minimum perimeters + infill target/range), protected features supports must not scar, and the material assumption with its `provisional`/`coupon_verified` status. When present, its paths must exactly match `verification.expected_print_parts`, and the export handoff index carries the intent per artifact for downstream slicer adapters. This is intent, never a printer/filament/process profile — those stay in the slicer.
 
 Run the host tooling before modeling:
@@ -96,6 +98,23 @@ When a part mates with a manufactured object or standard, identify the exact pro
 Record every critical value with a source. Do not ask the user for dimensions already published by the manufacturer. Do ask in one batch for dimensions that cannot be researched: actual cable overmold, installed wire bend, hand-clearance, garment opening, wall contour, or the exact sample's manufacturing variance.
 
 Do not start fit-dependent geometry while a critical source parameter is unresolved. Styling values such as corner radius, chamfer size, label depth, or exterior proportion can remain adjustable design parameters.
+
+### Material decision gate
+
+Material is a design input, not a slicer setting. Ask for it — or confirm it — **before finalizing** any of:
+
+- snap fit or clip;
+- living hinge or any repeatedly flexing feature;
+- press fit or interference fit;
+- heat-set insert boss, self-tapping boss, or threaded feature;
+- load-bearing connector, bracket, or mount;
+- any clearance whose value depends on the polymer.
+
+Blocking is not required, but committing is. Rough the feature out if it helps the conversation; do not declare it settled, record its clearance as final, or export it while the material is unstated. The same gate applies when the material changes later: a material change re-opens every fit, flexure, boss, orientation, and coupon result that depended on the old one.
+
+A documented user default is **proposed, never silently assumed**. Say which material you are proposing and why, and confirm before the geometry depends on it. Re-confirm explicitly whenever the use case conflicts with the default — an outdoor, high-heat, chemically exposed, sustained-load, or repeatedly flexing part under a PLA default is exactly that conflict, and it is the agent's job to raise it rather than to print the default into the model.
+
+Record the outcome in `material_decision` with its source and confidence, and bind a provisional decision to a `VAL__` coupon or a stated risk. Select from requirements, and take every number from the formulation's data sheet or a printed coupon: `references/material-selection.md`.
 
 ## 4. Parameterize in the user's language
 

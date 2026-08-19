@@ -23,8 +23,29 @@
       "revision": "2026-08-17 sample A",
       "confidence": "measured",
       "notes": "Converter body dimensions; wire and bend zones are separate keep-outs."
+    },
+    {
+      "id": "enclosure_material_requirements",
+      "kind": "conservative_proxy",
+      "locator": "design-brief://enclosure-material-requirements",
+      "revision": "2026-08-19",
+      "confidence": "provisional",
+      "notes": "Requirements the material must satisfy: indoor use, handled and occasionally dropped, no sunlight, no sustained load, a lid snap fit that must recover at every opening. Family selected from those requirements; no specific product is chosen, so generic PETG behavior is the conservative assumption and no numeric property is claimed."
     }
   ],
+  "material_decision": {
+    "family": "PETG",
+    "formulation": null,
+    "source_id": "enclosure_material_requirements",
+    "confidence": "provisional",
+    "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+    "rationale": "The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.",
+    "unresolved_risks": [
+      "No formulation is named, so no data-sheet number backs any material-dependent value.",
+      "fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.",
+      "Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."
+    ]
+  },
   "parameters": [
     {
       "name": "src_pd_board_length",

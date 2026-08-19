@@ -408,12 +408,37 @@ class ManifestValidationTests(unittest.TestCase):
         data["material_decision"] = decision
         return data
 
+    def _without_decision(self):
+        """The example now declares a decision; back-compat cases strip it."""
+        data = copy.deepcopy(self.data)
+        data.pop("material_decision", None)
+        return data
+
     def test_valid_material_decision_passes_and_absence_stays_valid(self) -> None:
+        from fusion_design.manifest import Manifest
+
         self.assertEqual([], validate_manifest_data(self._with_decision()))
-        self.assertNotIn("material_decision", self.data)
-        self.assertEqual([], validate_manifest_data(self.data))
-        manifest = load_manifest(EXAMPLE)
-        self.assertEqual({}, manifest.material_decision)
+        stripped = self._without_decision()
+        self.assertNotIn("material_decision", stripped)
+        self.assertEqual([], validate_manifest_data(stripped))
+        self.assertEqual({}, Manifest.from_data(stripped).material_decision)
+
+    def test_example_manifest_declares_a_bound_petg_decision(self) -> None:
+        decision = load_manifest(EXAMPLE).material_decision
+        self.assertEqual("PETG", decision["family"])
+        # Family only: the example deliberately names no formulation, so it
+        # claims no data-sheet numbers.
+        self.assertIsNone(decision["formulation"])
+        self.assertEqual("provisional", decision["confidence"])
+        # R5: a provisional decision must be bound to a coupon or a risk.
+        self.assertEqual("90_VALIDATION/VAL__PD_FIT_COUPON", decision["coupon_component"])
+        self.assertTrue(decision["unresolved_risks"])
+        self.assertIn(decision["source_id"], {source["id"] for source in self.data["sources"]})
+
+    def test_example_part_assumption_inconsistent_with_its_decision_fails(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][1]["material"]["assumption"] = "ASA"
+        self.assertIn("material-decision-part-mismatch", self._codes(data))
 
     def test_material_decision_core_rejections(self) -> None:
         for label, overrides, expected in (
@@ -541,7 +566,9 @@ class ManifestValidationTests(unittest.TestCase):
 
     def test_part_material_assumption_must_match_the_decision(self) -> None:
         # Back-compat: without a project decision the parts are never cross-checked.
-        self.assertNotIn("material-decision-part-mismatch", self._codes(self.data))
+        without = self._without_decision()
+        without["printable_parts"][0]["material"]["assumption"] = "ASA"
+        self.assertNotIn("material-decision-part-mismatch", self._codes(without))
 
         consistent = self._with_decision()
         consistent["printable_parts"][0]["material"]["assumption"] = "PETG, generic spool"

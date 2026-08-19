@@ -14,7 +14,7 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | `nurb check` | Manifest verification plus B-Rep clearance, forbidden interference, expected-print-body, and timeline-health gates | Partial; complete FDM rules require external/custom analysis |
 | `nurb inspect` | Read-only inventory script with root-context occurrences, bounds, body summaries, parameters, and timeline state | Supported for those measurements; face-local rendered findings need custom work |
 | `nurb scan` | Import immutable mesh evidence, record units/registration/provenance, derive only needed datums or sections, and build a conservative B-Rep checking envelope | Partial; general scan cleanup/section extraction may be external |
-| `nurb rules` | `design-doctrine.md`, the main skill, and `verification-contract.md` | Supported |
+| `nurb rules` | `design-doctrine.md`, `material-selection.md`, the main skill, and `verification-contract.md` | Supported |
 | `nurb api` | Discover the connected MCP schema and query current Fusion API documentation before scripting | Supported when those dynamic MCP capabilities are present |
 | `nurb skill` | Install or update the Agent Utilities plugin, or install this skill through the agent harness's skill manager | Supported through the harness; no runtime printer of the skill |
 | `nurb update` | Update the package from its versioned source, rerun tests, then reinstall the skill | Manual/version-control workflow; no automatic self-updater |
@@ -39,6 +39,7 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | Card `Don't` history | Decision log and rejected-option section in `DESIGN-STATE.md` | Supported as a workflow |
 | Variants | Fusion Configurations when available, or named parameter sets captured in the manifest and applied one at a time | Partial; no batch variant runner in the host CLI |
 | `printer.toml` and global printer profile | Slicer-native machine/material profile plus project handoff metadata | External; do not duplicate a slicer's authoritative profile incompletely |
+| Material choice | Manifest `material_decision` (family, formulation, source, confidence, coupon, risk) plus `references/material-selection.md` for requirement-driven selection | Supported as a recorded decision; the package ships no numeric property database and no filament profile |
 | STEP/3MF output | Fusion B-Rep/mesh export with exact print-body selection and recorded hashes | Supported when the connected export capability exists |
 | PrusaSlicer project handoff | `fusion-design prusaslicer-project` writes a deterministic project 3MF from the verified export index plus declared intent, binding it to the index and per-artifact hashes | Supported; presets are named, never cloned, and project construction launches no process at all |
 | PrusaSlicer headless slicing (`--export-gcode`) | `fusion-design prusaslicer-project --slice` runs the binary and reports the G-code's own statistics with the project sha256, G-code sha256/size, preset identifiers, slicer version, and exit code | Supported, opt-in. Requires the whole preset set: `--printer-profile` alone exits 139 (SIGSEGV), all three plus `--datadir` exit 0, so an incomplete set is refused before execution. Failures are structured; statistics absent from the G-code are reported absent, never estimated |

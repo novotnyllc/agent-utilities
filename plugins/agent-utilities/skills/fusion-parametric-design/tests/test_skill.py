@@ -120,6 +120,28 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn('"ok": true', result.stdout)
 
+    def test_material_decision_gate_is_stated_before_material_dependent_features(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("`references/material-selection.md`", text)
+        for requirement in (
+            "before finalizing",
+            "snap fit or clip",
+            "living hinge",
+            "press fit",
+            "heat-set insert boss",
+            "load-bearing connector",
+            "proposed, never silently assumed",
+            "material_decision",
+        ):
+            self.assertIn(requirement, text, requirement)
+
+    def test_material_selection_reference_ships_no_numeric_property_values(self) -> None:
+        """The skill records material decisions; it does not carry numbers it cannot verify."""
+        doctrine = (SKILL_DIR / "references" / "material-selection.md").read_text(encoding="utf-8")
+        # Ordered-list markers are the only digits the document may contain.
+        body = re.sub(r"(?m)^\d+\. ", "", doctrine)
+        self.assertNotRegex(body, r"\d")
+
     def test_all_declared_reference_files_exist(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         referenced = re.findall(r"`references/([^`]+\.md)`", text)
