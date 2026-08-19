@@ -270,13 +270,19 @@ variants: two enclosure sizes and one deliberately broken one.
    **Pass:** the step order is capture → per variant (apply, inventory, verify,
    export) → restore → verify-restore; every non-deferred step carries a
    compilable script; the export steps are deferred with their reason.
-2. Before starting, note the Parameters dialog's current `des_corner_radius` and
-   `fab_wall_thickness` expressions. These are the restore target.
+2. Before starting, note the Parameters dialog's expressions for **every**
+   parameter the manifest declares, not just the overridden ones — `apply` runs
+   the parameter sync, which writes all of them. These are the restore target.
 3. Execute each planned step's script through the MCP in order, saving each
    report to `build/reports/<report_name>`. After each save, re-run
    `plan-variants ... --reports-dir build/reports` to fold the evidence and get
    the next step — including the export script, which the runner emits only once
    that variant's verification report exists.
+   **Pass:** an intermediate fold exits 0 with `failures: []` while nothing has
+   failed, and exits 2 with `variant-failed` from the first fold after `broken`'s
+   verification report is saved — not only at the end. Every incomplete fold
+   reports `restore.ok: false` with a reason saying the document has not been
+   verifiably restored yet.
 4. **Pass:** `small` and `large` produce `ok: true` rows with their own
    `manifest_sha256`, their own export directory under the export root, and
    distinct artifact hashes; `broken` produces an `ok: false` row naming the

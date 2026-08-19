@@ -14,8 +14,10 @@ from fusion_design.cli import main
 from fusion_design.export_handoff import example_verification_report
 from fusion_design.manifest import load_manifest
 from fusion_design.scripts import manifest_sha256
+from fusion_design.variant_matrix import MatrixConfig
 from test_prusaslicer_project import _Fixture, _config_root, _intent, process_execution_offenses
 from test_prusaslicer_slice import _fake_slicer
+from test_variant_matrix import _FakeFusion, seed_reports
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -701,6 +703,59 @@ class PlanVariantsCliTests(unittest.TestCase):
         self.assertFalse(record["complete"])
         self.assertEqual([], record["failures"])
         self.assertEqual("capture-initial-state", record["next_step"]["step_id"])
+
+    def test_a_complete_successful_fold_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            reports = Path(temporary) / "reports"
+            reports.mkdir()
+            seed_reports(load_manifest(manifest), reports)
+            code, output, errors = self._run(
+                ["plan-variants", str(manifest), "--reports-dir", str(reports)]
+            )
+        self.assertEqual(0, code, errors)
+        record = json.loads(output)
+        self.assertTrue(record["complete"])
+        self.assertTrue(record["ok"], record["failures"])
+        self.assertTrue(record["restore"]["verified"])
+
+    def test_a_failed_variant_still_waiting_on_the_rest_exits_two(self) -> None:
+        # The normal shape of every intermediate fold in the acceptance loop: a
+        # variant has already failed and later steps have no report yet.
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            reports = Path(temporary) / "reports"
+            reports.mkdir()
+            loaded = load_manifest(manifest)
+            config = MatrixConfig(on_failure="continue")
+            seed_reports(
+                loaded, reports, _FakeFusion(loaded, fail_steps={("small", "verify")}), config
+            )
+            for pending in reports.glob("large__*"):
+                pending.unlink()
+            code, output, errors = self._run(
+                [
+                    "plan-variants",
+                    str(manifest),
+                    "--reports-dir",
+                    str(reports),
+                    "--on-failure",
+                    "continue",
+                ]
+            )
+        self.assertEqual(2, code, errors)
+        record = json.loads(output)
+        self.assertFalse(record["complete"])
+        self.assertIn("variant-failed", record["failures"])
+
+    def test_an_export_format_the_emitter_rejects_exits_two_at_plan_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            code, _, errors = self._run(
+                ["plan-variants", str(manifest), "--export-dir", "/exports", "--format", "3mf"]
+            )
+        self.assertEqual(2, code)
+        self.assertIn("STEP export is required", errors)
 
     def test_a_failed_step_report_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

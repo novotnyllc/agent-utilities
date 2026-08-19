@@ -29,7 +29,7 @@ from .scripts import (
     manifest_sha256,
 )
 from .variant_matrix import (
-    DEFAULT_TIMEOUT_SECONDS,
+    DEFAULT_SLOW_STEP_SECONDS,
     FAILURE_POLICIES,
     MatrixConfig,
     build_matrix_plan,
@@ -271,7 +271,7 @@ def _cmd_plan_variants(args: argparse.Namespace) -> int:
         export_dir=args.export_dir,
         formats=formats,
         on_failure=args.on_failure,
-        timeout_seconds=args.timeout_seconds,
+        slow_step_seconds=args.slow_step_seconds,
     )
     if args.reports_dir:
         record = run_variant_matrix(manifest, config, saved_report_executor(args.reports_dir))
@@ -286,7 +286,7 @@ def _cmd_plan_variants(args: argparse.Namespace) -> int:
         "project": manifest.project_name,
         "manifest_sha256": manifest_sha256(manifest),
         "on_failure": config.on_failure,
-        "timeout_seconds": float(config.timeout_seconds),
+        "slow_step_seconds": float(config.slow_step_seconds),
         "export_requested": bool(config.export_dir),
         "steps": [step.to_dict() for step in plan],
     }
@@ -417,10 +417,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Whether a failing variant stops the run or the matrix continues. The overall run fails either way.",
     )
     plan_variants.add_argument(
-        "--timeout-seconds",
+        "--slow-step-seconds",
         type=float,
-        default=DEFAULT_TIMEOUT_SECONDS,
-        help="Per-step budget against the live Fusion session.",
+        default=DEFAULT_SLOW_STEP_SECONDS,
+        help=(
+            "Elapsed-time threshold above which a step that has already returned is failed as "
+            "untrustworthy. Not a budget: nothing is cancelled, and a hung transaction never returns."
+        ),
     )
     plan_variants.add_argument(
         "--reports-dir",

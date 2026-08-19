@@ -411,7 +411,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
-"$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--timeout-seconds N] [--reports-dir DIR] [-o plan.json]
+"$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
@@ -425,11 +425,16 @@ variant is a non-goal. The plan is ordered: capture the initial state, then per
 variant apply, compute, inventory, verify and optionally export, then restore.
 Execute each step's script and save its report under the planned `report_name`,
 then re-run with `--reports-dir` to fold the evidence and get the next step.
-Restoration is verified by read-back against the captured snapshot on every exit
-path, per-variant reports and export directories are identity-bound, and the
-verdict is conjunctive: a run passes only when every variant passed and the
-document was verifiably restored. Configuration activation probes Fusion's
-configuration API and fails closed when the connected release lacks it.
+Restoration is verified by read-back of every declared parameter against the
+captured snapshot on every exit path that reaches the end of the run; a fold that
+halts waiting on the next report restores nothing and says so in `restore.reason`
+instead. Per-variant reports and export directories are identity-bound — by
+manifest hash for parameter variants and by the requested and activated
+configuration for configuration variants — and the verdict is conjunctive: a run
+passes only when every variant passed and the document was verifiably restored.
+An intermediate fold that has already seen a failing variant reports
+`variant-failed` and exits 2, incomplete or not. Configuration activation probes
+Fusion's configuration API and fails closed when the connected release lacks it.
 
 When a Fusion transaction needs reusable custom code, use
 `prepare-module-bundle` on a pure-Python package and execute the output of

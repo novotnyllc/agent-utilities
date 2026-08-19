@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -19,10 +20,12 @@ from fusion_design.variant_matrix import (
     StepReportUnavailable,
     build_matrix_plan,
     emit_configuration_script,
+    restore_manifest,
     run_variant_matrix,
     saved_report_executor,
     variant_manifest,
 )
+from fusion_design.variant_matrix import _MatrixRun
 from fusion_design.variants import variant_id
 
 
@@ -31,8 +34,22 @@ EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 
 # The document starts on values the manifest does not declare, so "restored"
 # means restored to what was found, not to what the manifest wishes were true.
-INITIAL_EXPRESSIONS = {"des_corner_radius": "4.5 mm", "fab_wall_thickness": "2.4 mm"}
+# src_pd_board_length is the case no variant overrides and the sync still
+# rewrites: the manifest declares 35 mm and the document is sitting at 99 mm.
+INITIAL_DRIFT = {
+    "des_corner_radius": "4.5 mm",
+    "fab_wall_thickness": "2.4 mm",
+    "src_pd_board_length": "99 mm",
+}
 INITIAL_CONFIGURATION = "Base"
+
+
+def _document_parameters(manifest: Manifest, **overrides: str) -> dict[str, str]:
+    """What a real inventory reports: every parameter in the document."""
+    state = {parameter["name"]: parameter["expression"] for parameter in manifest.parameters}
+    state.update(INITIAL_DRIFT)
+    state.update(overrides)
+    return state
 
 VARIANTS = [
     {"id": "small", "description": "Compact enclosure.", "parameters": {"des_corner_radius": "3 mm"}},
@@ -52,7 +69,15 @@ def _manifest(variants=None) -> Manifest:
 
 
 class _FakeFusion:
-    """Answers each planned step the way a live Fusion session would."""
+    """Answers each planned step the way a live Fusion session would.
+
+    Deliberately able to lie the way a hand-saved report directory lies: the
+    declared ``ok`` is separable from the failure tokens (``declared_ok``), the
+    configuration a report claims is separable from the variant that asked for
+    it (``reported_configuration``), and the read-back state is separable from
+    the captured one.  A fixture that derives everything from one flag cannot
+    express the stale, cross-variant evidence the fold-forward executor reads.
+    """
 
     def __init__(
         self,
@@ -63,13 +88,18 @@ class _FakeFusion:
         slow_steps: set[tuple[str, str]] | None = None,
         readback: dict[str, str] | None = None,
         restored_configuration: str = INITIAL_CONFIGURATION,
+        declared_ok: dict[tuple[str, str], bool] | None = None,
+        reported_configuration: dict[str, str] | None = None,
     ) -> None:
         self.manifest = manifest
         self.fail_steps = fail_steps or set()
         self.raise_steps = raise_steps or set()
         self.slow_steps = slow_steps or set()
-        self.readback = INITIAL_EXPRESSIONS if readback is None else readback
+        self.initial = _document_parameters(manifest)
+        self.readback = self.initial if readback is None else readback
         self.restored_configuration = restored_configuration
+        self.declared_ok = declared_ok or {}
+        self.reported_configuration = reported_configuration or {}
         self.derived = {
             variant_id(variant): variant_manifest(manifest, variant) for variant in manifest.variants
         }
@@ -93,7 +123,7 @@ class _FakeFusion:
             "ok": ok,
         }
         if step.report_kind == "inventory":
-            source = self.readback if step.step_id == VERIFY_RESTORE_STEP else INITIAL_EXPRESSIONS
+            source = self.readback if step.step_id == VERIFY_RESTORE_STEP else self.initial
             report["parameters"] = {
                 name: {"expression": expression, "units": "mm", "comment": ""}
                 for name, expression in source.items()
@@ -110,18 +140,23 @@ class _FakeFusion:
             ]
         elif step.report_kind == "configuration-activation":
             if step.step_id == CAPTURE_CONFIGURATION_STEP:
-                report["active_configuration"] = INITIAL_CONFIGURATION
+                requested, active = None, INITIAL_CONFIGURATION
             elif step.step_id == RESTORE_CONFIGURATION_STEP:
-                report["active_configuration"] = self.restored_configuration
+                requested = active = self.restored_configuration
             else:
-                report["active_configuration"] = str(
-                    next(
-                        variant.get("configuration", "")
-                        for variant in self.manifest.variants
-                        if variant_id(variant) == step.variant_id
-                    )
+                requested = active = self.reported_configuration.get(
+                    step.variant_id,
+                    str(
+                        next(
+                            variant.get("configuration", "")
+                            for variant in self.manifest.variants
+                            if variant_id(variant) == step.variant_id
+                        )
+                    ),
                 )
-            report["available_configurations"] = ["Base", "Config A"]
+            report["requested_configuration"] = requested
+            report["active_configuration"] = active
+            report["available_configurations"] = ["Base", "Config A", "Config B"]
         elif step.report_kind == "export-handoff":
             report["export_dir"] = f"/exports/{step.variant_id}"
             report["artifacts"] = [
@@ -132,6 +167,8 @@ class _FakeFusion:
                     "byte_size": 1234,
                 }
             ]
+        if key in self.declared_ok:
+            report["ok"] = self.declared_ok[key]
         return report
 
 
@@ -139,6 +176,36 @@ def _run(manifest, fake, config=None):
     return run_variant_matrix(
         manifest, config or MatrixConfig(), fake, clock=fake.clock
     )
+
+
+def seed_reports(manifest, directory, fake=None, config=None):
+    """Save a whole run's reports the way an agent folding forward would.
+
+    Driven through a real run so every deferred step's report carries the hash
+    the runner computes at run time, not one the test guessed.
+    """
+    fake = fake or _FakeFusion(manifest)
+
+    def executor(step):
+        report = fake(step)
+        (Path(directory) / step.report_name).write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return report
+
+    run_variant_matrix(manifest, config or MatrixConfig(), executor, clock=fake.clock)
+    return fake
+
+
+def _halting(fake, at):
+    """The fake, but the given (variant_id, step_id) has no report yet."""
+
+    def executor(step):
+        if (step.variant_id, step.step_id) == at:
+            raise StepReportUnavailable("not yet")
+        return fake(step)
+
+    return executor
 
 
 class VariantMatrixRunTests(unittest.TestCase):
@@ -152,7 +219,7 @@ class VariantMatrixRunTests(unittest.TestCase):
         self.assertEqual([], record["failures"])
         self.assertEqual(["small", "medium", "large"], [row["variant_id"] for row in record["variants"]])
         self.assertTrue(all(row["ok"] for row in record["variants"]))
-        self.assertEqual(INITIAL_EXPRESSIONS, record["initial_state"]["parameters"])
+        self.assertEqual(_document_parameters(manifest), record["initial_state"]["parameters"])
         self.assertTrue(record["restore"]["ok"])
         self.assertTrue(record["restore"]["verified"])
         self.assertEqual([], record["restore"]["mismatches"])
@@ -217,7 +284,7 @@ class VariantMatrixRunTests(unittest.TestCase):
 
     def test_a_readback_that_disagrees_with_the_snapshot_fails_the_run(self) -> None:
         manifest = _manifest()
-        drifted = dict(INITIAL_EXPRESSIONS, des_corner_radius="8 mm")
+        drifted = dict(_document_parameters(manifest), des_corner_radius="8 mm")
         fake = _FakeFusion(manifest, readback=drifted)
         record = _run(manifest, fake)
 
@@ -232,14 +299,14 @@ class VariantMatrixRunTests(unittest.TestCase):
     def test_a_step_that_outruns_its_budget_fails_that_variant_without_corrupting_the_record(self) -> None:
         manifest = _manifest()
         fake = _FakeFusion(manifest, slow_steps={("medium", "apply")})
-        record = _run(manifest, fake, MatrixConfig(timeout_seconds=60.0))
+        record = _run(manifest, fake, MatrixConfig(slow_step_seconds=60.0))
 
         self.assertFalse(record["ok"])
         rows = record["variants"]
         self.assertTrue(rows[0]["ok"])
         self.assertFalse(rows[1]["ok"])
-        timed_out = [step for step in rows[1]["steps"] if step.get("timed_out")]
-        self.assertEqual(["apply"], [step["step_id"] for step in timed_out])
+        overran = [step for step in rows[1]["steps"] if step.get("overran")]
+        self.assertEqual(["apply"], [step["step_id"] for step in overran])
         self.assertTrue(record["restore"]["verified"])
 
     def test_an_unrestorable_initial_capture_stops_before_any_variant_is_applied(self) -> None:
@@ -269,6 +336,237 @@ class VariantMatrixRunTests(unittest.TestCase):
         self.assertEqual(["initial-state-capture"], record["failures"])
         self.assertEqual([], record["variants"])
         self.assertFalse(record["restore"]["required"])
+
+
+class HaltedRunTests(unittest.TestCase):
+    """A halt means "not done yet"; it must never launder "already failed"."""
+
+    def test_a_variant_already_proved_bad_fails_the_run_even_while_it_halts(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest, fail_steps={("small", "verify")})
+        record = run_variant_matrix(
+            manifest,
+            MatrixConfig(on_failure="continue"),
+            _halting(fake, ("large", "apply")),
+            clock=fake.clock,
+        )
+
+        self.assertFalse(record["complete"])
+        self.assertFalse(record["ok"])
+        # This is the exit code the acceptance loop gates on.
+        self.assertIn("variant-failed", record["failures"])
+        self.assertEqual("large", record["next_step"]["variant_id"])
+        self.assertEqual(
+            [("small", False), ("medium", True), ("large", False)],
+            [(row["variant_id"], row["ok"]) for row in record["variants"]],
+        )
+
+    def test_the_row_being_waited_on_is_pending_not_failed(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        record = run_variant_matrix(
+            manifest, MatrixConfig(), _halting(fake, ("medium", "verify")), clock=fake.clock
+        )
+
+        self.assertEqual([], record["failures"])
+        self.assertFalse(record["complete"])
+        self.assertFalse(record["variants"][-1]["ok"])
+
+    def test_a_halt_after_an_apply_says_the_document_is_still_on_that_variant(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        record = run_variant_matrix(
+            manifest, MatrixConfig(), _halting(fake, ("small", "inventory")), clock=fake.clock
+        )
+
+        restore = record["restore"]
+        self.assertTrue(restore["required"])
+        self.assertFalse(restore["ok"])
+        self.assertFalse(restore["verified"])
+        self.assertIn("not been verifiably restored", restore["reason"])
+
+    def test_a_halt_before_any_apply_says_the_document_never_moved(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        record = run_variant_matrix(
+            manifest, MatrixConfig(), _halting(fake, ("", CAPTURE_STATE_STEP)), clock=fake.clock
+        )
+
+        restore = record["restore"]
+        self.assertFalse(restore["required"])
+        self.assertTrue(restore["ok"])
+        self.assertIn("never moved", restore["reason"])
+
+
+class RestoreCoverageTests(unittest.TestCase):
+    """The sync writes every declared parameter, so the snapshot must too."""
+
+    def test_a_parameter_no_variant_overrides_must_still_come_back(self) -> None:
+        manifest = _manifest()
+        # The sync drove this one from the document's 99 mm to the manifest's
+        # 35 mm; a restore that leaves it there is not a restore.
+        drifted = _document_parameters(manifest, src_pd_board_length="35 mm")
+        record = _run(manifest, _FakeFusion(manifest, readback=drifted))
+
+        self.assertFalse(record["ok"])
+        self.assertIn("restore", record["failures"])
+        self.assertFalse(record["restore"]["verified"])
+        self.assertEqual(
+            [{"name": "src_pd_board_length", "expected": "99 mm", "actual": "35 mm"}],
+            record["restore"]["mismatches"],
+        )
+
+    def test_a_configuration_only_matrix_compares_real_parameters(self) -> None:
+        manifest = _manifest([{"id": "config_a", "description": "A.", "configuration": "Config A"}])
+        drifted = _document_parameters(manifest, des_corner_radius="999 mm")
+        record = _run(manifest, _FakeFusion(manifest, readback=drifted))
+
+        self.assertFalse(record["ok"])
+        self.assertIn("restore", record["failures"])
+        self.assertEqual(
+            ["des_corner_radius"], [entry["name"] for entry in record["restore"]["mismatches"]]
+        )
+
+    def test_a_declared_parameter_absent_from_the_document_is_named_not_hidden(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        fake.initial = {
+            name: expression
+            for name, expression in fake.initial.items()
+            if name != "pack_usb_c_straight_departure"
+        }
+        fake.readback = fake.initial
+        record = _run(manifest, fake)
+
+        self.assertTrue(record["ok"], record["failures"])
+        self.assertEqual(
+            ["pack_usb_c_straight_departure"], record["initial_state"]["parameters_absent"]
+        )
+
+    def test_restore_manifest_refuses_a_parameter_the_manifest_does_not_declare(self) -> None:
+        with self.assertRaises(ValueError) as context:
+            restore_manifest(_manifest(), {"not_declared": "1 mm"})
+        self.assertIn("does not declare", str(context.exception))
+
+    def test_an_unverifiable_restore_is_a_loud_failure_not_a_crash(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        run = _MatrixRun(manifest, MatrixConfig(), fake, fake.clock)
+
+        def boom() -> None:
+            raise ValueError("the snapshot cannot be turned into a manifest")
+
+        run._restore = boom
+        record = run.run()
+
+        self.assertFalse(record["ok"])
+        self.assertIn("restore", record["failures"])
+        self.assertIn("cannot be turned into a manifest", record["restore"]["reason"])
+
+
+class ReportTrustTests(unittest.TestCase):
+    """The report directory is hand-maintained across many invocations."""
+
+    def test_a_report_declaring_ok_with_failure_tokens_is_rejected(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(
+            manifest,
+            fail_steps={("small", "verify")},
+            declared_ok={("small", "verify"): True},
+        )
+        record = run_variant_matrix(
+            manifest, MatrixConfig(export_dir="/exports"), fake, clock=fake.clock
+        )
+
+        self.assertFalse(record["ok"])
+        row = record["variants"][0]
+        self.assertEqual(["verify"], row["failures"])
+        failure = [step for step in row["steps"] if step["step_id"] == "verify"][0]
+        self.assertIn("contradicts itself", failure["error"])
+        # A contradictory report must not go on to drive an export.
+        self.assertNotIn(("small", "export"), fake.calls)
+
+    def test_a_report_declaring_ok_over_an_unhealthy_timeline_is_rejected(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(manifest)
+
+        def executor(step):
+            report = fake(step)
+            if step.step_id == "verify":
+                report["timeline"] = {"count": 4, "unhealthy": [{"index": 2}], "informational": []}
+            return report
+
+        record = run_variant_matrix(manifest, MatrixConfig(), executor, clock=fake.clock)
+        self.assertFalse(record["ok"])
+        failure = [step for step in record["variants"][0]["steps"] if step["step_id"] == "verify"][0]
+        self.assertIn("unhealthy timeline", failure["error"])
+
+    def test_a_configuration_report_naming_another_row_is_rejected(self) -> None:
+        manifest = _manifest(
+            [
+                {"id": "config_a", "description": "A.", "configuration": "Config A"},
+                {"id": "config_b", "description": "B.", "configuration": "Config B"},
+            ]
+        )
+        # Every configuration variant derives the base manifest unchanged, so
+        # the hash cannot catch this one; the activated row has to.
+        fake = _FakeFusion(manifest, reported_configuration={"config_b": "Config A"})
+        record = _run(manifest, fake)
+
+        self.assertFalse(record["ok"])
+        rows = record["variants"]
+        self.assertEqual([True, False], [row["ok"] for row in rows])
+        self.assertIn("does not belong to this variant", rows[1]["steps"][0]["error"])
+
+    def test_a_verification_report_for_another_document_does_not_summarise_this_row(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(manifest)
+
+        def executor(step):
+            report = fake(step)
+            if step.step_id == "verify":
+                report["manifest_sha256"] = "f" * 64
+                report["failures"] = ["clearance"]
+            return report
+
+        record = run_variant_matrix(manifest, MatrixConfig(), executor, clock=fake.clock)
+        row = record["variants"][0]
+        self.assertEqual(["verify"], row["failures"])
+        self.assertNotIn("verification_failures", row)
+
+    def test_a_malformed_executor_result_fails_that_step(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(manifest)
+        record = run_variant_matrix(
+            manifest, MatrixConfig(), lambda step: (fake(step),), clock=fake.clock
+        )
+
+        self.assertFalse(record["ok"])
+        self.assertIn(
+            "(report, raw_report_bytes)", record["initial_state"]["steps"][0]["error"]
+        )
+
+    def test_the_export_binds_to_the_saved_bytes_not_a_reserialisation(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(manifest)
+        captured: dict[str, str] = {}
+        saved: dict[str, bytes] = {}
+
+        def executor(step):
+            report = fake(step)
+            if step.step_id == "export":
+                captured["script"] = step.script or ""
+            # The file on disk, whitespace and all — not a re-serialisation.
+            raw = (json.dumps(report, indent=4, sort_keys=True) + "\n\n").encode("utf-8")
+            if step.step_id == "verify":
+                saved["bytes"] = raw
+            return report, raw
+
+        record = run_variant_matrix(
+            manifest, MatrixConfig(export_dir="/exports"), executor, clock=fake.clock
+        )
+        self.assertTrue(record["ok"], record["failures"])
+        self.assertIn(hashlib.sha256(saved["bytes"]).hexdigest(), captured["script"])
 
 
 class VariantMatrixEvidenceTests(unittest.TestCase):
@@ -313,7 +611,7 @@ class VariantMatrixEvidenceTests(unittest.TestCase):
         expressions = {
             parameter["name"]: parameter["expression"]
             for parameter in derived[1].parameters
-            if parameter["name"] in INITIAL_EXPRESSIONS
+            if parameter["name"] in ("des_corner_radius", "fab_wall_thickness")
         }
         self.assertEqual({"des_corner_radius": "6 mm", "fab_wall_thickness": "2.5 mm"}, expressions)
 
@@ -363,6 +661,28 @@ class VariantMatrixPlanTests(unittest.TestCase):
         self.assertEqual(INITIAL_CONFIGURATION, record["initial_state"]["configuration"])
         self.assertEqual(INITIAL_CONFIGURATION, record["restore"]["active_configuration"])
 
+    def test_a_mixed_matrix_restores_the_configuration_before_the_parameters(self) -> None:
+        # Activating a row can drive parameter values, so the parameter sync has
+        # to be the last write before the read-back.
+        manifest = _manifest(
+            [
+                VARIANTS[0],
+                {"id": "config_a", "description": "A.", "configuration": "Config A"},
+            ]
+        )
+        order = [step.step_id for step in build_matrix_plan(manifest, MatrixConfig())]
+        self.assertLess(
+            order.index(RESTORE_CONFIGURATION_STEP), order.index(RESTORE_PARAMETERS_STEP)
+        )
+
+        fake = _FakeFusion(manifest)
+        record = _run(manifest, fake)
+        self.assertTrue(record["ok"], record["failures"])
+        self.assertEqual(
+            [RESTORE_CONFIGURATION_STEP, RESTORE_PARAMETERS_STEP, VERIFY_RESTORE_STEP],
+            [step["step_id"] for step in record["restore"]["steps"]],
+        )
+
     def test_a_configuration_restored_to_the_wrong_row_fails_the_run(self) -> None:
         manifest = _manifest([{"id": "config_a", "description": "Config A.", "configuration": "Config A"}])
         fake = _FakeFusion(manifest, restored_configuration="Config A")
@@ -380,19 +700,44 @@ class VariantMatrixPlanTests(unittest.TestCase):
         self.assertIn("configuration-not-active", script)
         self.assertIn('"kind": "configuration-activation"', script)
 
+    def test_an_export_format_the_emitter_rejects_is_refused_at_plan_time(self) -> None:
+        # Not mid-run, with the document already on variant 1's expressions.
+        with self.assertRaises(ValueError) as context:
+            MatrixConfig(export_dir="/exports", formats=("3mf",))
+        self.assertIn("STEP export is required", str(context.exception))
+        for formats in (("3mf", "3mf"), ("obj",), ()):
+            with self.subTest(formats=formats):
+                with self.assertRaises(ValueError):
+                    MatrixConfig(export_dir="/exports", formats=formats)
+        # Without an export there is nothing to constrain.
+        MatrixConfig(formats=("3mf",))
+
+    def test_variant_ids_differing_only_in_case_are_refused(self) -> None:
+        # The report directory and export root live on a case-insensitive
+        # filesystem, where these two read each other's evidence.
+        manifest = _manifest(
+            [
+                {"id": "small", "description": "One.", "parameters": {"des_corner_radius": "3 mm"}},
+                {"id": "Small", "description": "Two.", "parameters": {"des_corner_radius": "3 mm"}},
+            ]
+        )
+        with self.assertRaises(ValueError) as context:
+            build_matrix_plan(manifest, MatrixConfig(export_dir="/exports"))
+        self.assertIn("collide", str(context.exception))
+
     def test_planning_a_manifest_without_variants_is_refused(self) -> None:
         data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
         with self.assertRaises(ValueError) as context:
             build_matrix_plan(Manifest.from_data(data), MatrixConfig())
         self.assertIn("declares no variants", str(context.exception))
 
-    def test_matrix_config_rejects_an_unknown_policy_and_a_useless_timeout(self) -> None:
+    def test_matrix_config_rejects_an_unknown_policy_and_a_useless_threshold(self) -> None:
         for kwargs in (
             {"on_failure": "carry-on"},
             {"on_failure": {"stop": True}},
-            {"timeout_seconds": 0},
-            {"timeout_seconds": float("nan")},
-            {"timeout_seconds": True},
+            {"slow_step_seconds": 0},
+            {"slow_step_seconds": float("nan")},
+            {"slow_step_seconds": True},
             {"export_dir": "   "},
         ):
             with self.subTest(**{key: str(value) for key, value in kwargs.items()}):

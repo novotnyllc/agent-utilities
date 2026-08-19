@@ -8,9 +8,12 @@ offline through an injected step executor.
 
 Three invariants the tests exist to defend:
 
-* Restoration is verified, not attempted.  The initial parameter expressions
-  (and active configuration) are captured before the first variant and read back
-  afterwards on every exit path; a mismatch is a loud failure.
+* Restoration is verified, not attempted.  The initial expressions of *every*
+  declared parameter (and the active configuration) are captured before the
+  first variant and read back afterwards on every exit path that reaches the
+  end of the run; a mismatch is a loud failure.  A run that halts waiting on
+  evidence cannot restore anything, so it states where the document actually
+  is instead of claiming it is safe.
 * Evidence is additive.  A variant's row is recorded as soon as it starts, so a
   later failure can never erase what an earlier variant earned.
 * The verdict is conjunctive.  A run passes only when every declared variant
@@ -27,7 +30,12 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from .export_handoff import ExportConfig, emit_export_script, verification_binding_from_report
+from .export_handoff import (
+    ALLOWED_FORMATS,
+    ExportConfig,
+    emit_export_script,
+    verification_binding_from_report,
+)
 from .manifest import Manifest
 from .printable_parts import _in_closed_set
 from .scripts import (
@@ -41,9 +49,10 @@ from .variants import variant_configuration, variant_id, variant_parameter_overr
 
 FAILURE_POLICIES = {"stop", "continue"}
 
-# One live Fusion transaction is minutes, not hours; a step that outruns this
-# budget is a hung session, not a slow one.
-DEFAULT_TIMEOUT_SECONDS = 900.0
+# One live Fusion transaction is minutes, not hours; a step that *returns* after
+# longer than this ran against a session worth distrusting.  This is a threshold,
+# not a budget: see MatrixConfig.slow_step_seconds.
+DEFAULT_SLOW_STEP_SECONDS = 900.0
 
 CAPTURE_STATE_STEP = "capture-initial-state"
 CAPTURE_CONFIGURATION_STEP = "capture-initial-configuration"
@@ -63,23 +72,47 @@ class StepReportUnavailable(Exception):
 
 @dataclass(frozen=True, slots=True)
 class MatrixConfig:
+    """Run-wide settings.
+
+    ``slow_step_seconds`` is a *detector, not a budget*: the runner drives a
+    synchronous executor, so a step that hangs never returns and nothing here
+    ever runs.  Elapsed time is compared only after the executor comes back, and
+    an overrun fails that step after the fact.  Nothing is cancelled or killed —
+    a hung Fusion transaction has to be dealt with in Fusion.
+    """
+
     export_dir: str | None = None
     formats: tuple[str, ...] = ("step", "3mf")
     on_failure: str = "stop"
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    slow_step_seconds: float = DEFAULT_SLOW_STEP_SECONDS
 
     def __post_init__(self) -> None:
         if not _in_closed_set(self.on_failure, FAILURE_POLICIES):
             raise ValueError(f"on_failure must be one of {', '.join(sorted(FAILURE_POLICIES))}.")
         if (
-            isinstance(self.timeout_seconds, bool)
-            or not isinstance(self.timeout_seconds, (int, float))
-            or not math.isfinite(float(self.timeout_seconds))
-            or float(self.timeout_seconds) <= 0
+            isinstance(self.slow_step_seconds, bool)
+            or not isinstance(self.slow_step_seconds, (int, float))
+            or not math.isfinite(float(self.slow_step_seconds))
+            or float(self.slow_step_seconds) <= 0
         ):
-            raise ValueError("timeout_seconds must be a positive, finite number of seconds.")
-        if self.export_dir is not None and not str(self.export_dir).strip():
+            raise ValueError("slow_step_seconds must be a positive, finite number of seconds.")
+        if self.export_dir is None:
+            return
+        if not str(self.export_dir).strip():
             raise ValueError("export_dir must be a non-empty Fusion-host path when export is requested.")
+        # The same preconditions emit_export_script enforces, checked here so a
+        # rejected format is refused at plan time rather than mid-run, with the
+        # document already sitting on the first variant's expressions.
+        formats = tuple(self.formats)
+        if not formats:
+            raise ValueError("At least one export format is required.")
+        unknown = sorted(set(formats) - set(ALLOWED_FORMATS))
+        if unknown:
+            raise ValueError(f"Unsupported export formats: {', '.join(unknown)}.")
+        if len(set(formats)) != len(formats):
+            raise ValueError("Export formats must not repeat.")
+        if "step" not in formats:
+            raise ValueError("STEP export is required; add 'step' to the requested formats.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +123,11 @@ class MatrixStep:
     variant_id: str
     report_kind: str
     report_name: str
-    timeout_seconds: float
+    slow_step_seconds: float
     manifest_sha256: str | None = None
     script: str | None = None
     deferred_reason: str | None = None
+    expected_configuration: str | None = None
 
     def to_dict(self, *, include_script: bool = True) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -101,9 +135,11 @@ class MatrixStep:
             "variant_id": self.variant_id,
             "report_kind": self.report_kind,
             "report_name": self.report_name,
-            "timeout_seconds": self.timeout_seconds,
+            "slow_step_seconds": self.slow_step_seconds,
             "manifest_sha256": self.manifest_sha256,
         }
+        if self.expected_configuration is not None:
+            row["expected_configuration"] = self.expected_configuration
         if self.deferred_reason:
             row["deferred_reason"] = self.deferred_reason
         if include_script:
@@ -272,21 +308,23 @@ def run(context):
 def _variant_step(
     identity: str,
     digest: str,
-    timeout: float,
+    slow_after: float,
     step_id: str,
     report_kind: str,
     script: str | None,
     deferred_reason: str | None = None,
+    expected_configuration: str | None = None,
 ) -> MatrixStep:
     return MatrixStep(
         step_id=step_id,
         variant_id=identity,
         report_kind=report_kind,
         report_name=f"{identity}__{step_id}__{digest[:8]}.json",
-        timeout_seconds=timeout,
+        slow_step_seconds=slow_after,
         manifest_sha256=digest,
         script=script,
         deferred_reason=deferred_reason,
+        expected_configuration=expected_configuration,
     )
 
 
@@ -304,7 +342,7 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
         )
     base_digest = manifest_sha256(manifest)
     short = base_digest[:8]
-    timeout = float(config.timeout_seconds)
+    slow_after = float(config.slow_step_seconds)
     has_parameter_variant = any(variant_parameter_overrides(variant) for variant in variants)
     has_configuration_variant = any(
         not variant_parameter_overrides(variant) and variant_configuration(variant) for variant in variants
@@ -316,7 +354,7 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
             variant_id="",
             report_kind="inventory",
             report_name=f"{CAPTURE_STATE_STEP}__{short}.json",
-            timeout_seconds=timeout,
+            slow_step_seconds=slow_after,
             manifest_sha256=base_digest,
             script=emit_inventory_script(manifest),
         )
@@ -328,7 +366,7 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
                 variant_id="",
                 report_kind="configuration-activation",
                 report_name=f"{CAPTURE_CONFIGURATION_STEP}__{short}.json",
-                timeout_seconds=timeout,
+                slow_step_seconds=slow_after,
                 manifest_sha256=base_digest,
                 script=emit_configuration_script(manifest, None),
             )
@@ -345,19 +383,29 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
         else:
             apply_kind = "configuration-activation"
             apply_script = emit_configuration_script(derived, variant_configuration(raw_variant))
-        steps.append(_variant_step(identity, digest, timeout, "apply", apply_kind, apply_script))
         steps.append(
-            _variant_step(identity, digest, timeout, "inventory", "inventory", emit_inventory_script(derived))
+            _variant_step(
+                identity,
+                digest,
+                slow_after,
+                "apply",
+                apply_kind,
+                apply_script,
+                expected_configuration=None if overrides else variant_configuration(raw_variant),
+            )
         )
         steps.append(
-            _variant_step(identity, digest, timeout, "verify", "verification", emit_verification_script(derived))
+            _variant_step(identity, digest, slow_after, "inventory", "inventory", emit_inventory_script(derived))
+        )
+        steps.append(
+            _variant_step(identity, digest, slow_after, "verify", "verification", emit_verification_script(derived))
         )
         if config.export_dir:
             steps.append(
                 _variant_step(
                     identity,
                     digest,
-                    timeout,
+                    slow_after,
                     "export",
                     "export-handoff",
                     None,
@@ -365,17 +413,8 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
                 )
             )
 
-    if has_parameter_variant:
-        steps.append(
-            MatrixStep(
-                step_id=RESTORE_PARAMETERS_STEP,
-                variant_id="",
-                report_kind="parameter-sync",
-                report_name=f"{RESTORE_PARAMETERS_STEP}__{short}.json",
-                timeout_seconds=timeout,
-                deferred_reason="Emitted from the captured initial parameter expressions, which are read at run time.",
-            )
-        )
+    # Configuration first: activating a row can drive parameter values, so the
+    # parameter sync has to be the last thing that writes.
     if has_configuration_variant:
         steps.append(
             MatrixStep(
@@ -383,9 +422,20 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
                 variant_id="",
                 report_kind="configuration-activation",
                 report_name=f"{RESTORE_CONFIGURATION_STEP}__{short}.json",
-                timeout_seconds=timeout,
+                slow_step_seconds=slow_after,
                 manifest_sha256=base_digest,
                 deferred_reason="Emitted from the captured initially active configuration, which is read at run time.",
+            )
+        )
+    if has_parameter_variant:
+        steps.append(
+            MatrixStep(
+                step_id=RESTORE_PARAMETERS_STEP,
+                variant_id="",
+                report_kind="parameter-sync",
+                report_name=f"{RESTORE_PARAMETERS_STEP}__{short}.json",
+                slow_step_seconds=slow_after,
+                deferred_reason="Emitted from the captured initial parameter expressions, which are read at run time.",
             )
         )
     steps.append(
@@ -394,20 +444,24 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
             variant_id="",
             report_kind="inventory",
             report_name=f"{VERIFY_RESTORE_STEP}__{short}.json",
-            timeout_seconds=timeout,
+            slow_step_seconds=slow_after,
             manifest_sha256=base_digest,
             script=emit_inventory_script(manifest),
         )
     )
 
+    # Case-folded: reports and export directories land on a real filesystem, and
+    # the usual macOS and Windows ones are case-insensitive, so ids differing
+    # only in case would read each other's evidence.
     owners: dict[str, str] = {}
     for step in steps:
-        if step.report_name in owners:
+        key = step.report_name.casefold()
+        if key in owners:
             raise ValueError(
-                f"Variant report identities collide: {step.step_id!r} and {owners[step.report_name]!r} "
-                f"both produce {step.report_name!r}; rename one variant id."
+                f"Variant report identities collide: {step.step_id!r} and {owners[key]!r} "
+                f"both produce {step.report_name!r} (compared case-insensitively); rename one variant id."
             )
-        owners[step.report_name] = step.step_id
+        owners[key] = step.step_id
     return tuple(steps)
 
 
@@ -482,12 +536,14 @@ class _MatrixRun:
             "project": manifest.project_name,
             "manifest_sha256": manifest_sha256(manifest),
             "on_failure": config.on_failure,
-            "timeout_seconds": float(config.timeout_seconds),
+            "slow_step_seconds": float(config.slow_step_seconds),
             "export_requested": bool(config.export_dir),
             "plan": [step.to_dict(include_script=False) for step in self.plan],
             "initial_state": {"captured": False},
             "variants": [],
-            "restore": {"required": False, "attempted": False, "ok": True, "verified": False, "steps": []},
+            # ok starts false: the document is only certified safe by a read-back
+            # that actually happened, never by a default nobody updated.
+            "restore": {"required": False, "attempted": False, "ok": False, "verified": False, "steps": []},
             "failures": [],
             "complete": False,
             "ok": False,
@@ -527,10 +583,13 @@ class _MatrixRun:
             return False, None, None, result
         elapsed = self.clock() - started
         result["elapsed_seconds"] = elapsed
-        if elapsed > step.timeout_seconds:
-            result["timed_out"] = True
+        if elapsed > step.slow_step_seconds:
+            # After the fact: the transaction already ran to completion, and
+            # nothing here cancelled it.  See MatrixConfig.slow_step_seconds.
+            result["overran"] = True
             result["error"] = (
-                f"Step exceeded its {step.timeout_seconds} second budget after {elapsed} seconds."
+                f"Step returned after {elapsed} seconds, past its {step.slow_step_seconds} second "
+                "slow-step threshold; the transaction was not cancelled."
             )
             return False, report, raw, result
         reason = self._report_rejection(step, report)
@@ -541,7 +600,13 @@ class _MatrixRun:
         return True, report, raw, result
 
     @staticmethod
-    def _report_rejection(step: MatrixStep, report: Any) -> str | None:
+    def _identity_rejection(step: MatrixStep, report: Any) -> str | None:
+        """Whether this report is even *about* this step's variant.
+
+        The manifest hash cannot answer that for a configuration variant — every
+        configuration derives the base manifest unchanged — so the configuration
+        the script requested and activated is the binding for those.
+        """
         if not isinstance(report, dict):
             return "Step report is not a JSON object."
         kind = report.get("kind")
@@ -552,8 +617,38 @@ class _MatrixRun:
                 f"Step report manifest_sha256 {report.get('manifest_sha256')!r} is not this step's "
                 f"{step.manifest_sha256!r}; the evidence does not belong to this variant."
             )
+        expected = step.expected_configuration
+        if expected is not None:
+            for field in ("requested_configuration", "active_configuration"):
+                if report.get(field) != expected:
+                    return (
+                        f"Step report {field} {report.get(field)!r} is not this variant's {expected!r}; "
+                        "the evidence does not belong to this variant."
+                    )
+        return None
+
+    @classmethod
+    def _report_rejection(cls, step: MatrixStep, report: Any) -> str | None:
+        reason = cls._identity_rejection(step, report)
+        if reason:
+            return reason
         if report.get("ok") is not True:
             return "Step report is not ok: true."
+        # Every emitter sets ok = not failures, so a report that claims both is
+        # stale or hand-edited; which half is wrong is unknowable, so reject it.
+        failures = report.get("failures")
+        if failures:
+            return (
+                f"Step report declares ok: true but also failures {failures!r}; the report contradicts "
+                "itself and cannot be trusted either way."
+            )
+        timeline = report.get("timeline")
+        unhealthy = timeline.get("unhealthy") if isinstance(timeline, dict) else None
+        if unhealthy:
+            return (
+                f"Step report declares ok: true with {len(unhealthy)} unhealthy timeline object(s); "
+                "evidence read off a sick timeline does not describe the declared design."
+            )
         return None
 
     # -- phases ---------------------------------------------------------
@@ -565,8 +660,12 @@ class _MatrixRun:
         if not ok:
             self.record["failures"].append("initial-state-capture")
             return False
-        self.snapshot = self._snapshot_from(report)
+        self.snapshot, absent = self._snapshot_from(report)
         self.record["initial_state"].update({"captured": True, "parameters": dict(self.snapshot)})
+        if absent:
+            # Surfaced, not swallowed: these will exist afterwards and the run
+            # has no way to put the document back to not having them.
+            self.record["initial_state"]["parameters_absent"] = absent
 
         if any(step.step_id == CAPTURE_CONFIGURATION_STEP for step in self.plan):
             configuration_step = self._step(CAPTURE_CONFIGURATION_STEP)
@@ -587,28 +686,47 @@ class _MatrixRun:
             self.record["initial_state"]["configuration"] = self.initial_configuration
         return True
 
-    def _snapshot_from(self, report: dict[str, Any]) -> dict[str, str]:
+    def _snapshot_from(self, report: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+        """Capture every declared parameter, not just the overridden ones.
+
+        ``apply`` runs the parameter sync, which writes *every* declared
+        parameter to its manifest expression.  A snapshot of only the overridden
+        subset would certify a restoration it never compared: a document sitting
+        at an expression the manifest disagrees with is silently rewritten and
+        never put back.
+        """
         names = sorted(
             {
-                name
-                for raw_variant in self.manifest.variants
-                for name in variant_parameter_overrides(raw_variant)
+                str(parameter.get("name", "")).strip()
+                for parameter in self.manifest.parameters
+                if isinstance(parameter, dict) and str(parameter.get("name", "")).strip()
             }
         )
+        overridden = {
+            name
+            for raw_variant in self.manifest.variants
+            for name in variant_parameter_overrides(raw_variant)
+        }
         parameters = report.get("parameters")
         if names and not isinstance(parameters, dict):
             raise ValueError("Initial state capture reported no parameters; the run cannot be restored.")
         snapshot: dict[str, str] = {}
+        absent: list[str] = []
         for name in names:
             entry = parameters.get(name) if isinstance(parameters, dict) else None
             expression = entry.get("expression") if isinstance(entry, dict) else None
-            if not isinstance(expression, str) or not expression.strip():
+            if isinstance(expression, str) and expression.strip():
+                snapshot[name] = expression.strip()
+            elif name in overridden:
                 raise ValueError(
                     f"Initial state capture has no usable expression for parameter {name!r}; a run that "
                     "cannot be restored must not start. Sync the base parameters first."
                 )
-            snapshot[name] = expression.strip()
-        return snapshot
+            else:
+                # The sync creates this one and nothing removes it again; that is
+                # a documented one-way change, not something to restore to.
+                absent.append(name)
+        return snapshot, absent
 
     def _run_variant(self, raw_variant: dict[str, Any]) -> bool:
         identity = variant_id(raw_variant)
@@ -656,7 +774,9 @@ class _MatrixRun:
             row["steps"].append(result)
             if not ok:
                 row["failures"].append(step_id)
-                if step_id == "verify" and isinstance(report, dict):
+                # Only summarise a report that is at least about this variant; a
+                # report rejected on identity describes some other document.
+                if step_id == "verify" and not self._identity_rejection(step, report):
                     row.update(_verification_summary(report))
                 return False
             if step_id == "verify":
@@ -689,30 +809,18 @@ class _MatrixRun:
         restore = self.record["restore"]
         restore["required"] = self.mutated
         if not self.mutated:
+            restore["ok"] = True
             restore["reason"] = "No variant was applied, so the document was never moved off its initial state."
             return
         restore["attempted"] = True
-        restore["ok"] = False
         if not self.record["initial_state"].get("captured"):
             restore["reason"] = "The initial state was never captured, so the document cannot be restored."
             self.record["failures"].append("restore")
             return
 
         steps: list[dict[str, Any]] = restore["steps"]
-        if any(step.step_id == RESTORE_PARAMETERS_STEP for step in self.plan):
-            target = restore_manifest(self.manifest, self.snapshot)
-            step = replace(
-                self._step(RESTORE_PARAMETERS_STEP),
-                manifest_sha256=manifest_sha256(target),
-                script=emit_parameter_sync_script(target),
-                deferred_reason=None,
-            )
-            ok, _, _, result = self._execute(step)
-            steps.append(result)
-            if not ok:
-                restore["reason"] = "Restoring the initial parameter expressions failed."
-                self.record["failures"].append("restore")
-                return
+        # Same order as the plan: the configuration goes back first, because
+        # activating a row can drive parameters the sync would then have to fix.
         if any(step.step_id == RESTORE_CONFIGURATION_STEP for step in self.plan):
             step = replace(
                 self._step(RESTORE_CONFIGURATION_STEP),
@@ -731,6 +839,20 @@ class _MatrixRun:
                 restore["reason"] = (
                     f"Read-back configuration {active!r} is not the captured {self.initial_configuration!r}."
                 )
+                self.record["failures"].append("restore")
+                return
+        if any(step.step_id == RESTORE_PARAMETERS_STEP for step in self.plan):
+            target = restore_manifest(self.manifest, self.snapshot)
+            step = replace(
+                self._step(RESTORE_PARAMETERS_STEP),
+                manifest_sha256=manifest_sha256(target),
+                script=emit_parameter_sync_script(target),
+                deferred_reason=None,
+            )
+            ok, _, _, result = self._execute(step)
+            steps.append(result)
+            if not ok:
+                restore["reason"] = "Restoring the initial parameter expressions failed."
                 self.record["failures"].append("restore")
                 return
 
@@ -770,8 +892,33 @@ class _MatrixRun:
             if "restore" not in self.record["failures"]:
                 self.record["failures"].append("restore")
 
+    def _note_failed_variants(self, in_flight: str = "") -> None:
+        """Record the failure token for any variant already known to have failed.
+
+        Completion-independent: a halted run has still *proved* a variant bad,
+        and anything gating on the exit code has to see that.  The row for the
+        step being waited on is excluded — it is pending, not failed.
+        """
+        if "variant-failed" in self.record["failures"]:
+            return
+        if any(not row["ok"] and row["variant_id"] != in_flight for row in self.record["variants"]):
+            self.record["failures"].append("variant-failed")
+
     def _halted(self) -> dict[str, Any]:
         self.record["next_step"] = self.halted_at.to_dict() if self.halted_at else None
+        self._note_failed_variants(self.halted_at.variant_id if self.halted_at else "")
+        # No restoration ran, so say where the document actually is rather than
+        # leaving the initialised defaults to read as a clean no-op.
+        restore = self.record["restore"]
+        restore["required"] = self.mutated
+        restore["ok"] = not self.mutated
+        restore["reason"] = (
+            "The run halted waiting on evidence after a variant was applied; restoration was not "
+            "completed and read back, so the document has not been verifiably restored."
+            if self.mutated
+            else "The run halted before any variant was applied, so the document was never moved off "
+            "its initial state."
+        )
         self.record["complete"] = False
         self.record["ok"] = False
         return self.record
@@ -798,8 +945,7 @@ class _MatrixRun:
             return self._halted()
 
         rows = self.record["variants"]
-        if any(not row["ok"] for row in rows) and "variant-failed" not in self.record["failures"]:
-            self.record["failures"].append("variant-failed")
+        self._note_failed_variants()
         if len(rows) != len(variants) and self.record["initial_state"].get("captured"):
             self.record["failures"].append("variants-incomplete")
         self.record["complete"] = True
