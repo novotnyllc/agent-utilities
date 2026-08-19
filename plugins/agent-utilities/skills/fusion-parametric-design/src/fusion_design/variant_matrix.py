@@ -837,7 +837,7 @@ class _MatrixRun:
             export_dir=_variant_export_dir(str(self.config.export_dir), identity),
             formats=tuple(self.config.formats),
             verification_report_sha256=hashlib.sha256(verification_bytes).hexdigest(),
-            expected_bounds_mm=verification_binding_from_report(derived, verification_report),
+            verification_binding=verification_binding_from_report(derived, verification_report),
         )
         return emit_export_script(derived, config)
 

@@ -116,13 +116,25 @@ class FakeBodies:
 
 
 class FakeOccurrence:
-    def __init__(self, bodies, bounds):
+    """A component whose measured properties agree with the bound verification.
+
+    Takes the whole per-part binding, not just bounds: the staleness gate
+    re-measures bounds, solid volume, and placement, so a fake that only carries
+    bounds would exercise a third of the gate.
+    """
+
+    def __init__(self, bodies, binding):
+        bodies = list(bodies)
         self.bRepBodies = FakeBodies(bodies)
-        self.bounds = bounds
+        self.bounds = binding["bounds_mm"]
+        solids = [body for body in bodies if body.isSolid and body.volume > 0]
+        if solids:
+            share = float(binding["total_solid_volume_mm3"]) / 1000.0 / len(solids)
+            for body in solids:
+                body.volume = share
         self.component = SimpleNamespace(name="component")
-        self.transform2 = SimpleNamespace(
-            asArray=lambda: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-        )
+        transform = list(binding["transform"])
+        self.transform2 = SimpleNamespace(asArray=lambda: transform)
 
 
 class FakeExportManager:
@@ -159,7 +171,7 @@ class ExportHandoffEmitterTests(unittest.TestCase):
             export_dir=str(export_dir),
             formats=tuple(formats),
             verification_report_sha256=hashlib.sha256(example_verification_report_bytes(self.manifest)).hexdigest(),
-            expected_bounds_mm=verification_binding_from_report(self.manifest, report),
+            verification_binding=verification_binding_from_report(self.manifest, report),
         )
 
     def test_emitted_script_compiles_and_embeds_identities(self) -> None:
@@ -195,16 +207,16 @@ class ExportHandoffEmitterTests(unittest.TestCase):
     def test_config_validation_fails_closed(self) -> None:
         good = self._config("/tmp/example-exports")
         with self.assertRaisesRegex(ValueError, "STEP export is required"):
-            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("3mf",), good.verification_report_sha256, good.expected_bounds_mm))
+            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("3mf",), good.verification_report_sha256, good.verification_binding))
         with self.assertRaisesRegex(ValueError, "Unsupported export formats"):
-            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("step", "obj"), good.verification_report_sha256, good.expected_bounds_mm))
+            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("step", "obj"), good.verification_report_sha256, good.verification_binding))
         with self.assertRaisesRegex(ValueError, "must not repeat"):
-            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("step", "step"), good.verification_report_sha256, good.expected_bounds_mm))
+            emit_export_script(self.manifest, ExportConfig(good.export_dir, ("step", "step"), good.verification_report_sha256, good.verification_binding))
         with self.assertRaisesRegex(ValueError, "non-empty"):
-            emit_export_script(self.manifest, ExportConfig("  ", good.formats, good.verification_report_sha256, good.expected_bounds_mm))
+            emit_export_script(self.manifest, ExportConfig("  ", good.formats, good.verification_report_sha256, good.verification_binding))
         with self.assertRaisesRegex(ValueError, "lowercase hex SHA-256"):
-            emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, "not-a-digest", good.expected_bounds_mm))
-        partial_bounds = dict(good.expected_bounds_mm)
+            emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, "not-a-digest", good.verification_binding))
+        partial_bounds = dict(good.verification_binding)
         partial_bounds.pop(self.print_parts[0])
         with self.assertRaisesRegex(ValueError, "missing for print parts"):
             emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, partial_bounds))
@@ -297,9 +309,14 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         from fusion_design.manifest import Manifest
 
         manifest = Manifest.from_data(colliding)
+        one_binding = {
+            "bounds_mm": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+            "total_solid_volume_mm3": 1.0,
+            "transform": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        }
         bounds = {
-            "10_PRODUCT/PROD__CASE": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
-            "10_PRODUCT/prod__case": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+            "10_PRODUCT/PROD__CASE": one_binding,
+            "10_PRODUCT/prod__case": one_binding,
         }
         with self.assertRaisesRegex(ValueError, "filenames collide"):
             emit_export_script(
@@ -317,13 +334,42 @@ class ExportHandoffEmitterTests(unittest.TestCase):
             {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, float("nan")]},
             {"min": [float("inf"), 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
         ):
-            bounds = dict(good.expected_bounds_mm)
-            bounds[part] = bad
+            bounds = dict(good.verification_binding)
+            bounds[part] = {**good.verification_binding[part], "bounds_mm": bad}
             with self.assertRaises(ValueError):
                 emit_export_script(
                     self.manifest,
                     ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, bounds),
                 )
+
+    def test_volume_and_transform_binding_reject_unusable_values(self) -> None:
+        good = self._config("/tmp/example-exports")
+        part = self.print_parts[0]
+        for field, bad in (
+            ("total_solid_volume_mm3", 0.0),
+            ("total_solid_volume_mm3", -1.0),
+            ("total_solid_volume_mm3", float("nan")),
+            ("total_solid_volume_mm3", "12000"),
+            ("transform", None),
+            ("transform", [1.0, 0.0, 0.0]),
+            ("transform", [float("inf")] * 16),
+        ):
+            with self.subTest(field=field, bad=bad):
+                binding = dict(good.verification_binding)
+                binding[part] = {**good.verification_binding[part], field: bad}
+                with self.assertRaises(ValueError):
+                    emit_export_script(
+                        self.manifest,
+                        ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, binding),
+                    )
+
+    def test_report_without_geometry_or_transforms_is_refused(self) -> None:
+        report = example_verification_report(self.manifest)
+        for key in ("geometry", "occurrence_transforms"):
+            with self.subTest(key=key):
+                stripped = {name: value for name, value in report.items() if name != key}
+                with self.assertRaisesRegex(ValueError, f"missing {key}"):
+                    verification_binding_from_report(self.manifest, stripped)
 
     def test_verification_binding_rejects_mismatched_reports(self) -> None:
         report = example_verification_report(self.manifest)
@@ -357,7 +403,7 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
             export_dir=str(export_dir if export_dir is not None else self.export_dir),
             formats=tuple(formats),
             verification_report_sha256=hashlib.sha256(example_verification_report_bytes(self.manifest)).hexdigest(),
-            expected_bounds_mm=bounds,
+            verification_binding=bounds,
         )
         source = emit_export_script(self.manifest, config)
         namespace = load_generated_script(source)
@@ -495,21 +541,57 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
     def test_stale_verification_blocks(self) -> None:
         report = example_verification_report(self.manifest)
         bounds = verification_binding_from_report(self.manifest, report)
+        maximum = bounds[self.print_parts[0]]["bounds_mm"]["max"]
         drifted = {
             path: FakeOccurrence(
                 [FakeBody("BODY")],
                 {
-                    "min": bounds[path]["min"],
-                    "max": [bounds[path]["max"][0] + 1.0, bounds[path]["max"][1], bounds[path]["max"][2]],
+                    **bounds[path],
+                    "bounds_mm": {
+                        "min": bounds[path]["bounds_mm"]["min"],
+                        "max": [
+                            bounds[path]["bounds_mm"]["max"][0] + 1.0,
+                            bounds[path]["bounds_mm"]["max"][1],
+                            bounds[path]["bounds_mm"]["max"][2],
+                        ],
+                    },
                 },
             )
             for path in self.print_parts
         }
+        self.assertEqual(3, len(maximum))
         namespace = self._namespace(occurrences=drifted)
         reports = self._run_expect_failure(namespace, "stale-verification")
         self.assertIn("stale-verification", reports[0]["failures"])
         self.assertTrue(all(row["reason"] == "bounds-drifted" for row in reports[0]["stale_parts"]))
         self.assertEqual([], list(self.export_dir.iterdir()))
+
+    def test_equal_extent_edits_are_caught_by_volume_and_placement(self) -> None:
+        """Bounds alone are six numbers; an edit that preserves them must not pass.
+
+        This is the whole reason the gate binds more than a bounding box: hollowing
+        a part or nudging its occurrence leaves the extent identical.
+        """
+        bounds = verification_binding_from_report(self.manifest, example_verification_report(self.manifest))
+        for reason, mutate in (
+            (
+                "volume-drifted",
+                lambda binding: {**binding, "total_solid_volume_mm3": binding["total_solid_volume_mm3"] * 0.9},
+            ),
+            (
+                "transform-drifted",
+                lambda binding: {**binding, "transform": binding["transform"][:12] + [1.0, 0.0, 0.0, 1.0]},
+            ),
+        ):
+            with self.subTest(reason=reason):
+                edited = {
+                    path: FakeOccurrence([FakeBody("BODY")], mutate(bounds[path]))
+                    for path in self.print_parts
+                }
+                namespace = self._namespace(occurrences=edited)
+                reports = self._run_expect_failure(namespace, "stale-verification")
+                self.assertTrue(all(row["reason"] == reason for row in reports[0]["stale_parts"]))
+                self.assertEqual([], list(self.export_dir.iterdir()))
 
     def test_missing_export_capability_fails_closed(self) -> None:
         namespace = self._namespace()
@@ -644,7 +726,7 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
             export_dir=str(self.export_dir),
             formats=("step", "3mf"),
             verification_report_sha256=hashlib.sha256(b"x" * 10).hexdigest(),
-            expected_bounds_mm=bounds,
+            verification_binding=bounds,
         )
         source = emit_export_script(intentless, config)
         namespace = load_generated_script(source)
@@ -677,7 +759,7 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
             export_dir=str(self.export_dir),
             formats=("step", "3mf"),
             verification_report_sha256=hashlib.sha256(b"y" * 10).hexdigest(),
-            expected_bounds_mm=bounds,
+            verification_binding=bounds,
         )
         source = emit_export_script(manifest, config)
         self.assertIn("body-name-mismatch", source)

@@ -176,7 +176,7 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
         export_dir=args.export_dir,
         formats=formats,
         verification_report_sha256=hashlib.sha256(report_bytes).hexdigest(),
-        expected_bounds_mm=verification_binding_from_report(manifest, report_data),
+        verification_binding=verification_binding_from_report(manifest, report_data),
     )
     _write_output(emit_export_script(manifest, config), args.output)
     return 0
@@ -211,8 +211,22 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
     )
     result = build_project(manifest, args.export_index, args.output, presets)
     if args.slice:
+        # The whole chain, not just the project hash: the slice block is the part
+        # a human quotes, and on its own it names nothing that verified it.
         result["slice"] = slice_project(
-            result["project_path"], presets, executable=args.slicer_executable
+            result["project_path"],
+            presets,
+            bindings={
+                key: result[key]
+                for key in (
+                    "project_sha256",
+                    "export_index_sha256",
+                    "manifest_sha256",
+                    "verification_report_sha256",
+                    "export_run_id",
+                )
+            },
+            executable=args.slicer_executable,
         )
     else:
         result["slice"] = SLICE_NOT_ATTEMPTED

@@ -100,6 +100,11 @@ So `fusion-design prusaslicer-project --slice` runs the slicer and reports what 
 {"slice": {"supported": true, "attempted": true, "ok": true,
            "exit_code": 0, "slicer_version": "PrusaSlicer 2.9.6",
            "project_sha256": "...", "gcode_sha256": "...", "gcode_byte_size": 228122,
+           "bindings": {"project_sha256": "...", "export_index_sha256": "...",
+                        "manifest_sha256": "...", "verification_report_sha256": "...",
+                        "export_run_id": "..."},
+           "gcode_window": {"head_bytes": 8192, "tail_bytes": 228122, "whole_file_read": true},
+           "chain_complete": true,
            "presets": {"printer": "...", "print": "...", "filament": "..."},
            "statistics": {"estimated_printing_time_normal": "17m 59s",
                           "filament_used_g_total": 4.69, "filament_used_mm_total": 1536.63},
@@ -108,10 +113,12 @@ So `fusion-design prusaslicer-project --slice` runs the slicer and reports what 
 
 How the boundary is held:
 
-- **The incomplete profile set is refused, not attempted.** `require_complete_profile_set` raises before anything is executed when printer, print, or filament is missing. That refusal is the fix for the crash, and it is tested by name.
+- **The incomplete profile set is refused, not attempted.** `require_complete_profile_set` raises before anything is executed when printer, print, or filament is missing. That refusal is the fix for the crash, and it is tested by name. A *complete but unresolvable* set is a different failure and was measured separately on PrusaSlicer 2.9.6 (2026-08-19): three names that resolve to nothing exit **1**, not 139, with `Error while loading config from profiles: Printer profile 'X' wasn't found.` -- with and without `--datadir`. So the guard checks completeness, which is what crashes; resolvability failures arrive as an ordinary structured failure with that message as the stderr tail.
+- **A `--datadir` is always supplied.** A plain-dict `presets` argument used to drop it silently, resolving names in PrusaSlicer's default configuration rather than the one they were validated against; that call is now refused.
 - **Execution is confined to one module.** `prusaslicer_slice.py` is the only file in the package permitted to touch a process-execution API; project construction (`prusaslicer_project.py`, `cli.py`, everything `build_project` calls) still contains none, and a structural AST test enforces exactly that split.
 - **`subprocess.run` with an argument list.** No `shell=True`, no string interpolation into a shell, and a timeout so a hung slicer cannot block forever.
-- **Statistics come only from the produced G-code.** Anything the G-code does not state is listed in `absent_statistics`. Nothing is inferred, estimated, or interpolated from the project file, the mesh, or a previous print.
+- **Statistics come only from whole lines of the produced G-code's trailing summary block.** PrusaSlicer writes them as one contiguous run of `; key = value` comments at the end of the file, ahead of the `prusaslicer_config` dump, and only that run is parsed. The anchor is structural, not a window: a profile's custom *start* G-code sits at the top of the file, separated from the run by the extrusion moves, so it is excluded for a 200-byte G-code exactly as for a 200-megabyte one — selecting a tail window would exclude nothing at all in the small case, and small parts routinely slice well under the window size. The file is read through a bounded head/tail window (the middle is extrusion moves and can be hundreds of megabytes) and both windows are trimmed to line boundaries first: a window cut mid-line would otherwise turn a truncated number into a syntactically valid, wrong one -- a real `41.9 g` read as `4.0 g`. `gcode_window` reports how much of the file was read, and a slice that yields no readable statistic is `ok: false` rather than `ok: true` with an empty block -- "the statistics were outside the window" must not be indistinguishable from "the slicer wrote none". Anything the G-code does not state is listed in `absent_statistics`. Nothing is inferred, estimated, or interpolated from the project file, the mesh, or a previous print.
+- **The slice is bound to the project it claims to have sliced.** `slice_project` takes a `bindings` map, re-hashes the file on disk against its `project_sha256`, and refuses to run if it changed since the project was built. The map -- export index, manifest, verification report, export run -- is echoed into the result, so a slice block lifted out of one report has something to contradict it.
 - **`--binary-gcode=0` is forced.** The Original Prusa XL presets default to binary G-code, whose statistics are not readable as `; ` comments.
 - **Failure is structured, never a fabricated number.** A non-zero exit (139/SIGSEGV included), a timeout, or a missing output file yields `ok: false` with the exit status and stderr tail, and the CLI exits 2.
 
