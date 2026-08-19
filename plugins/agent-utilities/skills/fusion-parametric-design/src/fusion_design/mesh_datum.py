@@ -26,6 +26,7 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from .mesh_fitting import (
+    MOTION_MOMENT_FIELDS,
     PRIMITIVE_KINDS,
     PrimitiveFit,
     Vec3,
@@ -205,6 +206,12 @@ class RegionFit:
     # U2's fillet proposal for this region: ``{"radius", "between"}`` when an
     # accepted torus is adjacent to exactly two non-torus primaries, else None.
     fillet: dict[str, Any] | None = None
+    # The kinematic router's raw moment block over this region's own facets, as
+    # ``mesh_fitting.region_motion_moments`` builds it.  ``None`` on a record
+    # written before this field existed, or on a region whose facets carried no
+    # readable normal -- absent, and never a zero block, because a zero block
+    # would sum into a group's evidence as if the region had been measured.
+    motion_moments: dict[str, Any] | None = None
 
     @property
     def accepted(self) -> bool:
@@ -247,6 +254,7 @@ class RegionFit:
             material_side=self.material_side,
             orientation_gate=self.orientation_gate,
             fillet=self.fillet,
+            motion_moments=self.motion_moments,
         )
 
 
@@ -389,6 +397,49 @@ def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | 
     return {"radius": radius, "between": sorted(str(item) for item in between)}
 
 
+def _parse_motion_moments(raw: Any, path: str) -> dict[str, Any] | None:
+    """U2's kinematic moment block, kept only when it arrives whole.
+
+    Absent is not malformed — a record written before this field existed simply
+    does not carry one, and a region whose facets carried no readable normal
+    honestly has none.  *Present and incomplete* refuses, because a block whose
+    ``matrix`` and ``facet_count`` disagree would sum into a group's evidence as
+    a measurement nobody made.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _malformed(path, "an object when present")
+    unknown = sorted(set(raw) - MOTION_MOMENT_FIELDS)
+    missing = sorted(MOTION_MOMENT_FIELDS - set(raw))
+    if unknown or missing:
+        raise _malformed(path, f"exactly {sorted(MOTION_MOMENT_FIELDS)} (missing {missing}, unknown {unknown})")
+    matrix = raw.get("matrix")
+    if not isinstance(matrix, (list, tuple)) or len(matrix) != 21:
+        raise _malformed(
+            f"{path}.matrix",
+            "21 numbers: the row-major upper triangle of the symmetric 6x6 moment block",
+        )
+    values = [_number(item) for item in matrix]
+    if any(item is None for item in values):
+        raise _malformed(f"{path}.matrix", "finite numbers")
+    count = raw.get("facet_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise _malformed(f"{path}.facet_count", "a positive integer")
+    area = _number(raw.get("area"))
+    if area is None or area <= 0.0:
+        raise _malformed(f"{path}.area", "a positive number")
+    centroid = _vector(raw.get("centroid_sum"))
+    if centroid is None:
+        raise _malformed(f"{path}.centroid_sum", "three finite numbers")
+    return {
+        "matrix": [float(v) for v in values],  # type: ignore[arg-type]
+        "facet_count": int(count),
+        "area": area,
+        "centroid_sum": list(centroid),
+    }
+
+
 def parse_fit_record(raw: Any) -> FitRecord:
     """Read U2's fit record, refusing rather than defaulting a missing field.
 
@@ -460,6 +511,9 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 material_side=material_side,
                 orientation_gate=orientation_gate,
                 fillet=_parse_fillet(raw_region, f"{path}"),
+                motion_moments=_parse_motion_moments(
+                    raw_region.get("motion_moments"), f"{path}.motion_moments"
+                ),
             )
         )
     return FitRecord(

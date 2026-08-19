@@ -13,11 +13,14 @@ from fusion_design.mesh_fitting import (
     fit_face_group,
     fit_primitive,
     normal_constrained_axis,
+    region_motion_moments,
+    route_kinematic_group,
     route_kinematic_surface,
     propose_design_intent,
     propose_nominal,
     section_mesh,
 )
+from fusion_design.mesh_fitting import _extent
 
 
 # --------------------------------------------------------------------------
@@ -1181,6 +1184,94 @@ class KinematicRouterTests(unittest.TestCase):
         points, normals = plane_samples(n=2)
         with self.assertRaises(ValueError):
             route_kinematic_surface(points, normals, **GATES)
+
+
+class KinematicGroupRouterTests(unittest.TestCase):
+    """Routing a *set* of regions from carried moment blocks rather than facets.
+
+    The archetype planner has the fit record and no triangles, so it cannot walk
+    facets.  What it gets instead is one 21-number block per region, and the
+    whole claim of that arrangement is that summing the blocks answers the same
+    question the facets would have.  These tests are that claim, not the arithmetic.
+    """
+
+    def test_a_group_of_one_answers_exactly_what_the_facets_answer(self) -> None:
+        for name, samples in (
+            ("extruded", extruded_cam_samples()),
+            ("revolved", revolved_samples()),
+            ("helicoid", helicoid_samples()),
+            ("cylinder", cylinder_samples()),
+            ("ellipsoid", ellipsoid_samples()),
+        ):
+            with self.subTest(name):
+                points, normals = samples
+                areas = [1.0] * len(points)
+                direct = route_kinematic_surface(points, normals, facet_areas=areas, **GATES)
+                grouped = route_kinematic_group(
+                    [region_motion_moments(points, normals, areas)], _extent(points), **GATES
+                )
+                self.assertEqual(direct["verdict"], grouped["verdict"])
+                self.assertEqual(direct["refusal"], grouped["refusal"])
+                self.assertAlmostEqual(direct["eigengap"], grouped["eigengap"], places=9)
+
+    def test_two_regions_route_as_one_surface_and_not_as_two_opinions(self) -> None:
+        # The additivity that makes the seam possible: the blocks of the two
+        # halves of one surface sum to the block of the whole, so the group
+        # verdict is the surface's and not an average of two.
+        points, normals = revolved_samples()
+        half = len(points) // 2
+        areas = [1.0] * len(points)
+        whole = route_kinematic_surface(points, normals, facet_areas=areas, **GATES)
+        grouped = route_kinematic_group(
+            [
+                region_motion_moments(points[:half], normals[:half], areas[:half]),
+                region_motion_moments(points[half:], normals[half:], areas[half:]),
+            ],
+            _extent(points),
+            **GATES,
+        )
+        self.assertEqual("revolution", grouped["verdict"])
+        self.assertAlmostEqual(whole["eigengap"], grouped["eigengap"], places=9)
+        self.assertEqual(2, grouped["region_count"])
+
+    def test_area_weighting_makes_a_sliver_of_evidence_read_as_a_sliver(self) -> None:
+        # The measured pathology this exists for: a rectangular plate with one
+        # small coaxial round. Both surfaces really are invariant under the
+        # rotation, so the verdict cannot come from the shapes -- it has to come
+        # from how much surface pins the axis. Shrink the round's area and the
+        # spectrum stops naming a single motion.
+        plane_points, plane_normals = plane_samples(n=24)
+        ring_points, ring_normals = cylinder_samples()
+        gaps = []
+        for share in (1.0, 0.001):
+            grouped = route_kinematic_group(
+                [
+                    region_motion_moments(
+                        plane_points, plane_normals, [1.0] * len(plane_points)
+                    ),
+                    region_motion_moments(
+                        ring_points, ring_normals, [share] * len(ring_points)
+                    ),
+                ],
+                _extent(list(plane_points) + list(ring_points)),
+                **GATES,
+            )
+            gaps.append(grouped["eigengap"])
+        self.assertGreater(gaps[0], gaps[1])
+
+    def test_a_region_with_no_readable_facet_carries_no_block_at_all(self) -> None:
+        # Absent, never a zero block: a zero block would sum into a group's
+        # evidence as a measurement nobody made.
+        self.assertIsNone(region_motion_moments([(0.0, 0.0, 0.0)], [(0.0, 0.0, 0.0)], [1.0]))
+        self.assertIsNone(region_motion_moments([(0.0, 0.0, 0.0)], [(0.0, 0.0, 1.0)], [0.0]))
+
+    def test_a_group_with_fewer_facets_than_unknowns_is_refused_not_fitted(self) -> None:
+        points, normals = plane_samples(n=2)
+        block = region_motion_moments(points, normals, [1.0] * len(points))
+        with self.assertRaises(ValueError):
+            route_kinematic_group([block], _extent(points), **GATES)
+        with self.assertRaises(ValueError):
+            route_kinematic_group([], 1.0, **GATES)
 
 
 # --------------------------------------------------------------------------

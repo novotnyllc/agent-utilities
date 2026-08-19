@@ -197,6 +197,7 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
 def rounded_plinth_mesh(
     width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
     post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6, post_inward=False,
+    post_centre=None,
 ):
     """A closed plinth whose top-front edge is rounded, under a coaxial post.
 
@@ -227,6 +228,11 @@ def rounded_plinth_mesh(
     profiles and an open surface has no section to give.
     """
     post_sign = -1.0 if post_inward else 1.0
+    # The post sits on the top face's centre unless the caller moves it. Moving
+    # it is what turns this plinth into the acceptance run's plate: the top face
+    # stops being an annulus about the post's axis and becomes a rectangle that
+    # merely happens to be perpendicular to it.
+    post_x, post_y = post_centre or (width / 2.0, (radius + depth) / 2.0)
     vertices: list[tuple[float, float, float]] = []
     index: dict[tuple, int] = {}
 
@@ -280,8 +286,8 @@ def rounded_plinth_mesh(
         return node(
             ("p", level, s % post_sides),
             (
-                width / 2.0 + post_radius * math.cos(angle),
-                (radius + depth) / 2.0 + post_radius * math.sin(angle),
+                post_x + post_radius * math.cos(angle),
+                post_y + post_radius * math.sin(angle),
                 height + post_sign * post_height * level / post_stacks,
             ),
         )
@@ -326,7 +332,7 @@ def rounded_plinth_mesh(
     # the rim point nearest the outer one's start. Without that alignment the
     # walk below is monotone in each loop's own parameter but not in angle, and
     # it stitches triangles straight across the hole.
-    start = math.atan2(radius - (radius + depth) / 2.0, -width / 2.0)
+    start = math.atan2(radius - post_y, -post_x)
     offset = round(start / (2.0 * math.pi) * post_sides)
     inner = [rim(0, offset + s) for s in range(post_sides)]
     i = j = 0
@@ -349,7 +355,7 @@ def rounded_plinth_mesh(
     for k in range(post_stacks):
         for s in range(post_sides):
             quad(rim(k, s), rim(k, s + 1), rim(k + 1, s + 1), rim(k + 1, s), 9)
-    cap = node(("pc",), (width / 2.0, (radius + depth) / 2.0, height + post_sign * post_height))
+    cap = node(("pc",), (post_x, post_y, height + post_sign * post_height))
     for s in range(post_sides):
         triangles.append((cap, rim(post_stacks, s), rim(post_stacks, s + 1)))
         groups.append(10)

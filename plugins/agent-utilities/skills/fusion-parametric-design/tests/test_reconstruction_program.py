@@ -289,6 +289,56 @@ class ArchetypeTests(unittest.TestCase):
             1.0,
         )
 
+    def test_the_revolve_carries_the_motion_evidence_that_licensed_it(self) -> None:
+        # A revolve is no longer won on precedence alone. It is won on the
+        # group's own facet normals being invariant under one rotation about
+        # this very axis, and the program carries the router's record so a
+        # reviewer can see the spectrum the decision came off.
+        group = build(fx.turned_record(), fx.spec())["archetypes"][0]
+        evidence = group["motion_evidence"]
+        self.assertTrue(evidence["confirmed"], evidence)
+        self.assertEqual("motion-revolution-confirmed", evidence["reason"])
+        self.assertEqual("revolution", evidence["router"]["verdict"])
+        self.assertGreater(evidence["router"]["eigengap"], 0.005)
+        self.assertLessEqual(evidence["axis_tilt_deg"], 2.0)
+        self.assertLessEqual(evidence["axis_offset"], 0.5)
+
+    def test_without_a_declared_motion_gate_no_revolve_is_claimed(self) -> None:
+        # A revolve asserts that a whole group is swept by one rotation. The
+        # caller who declared no gate to judge that against has not licensed the
+        # assertion, and the program says so on the archetype that took the
+        # regions instead rather than quietly falling back to precedence.
+        spec = fx.spec()
+        del spec["thresholds"]["motion_evidence"]
+        program = build(fx.turned_record(), spec)
+        self.assertEqual(["sketch-extrude"], [g["kind"] for g in program["archetypes"]])
+        evidence = program["archetypes"][0]["motion_evidence"]
+        self.assertFalse(evidence["confirmed"])
+        self.assertEqual("motion-evidence-undeclared", evidence["reason"])
+        self.assertIsNone(evidence["router"])
+
+    def test_a_record_carrying_no_facet_moments_names_the_absence(self) -> None:
+        # An older fit record has no moment block, and a missing measurement is
+        # not a failed one: the refusal names what is absent and how to get it.
+        record = fx.turned_record()
+        for region in record["regions"]:
+            region.pop("motion_moments")
+        program = build(record, fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in program["archetypes"]])
+        evidence = program["archetypes"][0]["motion_evidence"]
+        self.assertEqual("motion-evidence-unavailable", evidence["reason"])
+        self.assertIn("re-run `fit-regions`", evidence["detail"])
+        self.assertEqual(3, len(evidence["regions_without_moments"]))
+
+    def test_a_partly_declared_motion_gate_is_refused_rather_than_completed(self) -> None:
+        spec = fx.spec()
+        del spec["thresholds"]["motion_evidence"]["eigengap_min"]
+        issues = rp.validate_program_spec(spec)
+        self.assertIn(
+            "program_spec.thresholds.motion_evidence.eigengap_min",
+            [issue.path for issue in issues],
+        )
+
     def test_a_rejected_fit_is_listed_with_the_gate_it_failed(self) -> None:
         record = fx.box_record()
         # The rejected wall is a *y* wall, not an *x* one, and that is not
@@ -407,10 +457,25 @@ class HoleAndFilletTests(unittest.TestCase):
 
     def test_a_body_whose_only_turned_surface_is_a_bore_is_not_a_revolve(self) -> None:
         # Revolving a bore's own profile builds a disc where a plate belongs.
-        # The test is on positive evidence only: an unknown side still licenses
-        # the revolve exactly as it did before this unit.
-        self.assertNotIn("revolve", [g["kind"] for g in build(fx.bored_post_record("inside"), fx.spec())["archetypes"]])
-        self.assertIn("revolve", [g["kind"] for g in build(fx.bored_post_record(None), fx.spec())["archetypes"]])
+        # Neither side evidence makes this post a revolve, and the two get there
+        # by different routes, so the test names both. Known-inside: a bore is
+        # not an outward turned surface. Unknown: the side is still not the
+        # discriminator -- "unknown" is not "inward", exactly as before -- and
+        # what stops the revolve is the post's own shape. Its z faces are 12 x 10
+        # rectangles whose box centres sit 2.2 mm off the bore's axis against a
+        # declared 0.5: planes perpendicular to the axis, not annuli about it.
+        inside = build(fx.bored_post_record("inside"), fx.spec())
+        unknown = build(fx.bored_post_record(None), fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in inside["archetypes"]])
+        self.assertNotIn("revolve", [g["kind"] for g in unknown["archetypes"]])
+        # The side evidence still decides the hole, which is what it is for: a
+        # bore whose side the record states is cut out of the body, and one it
+        # does not is left in the extrude's section as an ordinary wall rather
+        # than cut on a guess.
+        self.assertIn("hole", [g["kind"] for g in inside["archetypes"]])
+        self.assertNotIn("hole", [g["kind"] for g in unknown["archetypes"]])
+        owner = {h: g for g in unknown["archetypes"] for h in g["regions"]}
+        self.assertEqual("sketch-extrude", owner[fx.region_hash("bore")]["kind"])
 
     def test_a_torus_between_two_rebuilt_features_becomes_a_fillet(self) -> None:
         blend = fx.torus("blend", 5.0, 1.0, 40.0, between=["bore", "z-lo"])
@@ -511,15 +576,28 @@ class HoleAndFilletTests(unittest.TestCase):
 
     def test_a_blend_inside_a_revolve_still_refuses_and_says_why(self) -> None:
         # A revolve's faces come as one collection with no partition, so an edge
-        # inside it cannot be named. The refusal is the honest answer, and it is
-        # where 61 of the benchmark's candidates still sit.
-        # With the bore's side unknown the revolve forms and takes both z planes,
-        # which moves the extrude's caps onto x -- so this blend's axis runs along
-        # y to stay out of the extrude's side set.
-        blend = self._blend("blend", ["z-lo", "z-hi"], axis=(0.0, 1.0, 0.0))
-        program = build(fx.bored_post_record(None, extras=[blend]), fx.spec())
+        # inside it cannot be named. The refusal is the honest answer.
+        #
+        # The body has to be a *real* revolve for the refusal to be about the
+        # partition rather than about the archetype: the turned post's caps are
+        # discs centred on the boss's own axis and its facets are invariant under
+        # one rotation about it, so the revolve is earned. The blend runs between
+        # the boss and the top cap, two surfaces of that one feature.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (1.0, 0.0, 0.0), (3.0, 0.0, 8.0), 1.0, 20.0, between=["boss", "cap-hi"]
+            ),
+            None,
+        )
+        record = fx.turned_record()
+        record["regions"].append(blend)
+        record["total_area"] = sum(region["area"] for region in record["regions"])
+        program = build(record, fx.spec())
         owner = {h: g for g in program["archetypes"] for h in g["regions"]}
-        self.assertEqual("revolve", owner[fx.region_hash("z-lo")]["kind"])
+        self.assertEqual("revolve", owner[fx.region_hash("boss")]["kind"])
+        self.assertEqual(
+            owner[fx.region_hash("boss")]["id"], owner[fx.region_hash("cap-hi")]["id"]
+        )
         self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
         gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
         self.assertIn("cannot partition into named sets", gates)

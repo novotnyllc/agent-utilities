@@ -91,6 +91,7 @@ from .mesh_fitting import (
     fit_face_group,
     fit_primitive,
     parameter_uncertainty,
+    region_motion_moments,
 )
 
 
@@ -2146,6 +2147,16 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 "accepted": accepted,
                 "dominant_curvature": _dominant_class(state["frame"], point_indices),
                 "orientation": _region_orientation(fit, triangles, mesh, topo, state),
+                # The kinematic router's sufficient statistic over this region's
+                # own facets. U3 has the fit record and no triangles, and the
+                # question "is this group of regions swept by a rotation?" is one
+                # only the facet normals can answer, so the answer's raw material
+                # crosses the seam here rather than being re-invented there.
+                "motion_moments": region_motion_moments(
+                    [topo.centroids[t] for t in triangles],
+                    [topo.tri_normals[t] for t in triangles],
+                    [topo.areas[t] for t in triangles],
+                ),
             }
         )
 

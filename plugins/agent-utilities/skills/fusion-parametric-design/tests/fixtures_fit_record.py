@@ -3,7 +3,65 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Any
+
+from fusion_design.mesh_fitting import region_motion_moments
+
+
+def _plane_moments(normal, point, area):
+    """Facets of a square patch of the declared area, centred on the fitted point.
+
+    The fixture describes surfaces analytically and U3 now reads a *facet*
+    statistic, so the fixture has to produce facets or it would be testing the
+    consumer against evidence no producer could write.  These are honest facets
+    of the very surface the fit record declares: the normal is the fitted one,
+    the positions lie in the fitted plane, and the weights sum to the declared
+    area.  `test_pipeline_seams` is what proves the real producer agrees.
+    """
+    axis = min(range(3), key=lambda i: abs(normal[i]))
+    u = _unit_cross(normal, tuple(1.0 if i == axis else 0.0 for i in range(3)))
+    v = _unit_cross(normal, u)
+    # Kept inside the declared bounding box so the box and the facets describe
+    # the same patch; the weights, not the footprint, carry the area.
+    half, n = 1.0, 6
+    points, normals, areas = [], [], []
+    for i in range(n):
+        for j in range(n):
+            su = -half + 2.0 * half * (i + 0.5) / n
+            sv = -half + 2.0 * half * (j + 0.5) / n
+            points.append(tuple(point[k] + su * u[k] + sv * v[k] for k in range(3)))
+            normals.append(tuple(normal))
+            areas.append(area / (n * n))
+    return region_motion_moments(points, normals, areas)
+
+
+def _cylinder_moments(axis, axis_point, radius, area, span):
+    u = _unit_cross(axis, (1.0, 0.0, 0.0) if abs(axis[0]) < 0.9 else (0.0, 1.0, 0.0))
+    v = _unit_cross(axis, u)
+    rings, around = 4, 24
+    points, normals, areas = [], [], []
+    for i in range(rings):
+        t = -0.5 * span + span * (i + 0.5) / rings
+        for j in range(around):
+            phi = 2.0 * math.pi * j / around
+            radial = tuple(math.cos(phi) * u[k] + math.sin(phi) * v[k] for k in range(3))
+            points.append(
+                tuple(axis_point[k] + t * axis[k] + radius * radial[k] for k in range(3))
+            )
+            normals.append(radial)
+            areas.append(area / (rings * around))
+    return region_motion_moments(points, normals, areas)
+
+
+def _unit_cross(a, b):
+    c = (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+    length = math.sqrt(sum(x * x for x in c))
+    return tuple(x / length for x in c)
 
 
 def region_hash(label: str) -> str:
@@ -37,6 +95,7 @@ def plane(label, normal, point, area, *, uncertainty=None, accepted=True, reject
             "uncertainty": dict(PLANE_SIGMAS if uncertainty is None else uncertainty),
             **({"rejection": rejection} if rejection else {}),
         },
+        "motion_moments": _plane_moments(normal, point, area),
     }
 
 
@@ -61,6 +120,7 @@ def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
             "support": {"axial_span": span},
             "uncertainty": dict(CYLINDER_SIGMAS if uncertainty is None else uncertainty),
         },
+        "motion_moments": _cylinder_moments(axis, axis_point, radius, area, span),
     }
 
 
@@ -226,6 +286,43 @@ def spec(
         "sigma_multiple": {
             "value": 3.0,
             "rationale": "three sigma: a deviation beyond it is not explained by fit noise.",
+        },
+        "motion_evidence": {
+            "sigma_theta_deg": {
+                "value": 0.2865,
+                "rationale": (
+                    "0.005 rad of facet-normal noise, the floor a tessellated surface leaves once "
+                    "the exporter's own vertex quantization is folded in."
+                ),
+            },
+            "residual_sigma_factor": {
+                "value": 3.0,
+                "rationale": (
+                    "three sigma of that noise before 'no rigid motion leaves this surface "
+                    "invariant' is a statement about the geometry rather than about the mesh."
+                ),
+            },
+            "eigengap_min": {
+                "value": 0.005,
+                "rationale": (
+                    "half a percent of the spectrum: below it the second-smallest eigenvalue is "
+                    "indistinguishable from zero and the invariant motions are a family, not one."
+                ),
+            },
+            "translation_epsilon": {
+                "value": 0.05,
+                "rationale": (
+                    "a rotation part under a twentieth of the unit six-vector is a translation "
+                    "with rounding on it."
+                ),
+            },
+            "pitch_epsilon": {
+                "value": 0.02,
+                "rationale": (
+                    "two percent of the region's own extent per radian: below it a screw is a "
+                    "rotation and the helix is the tessellation's."
+                ),
+            },
         },
     }
     if basis == "declared-absolute":

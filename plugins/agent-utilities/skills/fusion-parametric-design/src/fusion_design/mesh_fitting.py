@@ -2231,7 +2231,41 @@ def route_kinematic_surface(
     matrix, used, _weight = _normal_moments(points, normals, centre, scale, facet_areas)
     if used < 6:
         raise ValueError("the router needs at least six samples carrying usable normals.")
+    return _route_from_moments(
+        matrix,
+        used,
+        centre,
+        scale,
+        sigma_theta_rad=sigma_theta_rad,
+        residual_sigma_factor=residual_sigma_factor,
+        eigengap_min=eigengap_min,
+        translation_epsilon=translation_epsilon,
+        pitch_epsilon=pitch_epsilon,
+        signature=signature,
+    )
 
+
+def _route_from_moments(
+    matrix: Sequence[Sequence[float]],
+    used: int,
+    centre: Vec3,
+    scale: float,
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None,
+) -> dict[str, Any]:
+    """The verdict, from an already-accumulated ``M`` and the frame it was built in.
+
+    Split out of ``route_kinematic_surface`` so that the group router — which
+    reaches its ``M`` by summing per-region blocks rather than by walking facets
+    — reads the *same* spectrum through the *same* gates.  Two copies of this
+    ladder is how a group verdict and a region verdict start disagreeing about
+    the same geometry.
+    """
     values, vectors = _jacobi_eigen(matrix)
     smallest, second, largest = values[0], values[1], values[5]
     winner = vectors[0]
@@ -2349,6 +2383,159 @@ def route_kinematic_surface(
         f"the recovered motion is a screw of scaled pitch {pitch_scaled:.6g}, beyond the declared "
         f"{pitch_epsilon:.6g}. Helical geometry is reported and not emitted."
     )
+    return record
+
+
+# --------------------------------------------------------------------------
+# carrying the router's evidence across the fit record
+#
+# The router reads facets; the archetype planner has only the fit record, which
+# carries no triangles. What crosses the seam is the *sufficient statistic*:
+# ``M_raw = sum over facets of area * b b^T`` with ``b = [x x n, n]`` in the
+# mesh's own frame. It is 21 numbers per region, it is exactly additive across
+# regions, and it re-centres and re-scales by an exact congruence, so a group's
+# 6x6 is recoverable from its members' blocks without keeping a single triangle.
+# --------------------------------------------------------------------------
+
+#: Row-major upper triangle of a symmetric 6x6, in the order the record stores it.
+_MOMENT_TRIANGLE = tuple((i, j) for i in range(6) for j in range(i, 6))
+
+MOTION_MOMENT_FIELDS = frozenset({"matrix", "facet_count", "area", "centroid_sum"})
+
+
+def region_motion_moments(
+    points: Sequence[Vec3], normals: Sequence[Any], areas: Sequence[float]
+) -> dict[str, Any] | None:
+    """One region's raw kinematic moments, or ``None`` when it carries no usable facet.
+
+    Raw means *un-centred, un-scaled and weighted by real area*: those are the
+    three properties that make the block additive.  A block centred on its own
+    region could not be summed with its neighbour's, and one whose weights were
+    already normalized to that region's mean facet size would silently re-weight
+    the group by how finely each member happened to be tessellated.
+
+    A facet whose normal does not normalize is dropped from all four fields
+    together, so ``facet_count``, ``area``, ``centroid_sum`` and ``matrix``
+    always describe the same set of facets.
+    """
+    if not (len(points) == len(normals) == len(areas)):
+        raise ValueError("region moments need one normal and one area per facet.")
+    kept_points: list[Vec3] = []
+    kept_normals: list[Vec3] = []
+    kept_areas: list[float] = []
+    for point, raw_normal, area in zip(points, normals, areas):
+        normal = _unit(_as_point(raw_normal, "facet_normals"))
+        value = float(area)
+        if normal is None or not math.isfinite(value) or value <= 0.0:
+            continue
+        kept_points.append(_as_point(point, "facet_centroids"))
+        kept_normals.append(normal)
+        kept_areas.append(value)
+    if not kept_points:
+        return None
+    total = sum(kept_areas)
+    mean = total / len(kept_areas)
+    # `_normal_moments` divides the weights by their own mean; multiplying the
+    # result back by that mean recovers the raw area-weighted sum exactly, so
+    # there is one accumulation loop in this module rather than two.
+    matrix, used, _weight = _normal_moments(
+        kept_points, kept_normals, (0.0, 0.0, 0.0), 1.0, kept_areas
+    )
+    return {
+        "matrix": [matrix[i][j] * mean for i, j in _MOMENT_TRIANGLE],
+        "facet_count": used,
+        "area": total,
+        "centroid_sum": [
+            sum(p[0] for p in kept_points),
+            sum(p[1] for p in kept_points),
+            sum(p[2] for p in kept_points),
+        ],
+    }
+
+
+def route_kinematic_group(
+    moments: Sequence[Mapping[str, Any]],
+    extent: float,
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None = None,
+) -> dict[str, Any]:
+    """Route a *set* of regions from their carried moment blocks.
+
+    The blocks are summed in the mesh frame, then taken to the group's own
+    centred, unit-extent frame by the congruence ``M' = T M T^T`` with
+
+        T = [[I/s, -C/s], [0, I]],   C n = centre x n
+
+    which is exactly the change of variables ``x -> (x - centre) / s`` applied
+    to the rows.  The area weights are re-normalized to the *group's* mean facet
+    area, so a group's verdict does not depend on how finely each member was
+    tessellated relative to the others -- only on how much surface each supplies.
+    That re-weighting is the whole reason a 4 mm^2 corner round cannot certify a
+    2000 mm^2 plate as a solid of revolution.
+    """
+    blocks = [m for m in moments if m]
+    if not blocks:
+        raise ValueError("the group router needs at least one region's moments.")
+    count = sum(int(m["facet_count"]) for m in blocks)
+    area = sum(float(m["area"]) for m in blocks)
+    if count < 6:
+        raise ValueError("the group router needs at least six facets for a six-parameter fit.")
+    if not math.isfinite(area) or area <= 0.0:
+        raise ValueError("the group router needs a positive total facet area.")
+    if not math.isfinite(extent) or extent <= 0.0:
+        raise ValueError("the group router needs a positive extent.")
+    centre = (
+        sum(float(m["centroid_sum"][0]) for m in blocks) / count,
+        sum(float(m["centroid_sum"][1]) for m in blocks) / count,
+        sum(float(m["centroid_sum"][2]) for m in blocks) / count,
+    )
+    # sum(area_i b b^T), then to mean-one weights over the whole group.
+    factor = count / area
+    raw = [[0.0] * 6 for _ in range(6)]
+    for block in blocks:
+        entries = block["matrix"]
+        for index, (i, j) in enumerate(_MOMENT_TRIANGLE):
+            raw[i][j] += float(entries[index]) * factor
+    for i in range(6):
+        for j in range(i):
+            raw[i][j] = raw[j][i]
+    # T's rows: the moment half is (x x n)/s - (centre x n)/s, the normal half
+    # is untouched. Written as a 6x6 so the congruence is one loop.
+    cx, cy, cz = centre
+    transform = [
+        [1.0 / extent, 0.0, 0.0, 0.0, cz / extent, -cy / extent],
+        [0.0, 1.0 / extent, 0.0, -cz / extent, 0.0, cx / extent],
+        [0.0, 0.0, 1.0 / extent, cy / extent, -cx / extent, 0.0],
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    ]
+    intermediate = [
+        [sum(transform[i][k] * raw[k][j] for k in range(6)) for j in range(6)] for i in range(6)
+    ]
+    matrix = [
+        [sum(intermediate[i][k] * transform[j][k] for k in range(6)) for j in range(6)]
+        for i in range(6)
+    ]
+    record = _route_from_moments(
+        matrix,
+        count,
+        centre,
+        extent,
+        sigma_theta_rad=sigma_theta_rad,
+        residual_sigma_factor=residual_sigma_factor,
+        eigengap_min=eigengap_min,
+        translation_epsilon=translation_epsilon,
+        pitch_epsilon=pitch_epsilon,
+        signature=signature,
+    )
+    record["region_count"] = len(blocks)
+    record["facet_area"] = area
     return record
 
 

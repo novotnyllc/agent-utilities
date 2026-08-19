@@ -20,13 +20,20 @@ from __future__ import annotations
 from contextlib import redirect_stdout, redirect_stderr
 import io
 import json
+import math
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
 
 from fusion_design.cli import main
-from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
+from fusion_design import mesh_fitting as mf
+from fusion_design import reconstruction_program as rp
+from fusion_design.mesh_datum import (
+    ReconstructionRefused,
+    derive_datum_frame,
+    parse_fit_record,
+)
 from fusion_design.mesh_dump import pack_mesh_dump, read_mesh_dump
 from fusion_design.mesh_extract import emit_mesh_extract_script
 from fusion_design.mesh_face_groups import emit_mesh_face_groups_script
@@ -1010,6 +1017,220 @@ class NothingBuiltTests(unittest.TestCase):
                 )
             self.assertEqual(2, code)
             self.assertIn("delivered area fraction: 0.0000", err.getvalue())
+
+
+def _plinth(**overrides):
+    vertices, triangles, groups = ts.rounded_plinth_mesh(**overrides)
+    return ts.make_dump(vertices, triangles, face_groups=groups)
+
+
+class MotionEvidenceSeamTests(unittest.TestCase):
+    """The revolve precedence, decided on the facets the fit record now carries.
+
+    The defect this exists for was measured twice. The first live acceptance run
+    planned an 80 x 50 x 10 rectangular plate as a 360-degree revolve of radius
+    10 covering 77% of its area, which then died at emission with
+    `entity-resolution-ambiguous`. On the eleven-part benchmark the two
+    rectangular lids planned as revolves, and because a revolve's faces cannot be
+    partitioned into named sets, all 61 remaining fillet candidates gated
+    `fillet-neighbour-shared` inside them.
+
+    The cause was one line: any plane perpendicular to the primary axis counted
+    as a surface of revolution about it. A perpendicular cap is *consistent with*
+    a revolve; it is not evidence for one, and a plane's normal field genuinely
+    cannot tell an annulus from a rectangular plate -- both are +-z everywhere.
+
+    So the evidence had to come from somewhere the fit record did not reach.
+    Every region now carries its own kinematic moment block -- the sufficient
+    statistic of `n . (c_bar + c x x) = 0` over its facets -- and the planner
+    sums the blocks of a candidate group and asks the router whether they are
+    swept by one rotation about this axis. Nothing here is a fixture: the mesh is
+    segmented, fitted, planned and emitted, and the emitted script runs against
+    the Fusion doubles.
+    """
+
+    #: The acceptance run's own plate: 80 x 50 x 10, whose only coaxial outward
+    #: turned surface is one round of radius 10 that is not centred on it.
+    ACCEPTANCE = dict(
+        width=80.0, depth=50.0, height=10.0, post_radius=10.0, post_height=6.0,
+        post_centre=(22.0, 16.0), nx=16, ny=12, nz=5,
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        cls.dump = _plinth(post_centre=(6.0, 12.0))
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def old_rule_group(self, record):
+        """The membership the planner used before this change, re-stated here.
+
+        `_is_coaxial_with` is the line that changed, so "the old planning would
+        have produced the revolve" is asserted by re-running the old predicate --
+        every plane perpendicular to the axis, plus every turned surface on it --
+        against this same record and this same datum frame.
+        """
+        parsed = parse_fit_record(record)
+        frame = derive_datum_frame(
+            list(parsed.accepted()),
+            frame_margin=0.1,
+            angle_tolerance_deg=2.0,
+            offset_tolerance=0.5,
+        )
+        out = []
+        for region in parsed.accepted():
+            direction, anchor = region.direction(), region.anchor()
+            if direction is None or anchor is None:
+                continue
+            if mf._angle_deg(direction, frame.z_axis) > 2.0:
+                continue
+            if region.fit.kind == "plane" or (
+                rp._distance_to_line(anchor, frame.origin, frame.z_axis) <= 0.5
+            ):
+                out.append(region)
+        return out, parsed.total_area
+
+    def largest_planes(self, record, count=2):
+        return sorted(
+            (r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "plane"),
+            key=lambda r: -r["area"],
+        )[:count]
+
+    def test_the_fit_record_carries_the_moment_block_the_planner_routes(self) -> None:
+        # The producer/consumer seam itself. `motion_moments` is written by
+        # `fit-regions` and read by `plan-reconstruction`; a fixture on either
+        # side would let the two drift, which is the failure this file exists for.
+        for region in self.record["regions"]:
+            block = region["motion_moments"]
+            self.assertEqual(21, len(block["matrix"]), region["region_hash"])
+            self.assertEqual(region["triangle_count"], block["facet_count"])
+            self.assertAlmostEqual(region["area"], block["area"], places=6)
+        parsed = parse_fit_record(self.record)
+        self.assertTrue(all(r.motion_moments is not None for r in parsed.regions))
+
+    def test_the_summed_blocks_answer_what_the_regions_own_facets_answer(self) -> None:
+        # The exactness claim behind carrying 21 numbers instead of triangles:
+        # routing a group from its members' blocks is the same computation as
+        # routing the union of their facets, not an approximation of it.
+        regions = self.largest_planes(self.record, 3)
+        points, normals, areas = [], [], []
+        for region in regions:
+            for index in region["triangle_indices"]:
+                corners = [
+                    tuple(
+                        self.dump.vertices_mm[3 * self.dump.triangles[3 * index + corner] + axis]
+                        for axis in range(3)
+                    )
+                    for corner in range(3)
+                ]
+                first = tuple(corners[1][k] - corners[0][k] for k in range(3))
+                second = tuple(corners[2][k] - corners[0][k] for k in range(3))
+                cross = (
+                    first[1] * second[2] - first[2] * second[1],
+                    first[2] * second[0] - first[0] * second[2],
+                    first[0] * second[1] - first[1] * second[0],
+                )
+                magnitude = math.sqrt(sum(v * v for v in cross))
+                points.append(tuple(sum(p[k] for p in corners) / 3.0 for k in range(3)))
+                normals.append(tuple(v / magnitude for v in cross))
+                areas.append(magnitude / 2.0)
+        gates = {
+            "sigma_theta_rad": 0.005,
+            "residual_sigma_factor": 3.0,
+            "eigengap_min": 0.005,
+            "translation_epsilon": 0.05,
+            "pitch_epsilon": 0.02,
+        }
+        direct = mf.route_kinematic_surface(points, normals, facet_areas=areas, **gates)
+        grouped = mf.route_kinematic_group(
+            [r["motion_moments"] for r in regions], mf._extent(points), **gates
+        )
+        self.assertEqual(direct["verdict"], grouped["verdict"])
+        self.assertEqual(direct["refusal"], grouped["refusal"])
+        self.assertAlmostEqual(direct["eigengap"], grouped["eigengap"], places=9)
+
+    def test_the_old_rule_would_have_revolved_most_of_this_plate(self) -> None:
+        # Without this the test below only shows that the plate is an extrude,
+        # not that it stopped being a revolve.
+        group, total = self.old_rule_group(self.record)
+        turned = [
+            region for region in group
+            if region.fit.kind in ("cylinder", "cone") and region.material_side != "inside"
+        ]
+        self.assertGreaterEqual(len(group), 2)
+        self.assertTrue(turned, "the old rule needed one outward turned surface, and had one")
+        self.assertGreater(sum(region.area for region in group) / total, 0.5)
+
+    def test_the_plate_plans_as_an_extrude_and_a_revolve_keeps_only_the_boss(self) -> None:
+        owner = {h: g for g in self.program["archetypes"] for h in g["regions"]}
+        for cap in self.largest_planes(self.record):
+            self.assertEqual(
+                "sketch-extrude", owner[cap["region_hash"]]["kind"], cap["region_hash"]
+            )
+        # A boss is a legal revolve and this one is genuinely turned about its
+        # own axis; what it may not do any more is drag the plate in with it.
+        for group in [g for g in self.program["archetypes"] if g["kind"] == "revolve"]:
+            self.assertTrue(group["motion_evidence"]["confirmed"])
+            self.assertLess(group["area_fraction"], 0.2)
+
+    def test_the_acceptance_runs_own_plate_dimensions_behave_the_same(self) -> None:
+        record = fitted(_plinth(**self.ACCEPTANCE))
+        program = planned(record, self.manifest)
+        group, total = self.old_rule_group(record)
+        radii = [
+            region.fit.parameters["radius"] for region in group
+            if region.fit.kind == "cylinder" and region.material_side != "inside"
+        ]
+        self.assertTrue(radii)
+        self.assertAlmostEqual(10.0, max(radii), places=3)
+        self.assertGreater(sum(region.area for region in group) / total, 0.7)
+        owner = {h: g for g in program["archetypes"] for h in g["regions"]}
+        for cap in self.largest_planes(record):
+            self.assertEqual("sketch-extrude", owner[cap["region_hash"]]["kind"])
+
+    def test_the_replanned_plate_emits_its_fillet_through_the_transaction(self) -> None:
+        # The point of the whole change, end to end: with the plate's top face in
+        # an extrude rather than in a revolve, the round on its top edge sits
+        # between two face sets of one nameable feature and Fusion builds it.
+        fillets = [g for g in self.program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), self.program["unreconstructed"])
+        self.assertEqual("start-side", fillets[0]["edge_faces"])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        report, error = run_transaction(source, fakes.make_design(), self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        built = [entry for entry in report["created"] if entry["kind"] == "fillet"]
+        self.assertEqual(1, len(built), report)
+        self.assertEqual(fillets[0]["id"], built[0]["archetype_id"])
+        self.assertGreater(built[0]["edge_count"], 0)
+        self.assertEqual([], report["fillets_skipped"], report)
+
+    def test_a_genuinely_turned_part_still_plans_as_a_revolve(self) -> None:
+        # The other half of the claim, and the half a discriminator can fail
+        # silently: the same plinth with its post standing on the *centre* of the
+        # top face is turned about that axis, its top face really is an annulus
+        # about it, and the router finds one rotation and no other motion.
+        program = planned(fitted(_plinth()), self.manifest)
+        revolves = [g for g in program["archetypes"] if g["kind"] == "revolve"]
+        self.assertEqual(1, len(revolves), [g["kind"] for g in program["archetypes"]])
+        evidence = revolves[0]["motion_evidence"]
+        self.assertTrue(evidence["confirmed"], evidence)
+        self.assertEqual("revolution", evidence["router"]["verdict"])
+        self.assertGreater(evidence["router"]["eigengap"], 0.005)
+        self.assertLessEqual(evidence["axis_tilt_deg"], 2.0)
+        # The top face is in it, which is the case the change must not break.
+        self.assertGreater(revolves[0]["area_fraction"], 0.3)
 
 
 if __name__ == "__main__":

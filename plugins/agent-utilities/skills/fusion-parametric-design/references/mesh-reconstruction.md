@@ -197,7 +197,7 @@ The archetype vocabulary is closed and all four kinds now emit:
 | Archetype | Assigned when | Emitted as |
 | --- | --- | --- |
 | `sketch-extrude` | two parallel cap planes, with side surfaces perpendicular to them | a sketch on an origin plane or a parameter-driven offset from one, then an extrude |
-| `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore | a half-profile sketch containing the axis, then a revolve |
+| `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore, *and* the group's own facet normals shown invariant under a single rotation about that axis | a half-profile sketch containing the axis, then a revolve |
 | `hole` | an accepted cylinder whose `orientation.material_side` is `"inside"`, lying wholly within one extruded body, its axis along that body's extrusion direction | a placement point dimensioned to the sketch origin, then a hole feature with parametric diameter and depth |
 | `fillet` | an accepted blend — a torus, or a cylinder sweeping less arc than the declared `max_fillet_arc_deg` — adjacent to exactly two non-blend primaries, both of which this program rebuilt | a constant-radius fillet on the edge those two features share |
 
@@ -219,9 +219,20 @@ The same fail-closed rule runs the other way, which is the half that is easy to 
 
 The arithmetic runs one direction only: each stage may lose area relative to the one before it and can never gain any. A fillet that was planned and then skipped at build time subtracts its region *even though the build succeeded* — counting a planned-but-undelivered archetype as reconstructed would be exactly the over-claim this pipeline exists to prevent.
 
+### A revolve is earned before precedence is consulted
+
+Precedence decides between two archetypes the evidence *both* supports. It is not a licence to claim one the evidence does not support at all, and that distinction is where this stage went wrong for two units: any plane perpendicular to the primary axis counted as a surface of revolution about it. The first live acceptance run planned an 80 × 50 × 10 rectangular plate as a 360-degree revolve of radius 10 — 77% of its area — which then died at emission with `entity-resolution-ambiguous`; on the eleven-part benchmark two rectangular lids planned as revolves, and since a revolve's faces cannot be partitioned into named sets, all 61 remaining fillet candidates gated `fillet-neighbour-shared` inside them.
+
+A perpendicular cap is *consistent with* a revolve. It is not evidence for one, and no amount of normal data can make it so: a plane's normals are ±z on an annulus and on a rectangular plate alike. Two measurements now stand between a coaxial group and a `revolve`, and both read evidence the record already carries:
+
+1. **A cap's footprint, not its normal.** A disc or annulus swept about the axis is centred on the axis, so its axis-aligned bounding box is centred on it. Measured across the eleven benchmark parts, every large coaxial plane's box centre sat 23 to 160 mm off the candidate axis — the caps were plates perpendicular to it, and not one part was turned. The tolerance is the caller's already-declared `offset_tolerance`, which is the same question it was declared for.
+2. **The group's own invariant motion.** `route_kinematic_surface` — Pottmann and Randrup's kinematic router — answers extrusion, revolution and helix from one 6×6 eigenproblem over facet normals. The planner has no triangles, so every region now carries the router's *sufficient statistic* for its own facets: `sum over facets of area · b bᵀ` with `b = [x × n, n]`, twenty-one numbers, exactly additive across regions and exactly re-centrable. The planner sums the blocks of a candidate group and requires a `revolution` verdict whose recovered axis is the datum axis. A verdict of translation plans `sketch-extrude` however many caps are perpendicular; `router-ambiguous` — the invariant motions form a family rather than a single one — falls through to the next archetype in the precedence, with the router's record carried on whichever archetype claims the regions. Never a silent choice.
+
+The area weighting is what makes the second test bite: a 4 mm² corner round cannot certify a 2000 mm² plate as a solid of revolution, because the eigengap that says "one motion, not a family" is proportional to how much *surface* pins the axis. Its five gates are declared by the caller under `thresholds.motion_evidence`; undeclared means no revolve is claimed, and the program records that rather than falling back on precedence.
+
 ### We recover *a* parameterization, not *the* original
 
-A boss modelled as an extrude and the same boss modelled as a revolve are indistinguishable from the outside. The archetype precedence is therefore a **stated rule**, not a discovery: revolve is tried before sketch-extrude, and bores are classified before the extrude group chooses its side surfaces. The result is a feature tree consistent with the measured surface. It is not a claim about what the original designer did, and nothing in the pipeline reports one.
+A boss modelled as an extrude and the same boss modelled as a revolve are indistinguishable from the outside. The archetype precedence is therefore a **stated rule**, not a discovery: revolve is tried before sketch-extrude once it is earned, and bores are classified before the extrude group chooses its side surfaces. The result is a feature tree consistent with the measured surface. It is not a claim about what the original designer did, and nothing in the pipeline reports one.
 
 ### Every threshold is caller-declared, with its rationale
 

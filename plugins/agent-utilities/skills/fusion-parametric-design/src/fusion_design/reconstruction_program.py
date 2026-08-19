@@ -71,6 +71,7 @@ from .mesh_fitting import (
     _sub,
     _unit,
     propose_design_intent,
+    route_kinematic_group,
 )
 
 
@@ -112,6 +113,10 @@ THRESHOLD_FIELDS = {
     "sigma_multiple",
     "absolute_angle_tolerance_deg",
     "absolute_length_tolerance",
+    # The kinematic router's five gates, nested because they are one decision:
+    # they judge a candidate revolve's own motion, and none of them means
+    # anything without the other four.
+    "motion_evidence",
 }
 
 # Every threshold that is a declared number carrying its own rationale.
@@ -633,15 +638,171 @@ def reconcile(
 def _is_coaxial_with(
     region: RegionFit, origin: Vec3, z: Vec3, angle_tol: float, offset_tol: float
 ) -> bool:
+    """Is this region a surface of revolution about the axis, on its own evidence?
+
+    A *turned* surface answers with its fitted axis: same direction, same line.
+
+    A **plane** cannot answer with its normal, and this is where the planner used
+    to go wrong: a plane perpendicular to the axis was taken as a surface of
+    revolution about it, so every cap, ledge and rectangular plate in the part
+    joined the revolve.  A plane's normal field genuinely cannot tell an annulus
+    from a rectangular plate -- both are ``+-z`` everywhere -- so the normals are
+    not the evidence to ask.  Its *footprint* is: a disc or an annulus swept
+    about the axis is centred on the axis, and its axis-aligned bounding box is
+    centred on it exactly.  A plate whose axis passes near one corner is not, and
+    the offset is metres of millimetres rather than tolerance-sized -- measured
+    over the eleven-part benchmark, every large coaxial plane's box centre sat
+    23 to 160 mm off the candidate axis, and not one of them was turned.
+
+    The tolerance is the caller's already-declared ``offset_tolerance``, which is
+    the same question it was declared for: how far off the axis a thing may sit
+    before it is not on the axis.  A partial annulus -- a shoulder with a flat
+    milled across it -- fails this and joins the extrude instead, which is the
+    conservative direction: it is left out of a revolve rather than dragging a
+    revolve into existence.
+    """
     direction, anchor = region.direction(), region.anchor()
     if direction is None or anchor is None or region.fit is None:
         return False
     if region.fit.kind == "plane":
-        # A plane perpendicular to the axis is a surface of revolution about it.
-        return _angle_deg(direction, z) <= angle_tol
+        if _angle_deg(direction, z) > angle_tol:
+            return False
+        lo, hi = region.bounding_box
+        centre = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0)
+        return _distance_to_line(centre, origin, z) <= offset_tol
     if _angle_deg(direction, z) > angle_tol:
         return False
     return _distance_to_line(anchor, origin, z) <= offset_tol
+
+
+# The router's gates, as this planner names them in a program spec. Declared
+# together or not at all: four of the five are meaningless without the fifth,
+# and a partially declared router would run against numbers nobody chose.
+MOTION_GATE_FIELDS = (
+    "sigma_theta_deg",
+    "residual_sigma_factor",
+    "eigengap_min",
+    "translation_epsilon",
+    "pitch_epsilon",
+)
+
+
+def _motion_evidence(
+    regions: Sequence[RegionFit],
+    frame: DatumFrame,
+    gates: Mapping[str, float] | None,
+    angle_tolerance_deg: float,
+    offset_tolerance: float,
+) -> dict[str, Any]:
+    """Does this candidate group's own motion certify a rotation about the datum axis?
+
+    ``mesh_fitting.route_kinematic_surface`` answers extrusion, revolution and
+    helix from one 6x6 eigenproblem over the facet normals, and every region
+    carries the raw block for its own facets, so the group's system is the sum
+    of its members'.  Three things make this a real discriminator rather than a
+    restatement of the group's membership:
+
+    * the weights are **areas**, re-normalized over the group, so a 4 mm^2
+      corner round contributes 4 mm^2 of evidence against a 2000 mm^2 plate --
+      which is why a plate with one small coaxial round comes back ambiguous
+      rather than "a solid of revolution";
+    * the eigengap gate asks whether the invariant motion is *unique*.  A stack
+      of coaxial cylinders admits a rotation and a translation both, and picking
+      the rotation out of that two-parameter family is a guess;
+    * the recovered axis is checked against the datum axis this program would
+      actually revolve about, so a rotation about some *other* line never
+      licenses a revolve about this one.
+
+    Returns the decision as data, always.  ``confirmed`` false is never silence:
+    it carries the router's own record, or the named reason the router could not
+    be run at all.
+    """
+    if gates is None:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-undeclared",
+            "detail": (
+                "no motion_evidence thresholds were declared, so this program has no gate to judge "
+                "a candidate revolve's motion against. A revolve asserts that the whole group is "
+                "swept by one rotation, and that assertion is not made on an undeclared gate."
+            ),
+            "router": None,
+        }
+    missing = [region.region_hash for region in regions if region.motion_moments is None]
+    if missing:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-unavailable",
+            "detail": (
+                f"{len(missing)} of this group's {len(regions)} regions carry no facet moment block, "
+                "so the group's invariant motion cannot be measured. An older fit record carries "
+                "none; re-run `fit-regions` against the same dump to add them."
+            ),
+            "router": None,
+            "regions_without_moments": sorted(missing),
+        }
+    lo = [min(r.bounding_box[0][i] for r in regions) for i in range(3)]
+    hi = [max(r.bounding_box[1][i] for r in regions) for i in range(3)]
+    extent = _length((hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]))
+    try:
+        router = route_kinematic_group(
+            [region.motion_moments for region in regions],  # type: ignore[misc]
+            extent,
+            sigma_theta_rad=math.radians(gates["sigma_theta_deg"]),
+            residual_sigma_factor=gates["residual_sigma_factor"],
+            eigengap_min=gates["eigengap_min"],
+            translation_epsilon=gates["translation_epsilon"],
+            pitch_epsilon=gates["pitch_epsilon"],
+        )
+    except ValueError as error:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-unavailable",
+            "detail": f"the router could not be run over this group: {error}",
+            "router": None,
+        }
+    if router["verdict"] != "revolution":
+        return {
+            "confirmed": False,
+            "reason": f"motion-{router['refusal'] or router['verdict'] or 'none'}",
+            "detail": (
+                "this group's own facets do not show it swept by a rotation: "
+                + str(router.get("reason", "the router reached no verdict."))
+                + " A perpendicular cap is consistent with a revolve and is not evidence for one, "
+                "so the group falls through to the next archetype in the precedence."
+            ),
+            "router": router,
+        }
+    direction = _unit(tuple(router["direction"]))  # type: ignore[arg-type]
+    axis_point = tuple(router["axis_point"])  # type: ignore[assignment]
+    tilt = 180.0 if direction is None else _angle_deg(direction, frame.z_axis)
+    offset = _distance_to_line(axis_point, frame.origin, frame.z_axis)  # type: ignore[arg-type]
+    if tilt > angle_tolerance_deg or offset > offset_tolerance:
+        return {
+            "confirmed": False,
+            "reason": "motion-axis-mismatch",
+            "detail": (
+                f"the group is swept by a rotation, but about a line {tilt:.6g} degrees from the "
+                f"datum Z axis and {offset:.6g} away from it, against declared tolerances of "
+                f"{angle_tolerance_deg:.6g} and {offset_tolerance:.6g}. A revolve here would turn "
+                "the profile about an axis the geometry does not name."
+            ),
+            "router": router,
+            "axis_tilt_deg": tilt,
+            "axis_offset": offset,
+        }
+    return {
+        "confirmed": True,
+        "reason": "motion-revolution-confirmed",
+        "detail": (
+            "the group's facet normals are invariant under a single rotation about the datum Z "
+            "axis, and under no other one-parameter motion: that is affirmative evidence of a "
+            "surface of revolution, not merely consistency with one."
+        ),
+        "router": router,
+        "axis_tilt_deg": tilt,
+        "axis_offset": offset,
+    }
 
 
 def _datum_plane_for_normal(frame: DatumFrame, normal: Vec3, angle_tol: float) -> str | None:
@@ -1059,6 +1220,7 @@ def plan_archetypes(
     angle_tolerance_deg: float,
     offset_tolerance: float,
     equal_radius_tolerance: float | None = None,
+    motion_gates: Mapping[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Assign regions to the archetypes U4 emits; declare everything else.
 
@@ -1067,6 +1229,18 @@ def plan_archetypes(
     *a* parameterization, not *the* original), so the choice has to be a rule
     rather than whichever test happened to run first.  Revolve wins because it
     rebuilds the whole coaxial stack as one feature.
+
+    Precedence decides between two archetypes that the evidence *both* supports.
+    It is not a licence to claim one the evidence does not support at all, and
+    that is the distinction this stage used to miss: any plane perpendicular to
+    the primary axis counted as a surface of revolution, so a rectangular plate
+    with one small coaxial round planned as a 360-degree revolve of that round's
+    radius.  A revolve now has to be earned before precedence is consulted —
+    ``_motion_evidence`` puts the candidate group's own facet normals through
+    the kinematic router and requires an affirmative *rotation about this axis*.
+    A group whose motion is a translation, or whose invariant motions form a
+    family rather than a single one, falls through to ``sketch-extrude`` with
+    the router's record carried on whichever archetype ends up claiming it.
 
     ``hole`` and ``fillet`` are assigned from evidence U2 measures and this stage
     reads, never from shape alone.  A cylinder becomes a **hole** only when its
@@ -1109,7 +1283,12 @@ def plan_archetypes(
     # only: a cylinder whose side the record does not state still licenses the
     # revolve exactly as it did before, because "unknown" is not "inward".
     outward_turned = [r for r in turned if r.material_side != "inside"]
+    motion: dict[str, Any] | None = None
     if outward_turned and len(revolve) >= 2:
+        motion = _motion_evidence(
+            revolve, frame, motion_gates, angle_tolerance_deg, offset_tolerance
+        )
+    if motion is not None and motion["confirmed"]:
         members = sorted(region.region_hash for region in revolve)
         claimed.update(members)
         radius = max(
@@ -1139,9 +1318,12 @@ def plan_archetypes(
                 "radius": {"parameter": None, "value": radius},
                 "constraints": [],
                 "dependencies": [],
+                "motion_evidence": motion,
                 "reason": (
                     f"{len(revolve)} accepted fits are coaxial about the primary axis, including "
-                    f"{len(turned)} turned surface(s); one revolve rebuilds the stack."
+                    f"{len(turned)} turned surface(s), and the kinematic router finds their facet "
+                    "normals invariant under a single rotation about that axis and under no other "
+                    "one-parameter motion; one revolve rebuilds the stack."
                 ),
             }
         )
@@ -1216,11 +1398,26 @@ def plan_archetypes(
                     },
                     "constraints": [],
                     "dependencies": [],
+                    # Carried here, not only on a revolve: when a candidate
+                    # revolve was refused, these are the very regions it wanted,
+                    # and the reader of this extrude is the one who needs to see
+                    # why they are not a revolve. Null when no group was ever a
+                    # revolve candidate, which is not the same as "refused".
+                    "motion_evidence": None if motion is None or motion["confirmed"] else motion,
                     "reason": (
                         f"two parallel cap planes {abs(high_station - low_station):.6g} apart on datum "
                         f"{datum_plane}, with {len(sides)} side surface(s) perpendicular to them."
                     ),
                 }
+            )
+
+    if motion is not None and not motion["confirmed"]:
+        # Only reaches a region no archetype claimed: `unmappable` is consulted
+        # for unclaimed regions alone, so an extrude that took these caps hides
+        # this gate rather than contradicting it.
+        for region in revolve:
+            unmappable[region.region_hash] = (
+                f"revolve-motion-unproven ({motion['reason']}): {motion['detail']}"
             )
 
     holes, hole_gates = _plan_holes(
@@ -1621,6 +1818,34 @@ def validate_program_spec(spec: Any) -> list[ValidationIssue]:
         elif basis == "declared-absolute":
             for name in ("absolute_angle_tolerance_deg", "absolute_length_tolerance"):
                 _declared_number(issues, thresholds.get(name), f"program_spec.thresholds.{name}")
+        motion = thresholds.get("motion_evidence")
+        # Absent is a decision this stage acts on -- no revolve is claimed
+        # without a declared gate to judge its motion against -- so it is not an
+        # issue here. Present and partial is, because four of the five gates
+        # cannot judge a spectrum on their own.
+        if motion is not None:
+            if not isinstance(motion, dict):
+                issues.append(
+                    ValidationIssue(
+                        "program-spec-invalid-thresholds",
+                        "program_spec.thresholds.motion_evidence",
+                        "motion_evidence must be an object carrying the kinematic router's five "
+                        f"declared gates: {', '.join(MOTION_GATE_FIELDS)}.",
+                    )
+                )
+            else:
+                _reject_unknown_fields(
+                    issues,
+                    motion,
+                    set(MOTION_GATE_FIELDS),
+                    "program_spec.thresholds.motion_evidence",
+                )
+                for name in MOTION_GATE_FIELDS:
+                    _declared_number(
+                        issues,
+                        motion.get(name),
+                        f"program_spec.thresholds.motion_evidence.{name}",
+                    )
 
     adopted = spec.get("adopted")
     if not isinstance(adopted, list):
@@ -1690,6 +1915,13 @@ def _proposal_id(proposal: IntentProposal) -> str:
 def _threshold(thresholds: Mapping[str, Any], name: str) -> float | None:
     entry = thresholds.get(name)
     return None if entry is None else float(entry["value"])
+
+
+def _motion_gates(thresholds: Mapping[str, Any]) -> dict[str, float] | None:
+    entry = thresholds.get("motion_evidence")
+    if not isinstance(entry, dict):
+        return None
+    return {name: float(entry[name]["value"]) for name in MOTION_GATE_FIELDS}
 
 
 def program_sha256(program: Mapping[str, Any]) -> str:
@@ -1815,6 +2047,7 @@ def build_reconstruction_program(
         angle_tolerance_deg=_threshold(thresholds, "angle_tolerance_deg"),
         offset_tolerance=_threshold(thresholds, "offset_tolerance"),
         equal_radius_tolerance=_threshold(thresholds, "equal_radius_tolerance"),
+        motion_gates=_motion_gates(thresholds),
     )
     _attach_constraints(groups, adoptions)
     parameters = _user_parameters(groups, adoptions, fit_record.units)
@@ -1938,6 +2171,10 @@ _ARCHETYPE_FIELDS = {
     # fillet only: which pair of that single feature's face sets, when `between`
     # names one archetype; null when it names two.
     "edge_faces",
+    # revolve and sketch-extrude: the kinematic router's verdict on the revolve
+    # candidate group -- what licensed a revolve, or what refused one and sent
+    # these regions here instead. Null when no revolve was ever a candidate.
+    "motion_evidence",
 }
 
 OPERATIONS = {"new-body", "join", "cut", "finish"}
