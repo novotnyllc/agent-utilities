@@ -67,7 +67,9 @@ scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
+scripts/fusion-design emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 scripts/fusion-design emit-mesh-capture <manifest> [-o file.py]
+scripts/fusion-design emit-mesh-extract <manifest> --mesh-source-id <id> --classification <classification.json> --extract-spec <extract.json> [-o file.py]
 scripts/fusion-design emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 scripts/fusion-design emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
@@ -78,11 +80,29 @@ scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cach
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
 
-The three mesh commands implement the reconstruction gate in
+The mesh commands implement the reconstruction gate in
 `references/mesh-reconstruction.md`: capture is read-only and re-verifies every
-declared source hash before emitting, and both `emit-mesh-convert` and
-`emit-mesh-deviation` refuse unless a recorded classification chose a path they
-implement, for that exact mesh source.
+declared source hash before emitting, and `emit-mesh-extract`,
+`emit-mesh-convert` and `emit-mesh-deviation` all refuse unless a recorded
+classification chose a path they implement, for that exact mesh source.
+
+`emit-capability-probe` is the cheapest thing to run against a live Fusion: it
+creates nothing and starts no process. It records the embedded interpreter's
+`(python_version, abi, platform)` triple — pip's own `--python-version` /
+`--abi` / `--platform` flag values — its writable `sys.path` entries, which
+preview mesh and construction APIs exist, and, when a probe spec binds a body,
+that body's face-group histogram and whether a file written from Fusion's
+interpreter reads back. Nothing here is hardcoded, because Fusion auto-updates
+its Python and a stale tag fails as `ModuleNotFoundError`, which reads like "not
+installed".
+
+`emit-mesh-extract` writes an indexed mesh dump — millimetre vertices, triangle
+indices, per-triangle face-group ids when Fusion has them — and reports the
+SHA-256 of the bytes it wrote, re-read from disk. The host reader re-hashes
+before it parses, so nothing downstream can describe content that was not the
+content measured. If Fusion cannot write the file, the same bytes come back
+chunked and base64-encoded over the report, each chunk carrying its own digest,
+under a declared size ceiling.
 
 For reusable pure-Python helpers, prepare a content-addressed module bundle and
 send the verified emitted bootstrap through Fusion's Python-execution
