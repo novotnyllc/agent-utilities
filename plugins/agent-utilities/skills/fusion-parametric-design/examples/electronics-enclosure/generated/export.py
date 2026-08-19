@@ -5,7 +5,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
+MANIFEST_SHA256 = '8cec5b3c46476208d13e741828e906dc3c8b15513e746a8783da8dbe17180756'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 
@@ -193,7 +193,7 @@ import hashlib
 import os
 import uuid
 
-EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__7f3e64db.json","parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__base__7f3e64db.step"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__lid__7f3e64db.step"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.step"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"d0ce59a4a25e1950ea27145cefe1ce33c774a50a63360d92978aaae38da02d0b"}')
+EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__8cec5b3c.json","parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__8cec5b3c.3mf","step":"wearable-controller-pod__10_product-prod__base__8cec5b3c.step"},"manufacturing_intent":{"id":"prod_base","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim."},"print_as":"separate","protected_features":[{"description":"Top rim mates with the lid; keep it support-free and unscarred.","kind":"mating-face"},{"description":"USB-C insertion opening must stay dimensionally clean.","kind":"hole"}],"quantity":1,"strength":{"infill_percent":{"max":40,"min":20,"target":25},"min_perimeters":3},"support_policy":"none"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__8cec5b3c.3mf","step":"wearable-controller-pod__10_product-prod__lid__8cec5b3c.step"},"manufacturing_intent":{"id":"prod_lid","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":["-Z"],"contact_face":"+Z","rationale":"Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible."},"print_as":"separate","protected_features":[{"description":"Snap rim engages the base; supports must not touch it.","kind":"mating-face"}],"quantity":1,"strength":{"infill_percent":{"target":20},"min_perimeters":3},"support_policy":"build-plate-only"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__8cec5b3c.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__8cec5b3c.step"},"manufacturing_intent":{"id":"val_pd_fit_coupon","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"Coupon prints flat in the same orientation as the base pocket it validates."},"print_as":"separate","protected_features":[{"description":"Pocket walls are the measured fit surfaces.","kind":"critical-surface"}],"quantity":1,"strength":{"infill_percent":{"target":15},"min_perimeters":2},"support_policy":"none"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"6e0ca6bdfb1123ed5f1c9ff2e1e03e3f25eef3671eee86ca121616c93dd76d2b"}')
 EXPORT_STALENESS_TOLERANCE_MM = 1e-3
 FORMAT_OPTION_ATTRIBUTES = {
     "step": "createSTEPExportOptions",
@@ -356,6 +356,16 @@ def run(context):
             body = _resolve_single_solid_body(occurrence, path, failures, resolution_errors)
             if body is None:
                 continue
+            expected_body_name = part.get("expected_body_name")
+            if expected_body_name and body.name != expected_body_name:
+                failures.add("body-name-mismatch")
+                resolution_errors.append({
+                    "path": path,
+                    "reason": "declared-body-name-mismatch",
+                    "expected": expected_body_name,
+                    "actual": body.name,
+                })
+                continue
             try:
                 actual_bounds = _bbox_mm(occurrence)
             except Exception as error:
@@ -438,7 +448,7 @@ def run(context):
                     executed = export_manager.execute(options)
                     if not executed or not os.path.isfile(target) or os.path.getsize(target) <= 0:
                         raise RuntimeError("Fusion export did not produce " + target)
-                    artifacts.append({
+                    artifact_entry = {
                         "part_path": path,
                         "body_name": body.name,
                         "format": export_format,
@@ -449,7 +459,10 @@ def run(context):
                         "sha256": _file_sha256(target),
                         "transform": resolution["transform"],
                         "bounds_mm": resolution["actual_bounds_mm"],
-                    })
+                    }
+                    if "manufacturing_intent" in part:
+                        artifact_entry["manufacturing_intent"] = part["manufacturing_intent"]
+                    artifacts.append(artifact_entry)
 
             index = {
                 "kind": "export-handoff",

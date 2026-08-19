@@ -166,6 +166,182 @@ class ManifestValidationTests(unittest.TestCase):
         issues = validate_manifest_data(data)
         self.assertNotIn("reference-keepout-required", {issue.code for issue in issues})
 
+    def test_manifest_without_printable_parts_is_still_valid(self) -> None:
+        data = copy.deepcopy(self.data)
+        data.pop("printable_parts")
+        self.assertEqual([], validate_manifest_data(data))
+
+    def test_example_printable_parts_validate(self) -> None:
+        self.assertEqual([], validate_manifest_data(self.data))
+        manifest = load_manifest(EXAMPLE)
+        self.assertEqual(3, len(manifest.printable_parts))
+
+    def _codes(self, data) -> set[str]:
+        return {issue.code for issue in validate_manifest_data(data)}
+
+    def test_printable_part_identity_rules(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][1]["id"] = data["printable_parts"][0]["id"]
+        self.assertIn("printable-part-duplicate-id", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["id"] = "bad-id!"
+        self.assertIn("invalid-printable-part-id", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["path"] = "10_PRODUCT/DOES_NOT_EXIST"
+        codes = self._codes(data)
+        self.assertIn("printable-part-unknown-path", codes)
+        self.assertIn("printable-parts-mismatch-expected", codes)
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"].pop()
+        self.assertIn("printable-parts-mismatch-expected", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][1]["path"] = data["printable_parts"][0]["path"]
+        self.assertIn("printable-part-duplicate-path", self._codes(data))
+
+    def test_printable_part_orientation_rules(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["orientation"]["contact_face"] = "down"
+        self.assertIn("printable-part-invalid-orientation", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["orientation"]["allowed_alternatives"] = ["-Z"]
+        self.assertIn("printable-part-invalid-orientation", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["orientation"]["rationale"] = "  "
+        self.assertIn("printable-part-invalid-orientation", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][1]["orientation"]["allowed_alternatives"] = ["-Z", "-Z"]
+        self.assertIn("printable-part-invalid-orientation", self._codes(data))
+
+    def test_printable_part_support_rules(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["support_policy"] = "tree"
+        self.assertIn("printable-part-invalid-support-policy", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["support_policy"] = "explicit-regions"
+        self.assertIn("printable-part-invalid-support-policy", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["support_policy"] = "explicit-regions"
+        data["printable_parts"][0]["support_regions"] = [{"kind": "sideways", "description": "x"}]
+        self.assertIn("printable-part-invalid-support-policy", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["support_regions"] = [{"kind": "blocker", "description": "keep rim clear"}]
+        self.assertIn("printable-part-invalid-support-policy", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["support_policy"] = "explicit-regions"
+        data["printable_parts"][0]["support_regions"] = [
+            {"kind": "blocker", "description": "Keep the mating rim clear."}
+        ]
+        self.assertNotIn("printable-part-invalid-support-policy", self._codes(data))
+
+    def test_printable_part_strength_rules(self) -> None:
+        for mutate in (
+            lambda part: part["strength"].__setitem__("min_perimeters", 0),
+            lambda part: part["strength"]["infill_percent"].__setitem__("target", 101),
+            lambda part: part["strength"]["infill_percent"].__setitem__("min", 90),
+            lambda part: part["strength"]["infill_percent"].__setitem__("max", 1),
+            lambda part: part["strength"].pop("infill_percent"),
+        ):
+            data = copy.deepcopy(self.data)
+            mutate(data["printable_parts"][0])
+            self.assertIn("printable-part-invalid-strength", self._codes(data))
+
+    def test_printable_part_feature_material_and_misc_rules(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["protected_features"][0]["kind"] = "sticker"
+        self.assertIn("printable-part-invalid-protected-features", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["assumption"] = " "
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["status"] = "guessed"
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["source_id"] = "unknown_source"
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["source_id"] = "pd_trigger_board_measurement"
+        self.assertNotIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["quantity"] = 0
+        self.assertIn("printable-part-invalid-quantity", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["print_as"] = "together"
+        self.assertIn("printable-part-invalid-print-as", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["body_name"] = ""
+        self.assertIn("printable-part-invalid-body-name", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["surprise"] = True
+        self.assertIn("unknown-manifest-field", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["printable_parts"] = {"not": "a list"}
+        self.assertIn("printable-parts-must-be-list", self._codes(data))
+
+    def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
+        from fusion_design.manifest import (
+            CONTACT_FACES,
+            MATERIAL_STATUSES,
+            PRINT_AS_VALUES,
+            PROTECTED_FEATURE_KINDS,
+            SUPPORT_POLICIES,
+            SUPPORT_REGION_KINDS,
+        )
+
+        schema = json.loads((ROOT / "schema" / "fusion-project.schema.json").read_text(encoding="utf-8"))
+        part = schema["$defs"]["printable_part"]
+        self.assertIn("printable_parts", schema["properties"])
+        self.assertEqual(
+            {
+                "id",
+                "path",
+                "body_name",
+                "quantity",
+                "print_as",
+                "orientation",
+                "support_policy",
+                "support_regions",
+                "strength",
+                "protected_features",
+                "material",
+            },
+            set(part["properties"]),
+        )
+        self.assertEqual(PRINT_AS_VALUES, set(part["properties"]["print_as"]["enum"]))
+        self.assertEqual(CONTACT_FACES, set(schema["$defs"]["contact_face"]["enum"]))
+        self.assertEqual(SUPPORT_POLICIES, set(part["properties"]["support_policy"]["enum"]))
+        self.assertEqual(
+            SUPPORT_REGION_KINDS,
+            set(part["properties"]["support_regions"]["items"]["properties"]["kind"]["enum"]),
+        )
+        self.assertEqual(
+            PROTECTED_FEATURE_KINDS,
+            set(part["properties"]["protected_features"]["items"]["properties"]["kind"]["enum"]),
+        )
+        self.assertEqual(
+            MATERIAL_STATUSES,
+            set(part["properties"]["material"]["properties"]["status"]["enum"]),
+        )
+
     def test_load_manifest_raises_with_all_issues(self) -> None:
         data = copy.deepcopy(self.data)
         data["parameters"][0].pop("source_id")

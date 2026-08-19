@@ -108,18 +108,40 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
 
     expected_parts = _validate_config(manifest, config)
     digest = manifest_sha256(manifest)
+    intent_by_path = {
+        str(part.get("path", "")): {
+            "id": part.get("id"),
+            "quantity": part.get("quantity", 1),
+            "print_as": part.get("print_as"),
+            "orientation": part.get("orientation"),
+            "support_policy": part.get("support_policy"),
+            **({"support_regions": part["support_regions"]} if "support_regions" in part else {}),
+            "strength": part.get("strength"),
+            "protected_features": part.get("protected_features"),
+            "material": part.get("material"),
+        }
+        for part in manifest.printable_parts
+    }
+    body_name_by_path = {
+        str(part.get("path", "")): part["body_name"]
+        for part in manifest.printable_parts
+        if part.get("body_name")
+    }
     parts = []
     for path in expected_parts:
-        parts.append(
-            {
-                "path": path,
-                "expected_bounds_mm": _validate_bounds(path, config.expected_bounds_mm[path]),
-                "filenames": {
-                    export_format: _artifact_filename(manifest.project_name, path, digest, export_format)
-                    for export_format in config.formats
-                },
-            }
-        )
+        part_spec = {
+            "path": path,
+            "expected_bounds_mm": _validate_bounds(path, config.expected_bounds_mm[path]),
+            "filenames": {
+                export_format: _artifact_filename(manifest.project_name, path, digest, export_format)
+                for export_format in config.formats
+            },
+        }
+        if path in intent_by_path:
+            part_spec["manufacturing_intent"] = intent_by_path[path]
+        if path in body_name_by_path:
+            part_spec["expected_body_name"] = body_name_by_path[path]
+        parts.append(part_spec)
     filename_owners: dict[str, str] = {f"export-index__{digest[:8]}.json": "<index>"}
     for part in parts:
         for filename in part["filenames"].values():
@@ -304,6 +326,16 @@ def run(context):
             body = _resolve_single_solid_body(occurrence, path, failures, resolution_errors)
             if body is None:
                 continue
+            expected_body_name = part.get("expected_body_name")
+            if expected_body_name and body.name != expected_body_name:
+                failures.add("body-name-mismatch")
+                resolution_errors.append({
+                    "path": path,
+                    "reason": "declared-body-name-mismatch",
+                    "expected": expected_body_name,
+                    "actual": body.name,
+                })
+                continue
             try:
                 actual_bounds = _bbox_mm(occurrence)
             except Exception as error:
@@ -386,7 +418,7 @@ def run(context):
                     executed = export_manager.execute(options)
                     if not executed or not os.path.isfile(target) or os.path.getsize(target) <= 0:
                         raise RuntimeError("Fusion export did not produce " + target)
-                    artifacts.append({
+                    artifact_entry = {
                         "part_path": path,
                         "body_name": body.name,
                         "format": export_format,
@@ -397,7 +429,10 @@ def run(context):
                         "sha256": _file_sha256(target),
                         "transform": resolution["transform"],
                         "bounds_mm": resolution["actual_bounds_mm"],
-                    })
+                    }
+                    if "manufacturing_intent" in part:
+                        artifact_entry["manufacturing_intent"] = part["manufacturing_intent"]
+                    artifacts.append(artifact_entry)
 
             index = {
                 "kind": "export-handoff",

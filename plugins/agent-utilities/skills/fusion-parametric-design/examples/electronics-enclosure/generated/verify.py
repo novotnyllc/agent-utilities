@@ -5,7 +5,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e'
+MANIFEST_SHA256 = '8cec5b3c46476208d13e741828e906dc3c8b15513e746a8783da8dbe17180756'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 
@@ -220,6 +220,13 @@ def _has_positive_solid_brep(occurrence):
     return False
 
 
+def _occurrence_transform(occurrence):
+    transform = getattr(occurrence, "transform2", None)
+    if not transform:
+        return None
+    return [float(value) for value in transform.asArray()]
+
+
 def _parameter_mismatches(user_parameters):
     mismatches = []
     for spec in PARAMETER_SPECS:
@@ -277,11 +284,13 @@ def run(context):
         bounding_boxes = {}
         brep_bounding_boxes = {}
         geometry = {}
+        occurrence_transforms = {}
         for path in sorted(relevant_paths):
             occurrence = occurrence_map.get(path)
             if not occurrence:
                 continue
             geometry[path] = _body_summary(occurrence)
+            occurrence_transforms[path] = _occurrence_transform(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
             except Exception as error:
@@ -411,6 +420,7 @@ def run(context):
             "timeline": timeline,
             "bounding_boxes_mm": bounding_boxes,
             "brep_bounding_boxes_mm": brep_bounding_boxes,
+            "occurrence_transforms": occurrence_transforms,
             "geometry": geometry,
             "clearance_results": clearance_results,
             "interference_results": interference_results,

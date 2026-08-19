@@ -549,6 +549,16 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("report_attempted = False", source)
         self.assertIn('failures.append("compute-all")', source)
         self.assertIn('failures.append("parameters")', source)
+        self.assertIn("occurrence_transforms", source)
+        self.assertIn("transform2", source)
+
+        namespace = load_generated_script(source)
+        with_transform = SimpleNamespace(
+            transform2=SimpleNamespace(asArray=lambda: [1.0] + [0.0] * 15)
+        )
+        without_transform = SimpleNamespace(transform2=None)
+        self.assertEqual([1.0] + [0.0] * 15, namespace["_occurrence_transform"](with_transform))
+        self.assertIsNone(namespace["_occurrence_transform"](without_transform))
 
         namespace = load_generated_script(source)
         first_spec = namespace["PARAMETER_SPECS"][0]

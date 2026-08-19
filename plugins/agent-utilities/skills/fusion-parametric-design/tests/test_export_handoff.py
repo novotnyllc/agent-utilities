@@ -39,13 +39,19 @@ FORBIDDEN_CLAIM_KEYS = {
     "support_policy",
     "physical_fit",
     "fit",
+    "printer",
+    "filament",
+    "process_profile",
 }
 
 
 def _collect_keys(value, keys):
+    """Collect every key outside manufacturing_intent (declared intent is not a slicer claim)."""
     if isinstance(value, dict):
         for key, child in value.items():
             keys.add(key)
+            if key == "manufacturing_intent":
+                continue
             _collect_keys(child, keys)
     elif isinstance(value, list):
         for child in value:
@@ -168,6 +174,7 @@ class ExportHandoffEmitterTests(unittest.TestCase):
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")
         colliding = json.loads(json.dumps(self.manifest.to_dict()))
+        colliding.pop("printable_parts", None)
         # Two component paths whose slugs collide (lowercase folding).
         colliding["component_tree"].extend(["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"])
         colliding["verification"]["expected_print_parts"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
@@ -415,6 +422,96 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         namespace = self._namespace(export_dir=self.export_dir / "does-not-exist")
         reports = self._run_expect_failure(namespace, "missing-output-dir")
         self.assertEqual(["missing-output-dir"], reports[0]["failures"])
+
+    def test_index_carries_manufacturing_intent_from_manifest(self) -> None:
+        namespace = self._namespace()
+        report = self._run(namespace)[0]
+        intent_by_path = {part["path"]: part for part in self.manifest.printable_parts}
+        for artifact in report["artifacts"]:
+            intent = artifact["manufacturing_intent"]
+            declared = intent_by_path[artifact["part_path"]]
+            self.assertEqual(declared["id"], intent["id"])
+            self.assertEqual(declared["orientation"], intent["orientation"])
+            self.assertEqual(declared["support_policy"], intent["support_policy"])
+            self.assertEqual(declared["strength"], intent["strength"])
+            self.assertEqual(declared["material"], intent["material"])
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_omits_intent_when_manifest_has_none(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        stripped = self.manifest.to_dict()
+        stripped.pop("printable_parts")
+        intentless = Manifest.from_data(stripped)
+        report_data = example_verification_report(intentless)
+        bounds = verification_binding_from_report(intentless, report_data)
+        config = ExportConfig(
+            export_dir=str(self.export_dir),
+            formats=("step", "3mf"),
+            verification_report_sha256=hashlib.sha256(b"x" * 10).hexdigest(),
+            expected_bounds_mm=bounds,
+        )
+        source = emit_export_script(intentless, config)
+        namespace = load_generated_script(source)
+        occurrences = {
+            path: FakeOccurrence([FakeBody("BODY")], bounds[path]) for path in self.print_parts
+        }
+        manager = FakeExportManager()
+        design = SimpleNamespace(
+            exportManager=manager,
+            rootComponent=SimpleNamespace(),
+            unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=intentless.fusion_document, isSaved=False))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), {})
+        namespace["_bbox_mm"] = lambda occurrence: occurrence.bounds
+        report = self._run(namespace)[0]
+        for artifact in report["artifacts"]:
+            self.assertNotIn("manufacturing_intent", artifact)
+
+    def test_declared_body_name_mismatch_fails_closed(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        declared["printable_parts"][0]["body_name"] = "EXPECTED_BODY"
+        manifest = Manifest.from_data(declared)
+        report_data = example_verification_report(manifest)
+        bounds = verification_binding_from_report(manifest, report_data)
+        config = ExportConfig(
+            export_dir=str(self.export_dir),
+            formats=("step", "3mf"),
+            verification_report_sha256=hashlib.sha256(b"y" * 10).hexdigest(),
+            expected_bounds_mm=bounds,
+        )
+        source = emit_export_script(manifest, config)
+        self.assertIn("body-name-mismatch", source)
+        namespace = load_generated_script(source)
+        occurrences = {
+            path: FakeOccurrence([FakeBody("SOME_OTHER_NAME")], bounds[path]) for path in self.print_parts
+        }
+        design = SimpleNamespace(
+            exportManager=FakeExportManager(),
+            rootComponent=SimpleNamespace(),
+            unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=manifest.fusion_document, isSaved=False))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), {})
+        namespace["_bbox_mm"] = lambda occurrence: occurrence.bounds
+        reports = self._run_expect_failure(namespace, "body-name-mismatch")
+        self.assertIn("body-name-mismatch", reports[0]["failures"])
+        self.assertEqual([], list(self.export_dir.iterdir()))
+
+        matching = {
+            path: FakeOccurrence([FakeBody("EXPECTED_BODY")], bounds[path]) for path in self.print_parts
+        }
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(matching), dict(matching), {})
+        report = self._run(namespace)[0]
+        self.assertTrue(report["ok"])
 
     def test_saved_document_records_version_identity(self) -> None:
         namespace = self._namespace()
