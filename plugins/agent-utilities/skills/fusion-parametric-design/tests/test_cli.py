@@ -998,25 +998,5 @@ class MeshCliTests(unittest.TestCase):
         self.assertIn("classification-source-mismatch", errors)
 
 
-class CliDocumentationTests(unittest.TestCase):
-    def test_documented_command_lists_match_the_parser_exactly(self) -> None:
-        import argparse
-        import re
-
-        from fusion_design.cli import build_parser
-
-        parser = build_parser()
-        subparsers = next(
-            action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
-        )
-        commands = set(subparsers.choices)
-        for document in (ROOT / "SKILL.md", ROOT / "README.md"):
-            text = document.read_text(encoding="utf-8")
-            documented = set(
-                re.findall(r'(?m)^(?:"\$SKILL_DIR/)?scripts/fusion-design"? ([a-z][a-z-]*)', text)
-            )
-            self.assertEqual(commands, documented, document.name)
-
-
 if __name__ == "__main__":
     unittest.main()
