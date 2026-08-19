@@ -37,9 +37,76 @@
       ]
     }
   },
+  "geometry": {
+    "10_PRODUCT/PROD__BASE": {
+      "total_solid_volume_mm3": 12000.0
+    },
+    "10_PRODUCT/PROD__LID": {
+      "total_solid_volume_mm3": 910.0
+    },
+    "90_VALIDATION/VAL__PD_FIT_COUPON": {
+      "total_solid_volume_mm3": 200.0
+    }
+  },
   "kind": "verification",
   "manifest_sha256": "497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c",
   "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
+  "occurrence_transforms": {
+    "10_PRODUCT/PROD__BASE": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "10_PRODUCT/PROD__LID": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "90_VALIDATION/VAL__PD_FIT_COUPON": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
   "ok": true,
   "project": "wearable-controller-pod",
   "sample": true

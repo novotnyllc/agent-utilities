@@ -129,6 +129,56 @@ class ModuleCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unsupported file"):
                 namespace["run"]([])  # type: ignore[index, operator]
 
+    def test_the_bytes_that_were_verified_are_the_bytes_that_run(self) -> None:
+        """Swapping a module after verification returns must not change what executes.
+
+        The bootstrap used to verify by descriptor and import by path, so a writer
+        to the cache could win the race between the two reads.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            package = self._package(root)
+            result = prepare_module_bundle(str(package), "entry", str(root / "cache"))
+            namespace: dict[str, object] = {}
+            exec(emit_module_bootstrap(str(result["bundle_file"])), namespace)
+
+            package_dir = Path(str(result["package_dir"]))
+            original = (package_dir / "entry.py").read_bytes()
+            verify = namespace["_verify_package"]
+
+            def swap_after_verify(bundle_dir, package_name, expected_hashes):
+                sources = verify(bundle_dir, package_name, expected_hashes)
+                (package_dir / "entry.py").write_text(
+                    "def run(context):\n    context.append('TAMPERED-AFTER-VERIFY')\n",
+                    encoding="utf-8",
+                )
+                return sources
+
+            namespace["_verify_package"] = swap_after_verify
+            observations: list[object] = []
+            namespace["run"](observations)  # type: ignore[index, operator]
+            self.assertEqual([42], observations)
+            # The swap really happened; it just never reached the interpreter.
+            self.assertNotEqual(original, (package_dir / "entry.py").read_bytes())
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode check")
+    def test_runtime_verification_rejects_a_permission_loosened_cache(self) -> None:
+        """verify_module_bundle refuses this tree; the runtime must not accept it."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            result = prepare_module_bundle(str(self._package(root)), "entry", str(root / "cache"))
+            source = emit_module_bootstrap(str(result["bundle_file"]))
+            package_dir = Path(str(result["package_dir"]))
+            Path(str(result["bundle_dir"])).chmod(0o777)
+            package_dir.chmod(0o777)
+            (package_dir / "helper.py").chmod(0o666)
+            with self.assertRaisesRegex(ValueError, "must be private"):
+                verify_module_bundle(str(result["bundle_file"]))
+            namespace: dict[str, object] = {}
+            exec(source, namespace)
+            with self.assertRaisesRegex(RuntimeError, "accessible by group or other"):
+                namespace["run"]([])  # type: ignore[index, operator]
+
     def test_changed_source_creates_new_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

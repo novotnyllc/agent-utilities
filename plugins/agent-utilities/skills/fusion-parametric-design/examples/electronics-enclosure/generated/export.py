@@ -226,8 +226,24 @@ import hashlib
 import os
 import uuid
 
-EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__497dc556.json","material_decision":{"confidence":"provisional","coupon_component":"90_VALIDATION/VAL__PD_FIT_COUPON","family":"PETG","formulation":null,"rationale":"The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.","source_id":"enclosure_material_requirements","unresolved_risks":["No formulation is named, so no data-sheet number backs any material-dependent value.","fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.","Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."]},"parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__base__497dc556.step"},"manufacturing_intent":{"id":"prod_base","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim."},"print_as":"separate","protected_features":[{"description":"Top rim mates with the lid; keep it support-free and unscarred.","kind":"mating-face"},{"description":"USB-C insertion opening must stay dimensionally clean.","kind":"hole"}],"quantity":1,"strength":{"infill_percent":{"max":40,"min":20,"target":25},"min_perimeters":3},"support_policy":"none"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__lid__497dc556.step"},"manufacturing_intent":{"id":"prod_lid","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":["-Z"],"contact_face":"+Z","rationale":"Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible."},"print_as":"separate","protected_features":[{"description":"Snap rim engages the base; supports must not touch it.","kind":"mating-face"}],"quantity":1,"strength":{"infill_percent":{"target":20},"min_perimeters":3},"support_policy":"build-plate-only"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.step"},"manufacturing_intent":{"id":"val_pd_fit_coupon","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"Coupon prints flat in the same orientation as the base pocket it validates."},"print_as":"separate","protected_features":[{"description":"Pocket walls are the measured fit surfaces.","kind":"critical-surface"}],"quantity":1,"strength":{"infill_percent":{"target":15},"min_perimeters":2},"support_policy":"none"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"598d4aeb11d4e20d26670e1af8c8a8d4ccde8882ac99c43c8e0b8bb03b16b4a3"}')
+EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__497dc556.json","material_decision":{"confidence":"provisional","coupon_component":"90_VALIDATION/VAL__PD_FIT_COUPON","family":"PETG","formulation":null,"rationale":"The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.","source_id":"enclosure_material_requirements","unresolved_risks":["No formulation is named, so no data-sheet number backs any material-dependent value.","fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.","Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."]},"parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"expected_total_solid_volume_mm3":12000.0,"expected_transform":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__base__497dc556.step"},"manufacturing_intent":{"id":"prod_base","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim."},"print_as":"separate","protected_features":[{"description":"Top rim mates with the lid; keep it support-free and unscarred.","kind":"mating-face"},{"description":"USB-C insertion opening must stay dimensionally clean.","kind":"hole"}],"quantity":1,"strength":{"infill_percent":{"max":40,"min":20,"target":25},"min_perimeters":3},"support_policy":"none"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"expected_total_solid_volume_mm3":910.0,"expected_transform":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__lid__497dc556.step"},"manufacturing_intent":{"id":"prod_lid","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":["-Z"],"contact_face":"+Z","rationale":"Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible."},"print_as":"separate","protected_features":[{"description":"Snap rim engages the base; supports must not touch it.","kind":"mating-face"}],"quantity":1,"strength":{"infill_percent":{"target":20},"min_perimeters":3},"support_policy":"build-plate-only"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"expected_total_solid_volume_mm3":200.0,"expected_transform":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.step"},"manufacturing_intent":{"id":"val_pd_fit_coupon","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"Coupon prints flat in the same orientation as the base pocket it validates."},"print_as":"separate","protected_features":[{"description":"Pocket walls are the measured fit surfaces.","kind":"critical-surface"}],"quantity":1,"strength":{"infill_percent":{"target":15},"min_perimeters":2},"support_policy":"none"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"12df62f9eaa90db9b945b70a5307540e1186d7ba6fbd208b7fcf649b412499a4"}')
 EXPORT_STALENESS_TOLERANCE_MM = 1e-3
+# Volume is compared relatively: it scales as the cube of a length, so an absolute
+# millimetre tolerance would be meaningless across part sizes. 1e-4 is chosen to
+# sit alongside the bounds gate rather than far below it -- 1e-3 mm on a 100 mm
+# part is ~1e-5 relative, and volume goes as the cube, so a tighter volume figure
+# would make this the strictest gate of the three. The producer and the
+# re-measurement are the same summation, so there is no systematic offset to
+# absorb; the headroom is for Fusion's recompute jitter, which cannot be measured
+# offline. It is still orders of magnitude below any real edit: deleting an
+# internal boss or thinning a wall moves volume by percent, not by 0.01%.
+# A false alarm on the most safety-critical gate is how a gate gets disabled.
+EXPORT_STALENESS_VOLUME_RELATIVE_TOLERANCE = 1e-4
+# transform2 is a 4x4 in Fusion's internal centimetres; the rotation entries are
+# dimensionless, so one absolute tolerance covers both halves.
+EXPORT_STALENESS_TRANSFORM_TOLERANCE = 1e-9
+# Residual, stated in the emitted script because it is the script that gates:
+# The staleness gate re-measures bounds, total solid volume, and the occurrence transform. An edit that preserves all three -- relocating a hole, swapping a fillet for an equal-volume chamfer -- is not detected, and the report's clearance and interference results are not re-run. The gate detects drift in the properties it names; it does not prove the exported geometry is the verified geometry.
 FORMAT_OPTION_ATTRIBUTES = {
     "step": "createSTEPExportOptions",
     "3mf": "createC3MFExportOptions",
@@ -324,6 +340,32 @@ def _bounds_are_stale(actual, expected):
     return False
 
 
+def _solid_volume_mm3(occurrence):
+    """Total volume of the positive solid bodies, matching the verification report."""
+    total = 0.0
+    bodies = occurrence.bRepBodies
+    for index in range(bodies.count):
+        body = bodies.item(index)
+        volume_mm3 = float(body.volume) * 1000.0
+        if bool(body.isSolid) and volume_mm3 > 1e-9:
+            total += volume_mm3
+    return total
+
+
+def _volume_is_stale(actual, expected):
+    expected = float(expected)
+    return abs(float(actual) - expected) > abs(expected) * EXPORT_STALENESS_VOLUME_RELATIVE_TOLERANCE
+
+
+def _transform_is_stale(actual, expected):
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return True
+    for index in range(len(expected)):
+        if abs(float(actual[index]) - float(expected[index])) > EXPORT_STALENESS_TRANSFORM_TOLERANCE:
+            return True
+    return False
+
+
 def _remove_created(paths):
     errors = []
     for path in reversed(paths):
@@ -414,11 +456,40 @@ def run(context):
                     "actual_bounds_mm": actual_bounds,
                 })
                 continue
+            # Bounds alone are six numbers: an edit that preserves the extent
+            # passes them. Volume and placement are the other two properties the
+            # verification report already measured, so they are re-measured here.
+            try:
+                actual_volume = _solid_volume_mm3(occurrence)
+            except Exception as error:
+                failures.add("stale-verification")
+                stale_parts.append({"path": path, "reason": "volume-unavailable", "detail": str(error)})
+                continue
+            if _volume_is_stale(actual_volume, part["expected_total_solid_volume_mm3"]):
+                failures.add("stale-verification")
+                stale_parts.append({
+                    "path": path,
+                    "reason": "volume-drifted",
+                    "expected_total_solid_volume_mm3": part["expected_total_solid_volume_mm3"],
+                    "actual_total_solid_volume_mm3": actual_volume,
+                })
+                continue
+            actual_transform = _occurrence_transform(occurrence)
+            if _transform_is_stale(actual_transform, part["expected_transform"]):
+                failures.add("stale-verification")
+                stale_parts.append({
+                    "path": path,
+                    "reason": "transform-drifted",
+                    "expected_transform": part["expected_transform"],
+                    "actual_transform": actual_transform,
+                })
+                continue
             resolved[path] = {
                 "occurrence": occurrence,
                 "body": body,
                 "actual_bounds_mm": actual_bounds,
-                "transform": _occurrence_transform(occurrence),
+                "actual_total_solid_volume_mm3": actual_volume,
+                "transform": actual_transform,
             }
 
         export_dir = EXPORT_SPECS["export_dir"]
@@ -492,6 +563,7 @@ def run(context):
                         "sha256": _file_sha256(target),
                         "transform": resolution["transform"],
                         "bounds_mm": resolution["actual_bounds_mm"],
+                        "total_solid_volume_mm3": resolution["actual_total_solid_volume_mm3"],
                     }
                     if "manufacturing_intent" in part:
                         artifact_entry["manufacturing_intent"] = part["manufacturing_intent"]
@@ -511,6 +583,7 @@ def run(context):
                 "export_dir": export_dir,
                 "formats": EXPORT_SPECS["formats"],
                 "artifacts": artifacts,
+                "verification_binding_residual": "The staleness gate re-measures bounds, total solid volume, and the occurrence transform. An edit that preserves all three -- relocating a hole, swapping a fillet for an equal-volume chamfer -- is not detected, and the report's clearance and interference results are not re-run. The gate detects drift in the properties it names; it does not prove the exported geometry is the verified geometry.",
             }
             if "material_decision" in EXPORT_SPECS:
                 index["material_decision"] = EXPORT_SPECS["material_decision"]

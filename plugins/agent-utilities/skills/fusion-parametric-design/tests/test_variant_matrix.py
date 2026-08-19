@@ -132,7 +132,10 @@ class _FakeFusion:
             }
         elif step.report_kind == "verification":
             sample = example_verification_report(self.derived[step.variant_id])
-            report["brep_bounding_boxes_mm"] = sample["brep_bounding_boxes_mm"]
+            # All three measured properties the export's staleness binding reads,
+            # not bounds alone.
+            for measured in ("brep_bounding_boxes_mm", "geometry", "occurrence_transforms"):
+                report[measured] = sample[measured]
             report["compute_invoked"] = ok
             report["timeline"] = {"count": 4, "unhealthy": [] if ok else [{"index": 2}], "informational": []}
             report["failures"] = [] if ok else ["clearance", "timeline-health"]

@@ -164,9 +164,26 @@ class _Fixture:
         return artifact
 
     def manifest(self) -> Manifest:
-        """A manifest declaring exactly the parts this handoff carries."""
-        paths = sorted({artifact["part_path"] for artifact in self.artifacts})
-        return Manifest({"project": {"name": "Widget"}, "printable_parts": [{"path": path} for path in paths]})
+        """A manifest declaring exactly the parts this handoff carries, with their intent.
+
+        The index is a transcript of the manifest, so the manifest has to declare
+        the same manufacturing intent the index carries -- that agreement is what
+        build_project now checks.
+        """
+        declared = {}
+        for artifact in self.artifacts:
+            if "manufacturing_intent" in artifact:
+                declared[artifact["part_path"]] = artifact["manufacturing_intent"]
+            else:
+                declared.setdefault(artifact["part_path"], _intent())
+        return Manifest(
+            {
+                "project": {"name": "Widget"},
+                "printable_parts": [
+                    {"path": path, **declared[path]} for path in sorted(declared)
+                ],
+            }
+        )
 
     def write_index(self, name: str = "export-index.json", manifest: Manifest | None = None, **overrides) -> Path:
         index = {
@@ -174,6 +191,8 @@ class _Fixture:
             "ok": True,
             "project": "Widget",
             "manifest_sha256": manifest_sha256(manifest if manifest is not None else self.manifest()),
+            "verification_report_sha256": "a" * 64,
+            "export_run_id": "0123456789abcdef0123456789abcdef",
             "artifacts": self.artifacts,
         }
         index.update(overrides)
@@ -234,6 +253,26 @@ class RotationTests(unittest.TestCase):
     def test_unknown_contact_face_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "contact_face"):
             rotation_for_contact_face("sideways")
+
+
+class VertexFormattingTests(unittest.TestCase):
+    def test_negative_magnitudes_that_round_to_zero_emit_plain_zero(self) -> None:
+        # The zero collapse used to test the input, so any negative below 5e-7
+        # printed as "-0" -- different bytes for indistinguishable coordinates.
+        for value in (-0.0, -1e-9, -4.9e-7, -0.0000004):
+            with self.subTest(value=value):
+                self.assertEqual("0", prusaslicer_project._fmt(value))
+        self.assertEqual("0", prusaslicer_project._fmt(0.0))
+        self.assertEqual("-0.000001", prusaslicer_project._fmt(-1e-6))
+
+    def test_vertices_are_quantized_to_six_decimals_as_documented(self) -> None:
+        self.assertEqual("1.234568", prusaslicer_project._fmt(1.23456789))
+        self.assertEqual("0.0005", prusaslicer_project._fmt(0.0005000004))
+        docstring = prusaslicer_project.__doc__ or ""
+        self.assertIn("re-emitted from the Fusion-exported 3MF", docstring)
+        self.assertIn("quantized", docstring)
+        self.assertNotIn("copied verbatim", docstring)
+        self.assertNotIn("geometry is never rewritten", docstring)
 
 
 class OverrideTests(unittest.TestCase):

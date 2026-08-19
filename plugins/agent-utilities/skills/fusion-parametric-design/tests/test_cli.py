@@ -11,11 +11,11 @@ import unittest
 
 import fusion_design.cli as cli_module
 from fusion_design.cli import main
-from fusion_design.export_handoff import example_verification_report
+from fusion_design.export_handoff import example_verification_report, manufacturing_intent_by_path
 from fusion_design.manifest import load_manifest
 from fusion_design.scripts import manifest_sha256
 from fusion_design.variant_matrix import MatrixConfig
-from test_prusaslicer_project import _Fixture, _config_root, _intent, process_execution_offenses
+from test_prusaslicer_project import _Fixture, _config_root, process_execution_offenses
 from test_prusaslicer_slice import _fake_slicer
 from test_variant_matrix import _FakeFusion, seed_reports
 
@@ -25,6 +25,7 @@ EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 # The parts the example manifest declares printable; the index must name these.
 EXAMPLE_BASE = "10_PRODUCT/PROD__BASE"
 EXAMPLE_LID = "10_PRODUCT/PROD__LID"
+EXAMPLE_COUPON = "90_VALIDATION/VAL__PD_FIT_COUPON"
 
 
 class CliTests(unittest.TestCase):
@@ -93,7 +94,12 @@ class EmitExportCliTests(unittest.TestCase):
                 compute_invoked=True,
                 failures=[],
                 timeline={"unhealthy": []},
-                geometry={EXAMPLE_BASE: {"solid_body_count": 1, "has_positive_solid": True}},
+                # Layered onto the sample's real geometry, not substituted for it:
+                # the export's staleness binding reads total_solid_volume_mm3 here.
+                geometry={
+                    path: {**summary, "solid_body_count": 1, "has_positive_solid": True}
+                    for path, summary in report["geometry"].items()
+                },
             )
         if mutate:
             mutate(report)
@@ -327,18 +333,25 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             code = main(argv)
         return code, output.getvalue(), errors.getvalue()
 
-    def _handoff(self, root: Path, manifest=None) -> tuple[Path, Path]:
+    def _handoff(self, root: Path, manifest=None, mutate_intent=None) -> tuple[Path, Path]:
+        """A handoff whose intent is the example manifest's own, as a real export's is.
+
+        ``mutate_intent`` forges the index's copy, so the manifest/index divergence
+        gate can be exercised end to end.
+        """
+        declared = manufacturing_intent_by_path(load_manifest(EXAMPLE))
         fixture = _Fixture(root)
-        fixture.add_part(EXAMPLE_BASE, intent=_intent(print_as="assembled"), with_step=True)
-        fixture.add_part(
-            EXAMPLE_LID,
-            intent=_intent(
-                print_as="assembled",
-                quantity=2,
-                orientation={"contact_face": "+Z", "rationale": "declared", "allowed_alternatives": []},
-                support_policy="build-plate-only",
-            ),
-        )
+        # Every part the manifest declares printable, not a convenient subset: an
+        # index missing one is refused, which is the point of the coverage check.
+        for part_path, with_step in (
+            (EXAMPLE_BASE, True),
+            (EXAMPLE_LID, False),
+            (EXAMPLE_COUPON, False),
+        ):
+            intent = json.loads(json.dumps(declared[part_path]))
+            if mutate_intent is not None:
+                mutate_intent(part_path, intent)
+            fixture.add_part(part_path, intent=intent, with_step=with_step)
         index = fixture.write_index(manifest=manifest if manifest is not None else load_manifest(EXAMPLE))
         return index, _config_root(root)
 
@@ -371,17 +384,123 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), payload["project_sha256"])
             self.assertEqual(output.stat().st_size, payload["project_byte_size"])
             self.assertEqual(hashlib.sha256(index.read_bytes()).hexdigest(), payload["export_index_sha256"])
+            # Both parts declare print_as "separate", so each gets its own plate.
             self.assertEqual(
-                [{"plate": 1, "part_paths": [EXAMPLE_BASE, EXAMPLE_LID]}], payload["plates"]
+                [
+                    {"plate": 1, "part_paths": [EXAMPLE_BASE]},
+                    {"plate": 2, "part_paths": [EXAMPLE_LID]},
+                    {"plate": 3, "part_paths": [EXAMPLE_COUPON]},
+                ],
+                payload["plates"],
             )
             lid = next(obj for obj in payload["objects"] if obj["part_path"] == EXAMPLE_LID)
             self.assertEqual({"contact_face": "+Z", "axis": "X", "degrees": 180}, lid["applied_rotation"])
-            self.assertEqual(2, lid["instances_count"])
-            self.assertEqual(1, lid["plate"])
+            self.assertEqual(1, lid["instances_count"])
+            self.assertEqual(2, lid["plate"])
             self.assertEqual("1", lid["overrides"]["support_material_buildplate_only"])
             self.assertEqual(
                 {"printer", "filament", "print"}, set(payload["presets"]), payload["presets"]
             )
+            # The chain is carried forward, not re-derived at each hop.
+            index_data = json.loads(index.read_text(encoding="utf-8"))
+            self.assertEqual(
+                index_data["verification_report_sha256"], payload["verification_report_sha256"]
+            )
+            self.assertEqual(index_data["export_run_id"], payload["export_run_id"])
+
+    def test_index_intent_diverging_from_the_manifest_exits_two(self) -> None:
+        """The manifest is the authority: a forged index must not print its settings."""
+        forgeries = {
+            "support_policy": lambda intent: intent.update(support_policy="everywhere"),
+            "min_perimeters": lambda intent: intent["strength"].update(min_perimeters=1),
+            "infill": lambda intent: intent["strength"]["infill_percent"].update(target=5),
+            "contact_face": lambda intent: intent["orientation"].update(contact_face="+Z"),
+        }
+        for name, forge in forgeries.items():
+            with self.subTest(forgery=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(
+                    root,
+                    mutate_intent=lambda path, intent: forge(intent) if path == EXAMPLE_BASE else None,
+                )
+                output = root / "p.3mf"
+                code, stdout, errors = self._run(self._argv(index, output, config))
+                self.assertEqual(2, code, stdout)
+                self.assertIn("disagrees with the manifest", errors)
+                self.assertFalse(output.exists())
+
+    def test_index_omitting_a_declared_part_exits_two(self) -> None:
+        """A subset index must not silently build a project missing parts.
+
+        The intent check runs index-against-manifest; without the reverse check
+        this exits 0 with a matching manifest_sha256 and a clean provenance block.
+        """
+        for drop_step_too in (True, False):
+            with self.subTest(drop_step_too=drop_step_too), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(root)
+                payload = json.loads(index.read_text(encoding="utf-8"))
+                payload["artifacts"] = [
+                    artifact
+                    for artifact in payload["artifacts"]
+                    if artifact["part_path"] != EXAMPLE_COUPON
+                    # Dropping only the 3MF is the same omission: _collect_parts
+                    # counts geometry, so a lingering STEP hides nothing.
+                    or (not drop_step_too and artifact["format"] != "3mf")
+                ]
+                index.write_text(json.dumps(payload), encoding="utf-8")
+                output = root / "p.3mf"
+                code, stdout, errors = self._run(self._argv(index, output, config))
+                self.assertEqual(2, code, stdout)
+                self.assertIn("carries no 3MF artifact for printable parts", errors)
+                self.assertIn(EXAMPLE_COUPON, errors)
+                self.assertFalse(output.exists())
+
+    def test_an_omitted_or_extra_intent_key_is_a_divergence(self) -> None:
+        """Omission diverges, not just contradiction -- the union is load-bearing.
+
+        Comparing only the keys both sides carry lets an index *drop* quantity and
+        inherit _collect_parts' default of 1, contradicting a manifest that says 2.
+        """
+        def drop_quantity(intent):
+            intent.pop("quantity")
+
+        def add_unknown_key(intent):
+            intent["printer"] = "Some Printer"
+
+        for name, forge, expected in (
+            ("omitted", drop_quantity, "quantity"),
+            ("extra", add_unknown_key, "printer"),
+        ):
+            with self.subTest(kind=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(
+                    root,
+                    mutate_intent=lambda path, intent: forge(intent) if path == EXAMPLE_BASE else None,
+                )
+                output = root / "p.3mf"
+                code, stdout, errors = self._run(self._argv(index, output, config))
+                self.assertEqual(2, code, stdout)
+                self.assertIn("disagrees with the manifest", errors)
+                self.assertIn(expected, errors)
+                self.assertFalse(output.exists())
+
+    def test_index_without_the_verification_chain_exits_two(self) -> None:
+        for missing, pattern in (
+            ("verification_report_sha256", "verification_report_sha256"),
+            ("export_run_id", "export_run_id"),
+        ):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(root)
+                payload = json.loads(index.read_text(encoding="utf-8"))
+                payload.pop(missing)
+                index.write_text(json.dumps(payload), encoding="utf-8")
+                output = root / "p.3mf"
+                code, _, errors = self._run(self._argv(index, output, config))
+                self.assertEqual(2, code)
+                self.assertIn(pattern, errors)
+                self.assertFalse(output.exists())
 
     def test_default_run_attempts_no_slice_and_carries_no_numbers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

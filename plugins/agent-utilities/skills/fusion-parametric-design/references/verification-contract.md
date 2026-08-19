@@ -18,6 +18,20 @@ A release passes only the checks applicable to its intended use. “Generated su
 - No accidental visibility/selection state is being used as a substitute for geometry: the report records `occurrence_states` (`isSuppressed`/`isLightBulbOn`/`isVisible`) for every checked path. A suppressed checked occurrence fails closed as `suppressed-occurrence` unless its path is declared in `verification.allowed_suppressed_paths`, and a path whose state could not be read at all fails as `unreadable-occurrence-state` — a suppressed *or unknown* keep-out contributes no geometry to interference, so "zero interference" and "not in the model" would otherwise be indistinguishable.
 - The report's `ok` is scoped to the gates it names in `checked`, and `checked` is derived from what that run actually performed. A gate the manifest never declared appears in `not_declared`, never in `checked`: "this project declares no clearance checks" is an honest gap and must never read as a passed check. Everything in `unchecked` — printability, structural, thermal, physical — stays `not run` until the sections below are satisfied by external analysis or a printed part. Report it as "passed the gates it declared", not as "verified".
 
+### What the export's verification binding covers
+
+`emit-export` binds three measured properties per print part out of the passing report — `brep_bounding_boxes_mm`, `geometry[path].total_solid_volume_mm3`, and `occurrence_transforms[path]` — and the generated transaction re-measures all three in the live design before exporting, failing closed on any drift (`bounds-drifted`, `volume-drifted`, `transform-drifted`).
+
+This is a **sampling of properties, not a proof of identity.** A post-verification edit that preserves extent, volume, and placement — relocating a hole, exchanging a fillet for an equal-volume chamfer — is not detected, and the report's `clearance_results` and `interference_results` are not re-run at export time. Read the binding as evidence of *which* verification report justified the export, never as evidence that the exported geometry is the verified geometry. Re-run verification after any change that touches geometry.
+
+### The evidence chain is transitive
+
+Each artifact carries the bindings of the one before it, so a reader can walk backwards from a print job to the design that justified it:
+
+`manifest_sha256` → verification report → export index (`manifest_sha256` + `verification_report_sha256` + `export_run_id`) → PrusaSlicer project (all three, carried forward) → slice (`bindings`, including the `project_sha256` re-checked against the file on disk).
+
+A missing link fails closed at the hop that needed it: an index without `verification_report_sha256` or `export_run_id` cannot build a project, and a slice without a matching `project_sha256` is refused before the binary runs.
+
 ## Fit and packing
 
 - Packing occurrences use recorded transforms.

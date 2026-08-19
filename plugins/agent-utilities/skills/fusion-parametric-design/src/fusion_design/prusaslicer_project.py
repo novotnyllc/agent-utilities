@@ -9,10 +9,17 @@ stays a file boundary rather than a promise.
 
 Layout conventions worth knowing before reading the code:
 
-* Mesh vertices are copied verbatim from the Fusion-exported 3MF. Build
-  orientation and plate placement are expressed as the object's build-item
-  transform matrix (standard 3MF placement, honored by every reader), so the
-  geometry is never rewritten and the applied rotation stays auditable.
+* Mesh vertices are re-emitted from the Fusion-exported 3MF at six-decimal fixed
+  precision (see ``_fmt``): the coordinates are not transformed, but they are
+  quantized, so ``project_sha256`` attests to this re-serialization rather than to
+  the exported bytes. Build orientation and plate placement are expressed as the
+  object's build-item transform matrix (standard 3MF placement, honored by every
+  reader), so no rotation is baked into the coordinates and the applied rotation
+  stays auditable.
+* Print settings come from the *manifest*. The index carries a transcript of the
+  manifest's manufacturing intent, and every field of it is compared back against
+  the manifest before anything is written -- an index that disagrees is refused,
+  never applied.
 * ``Metadata/Slic3r_PE.config`` carries preset *identifiers only*. The user's
   profile settings are never copied into our artifacts.
 * PrusaSlicer has a single bed. "Plates" here are declared grouping, not a
@@ -29,15 +36,20 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 from xml.sax.saxutils import escape
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .export_handoff import manufacturing_intent_by_path
 from .manifest import Manifest
 from .printable_parts import CONTACT_FACES, SUPPORT_POLICIES
 from .scripts import manifest_sha256
+
+
+_SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
 
 MODEL_ENTRY = "3D/3dmodel.model"
@@ -251,11 +263,14 @@ def resolve_presets(
 
 
 def _fmt(value: float) -> str:
-    number = float(value)
-    if number == 0.0:
-        number = 0.0  # collapse -0.0 so identical inputs give identical bytes
-    text = f"{number:.6f}".rstrip("0").rstrip(".")
-    return text or "0"
+    """Six-decimal fixed-point, with the zero collapse tested on the *result*.
+
+    Testing ``value == 0.0`` instead let any negative magnitude below 5e-7 round to
+    zero and still print as ``-0``, so mathematically indistinguishable inputs
+    produced different bytes -- and different ``project_sha256`` values.
+    """
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0", "0") else text
 
 
 def overrides_for_intent(intent: Any, part_path: str) -> dict[str, str]:
@@ -542,6 +557,21 @@ def _load_index(index_path: Path, expected_manifest_digest: str) -> tuple[dict[s
         raise ValueError(
             f"Export index manifest_sha256 {actual_digest!r} does not match manifest {expected_manifest_digest!r}."
         )
+    # The chain is manifest -> verification -> export -> project. Each hop must
+    # carry the previous hop's bindings forward, or the project is a set of
+    # disconnected links and nothing downstream can tell whether any verification
+    # run justified the geometry it contains.
+    report_digest = index.get("verification_report_sha256")
+    if not isinstance(report_digest, str) or not _SHA256_RE.fullmatch(report_digest):
+        raise ValueError(
+            f"Export index verification_report_sha256 is {report_digest!r}; a lowercase hex SHA-256 is "
+            "required, because the project must name the verification run that justified its geometry."
+        )
+    run_id = index.get("export_run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(
+            f"Export index export_run_id is {run_id!r}; the project must name the export run it was built from."
+        )
     artifacts = index.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise ValueError("Export index carries no artifacts.")
@@ -605,6 +635,7 @@ def _collect_parts(index: dict[str, Any], artifact_dir: Path) -> list[dict[str, 
         parts.append(
             {
                 "part_path": part_path,
+                "intent": intent,
                 "quantity": quantity,
                 "print_as": print_as,
                 "rotation": rotation,
@@ -619,6 +650,64 @@ def _collect_parts(index: dict[str, Any], artifact_dir: Path) -> list[dict[str, 
             }
         )
     return parts
+
+
+def _divergent_fields(declared: dict[str, Any], carried: Any) -> list[str]:
+    """Keys where the manifest and the index disagree, *including omissions*.
+
+    The union is load-bearing and is not a stylistic choice. Narrowing it to an
+    intersection would compare only keys both sides happen to carry, so an index
+    that simply *drops* a key would pass -- and ``_collect_parts`` defaults the
+    missing ones (quantity to 1), which is how a manifest declaring ``quantity: 2``
+    would yield a project printing one. Omission is a divergence.
+    """
+    if not isinstance(carried, dict):
+        return ["<not an object>"]
+    return sorted(key for key in set(declared) | set(carried) if declared.get(key) != carried.get(key))
+
+
+def _assert_intent_matches_manifest(manifest: Manifest, parts: list[dict[str, Any]]) -> None:
+    """Refuse an index whose manufacturing intent disagrees with the manifest.
+
+    The manifest is the authority for what gets printed and how. The index carries
+    a transcript of it (``export_handoff.manufacturing_intent_by_path``, embedded
+    by the export transaction), and every print-determining value applied here --
+    support policy, perimeters, infill, contact face, quantity -- is read out of
+    that transcript. Binding the manifest's digest while sourcing the content from
+    an unchecked copy would make the digest a decoration, so the copy is compared
+    back field by field and any divergence fails closed.
+    """
+    declared_by_path = manufacturing_intent_by_path(manifest)
+    # Both directions. Checking only index-against-manifest lets an index that
+    # simply omits artifacts build a project that silently prints a subset of the
+    # declared parts, under a matching manifest_sha256 and a clean provenance
+    # block. A part whose 3MF is missing is missing whether or not its STEP is
+    # still indexed, because only 3MF artifacts carry geometry.
+    missing = sorted(set(declared_by_path) - {part["part_path"] for part in parts})
+    if missing:
+        raise ValueError(
+            f"Export index carries no 3MF artifact for printable parts the manifest declares: "
+            f"{', '.join(missing)}. The project would silently omit them."
+        )
+    for part in parts:
+        part_path = part["part_path"]
+        declared = declared_by_path.get(part_path)
+        if declared is None:
+            raise ValueError(
+                f"Export index carries manufacturing intent for part {part_path!r}, which the manifest "
+                "does not declare as printable."
+            )
+        divergent = _divergent_fields(declared, part["intent"])
+        if divergent:
+            details = ", ".join(
+                f"{key}: manifest {declared.get(key)!r} vs index {part['intent'].get(key)!r}"
+                for key in divergent
+            )
+            raise ValueError(
+                f"Export index manufacturing_intent for part {part_path!r} disagrees with the manifest "
+                f"it is bound to ({details}). The manifest is the authority for print settings; refusing "
+                "to apply intent the manifest does not declare."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -740,10 +829,13 @@ def build_project(
     """Write a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
     The index must be the one this manifest produced: its ``manifest_sha256`` has
-    to match the manifest's own digest and its 3MF parts have to be declared
-    printable parts, so the reported provenance describes the design actually
-    built. Fails closed on any index, binding, hash, byte-size, intent,
-    orientation, or override problem, and refuses to overwrite an existing output.
+    to match the manifest's own digest, its 3MF parts have to be declared printable
+    parts, and its manufacturing intent has to agree with the manifest field for
+    field -- so the reported provenance describes the design actually built. It
+    must also name the verification report and export run behind it, both of which
+    are carried into the result. Fails closed on any index, binding, hash,
+    byte-size, intent, orientation, or override problem, and refuses to overwrite
+    an existing output.
     """
     index_file = Path(index_path).expanduser()
     output = Path(output_path).expanduser()
@@ -756,13 +848,16 @@ def build_project(
 
     index, index_digest = _load_index(index_file, manifest_sha256(manifest))
     parts = _collect_parts(index, index_file.parent)
-    declared = {str(part.get("path")) for part in manifest.printable_parts}
+    # Stripped, like _collect_parts and export_handoff: the three modules have to
+    # agree on what a part path is, or a padded manifest path over-refuses.
+    declared = {str(part.get("path", "")).strip() for part in manifest.printable_parts}
     undeclared = sorted({part["part_path"] for part in parts} - declared)
     if undeclared:
         raise ValueError(
             f"Export index carries 3MF artifacts for parts the manifest does not declare as "
             f"printable: {', '.join(undeclared)}."
         )
+    _assert_intent_matches_manifest(manifest, parts)
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
     plates = _layout(parts)
@@ -796,6 +891,10 @@ def build_project(
         "export_index_path": str(index_file),
         "export_index_sha256": index_digest,
         "manifest_sha256": index.get("manifest_sha256"),
+        # Carried forward, not re-derived: a downstream reader can follow this
+        # project back to the export run and the verification report behind it.
+        "verification_report_sha256": index.get("verification_report_sha256"),
+        "export_run_id": index.get("export_run_id"),
         "presets": presets.as_dict(),
         "preset_config_root": presets.config_root,
         "plates": [

@@ -80,6 +80,18 @@ def _project(root: Path) -> Path:
     return path
 
 
+def _bindings(project: Path, **extra) -> dict:
+    """The chain a real caller passes: the project hash plus what produced it."""
+    return {
+        "project_sha256": hashlib.sha256(project.read_bytes()).hexdigest(),
+        "manifest_sha256": "b" * 64,
+        "export_index_sha256": "c" * 64,
+        "verification_report_sha256": "d" * 64,
+        "export_run_id": "0123456789abcdef0123456789abcdef",
+        **extra,
+    }
+
+
 class IncompleteProfileSetTests(unittest.TestCase):
     """The actual defect: a partial profile set is what segfaults PrusaSlicer."""
 
@@ -118,6 +130,7 @@ class IncompleteProfileSetTests(unittest.TestCase):
                 slice_project(
                     project,
                     {"printer": "P", "print": "Q"},
+                    bindings=_bindings(project),
                     executable=project,  # any existing file; must never be reached
                     runner=runner,
                 )
@@ -146,7 +159,7 @@ class ExecutableDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             project = _project(Path(temporary))
             with mock.patch.object(prusaslicer_slice, "resolve_executable", return_value=None):
-                result = slice_project(project, PRESETS, runner=_Runner())
+                result = slice_project(project, PRESETS, bindings=_bindings(project), runner=_Runner())
         self.assertTrue(result["supported"])
         self.assertFalse(result["attempted"])
         self.assertFalse(result["ok"])
@@ -187,7 +200,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(Path(temporary))
             binary = Path(temporary) / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            slice_project(project, PRESETS, executable=binary, runner=runner)
+            slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
 
         self.assertEqual(1, len(runner.calls))
         command = runner.calls[0]
@@ -211,7 +224,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, executable=binary, runner=runner)
+            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
 
             self.assertTrue(result["ok"])
             self.assertEqual(0, result["exit_code"])
@@ -235,7 +248,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, executable=binary, runner=runner)
+            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
             self.assertFalse((root / "project.gcode").exists())
 
         self.assertFalse(result["ok"])
@@ -252,7 +265,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, executable=binary, runner=runner)
+            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
         self.assertFalse(result["ok"])
         self.assertIn("wrote no G-code", result["failure"])
         self.assertNotIn("statistics", result)
@@ -267,7 +280,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, executable=binary, timeout=7, runner=timing_out)
+            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, timeout=7, runner=timing_out)
 
         self.assertFalse(result["ok"])
         self.assertIsNone(result["exit_code"])
@@ -281,7 +294,7 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, executable=binary, runner=runner)
+            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
         self.assertEqual(["WARNING: object is too tall"], result["warnings"])
 
     def test_existing_gcode_is_never_overwritten(self) -> None:
@@ -292,8 +305,214 @@ class SliceInvocationTests(unittest.TestCase):
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Refusing to overwrite"):
-                slice_project(project, PRESETS, executable=binary, runner=_Runner())
+                slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=_Runner())
             self.assertEqual("earlier", (root / "project.gcode").read_text(encoding="utf-8"))
+
+
+class WindowTrimmingTests(unittest.TestCase):
+    """Direct cover for the two helpers the parsing correctness rests on."""
+
+    def test_partial_lines_at_a_window_boundary_are_discarded(self) -> None:
+        window = b"used [g] = 41.9\n; next = 1\n; trailing partial = 4"
+        self.assertEqual(
+            b"; next = 1\n; trailing partial = 4",
+            prusaslicer_slice._whole_lines(window, drop_leading=True, drop_trailing=False),
+        )
+        self.assertEqual(
+            b"used [g] = 41.9\n; next = 1\n",
+            prusaslicer_slice._whole_lines(window, drop_leading=False, drop_trailing=True),
+        )
+        # A window holding no complete line yields nothing rather than a fragment.
+        self.assertEqual(
+            b"", prusaslicer_slice._whole_lines(b"g] = 41.9", drop_leading=True, drop_trailing=False)
+        )
+        self.assertEqual(
+            b"", prusaslicer_slice._whole_lines(b"g] = 41.9", drop_leading=False, drop_trailing=True)
+        )
+        self.assertEqual(
+            window, prusaslicer_slice._whole_lines(window, drop_leading=False, drop_trailing=False)
+        )
+
+    def test_the_summary_block_is_the_trailing_comment_run_only(self) -> None:
+        self.assertEqual(
+            ["; a = 1", "; b = 2"],
+            prusaslicer_slice.summary_block("; spoof = 9\nG1 X1\n; a = 1\n; b = 2\n"),
+        )
+        # Stops at the config marker, and at the last non-comment line before it.
+        self.assertEqual(
+            ["; a = 1"],
+            prusaslicer_slice.summary_block(
+                "; a = 1\n; prusaslicer_config = begin\n; a = 9\n; prusaslicer_config = end\n"
+            ),
+        )
+        self.assertEqual([], prusaslicer_slice.summary_block("; spoof = 9\nG1 X1\nM84\n"))
+        self.assertEqual([], prusaslicer_slice.summary_block(""))
+
+
+class SliceBindingTests(unittest.TestCase):
+    """Statistics have to attach to the project the caller says they came from."""
+
+    def test_project_replaced_after_the_binding_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            bindings = _bindings(project)
+            project.write_bytes(b"PK\x03\x04 a different project entirely")
+            binary = root / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+            runner = _Runner()
+            with self.assertRaisesRegex(ValueError, "changed between building the project and slicing"):
+                slice_project(project, PRESETS, bindings=bindings, executable=binary, runner=runner)
+            self.assertEqual([], runner.calls)
+
+    def test_a_missing_or_malformed_project_hash_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            for bindings in ({}, {"project_sha256": None}, {"project_sha256": "nope"}):
+                with self.subTest(bindings=bindings):
+                    with self.assertRaisesRegex(ValueError, "lowercase hex SHA-256"):
+                        slice_project(project, PRESETS, bindings=bindings, runner=_Runner())
+
+    def test_a_plain_dict_without_a_datadir_is_refused(self) -> None:
+        # Measured against PrusaSlicer 2.9.6: an unresolvable-but-complete set
+        # exits 1 rather than segfaulting, so this is not a crash guard -- it stops
+        # names validated against one configuration being resolved in another.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            runner = _Runner()
+            with self.assertRaisesRegex(ValueError, "datadir is required"):
+                slice_project(
+                    project,
+                    {"printer": "P", "print": "Q", "filament": "M"},
+                    bindings=_bindings(project),
+                    runner=runner,
+                )
+            self.assertEqual([], runner.calls)
+
+    def test_the_whole_chain_is_echoed_into_the_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+            bindings = _bindings(project)
+            result = slice_project(
+                project, PRESETS, bindings=bindings, executable=binary, runner=_Runner()
+            )
+        self.assertEqual(bindings, result["bindings"])
+        self.assertEqual(bindings["project_sha256"], result["project_sha256"])
+        for key in ("manifest_sha256", "export_index_sha256", "verification_report_sha256", "export_run_id"):
+            self.assertIn(key, result["bindings"])
+
+
+class GcodeWindowTests(unittest.TestCase):
+    """A number recovered from a truncated read is inferred, not measured."""
+
+    FOOTER = (
+        "; filament used [mm] = 1284.99\n"
+        "; filament used [cm3] = 3.09\n"
+        "; filament used [g] = 41.9\n"
+        "; total filament used [g] = 41.9\n"
+        "; estimated printing time (normal mode) = 18m 4s\n"
+        "; estimated printing time (silent mode) = 18m 46s\n"
+    )
+
+    def _slice(self, root: Path, gcode: str) -> dict:
+        project = _project(root)
+        binary = root / "PrusaSlicer"
+        binary.write_text("", encoding="utf-8")
+        return slice_project(
+            project,
+            PRESETS,
+            bindings=_bindings(project),
+            executable=binary,
+            runner=_Runner(gcode=gcode),
+        )
+
+    def test_a_statistic_straddling_the_head_boundary_is_never_half_read(self) -> None:
+        # The head window used to be joined to the tail with a newline, which
+        # completed its truncated last line: a real 41.9 g was reported as 4.0 g.
+        gcode = (
+            "; generated by PrusaSlicer 2.9.6 on 2026-08-19 at 04:32:04 UTC\n"
+            + "; comment padding\n" * 400
+            + "; total filament used [g] = 41.9\n"
+            + "G1 X10 Y10 E1\n" * 200000
+            + self.FOOTER
+        )
+        self.assertGreater(len(gcode.encode("utf-8")), prusaslicer_slice._HEAD_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), gcode)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(41.9, result["statistics"]["total_filament_used_g"])
+
+    # Deliberately a few hundred bytes: small parts routinely slice under the tail
+    # window, and that is exactly the case where selecting the tail excludes
+    # nothing at all. The start G-code must be excluded by its *position*, not by
+    # being lucky enough to fall outside a window.
+    START_GCODE_SPOOF = (
+        "; generated by PrusaSlicer 2.9.6 on 2026-08-19 at 04:32:04 UTC\n"
+        "; total filament used [g] = 0.1\n"
+        "; estimated printing time (normal mode) = 0h 1m\n"
+        "M104 S215\n"
+        "G28\n"
+        "G1 X10 Y10 E1\n"
+        "M84\n"
+    )
+
+    def test_start_gcode_alone_yields_no_statistics_in_a_small_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), self.START_GCODE_SPOOF)
+        self.assertLess(len(self.START_GCODE_SPOOF.encode("utf-8")), prusaslicer_slice._TAIL_BYTES)
+        self.assertTrue(result["gcode_window"]["whole_file_read"])
+        self.assertFalse(result["ok"])
+        self.assertEqual({}, result["statistics"])
+        self.assertIn("no statistic was readable", result["failure"])
+
+    def test_start_gcode_never_outvotes_the_real_footer_in_a_small_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), self.START_GCODE_SPOOF + self.FOOTER)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["gcode_window"]["whole_file_read"])
+        self.assertEqual(41.9, result["statistics"]["total_filament_used_g"])
+        self.assertEqual("18m 4s", result["statistics"]["estimated_printing_time_normal"])
+
+    def test_the_config_dump_is_not_mistaken_for_the_summary(self) -> None:
+        # The dump is itself a run of "; key = value" lines and sits after the
+        # summary, so the scan has to stop at its marker rather than at EOF.
+        gcode = (
+            self.START_GCODE_SPOOF
+            + self.FOOTER
+            + "; prusaslicer_config = begin\n"
+            + "; total filament used [g] = 999.0\n"
+            + "; prusaslicer_config = end\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), gcode)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(41.9, result["statistics"]["total_filament_used_g"])
+
+    def test_statistics_outside_the_window_are_a_failure_not_an_empty_block(self) -> None:
+        gcode = (
+            "; generated by PrusaSlicer 2.9.6 on 2026-08-19 at 04:32:04 UTC\n"
+            + self.FOOTER
+            + "; prusaslicer_config = begin\n"
+            + "; padding_key = padding_value\n" * 60000
+            + "; prusaslicer_config = end\n"
+        )
+        self.assertGreater(len(gcode.encode("utf-8")), prusaslicer_slice._TAIL_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), gcode)
+        self.assertFalse(result["ok"])
+        self.assertIn("no statistic was readable", result["failure"])
+        self.assertFalse(result["gcode_window"]["whole_file_read"])
+
+    def test_a_small_gcode_reports_the_window_as_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._slice(Path(temporary), GCODE)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["gcode_window"]["whole_file_read"])
 
 
 class RealSubprocessTests(unittest.TestCase):
@@ -302,8 +521,9 @@ class RealSubprocessTests(unittest.TestCase):
     def test_real_run_parses_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            project = _project(root)
             result = slice_project(
-                _project(root), PRESETS, executable=_fake_slicer(root), datadir=root
+                project, PRESETS, bindings=_bindings(project), executable=_fake_slicer(root), datadir=root
             )
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(3.93, result["statistics"]["total_filament_used_g"])
@@ -312,8 +532,13 @@ class RealSubprocessTests(unittest.TestCase):
     def test_real_non_zero_exit_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            project = _project(root)
             result = slice_project(
-                _project(root), PRESETS, executable=_fake_slicer(root, exit_code=139), datadir=root
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=_fake_slicer(root, exit_code=139),
+                datadir=root,
             )
         self.assertFalse(result["ok"])
         self.assertEqual(139, result["exit_code"])
