@@ -84,9 +84,83 @@
       "items": {
         "$ref": "#/$defs/printable_part"
       }
+    },
+    "material_decision": {
+      "$ref": "#/$defs/material_decision"
     }
   },
   "$defs": {
+    "material_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "source_id",
+        "confidence",
+        "rationale",
+        "unresolved_risks"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "PLA",
+            "PLA_SILK",
+            "PETG",
+            "TPU",
+            "ASA",
+            "ABS",
+            "PC",
+            "PC_CF",
+            "PA",
+            "PA_CF",
+            "PET_CF",
+            "OTHER"
+          ]
+        },
+        "formulation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "confidence": {
+          "enum": [
+            "published",
+            "verified_cad",
+            "measured",
+            "provisional",
+            "coupon_verified"
+          ]
+        },
+        "coupon_component": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unresolved_risks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "printer_requirements": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,

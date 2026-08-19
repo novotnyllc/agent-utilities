@@ -479,6 +479,8 @@ def run(context):
                 "formats": EXPORT_SPECS["formats"],
                 "artifacts": artifacts,
             }
+            if "material_decision" in EXPORT_SPECS:
+                index["material_decision"] = EXPORT_SPECS["material_decision"]
             design_state_rows = []
             for artifact in artifacts:
                 design_state_rows.append(
