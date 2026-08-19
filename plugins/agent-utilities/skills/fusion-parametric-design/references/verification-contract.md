@@ -14,7 +14,7 @@ A release passes only the checks applicable to its intended use. “Generated su
 - The verification report records each checked part's root-context occurrence transform (`occurrence_transforms`: raw Fusion `transform2.asArray()`, translation components in centimetres — deliberately unconverted, unlike the `*_mm` keys; the export index's per-artifact `transform` uses the same convention).
 - When the manifest declares `printable_parts`, its paths exactly match `verification.expected_print_parts`, and a declared `body_name` matches the resolved solid at export (`body-name-mismatch` fails closed).
 - No accidental visibility/selection state is being used as a substitute for geometry.
-- The report's `ok` is scoped to the digital gates it names in `checked` (`ok_scope: digital-gates-only`). Everything in its `unchecked` list — printability, structural, thermal, physical — is unproven by that key and stays `not run` until the sections below are satisfied by external analysis or a printed part. Report it as "passed the digital gates", not as "verified".
+- The report's `ok` is scoped to the gates it names in `checked`, and `checked` is derived from what that run actually performed. A gate the manifest never declared appears in `not_declared`, never in `checked`: "this project declares no clearance checks" is an honest gap and must never read as a passed check. Everything in `unchecked` — printability, structural, thermal, physical — stays `not run` until the sections below are satisfied by external analysis or a printed part. Report it as "passed the gates it declared", not as "verified".
 
 ## Fit and packing
 

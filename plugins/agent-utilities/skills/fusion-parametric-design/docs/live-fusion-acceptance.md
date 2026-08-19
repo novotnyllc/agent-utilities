@@ -58,7 +58,7 @@ From the package root:
 "$SKILL_DIR/scripts/fusion-design" emit-inventory examples/electronics-enclosure/fusion-project.json -o build/inventory.py
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync examples/electronics-enclosure/fusion-project.json -o build/sync-parameters.py
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold examples/electronics-enclosure/fusion-project.json -o build/scaffold.py
-"$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
+"$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py  # record the nonce it prints on stderr; step 10 needs it
 ```
 
 Run each emitted script directly through the discovered Fusion Python tool and
@@ -203,9 +203,9 @@ Finally, diff an inventory report against a verification report. **Pass:** the c
 
 Run the deterministic export transaction against the verified document:
 
-1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it:
-   `"$SKILL_DIR/scripts/fusion-design" emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --export-dir <fusion-host dir> -o build/export.py`
-   (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report).
+1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it, passing the nonce `emit-verification` printed on stderr in step 2:
+   `"$SKILL_DIR/scripts/fusion-design" emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --verification-nonce <nonce from step 2> --export-dir <fusion-host dir> -o build/export.py`
+   (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report). Negative test: re-run with any other nonce value. **Pass:** exit 2, no script emitted.
 2. Execute `build/export.py` through the MCP. **Pass:** the report is `kind: export-handoff`, `ok: true`; the enclosure base, lid, and fit coupon each produce the requested STEP/3MF files; `export-index__*.json` sits beside them; recomputing `shasum -a 256` on the Fusion host matches every `sha256` in the index; byte sizes match.
 3. Append the report's `design_state_rows` to `DESIGN-STATE.md` `## Exports`.
 4. Re-run the same script unchanged. **Pass:** it fails closed with `output-exists` and no file's bytes change.

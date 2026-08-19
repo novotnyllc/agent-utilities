@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import unittest
 
-from fusion_design.report_diff import diff_reports
+from fusion_design.export_handoff import emit_export_example_script
+from fusion_design.manifest import load_manifest
+from fusion_design.report_diff import BOUNDS_TOLERANCE_MM, diff_reports
+
+
+EXAMPLE = (
+    Path(__file__).resolve().parents[1] / "examples" / "electronics-enclosure" / "fusion-project.json"
+)
 
 
 class ReportDiffTests(unittest.TestCase):
@@ -157,6 +166,14 @@ class ReportDiffTests(unittest.TestCase):
         }
 
         self.assertEqual({}, diff_reports(before, after)["bounds_changed"])
+
+    def test_bounds_tolerance_matches_the_export_staleness_gate(self) -> None:
+        # Two constants for one question is one too many: both compare
+        # independent Fusion measurements of a body that did not move.
+        script = emit_export_example_script(load_manifest(EXAMPLE))
+        gate = re.search(r"EXPORT_STALENESS_TOLERANCE_MM = (\S+)", script)
+        self.assertIsNotNone(gate)
+        self.assertEqual(float(gate.group(1)), BOUNDS_TOLERANCE_MM)
 
     def test_diff_reports_compares_bounds_error_records_verbatim(self) -> None:
         before = {"brep_bounding_boxes_mm": {"a": {"error": "no bounding box"}}}

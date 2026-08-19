@@ -67,7 +67,7 @@ scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
-scripts/fusion-design emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
+scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
 scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
@@ -124,6 +124,8 @@ Then, through the connected Fusion MCP:
 5. create the native Fusion reference and product feature groups;
 6. run `verify.py` after the packing and product components contain geometry;
 7. capture the delimited JSON reports and viewport images.
+
+`emit-verification` prints a single-use nonce on stderr and embeds it in the script it emits. Keep it: `emit-export` requires that nonce, and only the report produced by running that script carries it, so an export cannot be bound to a report that never ran.
 
 The example verification script will initially fail because the scaffold components are empty. That is intentional: existence is not a substitute for modeled geometry or fit evidence.
 

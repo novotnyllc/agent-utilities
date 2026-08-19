@@ -5,6 +5,7 @@ from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+import secrets
 import sys
 from typing import Any, Callable
 
@@ -77,19 +78,48 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return 2 if plan.blocked else 0
 
 
-def _require_live_verification_report(report_data: Any) -> None:
-    """Refuse anything but the report a live verification transaction actually wrote.
+def _cmd_emit_verification(args: argparse.Namespace) -> int:
+    _validate_emit_paths(args)
+    manifest = load_manifest(args.manifest)
+    # Minted here, never derived from the manifest: a report can only echo it
+    # back by having been produced by this very script.
+    nonce = secrets.token_hex(16)
+    _write_output(emit_verification_script(manifest, nonce), args.output)
+    print(
+        f"verification nonce: {nonce}\n"
+        "Pass it to emit-export as --verification-nonce once this script has run in Fusion "
+        "and its report is saved. Re-emitting mints a new nonce and invalidates this one.",
+        file=sys.stderr,
+    )
+    return 0
 
-    A self-declared `sample` marker is one deletion away from a valid binding, so
-    the real gate is the evidence only the live transaction produces: it invokes
-    Compute All, records an explicit empty failure list, and reports timeline and
-    geometry maps. A hand-assembled or sample report carries none of them.
+
+def _require_live_verification_report(report_data: Any, nonce: str) -> None:
+    """Refuse anything but the report the emitted verification script wrote.
+
+    The nonce is the load-bearing check. `emit-verification` mints a random one,
+    embeds it in the script it emits, and prints it to stderr; only a report
+    produced by running that exact script echoes it back. Nothing derivable from
+    the manifest alone -- including this package's own
+    `export_handoff.example_verification_report` -- can satisfy it.
+
+    The checks below it are cheap consistency checks, not proof of liveness:
+    each is a constant that anyone holding the script could also supply. They
+    catch a truncated or hand-edited report early; they are not a second
+    independent gate, and must not be described as one.
     """
     if not isinstance(report_data, dict):
         raise ValueError("Verification report must be a JSON object.")
     if report_data.get("sample"):
         raise ValueError(
             "refusing to bind a sample verification report; run the live verification transaction and pass its saved report"
+        )
+    reported_nonce = report_data.get("verification_nonce")
+    if not isinstance(reported_nonce, str) or not reported_nonce or reported_nonce != nonce:
+        raise ValueError(
+            "verification report nonce does not match --verification-nonce; bind the export to a "
+            "report produced by running the script emit-verification emitted, and pass the nonce "
+            "that command printed"
         )
     missing = []
     if report_data.get("compute_invoked") is not True:
@@ -102,7 +132,7 @@ def _require_live_verification_report(report_data: Any) -> None:
             missing.append(f"a non-empty {key} object")
     if missing:
         raise ValueError(
-            "verification report lacks live-transaction evidence ("
+            "verification report is not internally consistent ("
             + "; ".join(missing)
             + "); run the live verification transaction and pass its saved report"
         )
@@ -121,7 +151,7 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
     report_bytes = Path(args.verification_report).read_bytes()
     manifest = load_manifest(args.manifest)
     report_data = json.loads(report_bytes.decode("utf-8"))
-    _require_live_verification_report(report_data)
+    _require_live_verification_report(report_data, args.verification_nonce)
     config = ExportConfig(
         export_dir=args.export_dir,
         formats=formats,
@@ -192,15 +222,25 @@ def _require_comparable_reports(before: Any, after: Any, allow_manifest_change: 
             f"report kind {before_kind!r} cannot be diffed; expected one of "
             f"{', '.join(DIFFABLE_REPORT_KINDS)}"
         )
-    if before.get("project") != after.get("project"):
+    # Absence must fail like a mismatch: two reports that both omit `project`
+    # would otherwise compare None == None and sail through.
+    for field in ("project", "manifest_sha256"):
+        for label, report in (("before", before), ("after", after)):
+            value = report.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"{label} report has no usable {field!r}; a report without it cannot be "
+                    "shown to describe the same design"
+                )
+    if before["project"] != after["project"]:
         raise ValueError(
-            f"refusing to diff reports from different projects: {before.get('project')!r} "
-            f"and {after.get('project')!r}"
+            f"refusing to diff reports from different projects: {before['project']!r} "
+            f"and {after['project']!r}"
         )
-    if not allow_manifest_change and before.get("manifest_sha256") != after.get("manifest_sha256"):
+    if not allow_manifest_change and before["manifest_sha256"] != after["manifest_sha256"]:
         raise ValueError(
             "the two reports were produced from different manifests "
-            f"({before.get('manifest_sha256')!r} and {after.get('manifest_sha256')!r}); "
+            f"({before['manifest_sha256']!r} and {after['manifest_sha256']!r}); "
             "pass --allow-manifest-change if the manifest was intentionally edited between them"
         )
 
@@ -209,8 +249,12 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     before = json.loads(Path(args.before).read_text(encoding="utf-8"))
     after = json.loads(Path(args.after).read_text(encoding="utf-8"))
     _require_comparable_reports(before, after, args.allow_manifest_change)
-    print(json.dumps(diff_reports(before, after), indent=2, sort_keys=True))
-    return 0
+    diff = diff_reports(before, after)
+    print(json.dumps(diff, indent=2, sort_keys=True))
+    # Every sibling command exits 2 when the thing it was asked to check failed.
+    # A diff that found a regression is that case, not a successful no-op.
+    regressed = bool(diff["failures_added"]) or (diff["ok_before"] and not diff["ok_after"])
+    return 2 if regressed else 0
 
 
 def _cmd_prepare_module_bundle(args: argparse.Namespace) -> int:
@@ -243,13 +287,23 @@ def build_parser() -> argparse.ArgumentParser:
         "emit-inventory": emit_inventory_script,
         "emit-parameter-sync": emit_parameter_sync_script,
         "emit-scaffold": emit_scaffold_script,
-        "emit-verification": emit_verification_script,
     }
     for name, emitter in emitters.items():
         command = subparsers.add_parser(name, help=f"Emit the {name.removeprefix('emit-')} Fusion Python script.")
         command.add_argument("manifest")
         command.add_argument("-o", "--output")
         command.set_defaults(handler=lambda args, fn=emitter: _manifest_command(args, fn))
+
+    emit_verification = subparsers.add_parser(
+        "emit-verification",
+        help=(
+            "Emit the verification Fusion Python script. Mints a single-use nonce, embeds it in "
+            "the script, and prints it to stderr; emit-export requires that nonce."
+        ),
+    )
+    emit_verification.add_argument("manifest")
+    emit_verification.add_argument("-o", "--output")
+    emit_verification.set_defaults(handler=_cmd_emit_verification)
 
     emit_export = subparsers.add_parser(
         "emit-export",
@@ -260,6 +314,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--verification-report",
         required=True,
         help="Path to the saved verification report JSON this export is justified by.",
+    )
+    emit_export.add_argument(
+        "--verification-nonce",
+        required=True,
+        help=(
+            "The nonce emit-verification printed for the script that produced this report. The "
+            "report must echo it back, which only running that script can do."
+        ),
     )
     emit_export.add_argument(
         "--export-dir",

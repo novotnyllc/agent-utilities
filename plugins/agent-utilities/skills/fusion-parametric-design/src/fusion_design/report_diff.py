@@ -3,6 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+# This is the same comparison the export staleness gate makes -- two independent
+# Fusion measurements of a body that did not move -- so it must use the same
+# tolerance. That gate's value lives inside the emitted export transaction
+# (export_handoff.EXPORT_STALENESS_TOLERANCE_MM, a literal in the script
+# template, not importable from here), so the two are kept equal by
+# test_report_diff.test_bounds_tolerance_matches_the_export_staleness_gate.
+BOUNDS_TOLERANCE_MM = 1e-3
+
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -16,17 +24,21 @@ def _canonical_rows(value: Any) -> dict[str, Any]:
     }
 
 
-# Reports carry bounds in millimetres already, so this only absorbs the float
-# noise of two independent Fusion measurements of an unchanged body.
-BOUNDS_TOLERANCE_MM = 1e-6
-
-
 def _rows_by_id(value: Any) -> dict[str, Any]:
+    """Key check rows by their declared id.
+
+    Rows without one are keyed by their own canonical JSON rather than by list
+    position, so deleting one unnamed row does not report its neighbour as
+    changed.
+    """
     rows = value if isinstance(value, list) else []
     indexed: dict[str, Any] = {}
-    for index, row in enumerate(rows):
+    for row in rows:
         identifier = row.get("id") if isinstance(row, dict) else None
-        indexed[str(identifier) if identifier is not None else f"#{index}"] = row
+        if identifier is None:
+            indexed[json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)] = row
+        else:
+            indexed[str(identifier)] = row
     return indexed
 
 
@@ -127,6 +139,10 @@ def diff_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
             unhealthy_before[key] for key in sorted(set(unhealthy_before) - set(unhealthy_after))
         ],
         "bounds_changed": bounds_changed,
+        # An uncompared pair is reported, not silently omitted: a body that was
+        # renamed and moved must not lose its displacement to the rename.
+        "bounds_added": sorted(set(after_bounds) - set(before_bounds)),
+        "bounds_removed": sorted(set(before_bounds) - set(after_bounds)),
         "ok_before": before.get("ok"),
         "ok_after": after.get("ok"),
         "failures_added": sorted(after_failures - before_failures),

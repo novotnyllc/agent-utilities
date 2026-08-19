@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -73,14 +74,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("manifest and output must name different files", errors.getvalue())
 
 
+# A stand-in for the nonce emit-verification mints. A fixture can only use it
+# because the same test also passes it to --verification-nonce; nothing here
+# derives it from the manifest, which is exactly what a forger cannot do.
+NONCE = "0123456789abcdef0123456789abcdef"
+
+
 class EmitExportCliTests(unittest.TestCase):
     def _write_report(self, directory: Path, mutate=None, keep_sample_marker=False) -> Path:
         report = example_verification_report(load_manifest(EXAMPLE))
         if not keep_sample_marker:
-            # Stand in for a live verification report: dropping the sample marker
-            # alone is not enough, and must not be.
             report.pop("sample", None)
             report.update(
+                verification_nonce=NONCE,
                 compute_invoked=True,
                 failures=[],
                 timeline={"unhealthy": []},
@@ -111,6 +117,8 @@ class EmitExportCliTests(unittest.TestCase):
                     str(EXAMPLE),
                     "--verification-report",
                     str(report_path),
+                    "--verification-nonce",
+                    NONCE,
                     "--export-dir",
                     "/exports/on/fusion/host",
                     "-o",
@@ -130,7 +138,7 @@ class EmitExportCliTests(unittest.TestCase):
                 Path(temporary), mutate=lambda report: report.update(manifest_sha256="0" * 64)
             )
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("does not match manifest", errors)
@@ -139,14 +147,14 @@ class EmitExportCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             failed = self._write_report(Path(temporary), mutate=lambda report: report.update(ok=False))
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(failed), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(failed), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("ok: true", errors)
 
             wrong_kind = self._write_report(Path(temporary), mutate=lambda report: report.update(kind="inventory"))
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(wrong_kind), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(wrong_kind), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("expected 'verification'", errors)
@@ -158,7 +166,7 @@ class EmitExportCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             report_path = self._write_report(Path(temporary), mutate=drop_bounds)
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("no usable B-Rep bounds", errors)
@@ -167,7 +175,7 @@ class EmitExportCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             report_path = self._write_report(Path(temporary))
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(EXAMPLE), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(EXAMPLE), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("must name different files", errors)
@@ -178,6 +186,8 @@ class EmitExportCliTests(unittest.TestCase):
                     str(EXAMPLE),
                     "--verification-report",
                     str(report_path),
+                    "--verification-nonce",
+                    NONCE,
                     "--export-dir",
                     "/exports",
                     "--format",
@@ -193,10 +203,71 @@ class EmitExportCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             report_path = self._write_report(Path(temporary), keep_sample_marker=True)
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
             self.assertIn("sample verification report", errors)
+
+    def test_emit_export_rejects_a_report_forged_from_this_packages_public_api(self) -> None:
+        # The whole bypass, in six lines: example_verification_report synthesizes
+        # a report from the manifest alone, and every consistency key is a
+        # constant a forger already knows. Only the nonce is not derivable.
+        with tempfile.TemporaryDirectory() as temporary:
+            forged = example_verification_report(load_manifest(EXAMPLE))
+            forged.pop("sample")
+            forged.update(
+                compute_invoked=True,
+                failures=[],
+                timeline={"unhealthy": []},
+                geometry={EXAMPLE_BASE: {"has_positive_solid": True}},
+            )
+            path = Path(temporary) / "forged.json"
+            path.write_text(json.dumps(forged), encoding="utf-8")
+            code, _, errors = self._run(
+                [
+                    "emit-export",
+                    str(EXAMPLE),
+                    "--verification-report",
+                    str(path),
+                    "--verification-nonce",
+                    NONCE,
+                    "--export-dir",
+                    "/exports",
+                ]
+            )
+            self.assertEqual(2, code)
+            self.assertIn("nonce does not match", errors)
+
+    def test_emit_export_rejects_a_report_bound_to_a_different_nonce(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = self._write_report(Path(temporary))
+            code, _, errors = self._run(
+                [
+                    "emit-export",
+                    str(EXAMPLE),
+                    "--verification-report",
+                    str(report_path),
+                    "--verification-nonce",
+                    "f" * 32,
+                    "--export-dir",
+                    "/exports",
+                ]
+            )
+            self.assertEqual(2, code)
+            self.assertIn("nonce does not match", errors)
+
+    def test_emit_verification_mints_a_nonce_the_emitted_script_carries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "verify.py"
+            code, _, errors = self._run(["emit-verification", str(EXAMPLE), "-o", str(script)])
+            self.assertEqual(0, code, errors)
+            nonce = re.search(r"verification nonce: ([0-9a-f]{32})", errors).group(1)
+            self.assertIn(nonce, script.read_text(encoding="utf-8"))
+
+            # Two emissions never share a nonce, so an old one cannot be replayed.
+            second = Path(temporary) / "verify2.py"
+            _, _, more = self._run(["emit-verification", str(EXAMPLE), "-o", str(second)])
+            self.assertNotEqual(nonce, re.search(r"verification nonce: ([0-9a-f]{32})", more).group(1))
 
     def test_emit_export_rejects_a_sample_report_with_the_marker_stripped(self) -> None:
         # The improvisation the guard actually has to survive: delete "sample"
@@ -207,12 +278,11 @@ class EmitExportCliTests(unittest.TestCase):
             path = Path(temporary) / "verification-report.json"
             path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(path), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(path), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
-            self.assertIn("live-transaction evidence", errors)
-            for token in ("compute_invoked", "failures", "timeline", "geometry"):
-                self.assertIn(token, errors)
+            # Refused on the nonce, which no manifest-derived report can carry.
+            self.assertIn("nonce does not match", errors)
 
     def test_emit_export_rejects_a_report_whose_failures_are_not_empty(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,10 +290,10 @@ class EmitExportCliTests(unittest.TestCase):
                 Path(temporary), mutate=lambda report: report.update(failures=["clearance"])
             )
             code, _, errors = self._run(
-                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--verification-nonce", NONCE, "--export-dir", "/exports"]
             )
             self.assertEqual(2, code)
-            self.assertIn("live-transaction evidence", errors)
+            self.assertIn("not internally consistent", errors)
 
     def test_emit_export_rejects_unknown_format(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -236,6 +306,8 @@ class EmitExportCliTests(unittest.TestCase):
                             str(EXAMPLE),
                             "--verification-report",
                             str(report_path),
+                            "--verification-nonce",
+                            NONCE,
                             "--export-dir",
                             "/exports",
                             "--format",
@@ -511,6 +583,36 @@ class DiffReportsCliTests(unittest.TestCase):
             )
             self.assertEqual(0, code, errors)
             self.assertIn("components_removed", output)
+
+    def test_diff_reports_refuses_reports_missing_project_or_manifest_hash(self) -> None:
+        # Absence must fail like a mismatch: None == None is not agreement.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for field in ("project", "manifest_sha256"):
+                before = self._report(root, f"before-{field}.json")
+                after = self._report(root, f"after-{field}.json")
+                for path in (before, after):
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    data.pop(field)
+                    path.write_text(json.dumps(data), encoding="utf-8")
+                code, output, errors = self._run(["diff-reports", str(before), str(after)])
+                self.assertEqual(2, code, field)
+                self.assertIn(f"no usable {field!r}", errors)
+                self.assertEqual("", output)
+
+    def test_diff_reports_exits_two_when_the_diff_finds_a_regression(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._report(root, "before.json", kind="verification", failures=[])
+            after = self._report(
+                root, "after.json", kind="verification", ok=False, failures=["clearance"]
+            )
+            code, output, _ = self._run(["diff-reports", str(before), str(after)])
+            self.assertEqual(2, code)
+            self.assertIn('"clearance"', output)
+
+            code, _, _ = self._run(["diff-reports", str(before), str(before)])
+            self.assertEqual(0, code)
 
     def test_diff_reports_refuses_an_undiffable_kind(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
