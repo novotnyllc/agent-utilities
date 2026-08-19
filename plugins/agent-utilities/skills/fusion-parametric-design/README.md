@@ -75,6 +75,7 @@ scripts/fusion-design emit-mesh-deviation <manifest> --mesh-source-id <id> --cla
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+scripts/fusion-design fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
