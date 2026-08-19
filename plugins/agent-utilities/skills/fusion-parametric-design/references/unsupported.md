@@ -160,6 +160,52 @@ What this package *does* supply is in `references/mesh-reconstruction.md`: immut
 
 The raw material *is* scriptable, which is why the fallback is our own arithmetic rather than an external tool: `MeshBody.mesh` returns a `PolygonMesh` exposing `nodeCoordinates`, `triangleNodeIndices` and `triangleFaceGroupTempIds` — Fusion's own segmentation, readable per triangle. Plane–mesh intersection and least-squares primitive fitting over that data live in `src/fusion_design/mesh_fitting.py` and are fully testable offline against synthetic meshes with known analytic answers. Fusion fits primitives internally for `MeshGenerateFaceGroupsFeature` but never exposes the fit, only the grouping.
 
+## Face-group segmentation: measured, 2026-08-19
+
+**Status:** Supported, cheap, and far better than its default suggests.
+
+`MeshGenerateFaceGroupsFeatureInput.meshGenerateFaceGroupsMethodType` **is
+readable and settable**, and it is the knob that matters. The three numeric
+knobs are not: `angleThreshold`, `minimumFaceGroupSize` and `boundaryTolerance`
+all raise `RuntimeError: 2 : InternalValidationError` on get, and reject every
+value on set. The method enum does not.
+
+The default is `FastGenerateFaceGroupsType` (angle-threshold clustering).
+`AccurateGenerateFaceGroupsType` matches mesh faces to analytic primitives.
+Measured over the 11 real production STLs in the Coat electronics-enclosure set
+(444 to 16,562 triangles):
+
+| | Fast (default) | Accurate |
+|---|---|---|
+| face groups, 11 parts | 976 | 1,908 |
+| segmentation time | 0.004–0.06 s | 0.03–1.92 s |
+| prismatic `MeshConvertFeature` → one healthy solid | 2 of 11 | 10 of 11 |
+| worst volume error where a solid *was* produced | +7.6%, reported healthy | −0.14% |
+| prismatic convert time, POD-A1-BASE | 33.4 s | 0.30 s |
+
+The prismatic convert consumes these groups — "face groups are used to infer
+prismatic features" — so the earlier finding that prismatic convert produces no
+solid on real STLs is a finding about the *default grouping*, not about convert.
+Under `Accurate`, convert is both correct and one to two orders of magnitude
+faster, because it is handed a segmentation instead of having to infer one.
+
+`PolygonMesh.triangleFaceGroupTempIds` delivers the result as one `FaceGroup`
+tempId per triangle, in `triangleNodeIndices` order, and `MeshBody.faceGroups`
+carries each group's `area`, `centroid`, `boundingBox` and `isPlanar`. That is
+a complete region assignment for our own fitters, with no inference needed.
+
+Fed those regions, `mesh_fitting.fit_primitive` accepted a fit on **1,908 of
+1,908** groups — every group, on every part — and every one of the 383 cylinders
+came back with a radius one-sigma inside the skill's own `max_radius_rel_sigma`
+of 2%. One caveat, and it is the whole caveat: on a bore or round tessellated
+with only two rings of vertices and no intermediate samples, a sphere passes
+exactly through the same points as the cylinder, and `fit_face_group` ranks by
+residual alone, so the sphere wins by the eighth decimal. 367 of 367 such
+groups are cylinders, and the group's own facet normals say so unambiguously —
+every one within 5° of perpendicular to the cylinder axis. **The vertices alone
+cannot separate sphere from cylinder here; the facet normals can.** Any use of
+these regions has to carry that tie-break.
+
 ## Mesh deviation comparison (`PolygonMesh.compareWith`)
 
 **Status:** Supported where present, and **preview-gated**.
