@@ -542,7 +542,23 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         _collect_keys(index, keys)
         self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
 
+    def test_index_carries_the_example_manifests_own_decision(self) -> None:
+        declared = self.manifest.material_decision
+        self.assertEqual("PETG", declared["family"])
+        report = self._run(self._namespace())[0]
+        self.assertEqual(declared, report["material_decision"])
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(declared, index["material_decision"])
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
     def test_index_omits_material_decision_when_manifest_declares_none(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        stripped = self.manifest.to_dict()
+        stripped.pop("material_decision")
+        self.manifest = Manifest.from_data(stripped)
         self.assertEqual({}, self.manifest.material_decision)
         report = self._run(self._namespace())[0]
         self.assertNotIn("material_decision", report)

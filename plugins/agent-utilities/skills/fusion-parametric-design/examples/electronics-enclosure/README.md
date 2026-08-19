@@ -12,7 +12,22 @@ It demonstrates:
 - a separate editable reference and packing component for each module;
 - connector and wire-bend keep-outs;
 - required base, lid, and fit-coupon components;
-- minimum-distance and forbidden-interference checks.
+- minimum-distance and forbidden-interference checks;
+- a recorded `material_decision` that drives the geometry.
+
+## The material decision, and what it changes
+
+The manifest decides **PETG, family only** — no formulation, `confidence: provisional`, bound to `90_VALIDATION/VAL__PD_FIT_COUPON`. The reason is the lid: its snap rim deflects at every opening and has to recover. PETG has the toughness and strain recovery for that. All three parts' `material.assumption` name PETG, which the validator cross-checks against the decision.
+
+The decision is family-only on purpose. No product is named, so no data-sheet number backs `fab_fit_clearance` — it is a hypothesis until the coupon is printed and measured, which is exactly what the recorded risks say.
+
+The counterexample: the same lid, under a different decision, is a different design.
+
+- **PLA.** The snap rim is the failure. PLA cracks at the root instead of bending back, so the snap either has to become a fastened lid or grow into a long, thin, compliant arm with a generous root radius — a different feature, not a tuned one. The base's wall and boss geometry would change with it.
+- **ASA (outdoors).** The snap survives, but the enclosure now cycles through a wide temperature range and ASA shrinks and warps more. `fab_fit_clearance` and the base/lid overlap have to be re-derived and re-couponed — the PETG-proven value does not transfer — and the large flat floor needs warp mitigation (ribs, a split, no long unbroken span) that the PETG version does not.
+- **Soft TPU.** The snap geometry stops making sense at all. A low-hardness TPU lid deflects under its own assembly load, will not hold an engagement rim, and squashes rather than fitting. The lid becomes a stretch-over cover or a captured gasket, and the base grows a retention feature to hold it — which is a different product, not a material swap.
+
+That is why the decision is recorded before the geometry: changing it later re-opens every fit, the snap, the wall, the orientation, and the coupon result. See `../../references/material-selection.md`.
 
 Generate the scripts:
 

@@ -76,6 +76,12 @@ Use only `not run`, `pass`, `fail`, or `not applicable`.
 
 ## Manufacturing assumptions
 
+Material decision — copy from the manifest's `material_decision`; a family with no named formulation is a legitimate row, a guessed formulation is not.
+
+| Chosen material | Family | Formulation | Source id | Confidence | Coupon | Printer requirements | Unresolved risk |
+|---|---|---|---|---|---|---|---|
+| Not decided | — | — | — | — | — | — | Material not chosen; no material-dependent geometry may be finalized. |
+
 - Process/material: Not recorded.
 - Printer/nozzle/layer height: Not recorded.
 - Intended build orientation: Not recorded.
