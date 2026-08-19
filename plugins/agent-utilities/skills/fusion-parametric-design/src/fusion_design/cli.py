@@ -18,6 +18,7 @@ from .manifest import ManifestValidationError, load_manifest, validate_manifest_
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
 from .prusaslicer_project import build_project, resolve_presets
+from .prusaslicer_slice import slice_project
 from .report_diff import diff_reports
 from .scripts import (
     emit_inventory_script,
@@ -103,21 +104,20 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
     return 0
 
 
-# The slice step is never attempted: PrusaSlicer 2.9.6 crashes during headless
-# slicing on this host, so the adapter reports the boundary instead of guessing
-# past it. This block is constant on purpose -- there is no success branch.
-SLICE_UNSUPPORTED = {
-    "supported": False,
+# Slicing is supported but opt-in: the default path builds the project file and
+# executes nothing at all.
+SLICE_NOT_ATTEMPTED = {
+    "supported": True,
+    "attempted": False,
     "reason": (
-        "Headless slicing is unavailable on this host: PrusaSlicer 2.9.6 segfaults in "
-        "Print::export_gcode (via Slic3r::CLI::process_actions), so this adapter never "
-        "executes the PrusaSlicer binary."
+        "Slicing was not requested. Pass --slice to run PrusaSlicer headlessly on the generated "
+        "project and report the statistics its G-code actually contains."
     ),
     "detail": (
-        "Print time, filament mass, and G-code statistics therefore remain external evidence "
-        "and must not be inferred, estimated, or interpolated from this project. Obtain them by "
-        "opening the generated project in the PrusaSlicer GUI and slicing there, then record the "
-        "result against this project's sha256."
+        "Without --slice, no print time, filament mass, or G-code statistic is available here, and "
+        "none may be inferred, estimated, or interpolated from this project. Either re-run with "
+        "--slice or slice the project in the PrusaSlicer GUI and record the result against this "
+        "project's sha256."
     ),
 }
 
@@ -132,9 +132,15 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
         args.config_root,
     )
     result = build_project(manifest, args.export_index, args.output, presets)
-    result["slice"] = SLICE_UNSUPPORTED
+    if args.slice:
+        result["slice"] = slice_project(
+            result["project_path"], presets, executable=args.slicer_executable
+        )
+    else:
+        result["slice"] = SLICE_NOT_ATTEMPTED
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    # A requested slice that did not produce G-code must not look like success.
+    return 2 if args.slice and not result["slice"].get("ok") else 0
 
 
 def _cmd_diff(args: argparse.Namespace) -> int:
@@ -209,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prusaslicer = subparsers.add_parser(
         "prusaslicer-project",
-        help="Build a PrusaSlicer project 3MF from a verified export index. Never slices.",
+        help="Build a PrusaSlicer project 3MF from a verified export index; optionally slice it.",
     )
     prusaslicer.add_argument("manifest")
     prusaslicer.add_argument(
@@ -231,6 +237,18 @@ def build_parser() -> argparse.ArgumentParser:
     prusaslicer.add_argument(
         "--config-root",
         help="PrusaSlicer configuration directory. Defaults to the platform user configuration location.",
+    )
+    prusaslicer.add_argument(
+        "--slice",
+        action="store_true",
+        help=(
+            "Also run PrusaSlicer headlessly on the generated project and report the statistics its "
+            "G-code contains. Off by default: without this flag no binary is executed."
+        ),
+    )
+    prusaslicer.add_argument(
+        "--slicer-executable",
+        help="Path to the PrusaSlicer binary. Defaults to the installed app bundle, then PATH.",
     )
     prusaslicer.set_defaults(handler=_cmd_prusaslicer_project)
 

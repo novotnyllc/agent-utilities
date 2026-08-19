@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from fusion_design.cli import main
 from fusion_design.export_handoff import example_verification_report
 from fusion_design.manifest import load_manifest
 from test_prusaslicer_project import _Fixture, _config_root, _intent, process_execution_offenses
+from test_prusaslicer_slice import _fake_slicer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -271,20 +273,62 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
                 {"printer", "filament", "print"}, set(payload["presets"]), payload["presets"]
             )
 
-    def test_slice_block_is_always_unsupported_and_carries_no_numbers(self) -> None:
+    def test_default_run_attempts_no_slice_and_carries_no_numbers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             index, config = self._handoff(root)
             code, stdout, errors = self._run(self._argv(index, root / "p.3mf", config))
             self.assertEqual(0, code, errors)
             slice_block = json.loads(stdout)["slice"]
-            self.assertEqual({"supported", "reason", "detail"}, set(slice_block))
-            self.assertIs(False, slice_block["supported"])
-            self.assertIn("segfault", slice_block["reason"].lower())
-            self.assertIn("Print::export_gcode", slice_block["reason"])
-            self.assertIn("must not be inferred", slice_block["detail"])
+            self.assertEqual({"supported", "attempted", "reason", "detail"}, set(slice_block))
+            self.assertIs(True, slice_block["supported"])
+            self.assertIs(False, slice_block["attempted"])
+            self.assertIn("--slice", slice_block["reason"])
+            self.assertIn("none may be inferred, estimated, or interpolated", slice_block["detail"])
             for banned in ("print_time", "estimated_time", "filament_used", "gcode_statistics", "grams"):
                 self.assertNotIn(banned, stdout, banned)
+            self.assertFalse((root / "p.gcode").exists())
+
+    def test_slice_flag_reports_real_statistics_from_the_produced_gcode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            code, stdout, errors = self._run(
+                self._argv(
+                    index, root / "p.3mf", config, "--slice", "--slicer-executable", str(_fake_slicer(root))
+                )
+            )
+            self.assertEqual(0, code, errors)
+            payload = json.loads(stdout)
+            slice_block = payload["slice"]
+            self.assertTrue(slice_block["ok"], slice_block)
+            self.assertIs(True, slice_block["attempted"])
+            self.assertEqual(payload["project_sha256"], slice_block["project_sha256"])
+            self.assertEqual("18m 4s", slice_block["statistics"]["estimated_printing_time_normal"])
+            self.assertEqual(
+                hashlib.sha256((root / "p.gcode").read_bytes()).hexdigest(), slice_block["gcode_sha256"]
+            )
+
+    def test_failed_slice_exits_two_and_keeps_its_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            code, stdout, _ = self._run(
+                self._argv(
+                    index,
+                    root / "p.3mf",
+                    config,
+                    "--slice",
+                    "--slicer-executable",
+                    str(_fake_slicer(root, exit_code=139)),
+                )
+            )
+            self.assertEqual(2, code)
+            slice_block = json.loads(stdout)["slice"]
+            self.assertFalse(slice_block["ok"])
+            self.assertEqual(139, slice_block["exit_code"])
+            self.assertIn("SIGSEGV", slice_block["failure"])
+            self.assertNotIn("statistics", slice_block)
 
     def test_unknown_preset_exits_two_and_names_what_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -42,7 +42,7 @@ docs/
 - `REF__`, `PACK__`, and `KEEP__` components separate editable reference geometry, physical occupancy, and functional space.
 - Fusion's measurement and interference APIs provide packing evidence.
 - MCP scripts are discovered dynamically and used as short transactions.
-- Print analysis and slicing remain external where Fusion does not provide an equivalent.
+- Print analysis remains external where Fusion does not provide an equivalent; slicing is delegated to PrusaSlicer through an opt-in adapter that reports the G-code's own statistics.
 
 ## Install the host tooling
 
@@ -155,7 +155,7 @@ The package intentionally does not pretend to supply:
 
 - a Nurb-style independent browser viewer with sliders;
 - a complete FDM wall/overhang/support checker;
-- integrated printer slicing, time, or filament estimates;
+- slicer-independent time or filament estimates (the PrusaSlicer adapter reports what a real slice produced; nothing is estimated without one);
 - trustworthy one-button FDM load ratings;
 - automatic scan-to-parametric reconstruction;
 - general semantic B-Rep or feature-history diffing;

@@ -1,9 +1,11 @@
 """Build a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
-The project is constructed as a file. This module never launches the slicer:
-PrusaSlicer 2.9.6 segfaults during headless slicing on the target host, so the
-adapter deliberately contains no process-launching API at all. Everything here
-is filesystem reads plus ``zipfile``/``ElementTree`` writes.
+The project is constructed as a file. This module never launches the slicer and
+deliberately contains no process-launching API at all -- everything here is
+filesystem reads plus ``zipfile``/``ElementTree`` writes, and a test enforces
+that structurally. Slicing is real and supported, but it lives in
+``prusaslicer_slice`` so the no-execution guarantee for project construction
+stays a file boundary rather than a promise.
 
 Layout conventions worth knowing before reading the code:
 
@@ -90,10 +92,17 @@ MAX_ARTIFACT_BYTES = MAX_MODEL_BYTES
 
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
+# The 'config' default is deliberately more than PrusaSlicer itself declares: a
+# real PrusaSlicer-authored project lists only rels, model, and png, leaving its
+# own .config parts without a content type even though OPC requires one for every
+# part extension. PrusaSlicer reads those parts by name, so declaring it is
+# harmless and standards-correct -- do not "fix" this back after diffing against a
+# real project. (A thumbnail part, if ever added, would need a png default too.)
 _CONTENT_TYPES_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+ <Default Extension="config" ContentType="application/octet-stream"/>
 </Types>
 """
 
@@ -815,6 +824,6 @@ def build_project(
             "Plates march along +Y without bound, so past roughly seven plates the layout runs off "
             "a 360 mm bed. Bed size is not known here -- printer presets are referenced by name and "
             "never read -- so arrange the plates in the PrusaSlicer GUI before slicing.",
-            "The PrusaSlicer binary was not executed.",
+            "Project construction executed no binary; slicing is a separate opt-in step.",
         ],
     }

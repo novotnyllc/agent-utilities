@@ -344,7 +344,18 @@ When the user runs PrusaSlicer, the export index plus its declared `manufacturin
 
 The adapter binds the index to the manifest — the index's `manifest_sha256` must equal this manifest's hash and every 3MF part must be a declared printable part, so a project can never report provenance for a design it was not built from. It re-verifies every referenced artifact against its recorded `sha256` and byte size, writes one object per printable part (never a merged mesh), applies the declared build orientation, honors declared plate grouping, sets `instances_count` from the declared quantity, and emits only the per-object overrides that declared intent justifies (support policy, infill target, minimum perimeters). Presets are selected **by identifier only** — the user's printer, filament, and process profiles stay in PrusaSlicer and are never cloned into our artifacts; on a multi-tool printer an unrequested filament falls back to extruder 0's selection. `support_policy: explicit-regions` is refused rather than approximated, because the adapter cannot paint the declared `support_regions`. Output is deterministic and stored uncompressed, so `project_sha256` re-derives to the same value on any host, and an existing output is never overwritten. Plates are laid out along +Y with no bed-size check (bed geometry lives in the printer preset, which is never read), so arrange large jobs in the GUI.
 
-**The adapter does not slice.** It builds a project file; it never executes the PrusaSlicer binary. Its result always carries `"slice": {"supported": false, ...}` because headless slicing segfaults in `Print::export_gcode` on PrusaSlicer 2.9.6 on this host. Print time, filament mass, and G-code statistics therefore remain external evidence: open the generated project in PrusaSlicer, slice there, and record the result against the project's `sha256`. Never infer or estimate those numbers. See `references/unsupported.md`.
+**Slicing is supported, and opt-in.** Project construction never executes anything; pass `--slice` to also run PrusaSlicer headlessly on the generated project:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project fusion-project.json \
+  --export-index export-index__<run>.json --output build/project.3mf \
+  --printer "<printer preset>" --print "<print preset>" --filament "<filament preset>" \
+  --slice
+```
+
+The `slice` block then carries the statistics the produced G-code actually contains — estimated print time, filament used in mm/cm³/g — bound to the project `.3mf` sha256, the resolved preset identifiers, the G-code sha256 and byte size, the slicer version string, and the exit code. Anything the G-code does not state is listed in `absent_statistics` rather than guessed, and nothing is ever inferred, estimated, or interpolated. Without `--slice` the block is `{"supported": true, "attempted": false, ...}` and no binary runs.
+
+**The one rule that makes headless slicing work: supply the whole profile set.** PrusaSlicer exits 139 (SIGSEGV) with no output when it is given a partial set — `--printer-profile` alone crashes it. `--printer-profile` + `--print-profile` + `--material-profile` together with `--datadir` slice cleanly; `PrusaSlicer --help` states the requirement outright. The adapter refuses to invoke the binary at all unless all three are resolved, and a failed slice (any non-zero exit, a timeout, or G-code that never appeared) is reported as a structured failure naming the exit status and stderr tail, with exit code 2 and no statistics. See `references/unsupported.md`.
 
 ## 15. Handoff and persistent design state
 
@@ -376,7 +387,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
-"$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR]
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json>
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]

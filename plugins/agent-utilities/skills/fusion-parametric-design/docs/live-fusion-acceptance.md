@@ -203,9 +203,14 @@ Run the deterministic export transaction against the verified document:
 
 **Pass:** the handoff records the Fusion version (or explicit `unsaved`), manifest hash, verification-report hash, export run ID, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
 
-## 11. Optional PrusaSlicer project handoff (manual, user-performed)
+## 11. Optional PrusaSlicer project handoff
 
-Only when PrusaSlicer is installed and the user wants the slicer handoff checked. Nothing in this step is automated, and **no step here runs the slicer from a script** — headless slicing segfaults on this host (`references/unsupported.md`).
+Only when PrusaSlicer is installed and the user wants the slicer handoff checked.
+
+What is automated and what is not:
+
+- **Automated:** project generation (which runs no process at all), the optional headless slice when `--slice` is passed, and every file, hash, and statistic check below.
+- **Manual:** the GUI confirmation of objects, placement, bed fit, presets, and overrides. Only a human can eyeball those, so they are never recorded as passing on the agent's own inspection.
 
 Generate the project from the export index produced in step 10:
 
@@ -218,18 +223,22 @@ Generate the project from the export index produced in step 10:
   --print "<installed print preset>"
 ```
 
-**Pass (automated part):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, `plate`, and justified `overrides`; and `slice` is `{"supported": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
+**Pass (project generation):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, `plate`, and justified `overrides`; and `slice` is `{"supported": true, "attempted": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
+
+**Optional headless slice.** Re-run the same command with `--slice` appended (and a fresh `--output`, since neither the project nor its G-code is ever overwritten). All three presets must be named: PrusaSlicer exits 139 (SIGSEGV) with no output when given a partial set, so the adapter refuses to invoke it unless printer, print, and filament are all resolved.
+
+**Pass (slice):** exit code 0; `slice.ok` is `true`; `slice.exit_code` is `0`; `slice.project_sha256` equals the payload's `project_sha256`; `slice.gcode_sha256`/`gcode_byte_size` match `shasum -a 256` and the on-disk size of `slice.gcode_path`; `slice.slicer_version` names the binary that ran; `slice.presets` are the requested ones; and every number under `slice.statistics` also appears verbatim in the G-code's own `; ` comment lines. Anything the G-code does not state appears in `absent_statistics` rather than as a value. A failed slice must instead show `ok: false` with `exit_code`, `failure`, and `stderr_tail`, no `statistics` key, and CLI exit code 2.
 
 **Manual confirmation — the user does this, the agent does not:** open `build/project.3mf` in the PrusaSlicer GUI and confirm by eye that
 
 1. the same objects are present, one per printable part, with the part paths as their names and no merged mesh;
-2. placement matches the reported plates and orientations — each part rests on the bed on its declared contact face, and parts declared `assembled` sit together;
+2. placement matches the reported plates and orientations — each part rests on the bed on its declared contact face, and parts declared `assembled` sit together — **and every object instance fits inside the selected printer's bed**. The adapter cannot check this: bed geometry lives in the printer preset, which is referenced by name and never read, so plates march along +Y without bound and a large job can run off the bed. Confirm the fit by eye and rearrange in the GUI if needed;
 3. the printer, filament, and print presets shown are the requested ones, with the user's own profile settings intact (the project names presets, it does not carry copies of them);
 4. per-object settings show only the justified overrides — supports from the declared policy, infill from the declared target, perimeters from the declared minimum.
 
-Slicing, if wanted, is also manual: slice in the GUI and record the resulting time/mass/statistics against the project's `sha256`. The agent must not report those numbers unless the user supplies them from that GUI slice.
+Where PrusaSlicer is not installed, or `--slice` was not used, slice in the GUI and record the resulting time/mass/statistics against the project's `sha256`. The agent must not report those numbers unless they came from the `--slice` G-code or the user supplied them from a GUI slice.
 
-**Pass:** the user confirms 1–4. This is a human acceptance step; it cannot be automated on this host and is never recorded as passing on the agent's own inspection.
+**Pass:** the user confirms 1–4. This is a human acceptance step; it is never recorded as passing on the agent's own inspection.
 
 ## 12. Restore the Fusion session
 
