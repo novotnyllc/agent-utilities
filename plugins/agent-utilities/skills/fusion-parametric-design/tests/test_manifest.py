@@ -302,6 +302,7 @@ class ManifestValidationTests(unittest.TestCase):
             CONTACT_FACES,
             MATERIAL_STATUSES,
             PRINT_AS_VALUES,
+            PRINTABLE_PART_FIELDS,
             PROTECTED_FEATURE_KINDS,
             SUPPORT_POLICIES,
             SUPPORT_REGION_KINDS,
@@ -310,22 +311,7 @@ class ManifestValidationTests(unittest.TestCase):
         schema = json.loads((ROOT / "schema" / "fusion-project.schema.json").read_text(encoding="utf-8"))
         part = schema["$defs"]["printable_part"]
         self.assertIn("printable_parts", schema["properties"])
-        self.assertEqual(
-            {
-                "id",
-                "path",
-                "body_name",
-                "quantity",
-                "print_as",
-                "orientation",
-                "support_policy",
-                "support_regions",
-                "strength",
-                "protected_features",
-                "material",
-            },
-            set(part["properties"]),
-        )
+        self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
         self.assertEqual(PRINT_AS_VALUES, set(part["properties"]["print_as"]["enum"]))
         self.assertEqual(CONTACT_FACES, set(schema["$defs"]["contact_face"]["enum"]))
         self.assertEqual(SUPPORT_POLICIES, set(part["properties"]["support_policy"]["enum"]))

@@ -66,7 +66,7 @@ The packing ledger should include:
 | support | Ledges, screws, pads, saddles, adhesive, etc. |
 | clearance | Required rigid and service spacing |
 | insertion/removal | Direction and sequence |
-| confidence | Published, measured, provisional, coupon-verified |
+| confidence | `published`, `verified_cad`, `measured`, `provisional`, `coupon_verified` |
 
 ## 5. Solve packing
 

@@ -430,15 +430,51 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         for artifact in report["artifacts"]:
             intent = artifact["manufacturing_intent"]
             declared = intent_by_path[artifact["part_path"]]
-            self.assertEqual(declared["id"], intent["id"])
-            self.assertEqual(declared["orientation"], intent["orientation"])
-            self.assertEqual(declared["support_policy"], intent["support_policy"])
-            self.assertEqual(declared["strength"], intent["strength"])
-            self.assertEqual(declared["material"], intent["material"])
+            # The manifest entry also carries manifest-only keys (path, body_name);
+            # every key the intent does carry must match the declaration exactly.
+            self.assertEqual({key: declared[key] for key in intent}, intent)
+            self.assertEqual(
+                {
+                    "id",
+                    "quantity",
+                    "print_as",
+                    "orientation",
+                    "support_policy",
+                    "strength",
+                    "protected_features",
+                    "material",
+                },
+                set(intent),
+            )
         index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
         keys: set = set()
         _collect_keys(index, keys)
         self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_carries_explicit_support_regions(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        regions = [
+            {"kind": "enforcer", "description": "Support the USB-C port ceiling."},
+            {"kind": "blocker", "description": "Keep supports out of the sealing groove."},
+        ]
+        declared["printable_parts"][0]["support_policy"] = "explicit-regions"
+        declared["printable_parts"][0]["support_regions"] = regions
+        part_path = declared["printable_parts"][0]["path"]
+        self.manifest = Manifest.from_data(declared)
+
+        report = self._run(self._namespace())[0]
+        matching = [
+            artifact for artifact in report["artifacts"] if artifact["part_path"] == part_path
+        ]
+        self.assertTrue(matching)
+        for artifact in matching:
+            self.assertEqual("explicit-regions", artifact["manufacturing_intent"]["support_policy"])
+            self.assertEqual(regions, artifact["manufacturing_intent"]["support_regions"])
+        for artifact in report["artifacts"]:
+            if artifact["part_path"] != part_path:
+                self.assertNotIn("support_regions", artifact["manufacturing_intent"])
 
     def test_index_omits_intent_when_manifest_has_none(self) -> None:
         from fusion_design.manifest import Manifest
