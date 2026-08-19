@@ -189,9 +189,18 @@ Retain passing inventory as `before.json`; change one user parameter or product 
 
 ## 10. Export and handoff
 
-Use the discovered export capability or Fusion UI to export the selected print bodies. Hash the outputs and complete `DESIGN-STATE.md`.
+Run the deterministic export transaction against the verified document:
 
-**Pass:** the handoff records the Fusion version, manifest hash, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
+1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it:
+   `scripts/fusion-design emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --export-dir <fusion-host dir> -o build/export.py`
+   (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report).
+2. Execute `build/export.py` through the MCP. **Pass:** the report is `kind: export-handoff`, `ok: true`; the enclosure base, lid, and fit coupon each produce the requested STEP/3MF files; `export-index__*.json` sits beside them; recomputing `shasum -a 256` on the Fusion host matches every `sha256` in the index; byte sizes match.
+3. Append the report's `design_state_rows` to `DESIGN-STATE.md` `## Exports`.
+4. Re-run the same script unchanged. **Pass:** it fails closed with `output-exists` and no file's bytes change.
+5. Negative test: duplicate a body name inside one print-part component (or add a second solid body), re-emit, and run. **Pass:** the report fails with `ambiguous-body` and no file is written.
+6. Confirm the index contains no slicing, print-time, mass, support, or physical-fit claims — those remain external evidence.
+
+**Pass:** the handoff records the Fusion version (or explicit `unsaved`), manifest hash, verification-report hash, export run ID, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
 
 ## 11. Restore the Fusion session
 

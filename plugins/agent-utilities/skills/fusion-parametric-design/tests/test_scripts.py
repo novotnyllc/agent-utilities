@@ -8,6 +8,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 import unittest
 
+from fusion_design.export_handoff import emit_export_example_script
 from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.positive_control import emit_positive_control_script
 from fusion_design.scripts import (
@@ -87,6 +88,7 @@ class ScriptEmissionTests(unittest.TestCase):
             "sync_parameters.py": emit_parameter_sync_script,
             "scaffold.py": emit_scaffold_script,
             "verify.py": emit_verification_script,
+            "export.py": emit_export_example_script,
         }
         for filename, emitter in emitted.items():
             with self.subTest(filename=filename):

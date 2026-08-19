@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 import sys
 from typing import Callable
 
+from .export_handoff import (
+    ALLOWED_FORMATS,
+    ExportConfig,
+    emit_export_script,
+    verification_binding_from_report,
+)
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
@@ -32,15 +39,18 @@ def _same_path(left: str, right: str) -> bool:
     return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
 
 
-def _validate_emit_paths(args: argparse.Namespace) -> None:
-    named_paths = [("manifest", args.manifest)]
-    if args.output:
-        named_paths.append(("output", args.output))
-
+def _validate_named_paths(named_paths: list[tuple[str, str]]) -> None:
     for index, (left_name, left_path) in enumerate(named_paths):
         for right_name, right_path in named_paths[index + 1 :]:
             if _same_path(left_path, right_path):
                 raise ValueError(f"{left_name} and {right_name} must name different files")
+
+
+def _validate_emit_paths(args: argparse.Namespace) -> None:
+    named_paths = [("manifest", args.manifest)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
 
 
 def _manifest_command(args: argparse.Namespace, function: Callable) -> int:
@@ -63,6 +73,33 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     plan = build_plan(load_manifest(args.manifest))
     print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
     return 2 if plan.blocked else 0
+
+
+def _cmd_emit_export(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest), ("verification-report", args.verification_report)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    formats = tuple(args.formats or ("step", "3mf"))
+    if len(set(formats)) != len(formats):
+        raise ValueError("--format values must not repeat")
+
+    report_bytes = Path(args.verification_report).read_bytes()
+    manifest = load_manifest(args.manifest)
+    report_data = json.loads(report_bytes.decode("utf-8"))
+    if isinstance(report_data, dict) and report_data.get("sample"):
+        raise ValueError(
+            "refusing to bind a sample verification report; run the live verification transaction and pass its saved report"
+        )
+    config = ExportConfig(
+        export_dir=args.export_dir,
+        formats=formats,
+        verification_report_sha256=hashlib.sha256(report_bytes).hexdigest(),
+        expected_bounds_mm=verification_binding_from_report(manifest, report_data),
+    )
+    _write_output(emit_export_script(manifest, config), args.output)
+    return 0
 
 
 def _cmd_diff(args: argparse.Namespace) -> int:
@@ -109,6 +146,31 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("manifest")
         command.add_argument("-o", "--output")
         command.set_defaults(handler=lambda args, fn=emitter: _manifest_command(args, fn))
+
+    emit_export = subparsers.add_parser(
+        "emit-export",
+        help="Emit the deterministic export/handoff Fusion Python script bound to a passing verification report.",
+    )
+    emit_export.add_argument("manifest")
+    emit_export.add_argument(
+        "--verification-report",
+        required=True,
+        help="Path to the saved verification report JSON this export is justified by.",
+    )
+    emit_export.add_argument(
+        "--export-dir",
+        required=True,
+        help="Directory on the Fusion host where export files and the handoff index are written.",
+    )
+    emit_export.add_argument(
+        "--format",
+        action="append",
+        choices=list(ALLOWED_FORMATS),
+        dest="formats",
+        help="Export format (repeatable). Defaults to step plus 3mf; step is always required.",
+    )
+    emit_export.add_argument("-o", "--output")
+    emit_export.set_defaults(handler=_cmd_emit_export)
 
     diff = subparsers.add_parser("diff-reports", help="Diff two machine-readable Fusion inventory/verification reports.")
     diff.add_argument("before")

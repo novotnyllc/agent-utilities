@@ -313,7 +313,16 @@ Do not claim a load rating from visual inspection. Use an appropriate simulation
 
 ## 14. Export only from the verified Fusion state
 
-Use Fusion's export capability to produce STEP and 3MF/STL as required. Record document version, manifest hash, export path, and file hash in the handoff.
+Use the deterministic export transaction instead of manual export selection:
+
+```bash
+scripts/fusion-design emit-export fusion-project.json \
+  --verification-report verify-report.json \
+  --export-dir /path/on/the/fusion/host/exports \
+  -o build/export.py
+```
+
+The CLI refuses to emit unless the saved verification report is `kind: verification`, `ok: true`, and hash-matches the manifest; the generated transaction then re-checks live bounds against that report, resolves each expected print part to exactly one solid body, refuses ambiguous or missing bodies, never overwrites existing outputs, and records byte size and SHA-256 for every file plus a machine-readable `export-index__*.json` beside the exports. Append the emitted `design_state_rows` to the `## Exports` table in `DESIGN-STATE.md`.
 
 Fusion export is not the slicer. Print time, filament mass, supports, and machine-specific behavior require a configured slicer or another external manufacturing tool. If no supported slicer is available, export the files and state that cost/time estimates are unavailable rather than inventing them.
 
@@ -348,6 +357,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json>
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]

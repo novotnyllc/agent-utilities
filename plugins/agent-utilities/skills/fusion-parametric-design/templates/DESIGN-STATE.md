@@ -86,9 +86,11 @@ Use only `not run`, `pass`, `fail`, or `not applicable`.
 
 ## Exports
 
-| Artifact | Fusion version/checkpoint | Configuration | File SHA-256 | Verification report | Slicer/profile | Notes |
-|---|---|---|---|---|---|---|
-| None | — | — | — | — | — | — |
+| Artifact | Fusion version/checkpoint | Component path | Units | Export options | Byte size | File SHA-256 | Export run ID | Verification report | Slicer/profile | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| None | — | — | — | — | — | — | — | — | — | — |
+
+Rows come from the export transaction's `design_state_rows`; append them verbatim rather than hand-copying hashes.
 
 ## Unsupported or outstanding proof
 
