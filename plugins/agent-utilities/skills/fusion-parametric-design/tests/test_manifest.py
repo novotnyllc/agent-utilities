@@ -1290,6 +1290,49 @@ class ManifestValidationTests(unittest.TestCase):
         data["printable_parts"][0]["material"]["source_id"] = "enclosure_material_requirements"
         self.assertIn("material-decision-part-outranks-decision", self._codes(data))
 
+    def test_provisional_starting_assumptions_compose_with_the_confidence_rule(self) -> None:
+        """The example's five sourced provisionals against the provenance rule.
+
+        Those parameters previously carried no source_id at all, which made the
+        confidence rule short-circuit on them. Now that they cite a
+        conservative_proxy source, the rule is live -- so pin both directions.
+        """
+        sourced = (
+            "clr_rigid_xy",
+            "clr_rigid_z",
+            "fab_wall_thickness",
+            "fab_fit_clearance",
+            "pack_usb_c_straight_departure",
+        )
+        for name in sourced:
+            parameter = next(p for p in self.data["parameters"] if p["name"] == name)
+            self.assertEqual("provisional_starting_assumptions", parameter["source_id"])
+            self.assertTrue(parameter["provisional"], name)
+
+        # Declared provisional against a provisional source: satisfied.
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(self.data))
+
+        # Settling one without settling its source is refused.
+        data = copy.deepcopy(self.data)
+        next(p for p in data["parameters"] if p["name"] == "fab_wall_thickness")["provisional"] = False
+        self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+        # And the source cannot be talked up to launder them: the kind cap holds
+        # a conservative_proxy at provisional however it labels itself.
+        data = copy.deepcopy(self.data)
+        next(s for s in data["sources"] if s["id"] == "provisional_starting_assumptions")[
+            "confidence"
+        ] = "measured"
+        for name in sourced:
+            next(p for p in data["parameters"] if p["name"] == name)["provisional"] = False
+        self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+        # A printed and measured coupon is what settles them.
+        next(s for s in data["sources"] if s["id"] == "provisional_starting_assumptions")[
+            "confidence"
+        ] = "coupon_verified"
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CLAIM_CONFIDENCE_RANK,
