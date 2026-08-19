@@ -18,7 +18,9 @@ from .export_handoff import (
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .mesh_convert import emit_mesh_convert_script
 from .mesh_deviation import emit_mesh_deviation_script
+from .mesh_dump import read_mesh_dump
 from .mesh_extract import emit_mesh_extract_script
+from .mesh_segmentation import fit_regions, load_spec
 from .mesh_probe import emit_capability_probe_script
 from .mesh_source import (
     emit_mesh_capture_script,
@@ -399,6 +401,26 @@ def _cmd_prepare_module_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fit_regions(args: argparse.Namespace) -> int:
+    """Detect primitives in a hash-bound mesh dump and print the fit record.
+
+    The dump digest is a required argument, never read from the dump itself: a
+    hash a file carries about its own bytes is not a binding, and the point of
+    this argument is that it came from the extraction report.
+    """
+    _validate_named_paths(
+        [("dump", args.dump), ("spec", args.spec)]
+        + ([("output", args.output)] if args.output else [])
+    )
+    spec = load_spec(json.loads(Path(args.spec).read_text(encoding="utf-8")))
+    dump = read_mesh_dump(args.dump, args.dump_sha256)
+    record = fit_regions(dump, spec)
+    _write_output(json.dumps(record, indent=2, sort_keys=True), args.output)
+    # A refusal is a declared outcome with a named reason, so it exits non-zero:
+    # nothing downstream may consume a record that produced no geometry.
+    return 2 if record["refusal"] is not None else 0
+
+
 def _cmd_emit_module_bootstrap(args: argparse.Namespace) -> int:
     _write_output(emit_module_bootstrap(args.bundle, args.output), args.output)
     return 0
@@ -703,6 +725,31 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_modules.add_argument("entry_module")
     prepare_modules.add_argument("--cache-root")
     prepare_modules.set_defaults(handler=_cmd_prepare_module_bundle)
+
+    fit = subparsers.add_parser(
+        "fit-regions",
+        help=(
+            "Detect analytic primitives in a hash-bound mesh dump and print the fit record: regions, "
+            "their disproof-gated fits with per-parameter uncertainty, unclaimed area, and the "
+            "measured noise and feature-size budget. Needs no Fusion."
+        ),
+    )
+    fit.add_argument("dump", help="Path to the mesh dump the extraction transaction wrote.")
+    fit.add_argument(
+        "--dump-sha256",
+        required=True,
+        help="The SHA-256 the extraction report recorded; the reader refuses bytes that do not match it.",
+    )
+    fit.add_argument(
+        "--spec",
+        required=True,
+        help=(
+            "Path to the detection spec JSON. Every threshold is an object with a value and a "
+            "rationale; a threshold without a rationale is rejected."
+        ),
+    )
+    fit.add_argument("-o", "--output")
+    fit.set_defaults(handler=_cmd_fit_regions)
 
     emit_bootstrap = subparsers.add_parser(
         "emit-module-bootstrap",

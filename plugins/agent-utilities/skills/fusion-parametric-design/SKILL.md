@@ -433,6 +433,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+"$SKILL_DIR/scripts/fusion-design" fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]
