@@ -160,6 +160,105 @@ What this package *does* supply is in `references/mesh-reconstruction.md`: immut
 
 The raw material *is* scriptable, which is why the fallback is our own arithmetic rather than an external tool: `MeshBody.mesh` returns a `PolygonMesh` exposing `nodeCoordinates`, `triangleNodeIndices` and `triangleFaceGroupTempIds` — Fusion's own segmentation, readable per triangle. Plane–mesh intersection and least-squares primitive fitting over that data live in `src/fusion_design/mesh_fitting.py` and are fully testable offline against synthetic meshes with known analytic answers. Fusion fits primitives internally for `MeshGenerateFaceGroupsFeature` but never exposes the fit, only the grouping.
 
+## Face-group segmentation: measured 2026-08-19, and now the segmentation source
+
+**Status:** Supported, cheap, far better than its default suggests, and adopted.
+
+`emit-mesh-face-groups` runs it and `fit-regions` consumes it. The package's own
+RANSAC/ICM segmentation layer is **deleted** — the numbers below are why — and a
+dump with no grouping is refused `face-groups-absent` rather than segmented by a
+fallback nobody measured. What is *not* delegated is the judgement: every group
+Fusion returns still passes support floors, Moran's I, the blocked held-out
+refit, the parsimony F test and the uncertainty gate before it is a fit.
+
+Re-measured 2026-08-19 with both pipelines run over identical dumps of the same
+11 STLs at the same declared thresholds: area-weighted coverage rose from
+**41.7% to 62.5%**, regions offered to the fitters from 47 to 1,069, regions
+accepted through every gate from 38 to 268, and accepted cylinders from 0 to 4.
+POD-B-BASE went from one region at 2.3% to 188 regions at 69.1%. The remaining
+839 groups of the 1,908 carry fewer than four points, which is below what a
+least-squares fit needs at all, and land in `unclaimed` rather than anywhere
+that could be mistaken for a fit.
+
+`MeshGenerateFaceGroupsFeatures.createInput` takes the **MeshBody itself**, not
+an `ObjectCollection`; a collection raises `2 : InternalValidationError :
+meshBody`. Measured, not inferred from `MeshConvertFeatures`, which does take a
+collection.
+
+`MeshGenerateFaceGroupsFeatureInput.meshGenerateFaceGroupsMethodType` **is
+readable and settable**, and it is the knob that matters. The three numeric
+knobs are not: `angleThreshold`, `minimumFaceGroupSize` and `boundaryTolerance`
+all raise `RuntimeError: 2 : InternalValidationError` on get, and reject every
+value on set. The method enum does not.
+
+The default is `FastGenerateFaceGroupsType` (angle-threshold clustering).
+`AccurateGenerateFaceGroupsType` matches mesh faces to analytic primitives.
+Measured over the 11 real production STLs in the Coat electronics-enclosure set
+(444 to 16,562 triangles):
+
+| | Fast (default) | Accurate |
+|---|---|---|
+| face groups, 11 parts | 976 | 1,908 |
+| segmentation time | 0.004–0.06 s | 0.03–1.92 s |
+| prismatic `MeshConvertFeature` → one healthy solid | 2 of 11 | 10 of 11 |
+| worst volume error where a solid *was* produced | +7.6%, reported healthy | −0.14% |
+| prismatic convert time, POD-A1-BASE | 33.4 s | 0.30 s |
+
+The prismatic convert consumes these groups — "face groups are used to infer
+prismatic features" — so the earlier finding that prismatic convert produces no
+solid on real STLs is a finding about the *default grouping*, not about convert.
+Under `Accurate`, convert is both correct and one to two orders of magnitude
+faster, because it is handed a segmentation instead of having to infer one.
+
+`PolygonMesh.triangleFaceGroupTempIds` delivers the result as one `FaceGroup`
+tempId per triangle, in `triangleNodeIndices` order, and `MeshBody.faceGroups`
+carries each group's `area`, `centroid`, `boundingBox` and `isPlanar`. That is
+a complete region assignment for our own fitters, with no inference needed. The
+tempIds partition the triangles and then stop existing: region identity stays a
+hash of sorted triangle indices bound to the dump, because a temp id is not
+stable across sessions.
+
+The method is set explicitly on every run and read back off the input before the
+feature is added; a release where it does not stick refuses rather than grouping
+by an unannounced Fast. In a direct-modeling design
+`MeshGenerateFaceGroupsFeatures.add()` returns `None` while still applying, so
+the return value is never read.
+
+Fed those regions, `mesh_fitting.fit_primitive` accepted a fit on **1,908 of
+1,908** groups — every group, on every part — and every one of the 383 cylinders
+came back with a radius one-sigma inside the skill's own `max_radius_rel_sigma`
+of 2%. One caveat, and it is the whole caveat: on a bore or round tessellated
+with only two rings of vertices and no intermediate samples, a sphere passes
+exactly through the same points as the cylinder, and `fit_face_group` ranks by
+residual alone, so the sphere wins by the eighth decimal. 367 of 367 such
+groups are cylinders, and the group's own facet normals say so unambiguously —
+every one within 5° of perpendicular to the cylinder axis. **The vertices alone
+cannot separate sphere from cylinder here; the facet normals can.** Any use of
+these regions has to carry that tie-break, and `fit_face_group` now does: given
+the group's facet normals and a caller-declared
+`cylinder_normal_perpendicular_deg`, a sphere that ranks first loses the group to
+an accepted cylinder whose axis every facet normal is perpendicular to. The
+evidence is recorded on the fit (`support.normal_tie_break`), and unreadable or
+tilted normals leave the ranking exactly where it was.
+
+The second thing the grouping changed is where the fillets are. Fusion delivers
+an edge round as a **partial-arc cylinder**, not a torus -- that is the 298-group
+bucket -- so a fillet candidate is a torus *or* a cylinder whose measured
+`angular_span_deg` is inside the declared `max_fillet_arc_deg`. A bore or a boss
+closes on itself and a round never does, which is the measurement that separates
+them. The evidence discipline is unchanged: two accepted non-blend neighbours or
+it is an ordinary fit.
+
+**What the tie-break does not buy, stated plainly.** All 367 groups now select a
+cylinder and carry its true radius, and most are then still refused for support
+span: two rings of vertices and nothing between them determine the *radius*
+without determining the *axis*, and the support floor says so. Only 4 cylinders
+across the 11 parts survive every gate, and only one fillet candidate is found,
+because a blend has to be accepted before it can be adjacent to anything. The
+298-group partial-arc bucket is therefore recognised but largely unrecovered.
+Closing that gap means denser sampling across the round -- a capture problem, not
+a threshold one -- and is not attempted here.
+
 ## Mesh deviation comparison (`PolygonMesh.compareWith`)
 
 **Status:** Supported where present, and **preview-gated**.
@@ -222,3 +321,97 @@ After two or more parts reveal genuinely shared logic, refactor into shared user
 **Status:** Unsupported by design.
 
 The MCP server executes explicit requests; the agent/skill owns the plan, checkpoints, decisions, and loop. Keep state in the manifest, Fusion document, reports, and `DESIGN-STATE.md`.
+
+## Oblique sketch planes in a parametric reconstruction
+
+**Status:** Unsupported in v1; bounded by the Fusion API.
+
+`ConstructionPlaneInput.setByPlane` is direct-edit-only, so in a parametric
+design every sketch plane must be an origin plane or an offset from one. A
+reconstruction whose cap plane is oblique to every datum axis is declared
+`plane-unmappable` host-side, before any transaction exists, and its regions
+become unreconstructed with that gate named.
+
+The escape hatch is known and deliberately not attempted: a scaffold sketch
+carrying three points, with a construction plane through them. It is future
+work rather than an improvisation, because a scaffold sketch is itself geometry
+that would have to be planned, constrained and verified.
+
+## Hole and fillet emission from a reconstruction program
+
+**Status:** Built — under the named conditions below, outside which they refuse.
+
+This entry previously read "not yet emitted", on the grounds that hole
+classification needs triangle winding to tell a bore from a boss and that
+evidence was not in the fit record. The evidence *is* in the fit record — the
+fitting stage measures `orientation.material_side` per region — and the planner
+now reads it. Both kinds emit. What remains unsupported is narrower, and worth
+stating precisely, because each of these leaves a region unreconstructed under
+the named gate rather than producing an approximate feature:
+
+1. **A hole in a mesh that is not watertight.** `material_side` is `null` on an
+   open or inconsistently wound mesh, and a cylinder of unknown side is left
+   unreconstructed with `material-side-unavailable`. Fix the scan, not the
+   threshold.
+2. **A hole in a program with more than one base body** —
+   `hole-base-ambiguous`. Nothing in the fit record says which body a bore is a
+   hole in, and choosing would be a guess.
+3. **A hole in a revolved body** — `hole-base-not-extruded`. A bore coaxial with
+   a revolve is already part of its half-profile; a non-coaxial bore against a
+   revolved body is a real feature and is not placed here.
+4. **A hole whose axis is oblique to its body's extrusion direction**
+   (`hole-axis-oblique`) or that reaches outside the body it would cut
+   (`hole-not-contained`).
+5. **A fillet whose two neighbours were not both rebuilt**
+   (`fillet-neighbour-unreconstructed`), or whose neighbours are surfaces of the
+   same archetype (`fillet-neighbour-shared`). A fillet rounds the edge between
+   two features; without two features there is no edge.
+6. **A fillet whose parent features share no edge in the built solid.** Recorded
+   in the rebuild report's `fillets_skipped` and subtracted from coverage. The
+   torus fit said the two surfaces meet and the built solid says they do not;
+   rounding some other nearby edge would invent the geometry the measurement
+   failed to find.
+7. **Variable-radius and elliptical blends.** Fillets are proposed by adjacency
+   and near-constant width, which is enough for a `filletFeatures` radius and
+   not enough to certify anything richer.
+
+Fillets are the one archetype that is *individually optional*: nothing depends
+on a finishing feature, so a fillet that cannot be placed costs its own region
+and nothing downstream. Every other archetype carries dependents, which is why
+every other failure rolls the whole build back.
+
+## Guaranteed full coverage of any part
+
+**Status:** Structurally impossible, and `parametric-partial` exists because of it.
+
+`reconstruction-coverage` returns `parametric-full`, `parametric-partial` or
+`reconstruction-refused`. The middle label is the honest common case and it is a
+**success**: part of the scan stands as editable features, the rest is listed
+with the gate that stopped it, and the source mesh stays in the document as
+reference geometry over the rebuild.
+
+Any promise of full coverage on an arbitrary part would be the claim this whole
+pipeline is a correction to. The coverage arithmetic therefore runs one
+direction only — each stage may lose area and can never gain any — so an
+archetype that was planned and not delivered subtracts its region even when the
+build otherwise succeeded.
+
+## Adopted 3-D relationships as sketch constraints
+
+**Status:** Carried as evidence, not enforced.
+
+The reconstruction program names its adopted relationships by region hash. A
+mesh section returns points, not regions, and the emitter receives the program
+and the dump but never the fit record — so nothing in it can say which sketch
+entity came from which region. Adopted constraints are carried into the report
+with `localized: false` and are never claimed to have been enforced. The sketch
+constraints that *are* applied were measured independently from the 2-D section,
+each recording the deviation it snapped from.
+
+## Joint-parameter interaction in the editability proof
+
+**Status:** Not exercised.
+
+The perturbation loop changes one parameter at a time and reports
+`interactions_exercised: false`. Pairwise perturbation is the same loop run
+n-squared times; it is deferred for run time, not for difficulty.

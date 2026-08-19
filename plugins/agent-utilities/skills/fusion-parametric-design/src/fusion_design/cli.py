@@ -17,7 +17,20 @@ from .export_handoff import (
 )
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .mesh_convert import emit_mesh_convert_script
+from .mesh_datum import ReconstructionRefused, parse_fit_record
+from .reconstruction_coverage import compose_coverage, format_coverage
+from .reconstruction_program import build_reconstruction_program
 from .mesh_deviation import emit_mesh_deviation_script
+from .mesh_dump import read_mesh_dump
+from .mesh_editability import (
+    emit_mesh_editability_script,
+    validate_editability_report,
+)
+from .mesh_extract import emit_mesh_extract_script
+from .mesh_face_groups import emit_mesh_face_groups_script
+from .mesh_rebuild import emit_mesh_rebuild_script, load_program, replan_without
+from .mesh_segmentation import fit_regions, load_spec
+from .mesh_probe import emit_capability_probe_script
 from .mesh_source import (
     emit_mesh_capture_script,
     mesh_source_record,
@@ -176,6 +189,22 @@ def _cmd_emit_mesh_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_emit_capability_probe(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest)]
+    if args.probe_spec:
+        named_paths.append(("probe-spec", args.probe_spec))
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    spec = None
+    if args.probe_spec:
+        spec = json.loads(Path(args.probe_spec).read_text(encoding="utf-8"))
+    _write_output(emit_capability_probe_script(manifest, spec), args.output)
+    return 0
+
+
 def _mesh_path_command(args: argparse.Namespace, spec_name: str, function: Callable) -> int:
     spec_path = getattr(args, spec_name)
     named_paths = [("manifest", args.manifest), ("classification", args.classification), ("spec", spec_path)]
@@ -195,6 +224,154 @@ def _mesh_path_command(args: argparse.Namespace, spec_name: str, function: Calla
     # value against itself and could never fail.
     source_record = mesh_source_record(manifest, args.mesh_source_id)
     _write_output(function(manifest, classification, source_record, spec), args.output)
+    return 0
+
+
+def _cmd_plan_reconstruction(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest), ("fit-record", args.fit_record), ("program-spec", args.program_spec)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    fit_record = parse_fit_record(json.loads(Path(args.fit_record).read_text(encoding="utf-8")))
+    spec = json.loads(Path(args.program_spec).read_text(encoding="utf-8"))
+    try:
+        program = build_reconstruction_program(
+            fit_record, spec, manifest_sha256=manifest_sha256(manifest)
+        )
+    except ReconstructionRefused as refused:
+        # A refusal is a result, not a crash: it prints its named reason and the
+        # alternative on stdout so the record can be kept as evidence.
+        print(json.dumps(refused.to_dict(), indent=2, sort_keys=True))
+        return 2
+    _write_output(json.dumps(program, indent=2, sort_keys=True), args.output)
+    return 0
+
+
+def _cmd_emit_mesh_rebuild(args: argparse.Namespace) -> int:
+    named_paths = [
+        ("manifest", args.manifest),
+        ("classification", args.classification),
+        ("program", args.program),
+        ("rebuild-spec", args.rebuild_spec),
+    ]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    verify_manifest_mesh_sources(manifest, args.manifest)
+    classification = json.loads(Path(args.classification).read_text(encoding="utf-8"))
+    program = load_program(args.program)
+    spec = json.loads(Path(args.rebuild_spec).read_text(encoding="utf-8"))
+    source_record = mesh_source_record(manifest, args.mesh_source_id)
+    # Minted here, never derived from the program: only a report produced by
+    # running this exact script can echo it back.
+    nonce = secrets.token_hex(16)
+    try:
+        source = emit_mesh_rebuild_script(
+            manifest, classification, source_record, program, spec, nonce
+        )
+    except ReconstructionRefused as refused:
+        print(json.dumps(refused.to_dict(), indent=2, sort_keys=True))
+        return 2
+    _write_output(source, args.output)
+    print(
+        f"rebuild nonce: {nonce}\n"
+        "The rebuild report echoes it back; emit-mesh-editability binds to that report. "
+        "Re-emitting mints a new nonce and invalidates this one.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_emit_mesh_editability(args: argparse.Namespace) -> int:
+    named_paths = [
+        ("manifest", args.manifest),
+        ("rebuild-record", args.rebuild_record),
+        ("editability-spec", args.editability_spec),
+    ]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    record = json.loads(Path(args.rebuild_record).read_text(encoding="utf-8"))
+    spec = json.loads(Path(args.editability_spec).read_text(encoding="utf-8"))
+    nonce = secrets.token_hex(16)
+    try:
+        source = emit_mesh_editability_script(manifest, record, spec, nonce)
+    except ManifestValidationError as invalid:
+        print(
+            json.dumps(
+                {"ok": False, "issues": [asdict(issue) for issue in invalid.issues]},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    _write_output(source, args.output)
+    print(
+        f"editability nonce: {nonce}\n"
+        "Pass it to check-editability once this script has run in Fusion and its report is saved.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_check_editability(args: argparse.Namespace) -> int:
+    _validate_named_paths(
+        [("rebuild-record", args.rebuild_record), ("editability-report", args.editability_report)]
+    )
+    record = json.loads(Path(args.rebuild_record).read_text(encoding="utf-8"))
+    report = json.loads(Path(args.editability_report).read_text(encoding="utf-8"))
+    verdict = validate_editability_report(
+        report, nonce=args.editability_nonce, rebuild_record=record
+    )
+    print(json.dumps(verdict, indent=2, sort_keys=True))
+    return 0 if verdict["ok"] else 2
+
+
+def _cmd_reconstruction_coverage(args: argparse.Namespace) -> int:
+    named_paths = [("program", args.program)]
+    for name, value in (
+        ("fit-record", args.fit_record),
+        ("rebuild-report", args.rebuild_report),
+        ("editability-verdict", args.editability_verdict),
+        ("output", args.output),
+    ):
+        if value:
+            named_paths.append((name, value))
+    _validate_named_paths(named_paths)
+
+    def read(path: str | None) -> dict | None:
+        return None if not path else json.loads(Path(path).read_text(encoding="utf-8"))
+
+    account = compose_coverage(
+        load_program(args.program),
+        fit_record=read(args.fit_record),
+        rebuild_report=read(args.rebuild_report),
+        editability_verdict=read(args.editability_verdict),
+    )
+    _write_output(json.dumps(account, indent=2, sort_keys=True), args.output)
+    # The prose goes to stderr so the JSON stays pipeable, and it goes out on
+    # every run: a partial reconstruction that is only visible to a reader who
+    # parsed the JSON is a partial reconstruction that gets reported as a
+    # success.
+    print(format_coverage(account), file=sys.stderr)
+    return 0 if account["label"] != "reconstruction-refused" else 2
+
+
+def _cmd_replan_without(args: argparse.Namespace) -> int:
+    named_paths = [("program", args.program), ("refusal", args.refusal)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+    program = load_program(args.program)
+    refusal_report = json.loads(Path(args.refusal).read_text(encoding="utf-8"))
+    replanned = replan_without(program, refusal_report)
+    _write_output(json.dumps(replanned, indent=2, sort_keys=True), args.output)
     return 0
 
 
@@ -381,6 +558,26 @@ def _cmd_prepare_module_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fit_regions(args: argparse.Namespace) -> int:
+    """Detect primitives in a hash-bound mesh dump and print the fit record.
+
+    The dump digest is a required argument, never read from the dump itself: a
+    hash a file carries about its own bytes is not a binding, and the point of
+    this argument is that it came from the extraction report.
+    """
+    _validate_named_paths(
+        [("dump", args.dump), ("spec", args.spec)]
+        + ([("output", args.output)] if args.output else [])
+    )
+    spec = load_spec(json.loads(Path(args.spec).read_text(encoding="utf-8")))
+    dump = read_mesh_dump(args.dump, args.dump_sha256)
+    record = fit_regions(dump, spec)
+    _write_output(json.dumps(record, indent=2, sort_keys=True), args.output)
+    # A refusal is a declared outcome with a named reason, so it exits non-zero:
+    # nothing downstream may consume a record that produced no geometry.
+    return 2 if record["refusal"] is not None else 0
+
+
 def _cmd_emit_module_bootstrap(args: argparse.Namespace) -> int:
     _write_output(emit_module_bootstrap(args.bundle, args.output), args.output)
     return 0
@@ -430,6 +627,94 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_capture.add_argument("manifest")
     mesh_capture.add_argument("-o", "--output")
     mesh_capture.set_defaults(handler=_cmd_emit_mesh_capture)
+
+    capability_probe = subparsers.add_parser(
+        "emit-capability-probe",
+        help=(
+            "Emit the read-only runtime capability probe: the embedded interpreter's tag triple, its "
+            "writable sys.path entries, which preview mesh and construction APIs exist, and — when a "
+            "probe spec binds a body — the face-group histogram and a dump write round-trip."
+        ),
+    )
+    capability_probe.add_argument("manifest")
+    capability_probe.add_argument(
+        "--probe-spec",
+        help=(
+            "Optional path to a probe spec JSON: component_path, body_name, dump_dir. Without it the "
+            "face-group and write-back probes report 'not-requested' rather than passing."
+        ),
+    )
+    capability_probe.add_argument("-o", "--output")
+    capability_probe.set_defaults(handler=_cmd_emit_capability_probe)
+
+    mesh_extract = subparsers.add_parser(
+        "emit-mesh-extract",
+        help=(
+            "Emit the read-only mesh extraction script: writes a hash-bound indexed mesh dump the host "
+            "reader re-hashes before parsing. Requires a classification of parametric-rebuild for this "
+            "exact mesh source."
+        ),
+    )
+    mesh_extract.add_argument("manifest")
+    mesh_extract.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_extract.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON; its path must be 'parametric-rebuild'.",
+    )
+    mesh_extract.add_argument(
+        "--extract-spec",
+        required=True,
+        help=(
+            "Path to the extraction spec JSON: body binding, dump_dir, and the declared max_triangles "
+            "and fallback_max_bytes with their rationales."
+        ),
+    )
+    mesh_extract.add_argument("-o", "--output")
+    mesh_extract.set_defaults(
+        handler=lambda args: _mesh_path_command(args, "extract_spec", emit_mesh_extract_script)
+    )
+
+    mesh_face_groups = subparsers.add_parser(
+        "emit-mesh-face-groups",
+        help=(
+            "Emit the segmentation script: runs MeshGenerateFaceGroups on the mesh body with the "
+            "accurate method set explicitly, then reads the per-triangle grouping and per-group "
+            "metadata back. Run this before emit-mesh-extract, which reads the grouping and never "
+            "generates one. Requires a classification of parametric-rebuild for this exact mesh "
+            "source."
+        ),
+    )
+    mesh_face_groups.add_argument("manifest")
+    mesh_face_groups.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_face_groups.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON; its path must be 'parametric-rebuild'.",
+    )
+    mesh_face_groups.add_argument(
+        "--face-group-spec",
+        required=True,
+        help=(
+            "Path to the face-group spec JSON: the body binding. The grouping method is not a spec "
+            "field -- the fast method is measurably wrong on real parts, so only the accurate one is "
+            "offered."
+        ),
+    )
+    mesh_face_groups.add_argument("-o", "--output")
+    mesh_face_groups.set_defaults(
+        handler=lambda args: _mesh_path_command(
+            args, "face_group_spec", emit_mesh_face_groups_script
+        )
+    )
 
     mesh_convert = subparsers.add_parser(
         "emit-mesh-convert",
@@ -489,6 +774,146 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_deviation.set_defaults(
         handler=lambda args: _mesh_path_command(args, "deviation_spec", emit_mesh_deviation_script)
     )
+
+    plan_reconstruction = subparsers.add_parser(
+        "plan-reconstruction",
+        help=(
+            "Derive the datum frame, license and adopt relationships, and emit the versioned "
+            "reconstruction program from a fit record. Host-side only; no Fusion needed."
+        ),
+    )
+    plan_reconstruction.add_argument("manifest")
+    plan_reconstruction.add_argument(
+        "--fit-record",
+        required=True,
+        help="Path to the fit record JSON produced by the fitting stage, bound to a mesh dump hash.",
+    )
+    plan_reconstruction.add_argument(
+        "--program-spec",
+        required=True,
+        help=(
+            "Path to the program spec JSON: the declared thresholds with their rationales, and the "
+            "adoption decision for each proposal that is adopted."
+        ),
+    )
+    plan_reconstruction.add_argument("-o", "--output")
+    plan_reconstruction.set_defaults(handler=_cmd_plan_reconstruction)
+
+    mesh_rebuild = subparsers.add_parser(
+        "emit-mesh-rebuild",
+        help=(
+            "Emit the parametric rebuild transaction from a reconstruction program and its bound "
+            "mesh dump. Requires a parametric-rebuild classification for this exact mesh source."
+        ),
+    )
+    mesh_rebuild.add_argument("manifest")
+    mesh_rebuild.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being rebuilt; the classification must agree with it.",
+    )
+    mesh_rebuild.add_argument(
+        "--classification", required=True, help="Path to the recorded classification JSON."
+    )
+    mesh_rebuild.add_argument(
+        "--program",
+        required=True,
+        help="Path to the reconstruction program JSON produced by plan-reconstruction.",
+    )
+    mesh_rebuild.add_argument(
+        "--rebuild-spec",
+        required=True,
+        help=(
+            "Path to the rebuild spec JSON: the component name, the path to the mesh dump the "
+            "program was fitted from, and the declared emission thresholds with their rationales."
+        ),
+    )
+    mesh_rebuild.add_argument("-o", "--output")
+    mesh_rebuild.set_defaults(handler=_cmd_emit_mesh_rebuild)
+
+    mesh_editability = subparsers.add_parser(
+        "emit-mesh-editability",
+        help=(
+            "Emit the editability proof: perturb each rebuilt parameter, assert its declared "
+            "observable moved, restore, and assert the model returned."
+        ),
+    )
+    mesh_editability.add_argument("manifest")
+    mesh_editability.add_argument(
+        "--rebuild-record",
+        required=True,
+        help="Path to the saved report the rebuild transaction wrote.",
+    )
+    mesh_editability.add_argument(
+        "--editability-spec",
+        required=True,
+        help=(
+            "Path to the editability spec JSON: per-parameter perturbation, expected observable, "
+            "minimum observable change and rationale, plus the restore epsilon per observable."
+        ),
+    )
+    mesh_editability.add_argument("-o", "--output")
+    mesh_editability.set_defaults(handler=_cmd_emit_mesh_editability)
+
+    check_editability = subparsers.add_parser(
+        "check-editability",
+        help=(
+            "Validate a saved editability report against its nonce and hash chain. This is the "
+            "gate: it cannot pass a report that asserts more than the run performed."
+        ),
+    )
+    check_editability.add_argument(
+        "--rebuild-record", required=True, help="Path to the saved rebuild report."
+    )
+    check_editability.add_argument(
+        "--editability-report", required=True, help="Path to the saved editability report."
+    )
+    check_editability.add_argument(
+        "--editability-nonce",
+        required=True,
+        help="The nonce emit-mesh-editability printed for the script that produced this report.",
+    )
+    check_editability.set_defaults(handler=_cmd_check_editability)
+
+    coverage = subparsers.add_parser(
+        "reconstruction-coverage",
+        help=(
+            "Compose the fit record, the program, the rebuild report and the editability verdict "
+            "into one account of what was reconstructed and what was not, with the label "
+            "parametric-full, parametric-partial or reconstruction-refused."
+        ),
+    )
+    coverage.add_argument("program")
+    coverage.add_argument(
+        "--fit-record",
+        help=(
+            "Path to the saved fit record. Optional, and its absence is reported rather than "
+            "read as full coverage."
+        ),
+    )
+    coverage.add_argument(
+        "--rebuild-report",
+        help="Path to the saved rebuild report. Without it nothing has been built and the label says so.",
+    )
+    coverage.add_argument(
+        "--editability-verdict", help="Path to the saved check-editability verdict."
+    )
+    coverage.add_argument("-o", "--output")
+    coverage.set_defaults(handler=_cmd_reconstruction_coverage)
+
+    replan = subparsers.add_parser(
+        "replan-without",
+        help=(
+            "Move the archetype a rebuild refusal named into unreconstructed and re-hash the "
+            "program, so a second emission run is one explicit, recorded command away."
+        ),
+    )
+    replan.add_argument("program")
+    replan.add_argument(
+        "--refusal", required=True, help="Path to the saved refusal report from the rebuild run."
+    )
+    replan.add_argument("-o", "--output")
+    replan.set_defaults(handler=_cmd_replan_without)
 
     emit_export = subparsers.add_parser(
         "emit-export",
@@ -634,6 +1059,31 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_modules.add_argument("entry_module")
     prepare_modules.add_argument("--cache-root")
     prepare_modules.set_defaults(handler=_cmd_prepare_module_bundle)
+
+    fit = subparsers.add_parser(
+        "fit-regions",
+        help=(
+            "Detect analytic primitives in a hash-bound mesh dump and print the fit record: regions, "
+            "their disproof-gated fits with per-parameter uncertainty, unclaimed area, and the "
+            "measured noise and feature-size budget. Needs no Fusion."
+        ),
+    )
+    fit.add_argument("dump", help="Path to the mesh dump the extraction transaction wrote.")
+    fit.add_argument(
+        "--dump-sha256",
+        required=True,
+        help="The SHA-256 the extraction report recorded; the reader refuses bytes that do not match it.",
+    )
+    fit.add_argument(
+        "--spec",
+        required=True,
+        help=(
+            "Path to the detection spec JSON. Every threshold is an object with a value and a "
+            "rationale; a threshold without a rationale is rejected."
+        ),
+    )
+    fit.add_argument("-o", "--output")
+    fit.set_defaults(handler=_cmd_fit_regions)
 
     emit_bootstrap = subparsers.add_parser(
         "emit-module-bootstrap",

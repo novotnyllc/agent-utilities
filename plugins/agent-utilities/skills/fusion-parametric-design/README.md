@@ -67,22 +67,69 @@ scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
+scripts/fusion-design emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 scripts/fusion-design emit-mesh-capture <manifest> [-o file.py]
+scripts/fusion-design emit-mesh-face-groups <manifest> --mesh-source-id <id> --classification <classification.json> --face-group-spec <face-groups.json> [-o file.py]
+scripts/fusion-design emit-mesh-extract <manifest> --mesh-source-id <id> --classification <classification.json> --extract-spec <extract.json> [-o file.py]
 scripts/fusion-design emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 scripts/fusion-design emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
+scripts/fusion-design plan-reconstruction <manifest> --fit-record <fit.json> --program-spec <program-spec.json> [-o program.json]
+scripts/fusion-design emit-mesh-rebuild <manifest> --mesh-source-id <id> --classification <classification.json> --program <program.json> --rebuild-spec <rebuild.json> [-o file.py]
+scripts/fusion-design replan-without <program.json> --refusal <refusal-report.json> [-o program-2.json]
+scripts/fusion-design emit-mesh-editability <manifest> --rebuild-record <rebuild-report.json> --editability-spec <editability.json> [-o file.py]
+scripts/fusion-design check-editability --rebuild-record <rebuild-report.json> --editability-report <report.json> --editability-nonce <nonce>
+scripts/fusion-design reconstruction-coverage <program.json> [--fit-record <fit.json>] [--rebuild-report <rebuild-report.json>] [--editability-verdict <verdict.json>] [-o account.json]
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+scripts/fusion-design fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
 
-The three mesh commands implement the reconstruction gate in
+The mesh commands implement the reconstruction gate in
 `references/mesh-reconstruction.md`: capture is read-only and re-verifies every
-declared source hash before emitting, and both `emit-mesh-convert` and
-`emit-mesh-deviation` refuse unless a recorded classification chose a path they
-implement, for that exact mesh source.
+declared source hash before emitting, and `emit-mesh-extract`,
+`emit-mesh-convert`, `emit-mesh-deviation` and `emit-mesh-rebuild` all refuse
+unless a recorded classification chose a path they implement, for that exact
+mesh source.
+
+`emit-mesh-rebuild` sections the mesh dump the program was fitted from to derive
+its sketch profiles, and reads that dump only after its bytes hash to the
+program's recorded `dump_sha256`. `emit-mesh-editability` then proves the result
+is editable rather than asserting it: each parameter is perturbed, its declared
+observable (`volume`, `centroid` or `bbox`) must move, and the model must return
+within the declared epsilon on restore. `check-editability` is the gate — it
+cannot pass a report that asserts more than the run performed.
+
+`emit-capability-probe` is the cheapest thing to run against a live Fusion: it
+creates nothing and starts no process. It records the embedded interpreter's
+`(python_version, abi, platform)` triple — pip's own `--python-version` /
+`--abi` / `--platform` flag values — its writable `sys.path` entries, which
+preview mesh and construction APIs exist, and, when a probe spec binds a body,
+that body's face-group histogram and whether a file written from Fusion's
+interpreter reads back. Nothing here is hardcoded, because Fusion auto-updates
+its Python and a stale tag fails as `ModuleNotFoundError`, which reads like "not
+installed".
+
+`emit-mesh-face-groups` is the segmentation stage and runs before extraction. It
+sets `meshGenerateFaceGroupsMethodType` to `AccurateGenerateFaceGroupsType`
+explicitly, reads the value back off the input before adding the feature, and
+refuses if it did not stick — the default, Fast, was measured producing a solid
+Fusion reported healthy and 7.6% wrong on volume. The method is not a spec
+field, because the only other value is the one that is wrong. It reports the
+per-triangle grouping and each group's area, centroid, bounding box and
+planarity. `fit-regions` then fits each of those groups and refuses
+`face-groups-absent` on a dump extracted before this ran.
+
+`emit-mesh-extract` writes an indexed mesh dump — millimetre vertices, triangle
+indices, per-triangle face-group ids when Fusion has them — and reports the
+SHA-256 of the bytes it wrote, re-read from disk. The host reader re-hashes
+before it parses, so nothing downstream can describe content that was not the
+content measured. If Fusion cannot write the file, the same bytes come back
+chunked and base64-encoded over the report, each chunk carrying its own digest,
+under a declared size ceiling.
 
 For reusable pure-Python helpers, prepare a content-addressed module bundle and
 send the verified emitted bootstrap through Fusion's Python-execution

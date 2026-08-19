@@ -107,11 +107,66 @@ Three fail-closed cases produce no verdict rather than a number:
 
 In all three the invented-material verdict is `not-established`, never a pass, and it carries no `count` or `max_mm` that could be misread as a zero.
 
+## What the reconstruction pipeline builds
+
+Inside Fusion, first: `emit-mesh-face-groups` runs `MeshGenerateFaceGroups` on the mesh body with `AccurateGenerateFaceGroupsType` set explicitly, and `emit-mesh-extract` then writes the hash-bound dump carrying that grouping, one id per triangle. Host-side, with no Fusion running: `fit-regions` fits an analytic primitive to each of those groups behind the disproof gates; `plan-reconstruction` derives a datum frame from the accepted fits and assigns them to archetypes; `reconstruction-coverage` composes the final account. Back inside Fusion: `emit-mesh-rebuild` builds the timeline, `emit-mesh-editability` proves each parameter drives it, and `emit-mesh-deviation` grades the result against the immutable source.
+
+**The regions come from Fusion; the judgement does not.** Both paths were run end to end over the same dumps of the same 11 production STLs, at the same declared thresholds:
+
+| | RANSAC/ICM (deleted) | face groups, accurate |
+| --- | --- | --- |
+| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) |
+| regions accepted through every gate | 38 | 268 |
+| area-weighted coverage, 11 parts | **41.7%** | **62.5%** |
+| cylinders accepted, 11 parts | 0 | 4 |
+| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% |
+| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% |
+
+So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
+
+**Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
+
+The archetype vocabulary is closed and all four kinds now emit:
+
+| Archetype | Assigned when | Emitted as |
+| --- | --- | --- |
+| `sketch-extrude` | two parallel cap planes, with side surfaces perpendicular to them | a sketch on an origin plane or a parameter-driven offset from one, then an extrude |
+| `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore | a half-profile sketch containing the axis, then a revolve |
+| `hole` | an accepted cylinder whose `orientation.material_side` is `"inside"`, lying wholly within one extruded body, its axis along that body's extrusion direction | a placement point dimensioned to the sketch origin, then a hole feature with parametric diameter and depth |
+| `fillet` | an accepted blend — a torus, or a cylinder sweeping less arc than the declared `max_fillet_arc_deg` — adjacent to exactly two non-blend primaries, both of which this program rebuilt | a constant-radius fillet on the edge those two features share |
+
+### What makes a bore a bore
+
+`hole` sat in the vocabulary unassignable for two units, because telling a bore from a boss means knowing which side of the surface the material is on, and shape alone never says. `fit-regions` measures it: the signed volume of a closed, consistently wound mesh gives its winding an outward direction, and comparing that against a region's own surface normals yields `orientation.material_side` — `"inside"` for a bore, `"outside"` for a boss.
+
+**It is `null` on an open or inconsistently wound mesh, and on every plane** (a plane encloses no volume, so it has an outward direction but no inside). When it is `null` on a cylinder the region is left unreconstructed carrying `material-side-unavailable` and the fitting stage's own reason for the absence. It is never guessed. The practical consequence belongs on a capture checklist rather than buried here: **a scan that is not watertight can never produce a hole.**
+
+The same fail-closed rule runs the other way, which is the half that is easy to get wrong. A cylinder of *unknown* side is treated exactly as it was before this evidence existed — it can still join a revolve or an extrude group — because "unknown" is not "inward", and changing behaviour on absent evidence is the same defect wearing the opposite sign.
+
+### Partial reconstruction is a first-class outcome
+
+`reconstruction-coverage` composes the four stages that each know a different part of the answer, and returns one of a closed label set:
+
+- **`parametric-full`** — every region carrying an accepted fit was planned and built.
+- **`parametric-partial`** — some was rebuilt and some was not. **This is a success.** It has its own name so it can never be reported as a reconstruction with a footnote: the unreconstructed regions are listed with the gate that stopped each one, and the source mesh stays in the document as reference geometry over the rebuild.
+- **`reconstruction-refused`** — the rebuild refused and rolled back, or was never run. Delivered area is zero however much was planned.
+
+The arithmetic runs one direction only: each stage may lose area relative to the one before it and can never gain any. A fillet that was planned and then skipped at build time subtracts its region *even though the build succeeded* — counting a planned-but-undelivered archetype as reconstructed would be exactly the over-claim this pipeline exists to prevent.
+
+### We recover *a* parameterization, not *the* original
+
+A boss modelled as an extrude and the same boss modelled as a revolve are indistinguishable from the outside. The archetype precedence is therefore a **stated rule**, not a discovery: revolve is tried before sketch-extrude, and bores are classified before the extrude group chooses its side surfaces. The result is a feature tree consistent with the measured surface. It is not a claim about what the original designer did, and nothing in the pipeline reports one.
+
+### Every threshold is caller-declared, with its rationale
+
+No stage carries a tuned constant. Each threshold arrives in a spec file as `{"value": ..., "rationale": "..."}`, and validation rejects a bare number — a module constant with extra steps is still a module constant. A rationale that reads like one says what measurement or shop tolerance the number came from and what changes if it moves: *"three sigma: a deviation beyond it is not explained by fit noise"* qualifies; *"seems about right"* does not, and the point of requiring the field is that the difference is visible in review.
+
 ## What is not built here
 
 - **Fusion's Mesh Section Sketch and Fit Curves to Mesh Section are UI-only.** There is no `MeshSectionSketch` class, nothing on `Sketch` that creates one, and no `MeshPlaneCutFeature`. No emitted script calls them, and none ever should. The sectioning and fitting in `mesh_fitting.py` are our own arithmetic over `PolygonMesh` data for exactly this reason.
-- **Coordinate-frame derivation from the fitted primitives is not implemented.** `mesh_fitting.py` fits planes, cylinders, cones and spheres and proposes design intent, but it does not derive a coordinate frame from those fits — the second half of R8 is absent.
-- **Sketch API emission is not implemented.** No constrained sketch or dimension is emitted from a fit today. The fits and proposals are host-side data; turning them into Fusion sketch geometry is still to be built.
+- **Torus fitting does not certify a fillet surface.** A fillet is proposed by adjacency and near-constant width, which is enough to emit a `filletFeatures` radius and not enough to certify a variable-radius or elliptical blend. Those stay unreconstructed.
+- **A fillet's edge is found, not measured.** The emitter rounds the edges the two parent features share in the built solid. Where they share none, the fillet is skipped by name — never rounded onto some other edge that happened to be nearby.
+- **Oblique sketch planes are refused rather than approximated** (`plane-unmappable`). See `references/unsupported.md`.
 - **Whole-part auto-conversion, organic/freeform surface recovery, and automatic design-intent assertion are deliberately out of scope.** See `references/unsupported.md`.
 
 ## Honesty rules

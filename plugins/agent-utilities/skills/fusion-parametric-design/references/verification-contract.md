@@ -114,6 +114,203 @@ Mark each physical item `not run`, `pass`, or `fail`:
 
 Digital evidence cannot convert an unperformed physical test to `pass`.
 
+## Reconstruction emission
+
+`emit-mesh-rebuild` decides everything decidable without Fusion, host-side and
+under test, and hands the transaction a fully-ordered build list it interprets
+without making a single choice of its own. Anything not constructible exactly as
+declared is a named refusal.
+
+Planning refusals, before any transaction exists:
+`program-schema-violation`, `program-order-invalid`, `program-order-cyclic`,
+`program-parameter-unbound`, `plane-unmappable`, `units-unsupported`,
+`cap-order-inverted`, `profile-not-found`, `profile-not-closed`,
+`profile-ambiguous`, `entity-resolution-ambiguous`,
+`archetype-kind-unsupported`, `parameter-name-collision`. Reading the mesh dump
+additionally refuses `dump-hash-mismatch` before a single byte is parsed.
+
+Two of those are worth naming. `units-unsupported` fires when a program declares
+anything but millimetres: the dump format writes millimetres, so every number
+reaching the emitter is a millimetre figure and relabelling them would put the
+sketch geometry and the dimension driving it a conversion factor apart.
+`cap-order-inverted` fires when the declared sketch-plane offset names the far
+cap rather than the near one — detected by probing the mirrored station, and
+named rather than silently flipped, because the extrude direction would still be
+wrong and repairing a program inside the emitter is the improvisation this unit
+exists to prevent.
+
+Transaction refusals: `rebuild-capability` (naming the missing API member),
+`parameter-name-collision` (checked live), `constraint-rejected-budget-exceeded`,
+`feature-failed` (naming the archetype and Fusion's message), `solver-unhealthy`,
+`profile-not-found`, `document-changed`, and `rollback-incomplete`.
+
+On any refusal the transaction deletes everything it created in reverse creation
+order — features, then sketches, then planes, then parameters, then the
+component, because a user parameter a live dimension still references will not
+delete. A half-emitted model differs from the program it claims to implement,
+which would make every downstream hash binding a lie.
+
+`created: []` states what the transaction *delivers*, and a refusal delivers
+nothing. What the document still holds is a separate question and `created` must
+not be read as answering it: `document_state` is `"rolled-back"` or `"dirty"`,
+and a dirty report names what would not delete in `rollback_remaining`. A dirty
+report also carries both tokens — the refusal first, then `rollback-incomplete`
+— because the failed cleanup is a second thing that went wrong, not a
+replacement for the reason. `replan-without` refuses a dirty report outright:
+emitting a second component beside the wreckage of the first is not a replan.
+`replan-without` turns the refusal into a smaller program — the failed archetype
+moved to `unreconstructed` with the refusal token as its gate, coverage reduced,
+a new program hash — so a second run is one explicit, recorded command away
+rather than an improvisation inside Fusion.
+
+Each applied sketch constraint records the deviation it snapped from, and the
+displacement it actually caused; only displacement *in excess* of the snap counts
+against the declared tolerance. Rejections are recorded individually with their
+measurements, and `fully_constrained` is whatever the sketch reported — `true`,
+`false`, or `"unavailable"` when the property is absent. It is never inferred.
+
+Each sketch also reports `profile_displacement_mm`: how far the furthest sketch
+point ended up from where the mesh section put it. Deleting a rejected constraint
+removes the constraint, and whether Fusion also returns the geometry it already
+moved is not something a script can establish — so the distance is measured and
+reported rather than assumed to be zero. An under-constrained or wandered profile
+is a recorded defect, not a refusal: the direct instruments for it are the
+sketch's own `fully_constrained` flag, the deviation run against the immutable
+source mesh, and the editability proof's restore assertion.
+
+## Reconstruction editability
+
+A reconstruction claims to be an editable model. `designType == ParametricDesignType`
+does not establish that: it is equally true of a document holding one faceted
+body and no timeline. The only evidence that counts is a measurement.
+
+`emit-mesh-editability` perturbs one user parameter at a time and, per parameter:
+
+1. records all three observables — volume, centroid and bounding-box extent —
+   at the nominal expression;
+2. sets the caller-declared perturbed value and recomputes;
+3. asserts the parameter's **declared** observable moved by at least the
+   declared minimum. Volume alone is the wrong instrument: a plane-offset or
+   hole-position parameter can move a feature bodily through the part while
+   preserving volume to within noise, and a volume-only test would report it
+   inert and fail a correct model. The other two observables are recorded and
+   asserted against nothing;
+4. restores the original expression, recomputes, and asserts all three
+   observables returned within the declared restore epsilon;
+5. only then appends the parameter name to `checked`.
+
+Record for each run:
+
+- `checked` — parameters that completed all of steps 1-4. Nothing else may
+  appear here.
+- `not_exercised` — parameters the spec deliberately skipped, and every
+  parameter after an aborted restore. These are unproven and the report says so.
+- `restore_failure` on a parameter row, recorded separately from `failure` so a
+  parameter that broke the rebuild *and* then would not restore keeps both
+  attributions instead of the second erasing the first. Restoring means two
+  things and both are checked: the observables come back within the epsilon, and
+  the timeline is no sicker than it was before the perturbation.
+- `unattributable_unhealthy` — timeline entries this perturbation broke whose
+  name could not be read. They still count as broken. A nameless entry reading
+  as "not one of ours, so nothing broke" would convert an absent API into a
+  pass, and damage that predates the perturbation is excluded by comparing
+  against a baseline taken before the expression changed.
+- `failures` — from the closed set `parameter-inert`,
+  `parameter-effect-reversed`, `parameter-broke-rebuild`,
+  `parameter-not-restorable`, `body-count-changed`, `base-feature-detected`,
+  `rebuild-record-mismatch`, `editability-capability`, `document-changed`. A
+  break names **which parameter broke which feature**, by the feature's own
+  deterministic name, with Fusion's own message.
+- `interactions_exercised: false` — always. Parameters are perturbed one at a
+  time; no interaction between two of them was exercised by this run.
+- `entity_tokens` — per-parameter token re-resolution counts. These are a
+  measurement of this run, never a guarantee of token stability.
+
+`check-editability` is the gate. It matches the nonce `emit-mesh-editability`
+minted and the manifest/dump/program/rebuild hash chain, and it re-derives every
+name in `checked` from the row that recorded the measurement — the nonce proves
+the report came from the emitted script, not that any individual name earned its
+place. A name in `checked` with no row, a row that says it was not exercised, a
+row carrying a failure, or a row with no restore measurement all fail the gate,
+as does a report whose `ok` sits beside a failure, whose failures fall outside
+the closed set, or that leaves a parameter neither proven nor named unexercised.
+A spec in which every parameter declares `exercise: false` is rejected before
+emission: a proof that exercises nothing proves nothing. A hand-written report
+cannot satisfy the gate: the nonce exists only inside the source that emission
+generated.
+
+## Reconstruction coverage
+
+`reconstruction-coverage` composes the fit record, the program, the rebuild
+report and the editability verdict into one account, and returns a label from a
+closed set: `parametric-full`, `parametric-partial`, `reconstruction-refused`.
+
+What the account asserts:
+
+- `delivered_area_fraction` — the program's own coverage, **minus every
+  archetype the build did not deliver**. It is the fraction of the scan's
+  surface area now standing as editable Fusion features, and it is never rounded
+  up. A fillet that was planned and then skipped subtracts its region even
+  though the build succeeded; a refused rebuild delivers zero however much was
+  planned.
+- `unreconstructed[]` — every region the program declined, with its gate, plus
+  every archetype the build did not deliver, with its reason.
+- `stages[]` — the four stages separately, so a reader can see *where* area was
+  lost rather than only that it was.
+
+What the account does **not** assert, stated in the account itself:
+
+- That what was rebuilt is dimensionally correct. That is the deviation
+  verdict's question and it is a separate instrument.
+- That the recovered feature tree is the original designer's. It is *a*
+  parameterization consistent with the measured surface, never *the* original.
+- That any parameter drives a rebuild unless the editability proof exercised it.
+  Coverage and editability are different axes and are carried side by side
+  rather than folded into one number: a fully covered model whose parameters are
+  all inert is not a better outcome than a partial model that edits.
+- Anything at all when an input is absent. A missing fit record is reported
+  missing, never read as full coverage; a missing rebuild report means nothing
+  was built, and a plan is not a model.
+
+The absent-input case is the one worth watching, because it is where an
+optimistic reading is most tempting. Each absent stage carries an
+`unavailable_reason` naming what is not known, and the label falls to
+`reconstruction-refused` when no build ran.
+
+## What the reconstruction pipeline has not established against live Fusion
+
+Everything above is exercised offline against the stubbed-`adsk` harness, which
+proves the decision surface and proves nothing whatever about Fusion's own
+behaviour. `docs/live-fusion-acceptance.md` §13 is the procedure that would
+settle these; until a run is recorded against a named Fusion version each is an
+assumption and is labelled one here.
+
+This list **extends** the emission and editability sections above rather than
+restating them: those already cover the sketch solver, offset construction
+planes, parameter binding, feature-owned face collections, reverse-order
+rollback, `entityToken` stability and the physical-properties noise floor. What
+this unit adds:
+
+| Not established offline | Established by |
+| --- | --- |
+| That `HoleFeatures.createSimpleInput` with `setPositionBySketchPoint` and `setDistanceExtent` places a hole where the fitted bore is | a live run of a program carrying a hole archetype |
+| That a hole's two origin-anchored position dimensions bind to user parameters and move the hole when edited | the editability loop over `recon_hole_*_x` / `_y`, whose declared observable is the centroid |
+| That `FilletFeatures.addConstantRadiusEdgeSet` accepts an edge set gathered from two features' shared faces | a live run of a program carrying a fillet archetype |
+| That `BRepEdge.tempId` identifies the same edge across two features within one transaction | the same run; a mismatch surfaces as `fillets_skipped` with `entity-resolution-ambiguous`, which is the honest failure mode rather than a wrong fillet |
+| That `Feature.faces` is populated on a hole and on a revolve, not only on an extrude | the same run; an absent collection records `fillet-capability` and skips that fillet |
+| That a real closed scan yields `orientation.material_side` values agreeing with the part's actual bores | a live run over a marketplace STL, comparing assigned holes against the model |
+| That the coverage fraction on a real part is high enough to be useful | the same run. The number is the point of recording it, and a low one is a result rather than a failure |
+
+Two further boundaries — offline facts rather than open questions — are recorded
+here because they bound what a live run could show:
+
+- **A fillet is skipped, not refused.** A run reporting `ok: true` with entries
+  in `fillets_skipped` built less than its program declared. The coverage
+  account subtracts them; a reader looking only at `ok` would not see it.
+- **No emitted transaction starts a process.** Inside Fusion `sys.executable` is
+  the Fusion binary. The hole and fillet paths add no exception, and the
+  string-search suite over generated source covers them with everything else.
+
 ## Handoff
 
 - Fusion document version/checkpoint recorded.

@@ -46,6 +46,29 @@ Deviation verdict — record both directions and the question each answers; neve
 
 Threshold rationale: Not recorded. Fusion version and preview APIs used: Not recorded.
 
+Parametric rebuild — record the coverage label and its fraction together; the
+label on its own is not the result:
+
+| Field | Value |
+|---|---|
+| Coverage label (`parametric-full` / `parametric-partial` / `reconstruction-refused`) | Not run |
+| Delivered area fraction | — |
+| Program sha256 / dump sha256 | — / — |
+| Rebuild nonce / editability nonce | — / — |
+| Archetypes built (kind × count) | — |
+| Fillets skipped, with reason | None recorded |
+| Parameters in `checked` | None recorded |
+| Parameters `not_exercised` | None recorded |
+| `interactions_exercised` | `false` — the loop perturbs one parameter at a time |
+
+Unreconstructed regions — every one, with the gate that stopped it. A partial
+reconstruction is a success, and this is the half of it that must not go
+missing:
+
+| Region / archetype id | Area fraction | Gate |
+|---|---:|---|
+| None recorded | — | — |
+
 ## Packing and component ledger
 
 | Item | Installed transform/orientation | `REF__` authoring model | `PACK__` checking model | `KEEP__` volumes | Support/retention | Insertion/removal sequence | Confidence |

@@ -28,6 +28,55 @@ EXAMPLE_LID = "10_PRODUCT/PROD__LID"
 EXAMPLE_COUPON = "90_VALIDATION/VAL__PD_FIT_COUPON"
 
 
+class PlanReconstructionCliTests(unittest.TestCase):
+    def _run(self, record, spec):
+        import fixtures_fit_record as fx  # noqa: F401  (fixture module lives in tests/)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fit_path = Path(temporary) / "fit-record.json"
+            spec_path = Path(temporary) / "program-spec.json"
+            fit_path.write_text(json.dumps(record), encoding="utf-8")
+            spec_path.write_text(json.dumps(spec), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "plan-reconstruction",
+                        str(EXAMPLE),
+                        "--fit-record",
+                        str(fit_path),
+                        "--program-spec",
+                        str(spec_path),
+                    ]
+                )
+            return code, json.loads(output.getvalue())
+
+    def test_a_plannable_fit_record_produces_a_bound_program(self) -> None:
+        import fixtures_fit_record as fx
+
+        code, program = self._run(fx.box_record(), fx.spec())
+        self.assertEqual(0, code)
+        self.assertEqual(program["manifest_sha256"], manifest_sha256(load_manifest(str(EXAMPLE))))
+        self.assertEqual(program["dump_sha256"], fx.DUMP_SHA256)
+        self.assertEqual(program["program_version"], 1)
+
+    def test_a_refusal_prints_its_named_reason_and_alternative_and_exits_two(self) -> None:
+        import fixtures_fit_record as fx
+
+        record = fx.record(
+            [
+                fx.cylinder("a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                fx.cylinder("b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        code, refusal = self._run(record, fx.spec())
+        self.assertEqual(2, code)
+        self.assertEqual(refusal["refusal"], "frame-ambiguous")
+        self.assertTrue(refusal["alternative"].strip())
+        self.assertIn("winner", refusal["detail"])
+
+
 class CliTests(unittest.TestCase):
     def test_validate_prints_json_for_valid_manifest(self) -> None:
         output = io.StringIO()
@@ -980,6 +1029,123 @@ class MeshCliTests(unittest.TestCase):
         code, _, errors = self._run(["emit-mesh-capture", str(self.manifest), "-o", str(self.root / "b.py")])
         self.assertEqual(2, code)
         self.assertIn("mesh-source-hash-mismatch", errors)
+
+    def _extract_spec(self, **overrides) -> Path:
+        payload = {
+            "component_path": "",
+            "body_name": "bracket_scan",
+            "dump_dir": str(self.root / "dumps"),
+            "max_triangles": 200000,
+            "max_triangles_rationale": (
+                "Beyond this density the extra triangles are noise samples rather than recoverable "
+                "design, and fit-driven splitting is superlinear in the base count."
+            ),
+            "fallback_max_bytes": 4000000,
+            "fallback_max_bytes_rationale": (
+                "The stdout report is the transport of last resort; beyond this the report becomes "
+                "the failure, so refuse rather than truncate."
+            ),
+        }
+        payload.update(overrides)
+        path = self.root / "extract.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_emit_capability_probe_runs_with_and_without_a_bound_body(self) -> None:
+        script = self.root / "probe.py"
+        code, _, errors = self._run(["emit-capability-probe", str(self.manifest), "-o", str(script)])
+        self.assertEqual(0, code, errors)
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("capability-probe", source)
+        self.assertIn('"probe_spec":null', source)
+
+        spec = self.root / "probe.json"
+        spec.write_text(
+            json.dumps(
+                {
+                    "component_path": "",
+                    "body_name": "bracket_scan",
+                    "dump_dir": str(self.root / "dumps"),
+                }
+            ),
+            encoding="utf-8",
+        )
+        bound = self.root / "probe-bound.py"
+        code, _, errors = self._run(
+            ["emit-capability-probe", str(self.manifest), "--probe-spec", str(spec), "-o", str(bound)]
+        )
+        self.assertEqual(0, code, errors)
+        self.assertIn("bracket_scan", bound.read_text(encoding="utf-8"))
+
+    def test_emit_capability_probe_rejects_a_spec_without_a_dump_directory(self) -> None:
+        spec = self.root / "probe.json"
+        spec.write_text(
+            json.dumps({"component_path": "", "body_name": "bracket_scan", "dump_dir": ""}),
+            encoding="utf-8",
+        )
+        code, _, errors = self._run(
+            ["emit-capability-probe", str(self.manifest), "--probe-spec", str(spec)]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("probe-spec-invalid-dump-dir", errors)
+
+    def test_emit_mesh_extract_requires_a_parametric_rebuild_classification(self) -> None:
+        spec = self._extract_spec()
+        faceted = self._classification(
+            "faceted.json", edit_kind="boolean-mechanical", facet_budget=10000
+        )
+        code, _, errors = self._run(
+            [
+                "emit-mesh-extract",
+                str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
+                "--classification",
+                str(faceted),
+                "--extract-spec",
+                str(spec),
+                "-o",
+                str(self.root / "extract.py"),
+            ]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("classification-path-forbids-operation", errors)
+
+        script = self.root / "extract.py"
+        code, _, errors = self._run(
+            [
+                "emit-mesh-extract",
+                str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
+                "--classification",
+                str(self._classification("rebuild.json")),
+                "--extract-spec",
+                str(spec),
+                "-o",
+                str(script),
+            ]
+        )
+        self.assertEqual(0, code, errors)
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("mesh-extract", source)
+        self.assertIn("def pack_mesh_dump(", source)
+
+    def test_emit_mesh_extract_rejects_a_budget_without_a_rationale(self) -> None:
+        code, _, errors = self._run(
+            [
+                "emit-mesh-extract",
+                str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
+                "--classification",
+                str(self._classification("rebuild.json")),
+                "--extract-spec",
+                str(self._extract_spec(max_triangles_rationale="   ")),
+            ]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("extract-spec-invalid-budget-rationale", errors)
 
     def test_emit_mesh_convert_requires_a_faceted_brep_classification(self) -> None:
         spec = self.root / "convert.json"

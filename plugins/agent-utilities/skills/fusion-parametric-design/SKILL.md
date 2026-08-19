@@ -281,6 +281,40 @@ Do not convert a dense mesh to B-rep merely to claim parametric editability. Con
   --classification build/classification.json --deviation-spec build/deviation.json -o build/mesh-deviation.py
 ```
 
+**Segment with Fusion, judge with the gates.** A `parametric-rebuild` starts with `emit-mesh-face-groups`, which runs `MeshGenerateFaceGroups` on the mesh body with `AccurateGenerateFaceGroupsType` set explicitly and read back before the feature is added. Never inherit the default: `FastGenerateFaceGroupsType` was measured producing a solid Fusion reported healthy and 7.6% wrong on volume, and that is the silent wrong answer this whole path exists to refuse. `emit-mesh-extract` then carries that grouping into the dump, one id per triangle, and `fit-regions` fits each group and refuses `face-groups-absent` on a dump extracted before the grouping ran. Fusion decides which triangles belong together; nothing about whether a fit is *justified* is delegated to it — support floors, Moran's I, the blocked held-out refit, parsimony and the uncertainty gate all still run per group, and a group that fails one is recorded with the gate that killed it.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-face-groups fusion-project.json --mesh-source-id scan_bracket \
+  --classification build/classification.json --face-group-spec build/face-groups.json -o build/mesh-face-groups.py
+```
+
+**A `parametric-rebuild` produces a timeline, and the claim that it is editable is measured, not asserted.** `plan-reconstruction` decides what will be built before anything is; `emit-mesh-rebuild` sections the mesh dump the program was fitted from — reading it only after its bytes hash to the program's recorded `dump_sha256` — and emits one data-driven transaction that verifies, constructs, measures and reports, making no choices of its own. A feature it cannot build exactly as declared is a named refusal with full rollback and no geometry; `replan-without` then turns that refusal into a smaller program in one explicit, recorded command rather than letting anything improvise inside Fusion.
+
+Then prove the result. `designType == ParametricDesignType` establishes nothing — it is equally true of a faceted body with no timeline. `emit-mesh-editability` perturbs each user parameter one at a time, asserts the observable that parameter *declares* it moves (`volume`, `centroid` or `bbox` — volume alone would report a correct hole-position or plane-offset parameter as dead), restores it, and asserts the model came back within the declared epsilon. A failure names which parameter broke which feature. `check-editability` is the gate and cannot pass a report that asserts more than the run performed.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-rebuild fusion-project.json --mesh-source-id scan_bracket \
+  --classification build/classification.json --program build/program.json \
+  --rebuild-spec build/rebuild.json -o build/mesh-rebuild.py
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-editability fusion-project.json \
+  --rebuild-record build/rebuild-report.json --editability-spec build/editability.json \
+  -o build/mesh-editability.py
+"$SKILL_DIR/scripts/fusion-design" check-editability --rebuild-record build/rebuild-report.json \
+  --editability-report build/editability-report.json --editability-nonce "$NONCE"
+```
+
+**Capture watertight, or holes are off the table.** A cylinder becomes a `hole` only when the fit record says its `orientation.material_side` is `"inside"` — the mesh's own winding putting solid on the far side of the surface. That measurement needs a closed, consistently wound mesh; on an open one it is `null`, and a cylinder of unknown side is left unreconstructed under `material-side-unavailable` rather than guessed into a bore. Worth knowing at capture time, while it is still fixable, rather than four commands later.
+
+**Finish with the coverage account, and read the label.** `reconstruction-coverage` composes the fit record, the program, the rebuild report and the editability verdict into one statement of what was rebuilt and what was not, labelled `parametric-full`, `parametric-partial` or `reconstruction-refused`. `parametric-partial` is a **success** — part of the scan stands as editable features, the rest is listed with the gate that stopped it, and the source mesh stays in the document as reference geometry over the rebuild. It has its own name precisely so it is never abbreviated to "reconstructed". The delivered fraction subtracts every archetype the build did not deliver, including a fillet that was planned and then skipped, so it can only ever understate.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" reconstruction-coverage build/program.json \
+  --fit-record build/fit-record.json --rebuild-report build/rebuild-report.json \
+  --editability-verdict build/editability-verdict.json -o build/coverage.json
+```
+
+The end-to-end procedure against a live Fusion — every command, what to look at in each report, and what a failure at each stage means — is `docs/live-fusion-acceptance.md` §13.
+
 When fit depends on an irregular scan, create a small `VAL__` coupon containing only the critical mating profile before committing to the full print.
 
 ## 11. Verify numerically after every meaningful change
@@ -425,12 +459,22 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-face-groups <manifest> --mesh-source-id <id> --classification <classification.json> --face-group-spec <face-groups.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-extract <manifest> --mesh-source-id <id> --classification <classification.json> --extract-spec <extract.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" plan-reconstruction <manifest> --fit-record <fit.json> --program-spec <program-spec.json> [-o program.json]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-rebuild <manifest> --mesh-source-id <id> --classification <classification.json> --program <program.json> --rebuild-spec <rebuild.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" replan-without <program.json> --refusal <refusal-report.json> [-o program-2.json]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-editability <manifest> --rebuild-record <rebuild-report.json> --editability-spec <editability.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" check-editability --rebuild-record <rebuild-report.json> --editability-report <report.json> --editability-nonce <nonce>
+"$SKILL_DIR/scripts/fusion-design" reconstruction-coverage <program.json> [--fit-record <fit.json>] [--rebuild-report <rebuild-report.json>] [--editability-verdict <verdict.json>] [-o account.json]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+"$SKILL_DIR/scripts/fusion-design" fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]
