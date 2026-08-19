@@ -126,12 +126,12 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
     _validate_named_paths(
         [("manifest", args.manifest), ("export-index", args.export_index), ("output", args.output)]
     )
-    load_manifest(args.manifest)
+    manifest = load_manifest(args.manifest)
     presets = resolve_presets(
         {"printer": args.printer, "filament": args.filament, "print": args.print_preset},
         args.config_root,
     )
-    result = build_project(args.export_index, args.output, presets)
+    result = build_project(manifest, args.export_index, args.output, presets)
     result["slice"] = SLICE_UNSUPPORTED
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
@@ -215,7 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
     prusaslicer.add_argument(
         "--export-index",
         required=True,
-        help="Path to the export-handoff index JSON; its 3MF artifacts are re-verified by hash and byte size.",
+        help=(
+            "Path to the export-handoff index JSON. Its manifest_sha256 must match this manifest, "
+            "and its 3MF artifacts are re-verified by hash and byte size."
+        ),
     )
     prusaslicer.add_argument(
         "--output",

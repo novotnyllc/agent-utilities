@@ -24,6 +24,8 @@ from dataclasses import dataclass
 import hashlib
 import io
 import json
+import math
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -31,7 +33,9 @@ from xml.sax.saxutils import escape
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .manifest import Manifest
 from .printable_parts import CONTACT_FACES, SUPPORT_POLICIES
+from .scripts import manifest_sha256
 
 
 MODEL_ENTRY = "3D/3dmodel.model"
@@ -55,12 +59,13 @@ ALLOWED_OVERRIDE_KEYS = (
 )
 
 # Every override below is traceable to a declared support_policy value; a policy
-# outside this table has no justified translation and is rejected.
+# outside this table has no justified translation and is rejected. 'explicit-regions'
+# is deliberately absent: it declares support_regions this adapter cannot express,
+# and honoring it as 'everywhere' would silently print a different policy.
 SUPPORT_POLICY_OVERRIDES = {
     "none": {"support_material": "0"},
     "build-plate-only": {"support_material": "1", "support_material_buildplate_only": "1"},
     "everywhere": {"support_material": "1", "support_material_buildplate_only": "0"},
-    "explicit-regions": {"support_material": "1", "support_material_buildplate_only": "0"},
 }
 
 # contact_face names the face that must end up on the bed, so the rotation is
@@ -81,6 +86,7 @@ PLATE_GAP_MM = 20.0
 # A verified artifact is not hostile input, but an unbounded read still turns a
 # corrupt export into an OOM instead of an error message.
 MAX_MODEL_BYTES = 256 * 1024 * 1024
+MAX_ARTIFACT_BYTES = MAX_MODEL_BYTES
 
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -119,19 +125,28 @@ class ResolvedPresets:
 def default_config_root() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "PrusaSlicer"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return (Path(appdata) if appdata else Path.home() / "AppData" / "Roaming") / "PrusaSlicer"
     return Path.home() / ".config" / "PrusaSlicer"
 
 
-def _selected_presets(config_root: Path) -> dict[str, set[str]]:
-    """Preset names PrusaSlicer.ini records as selected.
+def _selected_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Preset names PrusaSlicer.ini records as selected, plus the primary of each kind.
 
     A selected preset may be a *system* preset with no user ``.ini`` on disk, so
     these names count as installed even when the directory scan misses them.
+
+    On a multi-tool printer PrusaSlicer records ``filament`` for extruder 0 and
+    ``filament_1``..``filament_N`` for the rest. The bare key is the primary
+    selection and is the only one an unrequested kind may fall back to; the union
+    exists solely to decide whether a name counts as installed.
     """
     selected: dict[str, set[str]] = {kind: set() for kind in PRESET_KINDS}
+    primary: dict[str, str] = {}
     ini = config_root / "PrusaSlicer.ini"
     if not ini.is_file():
-        return selected
+        return selected, primary
     section = ""
     for raw_line in ini.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip()
@@ -149,17 +164,19 @@ def _selected_presets(config_root: Path) -> dict[str, set[str]]:
         base = key.split("_")[0] if key.startswith("filament") else key
         if base in PRESET_KINDS:
             selected[base].add(value)
-    return selected
+            if key == base:
+                primary[base] = value
+    return selected, primary
 
 
-def _installed_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    selected = _selected_presets(config_root)
+def _installed_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
+    selected, primary = _selected_presets(config_root)
     available: dict[str, set[str]] = {}
     for kind in PRESET_KINDS:
         directory = config_root / kind
         stems = {entry.stem for entry in directory.glob("*.ini")} if directory.is_dir() else set()
         available[kind] = stems | selected[kind]
-    return available, selected
+    return available, selected, primary
 
 
 def resolve_presets(
@@ -184,19 +201,26 @@ def resolve_presets(
         raise ValueError(
             f"Unknown preset kinds: {', '.join(unknown_kinds)}; expected {', '.join(PRESET_KINDS)}."
         )
-    available, selected = _installed_presets(root)
+    available, selected, primary = _installed_presets(root)
     chosen: dict[str, str] = {}
     for kind in PRESET_KINDS:
         name = requested.get(kind)
         name = name.strip() if isinstance(name, str) else None
         if not name:
-            fallback = sorted(selected[kind])
-            if not fallback:
+            # The bare key is extruder 0 / the active selection. Only when the ini
+            # records no unsuffixed key at all does sorted order decide anything.
+            name = primary.get(kind) or (sorted(selected[kind])[0] if selected[kind] else None)
+            if not name:
                 raise ValueError(
                     f"No {kind} preset was requested and PrusaSlicer.ini in {str(root)!r} "
                     f"records no selected {kind} preset."
                 )
-            name = fallback[0]
+        if any(character in name for character in '\r\n"'):
+            raise ValueError(
+                f"PrusaSlicer {kind} preset name {name!r} contains a newline, carriage return, or "
+                "double quote; such a name cannot be written to Metadata/Slic3r_PE.config without "
+                "corrupting it."
+            )
         if name not in available[kind]:
             options = ", ".join(sorted(available[kind])) or "<none installed>"
             raise ValueError(
@@ -240,6 +264,12 @@ def overrides_for_intent(intent: Any, part_path: str) -> dict[str, str]:
         raise ValueError(
             f"Printable part {part_path!r} declares support_policy {policy!r}; "
             f"expected one of {', '.join(sorted(SUPPORT_POLICIES))}."
+        )
+    if policy not in SUPPORT_POLICY_OVERRIDES:
+        raise ValueError(
+            f"Printable part {part_path!r} declares support_policy {policy!r}, which requires "
+            "per-region support painting; this adapter cannot express declared support_regions in a "
+            "PrusaSlicer project and refuses to substitute support everywhere."
         )
     overrides.update(SUPPORT_POLICY_OVERRIDES[policy])
 
@@ -293,10 +323,39 @@ def _children(node: Any, name: str) -> list[Any]:
     return [child for child in node if _local(child.tag) == name]
 
 
-def _read_source_mesh(archive_path: Path) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
-    label = archive_path.name
+def _mesh_coordinate(vertex: Any, name: str, label: str) -> float:
+    """Read one vertex coordinate, fail-closed on missing, non-numeric, or non-finite.
+
+    ``float()`` happily accepts ``"NaN"`` and ``"inf"``; either would propagate
+    through the bounds of every part on the plate and emit bare NaN literals into
+    the report, which is not even valid JSON.
+    """
+    raw = vertex.get(name)
+    if raw is None:
+        raise ValueError(f"Exported 3MF {label!r} has a vertex with no {name} coordinate.")
     try:
-        with zipfile.ZipFile(archive_path) as archive:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"Exported 3MF {label!r} has a vertex with non-numeric {name}={raw!r}.") from None
+    if not math.isfinite(value):
+        raise ValueError(f"Exported 3MF {label!r} has a vertex with non-finite {name}={raw!r}.")
+    return value
+
+
+def _mesh_index(triangle: Any, name: str, label: str) -> int:
+    """Read one triangle vertex index; a missing attribute must not raise TypeError."""
+    raw = triangle.get(name)
+    if raw is None:
+        raise ValueError(f"Exported 3MF {label!r} has a triangle with no {name} vertex index.")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"Exported 3MF {label!r} has a triangle with non-integer {name}={raw!r}.") from None
+
+
+def _read_source_mesh(payload: bytes, label: str) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             try:
                 info = archive.getinfo(MODEL_ENTRY)
             except KeyError:
@@ -339,11 +398,11 @@ def _read_source_mesh(archive_path: Path) -> tuple[list[tuple[float, float, floa
     vertices: list[tuple[float, float, float]] = []
     for holder in _children(mesh, "vertices"):
         for vertex in _children(holder, "vertex"):
-            vertices.append((float(vertex.get("x", 0.0)), float(vertex.get("y", 0.0)), float(vertex.get("z", 0.0))))
+            vertices.append(tuple(_mesh_coordinate(vertex, axis, label) for axis in ("x", "y", "z")))  # type: ignore[arg-type]
     triangles: list[tuple[int, int, int]] = []
     for holder in _children(mesh, "triangles"):
         for triangle in _children(holder, "triangle"):
-            triangles.append((int(triangle.get("v1")), int(triangle.get("v2")), int(triangle.get("v3"))))
+            triangles.append(tuple(_mesh_index(triangle, name, label) for name in ("v1", "v2", "v3")))  # type: ignore[arg-type]
     if not vertices or not triangles:
         raise ValueError(f"Exported 3MF {label!r} carries no mesh geometry ({len(vertices)} vertices, {len(triangles)} triangles).")
     limit = len(vertices)
@@ -425,15 +484,8 @@ def assign_plates(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _verified_artifact_path(artifact: dict[str, Any], artifact_dir: Path) -> Path:
+def _verified_artifact(artifact: dict[str, Any], artifact_dir: Path) -> bytes:
+    """Re-verify one indexed artifact and return its bytes (read exactly once)."""
     filename = artifact.get("filename")
     if not isinstance(filename, str) or not filename.strip():
         raise ValueError("Export index artifact is missing a filename.")
@@ -444,20 +496,25 @@ def _verified_artifact_path(artifact: dict[str, Any], artifact_dir: Path) -> Pat
         raise ValueError(f"Export index references {filename!r}, which is not a file in {str(artifact_dir)!r}.")
     expected_size = artifact.get("byte_size")
     actual_size = path.stat().st_size
+    if actual_size > MAX_ARTIFACT_BYTES:
+        raise ValueError(
+            f"Export artifact {filename!r} is {actual_size} bytes, above the {MAX_ARTIFACT_BYTES}-byte limit."
+        )
     if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size != actual_size:
         raise ValueError(
             f"Export artifact {filename!r} is {actual_size} bytes; the index records {expected_size!r}."
         )
+    payload = path.read_bytes()
     expected_digest = artifact.get("sha256")
-    actual_digest = _file_sha256(path)
+    actual_digest = hashlib.sha256(payload).hexdigest()
     if not isinstance(expected_digest, str) or expected_digest != actual_digest:
         raise ValueError(
             f"Export artifact {filename!r} hashes to {actual_digest}; the index records {expected_digest!r}."
         )
-    return path
+    return payload
 
 
-def _load_index(index_path: Path) -> tuple[dict[str, Any], str]:
+def _load_index(index_path: Path, expected_manifest_digest: str) -> tuple[dict[str, Any], str]:
     if not index_path.is_file():
         raise ValueError(f"Export index {str(index_path)!r} is not a file.")
     raw = index_path.read_bytes()
@@ -471,6 +528,11 @@ def _load_index(index_path: Path) -> tuple[dict[str, Any], str]:
         raise ValueError(f"Export index kind is {index.get('kind')!r}, expected 'export-handoff'.")
     if index.get("ok") is not True:
         raise ValueError("Export index is not ok: true; the project requires a passing export handoff.")
+    actual_digest = index.get("manifest_sha256")
+    if actual_digest != expected_manifest_digest:
+        raise ValueError(
+            f"Export index manifest_sha256 {actual_digest!r} does not match manifest {expected_manifest_digest!r}."
+        )
     artifacts = index.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise ValueError("Export index carries no artifacts.")
@@ -488,7 +550,7 @@ def _collect_parts(index: dict[str, Any], artifact_dir: Path) -> list[dict[str, 
             raise ValueError("Export index artifact is missing part_path.")
         part_path = part_path.strip()
         export_format = artifact.get("format")
-        path = _verified_artifact_path(artifact, artifact_dir)
+        payload = _verified_artifact(artifact, artifact_dir)
         record = {
             "filename": artifact["filename"],
             "format": export_format,
@@ -506,7 +568,12 @@ def _collect_parts(index: dict[str, Any], artifact_dir: Path) -> list[dict[str, 
                 f"Export index artifact for part {part_path!r} carries no manufacturing_intent; "
                 "the project cannot be built without declared intent."
             )
-        geometry[part_path] = {"path": path, "artifact": record, "intent": intent}
+        # Parsed here, from the bytes just verified: the artifact is never read twice.
+        geometry[part_path] = {
+            "mesh": _read_source_mesh(payload, artifact["filename"]),
+            "artifact": record,
+            "intent": intent,
+        }
 
     if not geometry:
         raise ValueError("Export index carries no 3MF artifacts; the project needs exported meshes.")
@@ -525,7 +592,7 @@ def _collect_parts(index: dict[str, Any], artifact_dir: Path) -> list[dict[str, 
         if not isinstance(orientation, dict):
             raise ValueError(f"Printable part {part_path!r} declares no orientation object.")
         rotation, rotation_record = rotation_for_contact_face(orientation.get("contact_face"))
-        vertices, triangles = _read_source_mesh(entry["path"])
+        vertices, triangles = entry["mesh"]
         parts.append(
             {
                 "part_path": part_path,
@@ -616,11 +683,15 @@ def _config_text(presets: ResolvedPresets) -> str:
 
 
 def _deterministic_zip(entries: list[tuple[str, str]]) -> bytes:
+    # ZIP_STORED, not ZIP_DEFLATED: project_sha256 is published so another host can
+    # re-derive it, and deflate output depends on the linked zlib build (zlib-ng and
+    # stock zlib compress identical bytes differently). Storing costs archive size
+    # and buys a hash that means the same thing everywhere.
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
         for name, text in entries:
             info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
             info.create_system = 3
             info.external_attr = 0o644 << 16
             archive.writestr(info, text.encode("utf-8"))
@@ -652,24 +723,37 @@ def _layout(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_project(
+    manifest: Manifest,
     index_path: str | Path,
     output_path: str | Path,
     presets: ResolvedPresets,
 ) -> dict[str, Any]:
     """Write a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
-    Fails closed on any index, hash, byte-size, intent, orientation, or override
-    problem, and refuses to overwrite an existing output.
+    The index must be the one this manifest produced: its ``manifest_sha256`` has
+    to match the manifest's own digest and its 3MF parts have to be declared
+    printable parts, so the reported provenance describes the design actually
+    built. Fails closed on any index, binding, hash, byte-size, intent,
+    orientation, or override problem, and refuses to overwrite an existing output.
     """
     index_file = Path(index_path).expanduser()
     output = Path(output_path).expanduser()
+    if not isinstance(manifest, Manifest):
+        raise ValueError("manifest must be a Manifest loaded via load_manifest().")
     if not isinstance(presets, ResolvedPresets):
         raise ValueError("presets must be a ResolvedPresets resolved via resolve_presets().")
     if output.exists() or output.is_symlink():
         raise ValueError(f"Refusing to overwrite existing output {str(output)!r}.")
 
-    index, index_digest = _load_index(index_file)
+    index, index_digest = _load_index(index_file, manifest_sha256(manifest))
     parts = _collect_parts(index, index_file.parent)
+    declared = {str(part.get("path")) for part in manifest.printable_parts}
+    undeclared = sorted({part["part_path"] for part in parts} - declared)
+    if undeclared:
+        raise ValueError(
+            f"Export index carries 3MF artifacts for parts the manifest does not declare as "
+            f"printable: {', '.join(undeclared)}."
+        )
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
     plates = _layout(parts)
@@ -688,6 +772,11 @@ def build_project(
             handle.write(payload)
     except FileExistsError as error:
         raise ValueError(f"Refusing to overwrite existing output {str(output)!r}.") from error
+    except BaseException:
+        # A partial file would be indistinguishable from a finished project and
+        # would block the retry, since the writer never overwrites.
+        output.unlink(missing_ok=True)
+        raise
 
     return {
         "kind": "prusaslicer-project",
@@ -723,6 +812,9 @@ def build_project(
             "Preset identifiers only; no PrusaSlicer profile settings were copied.",
             "PrusaSlicer has a single bed: plates are declared grouping laid out side by side, "
             "and plate capacity was not validated.",
+            "Plates march along +Y without bound, so past roughly seven plates the layout runs off "
+            "a 360 mm bed. Bed size is not known here -- printer presets are referenced by name and "
+            "never read -- so arrange the plates in the PrusaSlicer GUI before slicing.",
             "The PrusaSlicer binary was not executed.",
         ],
     }
