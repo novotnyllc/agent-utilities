@@ -113,18 +113,84 @@ Inside Fusion, first: `emit-mesh-face-groups` runs `MeshGenerateFaceGroups` on t
 
 **The regions come from Fusion; the judgement does not.** Both paths were run end to end over the same dumps of the same 11 production STLs, at the same declared thresholds:
 
-| | RANSAC/ICM (deleted) | face groups, accurate |
-| --- | --- | --- |
-| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) |
-| regions accepted through every gate | 38 | 268 |
-| area-weighted coverage, 11 parts | **41.7%** | **62.5%** |
-| cylinders accepted, 11 parts | 0 | 4 |
-| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% |
-| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% |
+| | RANSAC/ICM (deleted) | face groups, vertices only | face groups, normals as fit data |
+| --- | --- | --- | --- |
+| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) | 1,069 |
+| regions accepted through every gate | 38 | 268 | **619** |
+| area-weighted coverage, 11 parts | **41.7%** | **62.5%** | **70.5%** |
+| cylinders accepted, 11 parts | 0 | 4 | **251** |
+| full-turn bores accepted (of 85 present) | 0 | 0 | **76** |
+| fillet candidates | 0 | 1 | **114** |
+| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% | 105 regions, 50.8% |
+| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% | 188 regions, 72.1% |
+
+All 24 thresholds the middle column declared carry the same values in the right
+one; the seven the right column adds are new evidence, not loosened old evidence,
+and each is caller-declared with its rationale.
 
 So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
 
 **Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
+
+**The normals are fit data, not only a tie-break.** Every facet normal on a
+cylinder is perpendicular to its axis by construction, so a bore tessellated as
+two vertex rings — which determines a radius and no axis — has the axis sitting
+in the facets between the rings. `normal_constrained_axis` accumulates the
+area-weighted second moment `A = sum w n n^T` (weights are facet areas over their
+own mean, so the trace is an effective facet count), takes the axis from its
+smallest eigenvector, and reports the closed-form Gauss-Newton sigma
+`sigma_theta * sqrt(1/l1 + 1/l2)` in the tangent plane, where `sigma_theta^2 =
+l0 / (W - 2)` floored by a caller-declared measurement precision. The
+determinacy of the axis is the eigengap `l1 / trace`: one half for a full ring of
+facets, zero for a sliver. With the direction pinned, radius and axis point stay
+the module's existing exact 2-D circle fit. The same accumulation, read as the
+whole 6×6 `n·(c̄ + c×x) = 0` system, is `route_kinematic_surface` — Pottmann and
+Randrup's kinematic router, which answers extrusion, revolution and helix in one
+eigenproblem and refuses a plane or a cylinder outright, because their invariant
+motions form a family and no eigenvector describes a family.
+
+`min_axial_span_ratio` is untouched and still applied to every fit whose axis
+came from the vertices. A fit whose axis came from the normals records the floor
+as **measured and not applied**, with the eigengap that replaced it: the floor
+asks how long a cylinder must be *before its axis is determined*, and that is a
+question about a determination this fit did not make.
+
+**Two measurement regimes, decided from evidence and never silently.** An STL
+written by a solid modeller has vertices on the analytic surface to float
+precision and a bimodal dihedral distribution — facet pairs from one planar face
+meet at exactly zero. A scan has neither. `record.regime` carries the decision,
+both readings behind it, and any caller override (`regime: auto|tessellation|scan`).
+Two consequences follow. `noise-model-inconsistent` no longer fires on a
+noise-free mesh, where the two estimators are *meant* to disagree because one
+absorbs curvature and the other measures the facet turn angle: it fired on all 11
+production parts and now fires on none. And `sigma` is floored at the precision
+the coordinates are *stored* at (`vertex_precision_rel`; a binary STL holds
+float32). Without that floor the residual-structure gates spend their power
+testing the file format — quantization is deterministic and therefore
+systematically signed, and it refused 56 of the 85 full-turn bores for "azimuthal
+structure" that was the quantization of a perfectly round hole.
+
+**Group boundaries are free evidence.** The loop between a bore and the face it
+breaks through is a circle, and it is shared with the neighbouring group rather
+than being one more reading of the bore's own wall. `support.boundary_circle`
+fits that loop in its *own* best-fit plane and reports the radius and the angle to
+the fitted axis, so the two readings are independent. Agreement strengthens the
+fit; disagreement beyond the declared `boundary_circle_sigmas` is the named flag
+`boundary-circle-disagrees`, never a silent preference for either number, and a
+loop that is not a circle at all yields no corroboration rather than a
+disagreement. Measured: 105 of 251 accepted turned surfaces have a circular
+boundary loop, and 103 of those agree.
+
+**A fillet is a chain, not a fragment.** Fusion's grouping can cut one edge round
+into a run of partial-arc cylinder groups, and marking them one at a time gives
+one "fillet" per tessellation artefact. Blends are assembled into chains first —
+adjacent, radii agreeing within the declared `max_fillet_radius_rel_spread`, and
+lying between the same two primaries — and the chain is the candidate, carrying a
+`chain_id` and the area-weighted radius. The evidence discipline is applied to
+the chain and is otherwise unchanged: exactly two accepted non-blend neighbours,
+or it is an ordinary run of fits and says so. On these 11 parts the accurate
+grouping already delivers one group per round, so every chain has one member; the
+assembly matters for a grouping that fragments.
 
 The archetype vocabulary is closed and all four kinds now emit:
 

@@ -76,6 +76,7 @@ from .mesh_fitting import (
     _cross,
     _dot,
     _extent,
+    _fit_circle_2d,
     _frame,
     _length,
     _raw_fit,
@@ -112,6 +113,15 @@ REFUSAL_REASONS = {
 #: estimators disagreed by more than 2x, so the iid assumption every statistical
 #: gate is calibrated against does not hold and its verdicts are approximate.
 RECORD_FLAGS = {"noise-model-inconsistent", "normals-unoriented", "angular-resolution-degraded"}
+
+#: The two measurement regimes, plus the caller's "decide it from the mesh".
+#: An exact tessellation exported from CAD has vertices on the analytic surface
+#: to float precision and sparse; a scan has dense noisy ones. Assuming a scan
+#: everywhere is what made ``noise-model-inconsistent`` fire on every noise-free
+#: mesh: the two estimators are *meant* to disagree there, because one absorbs
+#: curvature and the other measures the facet turn angle, and on a mesh with no
+#: noise the whole of that difference is discretization.
+TESSELLATION_REGIMES = {"auto", "tessellation", "scan"}
 
 DETECTED_KINDS = ("plane", "cylinder", "sphere", "cone", "torus")
 
@@ -249,6 +259,49 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
         "how much arc a cylindrical region may sweep and still be an edge round rather than a "
         "bore or a boss",
     ),
+    "regime": (
+        "choice",
+        lambda v: v in TESSELLATION_REGIMES,
+        "which measurement regime this mesh is in -- 'auto' to decide from the mesh's own "
+        "evidence, or 'tessellation'/'scan' when the caller knows what they captured",
+    ),
+    "vertex_precision_rel": (
+        "float",
+        _positive,
+        "the relative precision the vertex coordinates are *stored* at -- a binary STL holds "
+        "float32, so about 1.2e-07 of the coordinate magnitude -- below which a residual is "
+        "quantization rather than geometry",
+    ),
+    "tessellation_sigma_over_extent": (
+        "float",
+        _positive,
+        "how small the quadric-residual noise must be, relative to the part extent, before the "
+        "vertices read as exact rather than measured",
+    ),
+    "min_normal_axis_eigengap": (
+        "float",
+        _positive,
+        "how much of the facet-normal spectrum must sit away from the axis direction before the "
+        "normals determine an axis the vertices cannot",
+    ),
+    "normal_sigma_theta_floor_deg": (
+        "float",
+        _non_negative,
+        "the measurement floor on facet-normal direction: how far a normal may be wrong on a mesh "
+        "whose vertices are exact, so a noise-free tessellation does not report zero uncertainty",
+    ),
+    "max_fillet_radius_rel_spread": (
+        "float",
+        _non_negative,
+        "how far the radii along one chain of partial-arc cylinders may spread, relative to their "
+        "mean, and still be one constant-radius fillet",
+    ),
+    "boundary_circle_sigmas": (
+        "float",
+        _positive,
+        "how many joint sigmas a bore's own boundary circle may disagree with its fitted radius "
+        "before the corroboration is recorded as a disagreement",
+    ),
     # exact-fit gates (passed through to mesh_fitting)
     "max_relative_residual": ("float", _positive, "the residual gate, relative to sampled extent"),
     "max_radius_ratio": ("float", _positive, "how far a fitted radius may exceed the sampled extent"),
@@ -334,6 +387,10 @@ _FIT_GATE_NAMES = (
 #: no supported primitive fits a saddle" rather than "nothing fit".
 CURVATURE_CLASSES = {"flat", "ridge-valley", "peak-pit", "saddle", "ambiguous"}
 
+#: The kinds that carry an axis and a radius, and can therefore be checked
+#: against the circle their own group boundary traces.
+_AXIS_KINDS = ("cylinder", "cone", "torus")
+
 #: Free parameters per kind, for the parsimony F test (spec 10.4).
 _FREE_PARAMETERS = {"plane": 3, "sphere": 4, "cylinder": 5, "cone": 6, "torus": 7}
 
@@ -417,7 +474,9 @@ def load_spec(raw: Any) -> DetectionSpec:
         _reject_unknown_fields(issues, dict(entry), {"value", "rationale"}, f"spec.{name}")
         value = entry.get("value")
         ok = not isinstance(value, bool)
-        if ok and kind == "int":
+        if ok and kind == "choice":
+            ok = isinstance(value, str)
+        elif ok and kind == "int":
             ok = isinstance(value, int)
         elif ok:
             ok = isinstance(value, (int, float)) and math.isfinite(value)
@@ -445,7 +504,7 @@ def load_spec(raw: Any) -> DetectionSpec:
             )
             continue
         if ok:
-            values[name] = value if kind == "int" else float(value)
+            values[name] = value if kind in ("int", "choice") else float(value)
             rationales[name] = rationale.strip()
 
     if issues:
@@ -1115,6 +1174,24 @@ def _support_floors(
         )
         floor = max(float(spec.value("min_axial_span_ratio")) * radius, 4.0 * median_edge)
         measured["axial_span_floor"] = floor
+        # The axial-span floor exists for one stated reason -- "how long a
+        # cylinder or cone must be, in radii, before its axis is determined" --
+        # and it measures the *vertices'* baseline for that determination. When
+        # the axis came from the facet normals instead, at an eigengap the caller
+        # declared sufficient, this floor is testing evidence the fit does not
+        # rest on: a bore two rings deep has almost no vertex baseline and a
+        # perfectly determined normal system. The floor is therefore recorded and
+        # not applied, with the evidence that replaced it, rather than loosened --
+        # the threshold's value is untouched and every fit whose axis did come
+        # from the vertices still meets it.
+        evidence = fit.support.get("axis_evidence")
+        if isinstance(evidence, Mapping) and evidence.get("source") == "facet-normals":
+            measured["axial_span_floor_applied"] = False
+            measured["axis_determined_by"] = "facet-normals"
+            measured["normal_axis_eigengap"] = evidence.get("eigengap")
+            return True, measured
+        measured["axial_span_floor_applied"] = True
+        measured["axis_determined_by"] = "vertices"
         if measured["axial_span"] < floor:
             return False, measured
     return True, measured
@@ -1525,14 +1602,40 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     # the conservative choice, since every downstream band widens with it.
     sigma = max(sigma_quadric, sigma_dihedral)
     lo, hi = sorted((sigma_quadric, sigma_dihedral))
-    inconsistent = hi > 0.0 and (lo <= 0.0 or hi / lo > 2.0)
+    disagree = hi > 0.0 and (lo <= 0.0 or hi / lo > 2.0)
+    # No estimator can see below the precision the coordinates are *stored* at.
+    # A binary STL holds float32, so a 100 mm part carries about 1e-05 mm of
+    # quantization in every vertex -- deterministic, and therefore systematically
+    # signed, which is exactly the signature the residual-structure gates are
+    # built to catch. Without this floor those gates spend their power testing
+    # the file format: measured over the 11 production STLs it refused 56 of the
+    # 85 full-turn bores for "azimuthal structure" that was the quantization of a
+    # perfectly round hole. The floor binds only where the mesh is quiet enough
+    # for it to matter; on a scan the estimators are orders of magnitude above it.
+    precision_floor = float(state["spec"].value("vertex_precision_rel")) * topo.extent
+    sigma = max(sigma, precision_floor)
     surface_scale = max(surface_scale, sigma)
     discretization = math.sqrt(max(0.0, surface_scale * surface_scale - sigma * sigma))
     state["noise"] = {"sigma": sigma, "surface_scale": surface_scale}
+    dihedral = _dihedral_degrees(topo)
+    regime = _detect_regime(state["spec"], topo, sigma_quadric, dihedral)
+    state["regime"] = regime
+    state["record"]["regime"] = regime
+    # The flag says the *noise model* is inconsistent, and that claim only means
+    # something where both estimators are estimating noise. On an exact
+    # tessellation the dihedral estimator is measuring the facet turn angle of a
+    # mesh with no noise in it at all, so the two are meant to disagree and the
+    # disagreement is discretization rather than a failed iid assumption. The
+    # measured ratio stays in the record either way; what the regime changes is
+    # whether it is reported as a defect.
+    inconsistent = disagree and regime["regime"] != "tessellation"
     if inconsistent:
         state["flags"].append("noise-model-inconsistent")
-    dihedral = _dihedral_degrees(topo)
     state["record"]["noise"] = {
+        "regime": regime["regime"],
+        "estimators_disagree": disagree,
+        "vertex_precision_floor": precision_floor,
+        "precision_floor_binds": precision_floor >= max(sigma_quadric, sigma_dihedral),
         "sigma": sigma,
         "sigma_quadric": sigma_quadric,
         "sigma_dihedral": sigma_dihedral,
@@ -1552,6 +1655,91 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         ),
     }
     return None
+
+
+#: A dihedral below this reads as *exactly* coplanar. It is a float-noise
+#: comparison, not a decision threshold: the question it answers is whether two
+#: facets were generated from one analytic face, and a tessellator's answer is
+#: exact while a scanner's is never within a billionth of a degree of it.
+_EXACT_COPLANAR_DEG = 1e-9
+
+
+def _detect_regime(
+    spec: DetectionSpec, topo: _Topology, sigma_quadric: float, dihedral: Sequence[float]
+) -> dict[str, Any]:
+    """Exact tessellation or scan, from evidence this run already measured.
+
+    Two independent readings, because either alone is fooled by a mesh the other
+    catches:
+
+    * **the measured noise.** A quadric absorbs curvature, so ``sigma_quadric``
+      is the vertices' departure from a smooth surface. On an STL written by a
+      solid modeller that departure is float precision -- some 1e-12 of the part
+      -- and on any scan it is orders of magnitude larger. The caller declares
+      where the line sits.
+    * **the dihedral distribution.** A tessellation is bimodal: facet pairs
+      generated from one analytic planar face meet at *exactly* zero, and feature
+      edges are sharp. A scan has neither -- every dihedral carries noise, so no
+      pair is ever exactly coplanar.
+
+    Both must say tessellation for the regime to be tessellation. When they
+    disagree the answer is `scan`, which is the conservative regime -- it keeps
+    the wider noise bands and the floors sized for them -- and the disagreement
+    is named in the record rather than resolved silently.
+
+    The caller may override with `regime`, and the override is recorded beside
+    the evidence it overrode, so a reader can always see what the mesh said.
+    """
+    extent = topo.extent
+    ratio = sigma_quadric / extent if extent > 0.0 else math.inf
+    declared = float(spec.value("tessellation_sigma_over_extent"))
+    exact = sum(1 for angle in dihedral if abs(angle) < _EXACT_COPLANAR_DEG)
+    exact_fraction = exact / len(dihedral) if dihedral else 0.0
+    quiet = ratio <= declared
+    bimodal = exact > 0
+    detected = "tessellation" if (quiet and bimodal) else "scan"
+    requested = str(spec.value("regime"))
+    regime = detected if requested == "auto" else requested
+    return {
+        "regime": regime,
+        "detected": detected,
+        "declared": requested,
+        "overridden": requested != "auto" and requested != detected,
+        "evidence": {
+            "sigma_quadric_over_extent": ratio,
+            "tessellation_sigma_over_extent": declared,
+            "vertices_read_as_exact": quiet,
+            "exactly_coplanar_edge_fraction": exact_fraction,
+            "exactly_coplanar_edge_count": exact,
+            "interior_edge_count": len(dihedral),
+            "dihedral_reads_as_bimodal": bimodal,
+            "readings_agree": quiet == bimodal,
+        },
+        "note": (
+            "Both readings must say tessellation for the regime to be tessellation; they disagree "
+            "into 'scan', which is the conservative side. A declared regime overrides the "
+            "detection and both are reported."
+        ),
+    }
+
+
+def _normal_sigma_floor_deg(state: dict[str, Any]) -> float:
+    """The measurement floor on a facet normal's direction, in degrees.
+
+    On an exact tessellation the vertices are exact, so the only floor is the one
+    the caller declared for float precision. On a scan the floor is whichever is
+    larger of that and the noise the mesh actually carries: a vertex displaced by
+    ``sigma`` across an edge of length ``l`` tilts its facet by about
+    ``sigma / l`` radians, and reporting a tighter axis than that noise supports
+    would be inventing precision out of the same evidence that refuses it.
+    """
+    declared = float(state["spec"].value("normal_sigma_theta_floor_deg"))
+    if state["regime"]["regime"] == "tessellation":
+        return declared
+    topo: _Topology = state["topology"]
+    if topo.median_edge <= 0.0:
+        return declared
+    return max(declared, math.degrees(state["noise"]["sigma"] / topo.median_edge))
 
 
 def _stage_feature_scale(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -1712,6 +1900,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
     grid: _Grid = state["grid"]
     gates = spec.fit_gates()
     perpendicular = float(spec.value("cylinder_normal_perpendicular_deg"))
+    sigma_theta_floor = _normal_sigma_floor_deg(state)
 
     regions: list[dict[str, Any]] = []
     # The residual-structure baseline: how much spatial structure this part's own
@@ -1741,6 +1930,14 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             kinds=DETECTED_KINDS,
             facet_normals=[topo.tri_normals[t] for t in triangles],
             cylinder_perpendicular_deg=perpendicular,
+            # The facets are the evidence the vertices do not carry: their
+            # normals are perpendicular to a cylinder's axis by construction, and
+            # weighting by area is what makes the recovered sigma a statement
+            # about surface rather than about triangle count.
+            facet_centroids=[topo.centroids[t] for t in triangles],
+            facet_areas=[topo.areas[t] for t in triangles],
+            normal_axis_eigengap_min=float(spec.value("min_normal_axis_eigengap")),
+            normal_sigma_theta_floor_deg=sigma_theta_floor,
             **gates,
         )
         fit = fits[0]
@@ -1838,7 +2035,20 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     elif structure is not None:
                         checked.append("residual-structure")
 
-            if accepted:
+            if accepted and fit.rms_residual <= power_floor:
+                # The same rule the Moran block above already states, applied to
+                # its sibling: a test has no power against residuals an order of
+                # magnitude inside the measurement noise. Held-out residuals of
+                # 2e-06 mm against in-sample residuals of 1e-06 mm are a ratio of
+                # two quantization patterns, and calling that "over-parameterized
+                # for the evidence" is a verdict about the file format. Reported
+                # as unavailable, and deliberately *not* appended to `checked`,
+                # because the check did not run.
+                support["heldout_unavailable_reason"] = (
+                    "residuals are below the measurement noise, so a held-out comparison has no "
+                    "power here"
+                )
+            elif accepted:
                 held = _blocked_heldout(fit, point_indices, mesh, grid, spec)
                 if held is None:
                     accepted, rejection = False, (
@@ -1890,6 +2100,20 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 accepted, rejection = False, failure
             else:
                 checked.append("parameter-uncertainty")
+
+        if accepted and fit.kind in _AXIS_KINDS:
+            corroboration = _boundary_corroboration(
+                fit,
+                uncertainty,
+                triangles,
+                mesh,
+                topo,
+                float(spec.value("boundary_circle_sigmas")),
+                surface_scale,
+            )
+            if corroboration is not None:
+                support["boundary_circle"] = corroboration
+                checked.append("boundary-circle-corroboration")
 
         region_hash = _region_hash(mesh.dump_sha256, triangles)
         recorded = PrimitiveFit(
@@ -2082,7 +2306,12 @@ def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     frame: _PointFrame = state["frame"]
 
     accepted = [r for r in regions if r["accepted"]]
-    _mark_fillet_candidates(accepted, topo, float(state["spec"].value("max_fillet_arc_deg")))
+    _mark_fillet_candidates(
+        accepted,
+        topo,
+        float(state["spec"].value("max_fillet_arc_deg")),
+        float(state["spec"].value("max_fillet_radius_rel_spread")),
+    )
     covered = sum(r["area"] for r in accepted) / topo.total_area if topo.total_area > 0.0 else 0.0
 
     # Welded indices on both sides: `topo.valid` is welded, so comparing it
@@ -2122,6 +2351,152 @@ def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _boundary_loops(
+    triangles: Sequence[int], mesh: WeldedMesh, topo: _Topology
+) -> list[list[int]]:
+    """The vertex loops where this face group stops, largest first.
+
+    Fusion's grouping is a partition, so a group's boundary is free evidence
+    nobody has spent anything to get: the loop between a bore and the face it
+    breaks through is a *circle*, and the loop is shared with the neighbouring
+    group rather than being one more reading of the bore's own wall.
+
+    Loops are returned as vertex index lists, unordered within a loop -- a circle
+    fit does not care about traversal order, and reconstructing a consistent one
+    would be work in aid of nothing.
+    """
+    owned = set(triangles)
+    border: list[tuple[int, int]] = []
+    for index in triangles:
+        a, b, c = mesh.triangles[index]
+        for i, j in ((a, b), (b, c), (c, a)):
+            key = (i, j) if i < j else (j, i)
+            incident = topo.edges.get(key, ())
+            if not any(other in owned for other in incident if other != index):
+                border.append(key)
+    if not border:
+        return []
+    adjacency: dict[int, set[int]] = {}
+    for i, j in border:
+        adjacency.setdefault(i, set()).add(j)
+        adjacency.setdefault(j, set()).add(i)
+    loops: list[list[int]] = []
+    seen: set[int] = set()
+    for start in adjacency:
+        if start in seen:
+            continue
+        component = [start]
+        seen.add(start)
+        frontier = [start]
+        while frontier:
+            nxt: list[int] = []
+            for node in frontier:
+                for other in adjacency[node]:
+                    if other not in seen:
+                        seen.add(other)
+                        component.append(other)
+                        nxt.append(other)
+            frontier = nxt
+        loops.append(component)
+    loops.sort(key=len, reverse=True)
+    return loops
+
+
+def _boundary_corroboration(
+    fit: PrimitiveFit,
+    uncertainty: Mapping[str, float],
+    triangles: Sequence[int],
+    mesh: WeldedMesh,
+    topo: _Topology,
+    sigmas: float,
+    surface_scale: float,
+) -> dict[str, Any] | None:
+    """Check a turned surface's radius and axis against its own boundary circle.
+
+    The loop is fitted in *its own* best-fit plane, not in the plane the cylinder
+    fit produced, so the two readings are independent: the loop's normal is
+    evidence about the axis, and the loop's radius is evidence about the radius.
+    Agreement strengthens the fit; disagreement beyond the joint uncertainty is a
+    named flag and never a silent preference for either number. Nothing here
+    changes a parameter -- corroboration that quietly moved the answer would stop
+    being corroboration.
+
+    A loop is only evidence when it *is* a circle. The border of a partial-arc
+    round is a long rectangle-ish loop around the whole patch, and a circle
+    fitted through it is a number with no meaning; loops whose own circle fit
+    misses by more than the declared sigmas of measured surface scale are skipped
+    rather than reported as a disagreement, because "this is not a circle" and
+    "this circle has the wrong radius" are different findings.
+
+    ``None`` when the group has no usable boundary loop, which is the honest
+    answer for a group that closes on itself and for one whose border is not
+    round.
+    """
+    anchor = fit.parameters.get("axis_point") or fit.parameters.get("center")
+    axis = fit.parameters.get("axis_direction")
+    radius = fit.parameters.get("radius")
+    if anchor is None or axis is None or not isinstance(radius, float) or radius <= 0.0:
+        return None
+    for loop in _boundary_loops(triangles, mesh, topo):
+        # Four points fix a circle and its plane with one to spare; fewer is not
+        # a small loop, it is no loop.
+        if len(loop) < 5:
+            continue
+        points = [mesh.vertices[i] for i in loop]
+        centre = _centroid(points)
+        _values, vectors = _symmetric_eigen(_covariance(points, centre))
+        normal = vectors[0]
+        u, v = _frame(normal)
+        circle = _fit_circle_2d(
+            [_dot(_sub(p, centre), u) for p in points],
+            [_dot(_sub(p, centre), v) for p in points],
+        )
+        if circle is None:
+            continue
+        cx, cy, loop_radius = circle
+        if not math.isfinite(loop_radius) or loop_radius <= 0.0:
+            continue
+        residual = _rms(
+            math.hypot(_dot(_sub(p, centre), u) - cx, _dot(_sub(p, centre), v) - cy) - loop_radius
+            for p in points
+        )
+        if residual > sigmas * surface_scale:
+            continue
+        tilt = math.degrees(math.acos(min(1.0, abs(_dot(_unit(normal) or normal, axis)))))
+        sigma_r = uncertainty.get("radius")
+        sigma_axis = uncertainty.get("axis_direction_deg")
+        # Absent sigma means the disagreement cannot be sized, so it is reported
+        # as unsized rather than as agreement. Empty is unknown, never zero.
+        radius_delta = loop_radius - radius
+        agrees_radius = (
+            None if sigma_r is None else abs(radius_delta) <= sigmas * max(sigma_r, residual)
+        )
+        agrees_axis = None if sigma_axis is None else tilt <= sigmas * sigma_axis
+        return {
+            "loop_point_count": len(loop),
+            "loop_radius": loop_radius,
+            "loop_circle_rms": residual,
+            "fitted_radius": radius,
+            "radius_delta": radius_delta,
+            "loop_normal_to_axis_deg": tilt,
+            "declared_sigmas": sigmas,
+            "radius_sigma": sigma_r,
+            "axis_sigma_deg": sigma_axis,
+            "agrees_on_radius": agrees_radius,
+            "agrees_on_axis": agrees_axis,
+            "flag": (
+                None
+                if agrees_radius is not False and agrees_axis is not False
+                else "boundary-circle-disagrees"
+            ),
+            "note": (
+                "the boundary loop between this group and its neighbour, fitted as a circle in its "
+                "own best-fit plane; independent of the surface fit and never allowed to move it"
+            ),
+        }
+    return None
+
+
 def _blend_radius(region: dict[str, Any], max_arc_deg: float) -> tuple[float, str] | None:
     """The radius this region would round an edge with, or ``None`` if it rounds none.
 
@@ -2150,16 +2525,33 @@ def _blend_radius(region: dict[str, Any], max_arc_deg: float) -> tuple[float, st
 
 
 def _mark_fillet_candidates(
-    accepted: Sequence[dict[str, Any]], topo: _Topology, max_arc_deg: float
+    accepted: Sequence[dict[str, Any]],
+    topo: _Topology,
+    max_arc_deg: float,
+    max_radius_rel_spread: float,
 ) -> None:
-    """A blend adjacent to exactly two accepted non-blend regions is a fillet.
+    """Chain the blend regions along an edge, and call each chain one fillet.
 
-    Emitted downstream as a fillet feature on the shared edge -- parametric and
-    editable -- rather than as blend surface geometry, which Fusion has no
-    editable home for. The evidence discipline is unchanged by widening the
-    shapes that qualify: a fillet still needs *two* accepted neighbours that are
-    themselves features, so a blend against one face, or against another blend,
-    stays an ordinary fit and says so.
+    A real edge round does not arrive as one face group. Fusion's grouping cuts
+    it into a *run* of partial-arc cylinders -- the measured segmentation put 298
+    groups in that bucket -- and each member of the run touches its two
+    neighbouring blends as well as the two faces the round lies between. Marking
+    them one at a time produces one "fillet" per tessellation artefact and none
+    of them describes the feature: what the rebuild has to emit is a single
+    constant-radius fillet on the edge those two faces share.
+
+    So the run is assembled first, from group adjacency, and the chain is the
+    candidate. Two blends join a chain when they are adjacent, when their radii
+    agree to within the caller's declared relative spread -- a constant-radius
+    round is constant, and a run whose radius drifts is not one round -- and when
+    they lie between the same two primaries.
+
+    The evidence discipline is unchanged, and is applied to the chain rather than
+    to the fragment: a fillet still needs exactly *two* accepted neighbours that
+    are themselves non-blend features. A chain against one face, against three,
+    or against another chain stays an ordinary run of fits and says so. A lone
+    blend is simply a chain of one, which is why this replaces the per-region
+    rule rather than sitting beside it.
     """
     owner: dict[int, str] = {}
     for region in accepted:
@@ -2170,23 +2562,98 @@ def _mark_fillet_candidates(
     # Resolved for every region first: whether a neighbour is a primary feature
     # cannot depend on the order regions happen to be visited in.
     blends = {r["region_hash"]: _blend_radius(r, max_arc_deg) for r in accepted}
+    by_hash = {r["region_hash"]: r for r in accepted}
+
+    neighbours_of: dict[str, set[str]] = {}
     for region in accepted:
-        neighbours: set[str] = set()
+        found: set[str] = set()
         for index in region["welded_triangle_indices"]:
             for other in topo.tri_neighbours[index]:
                 target = owner.get(other)
                 if target is not None and target != region["region_hash"]:
-                    neighbours.add(target)
-        region["adjacent_regions"] = sorted(neighbours)
-        primaries = sorted(n for n in neighbours if blends.get(n) is None)
-        blend = blends[region["region_hash"]]
-        region["fillet_candidate"] = blend is not None and len(primaries) == 2
-        if region["fillet_candidate"]:
-            radius, source = blend  # type: ignore[misc]
+                    found.add(target)
+        neighbours_of[region["region_hash"]] = found
+        region["adjacent_regions"] = sorted(found)
+        region["fillet_candidate"] = False
+        region.pop("fillet", None)
+
+    def primaries_of(name: str) -> tuple[str, ...]:
+        return tuple(sorted(n for n in neighbours_of[name] if blends.get(n) is None))
+
+    # Connected components over "adjacent blends that agree", by union of the
+    # walk. Radii are compared pairwise against the running chain mean so a slow
+    # drift cannot creep past a pairwise-only test one link at a time; the whole
+    # chain's spread is re-checked at the end regardless.
+    seen: set[str] = set()
+    for start_hash in sorted(blends):
+        if start_hash in seen or blends[start_hash] is None:
+            continue
+        chain = [start_hash]
+        seen.add(start_hash)
+        frontier = [start_hash]
+        anchor = primaries_of(start_hash)
+        while frontier:
+            nxt: list[str] = []
+            for name in frontier:
+                for other in sorted(neighbours_of[name]):
+                    if other in seen or blends.get(other) is None:
+                        continue
+                    if primaries_of(other) != anchor:
+                        continue
+                    seen.add(other)
+                    chain.append(other)
+                    nxt.append(other)
+            frontier = nxt
+
+        radii = [blends[name][0] for name in chain]  # type: ignore[index]
+        areas = [by_hash[name]["area"] for name in chain]
+        total = sum(areas)
+        mean = (
+            sum(r * a for r, a in zip(radii, areas)) / total
+            if total > 0.0
+            else sum(radii) / len(radii)
+        )
+        spread = (max(radii) - min(radii)) / mean if mean > 0.0 else math.inf
+        # The chain id is the chain's own content, so it is stable across runs
+        # and carries no ordering or session state.
+        chain_id = hashlib.sha256("|".join(sorted(chain)).encode("utf-8")).hexdigest()
+        detail = {
+            "id": chain_id,
+            "members": sorted(chain),
+            "member_count": len(chain),
+            "radius_spread_rel": spread,
+            "max_radius_rel_spread": max_radius_rel_spread,
+            "mean_radius": mean,
+        }
+        if len(anchor) != 2 or spread > max_radius_rel_spread:
+            for name in chain:
+                by_hash[name]["fillet_chain"] = dict(
+                    detail,
+                    accepted=False,
+                    reason=(
+                        f"this chain lies between {len(anchor)} accepted non-blend regions, and a "
+                        "fillet is an edge between exactly two"
+                        if len(anchor) != 2
+                        else f"the radii along this chain spread by {spread:.4g} of their mean, "
+                        f"above the declared {max_radius_rel_spread:g}; a constant-radius round is "
+                        "constant"
+                    ),
+                )
+            continue
+        source = blends[chain[0]][1]  # type: ignore[index]
+        for name in chain:
+            region = by_hash[name]
+            region["fillet_candidate"] = True
+            region["fillet_chain"] = dict(detail, accepted=True, reason=None)
             region["fillet"] = {
-                "radius": radius,
-                "between": primaries,
-                "emission": f"filletFeatures on the shared edge, radius = {source}",
+                "radius": mean,
+                "between": list(anchor),
+                "chain_id": chain_id,
+                "chain_member_count": len(chain),
+                "emission": (
+                    f"one filletFeatures on the shared edge for the whole chain; radius = {source}, "
+                    f"area-weighted over the chain's {len(chain)} group(s)"
+                ),
             }
 
 
@@ -2287,6 +2754,10 @@ def fit_regions(dump: MeshDump, spec: DetectionSpec) -> dict[str, Any]:
         # before topology carries the key with a value U3 rejects rather than an
         # absent key U3 has to guess about.
         "total_area": 0.0,
+        # Filled by the noise stage. Null until then, so a record that refused
+        # earlier carries the key with a value that reads as "not decided"
+        # rather than an absent key a consumer has to guess about.
+        "regime": None,
         "regions": [],
         "unfitted_regions": [],
         "unclaimed": {"triangle_count": 0, "area_fraction": 0.0, "components": []},

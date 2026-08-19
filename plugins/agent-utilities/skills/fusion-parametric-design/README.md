@@ -95,6 +95,18 @@ declared source hash before emitting, and `emit-mesh-extract`,
 unless a recorded classification chose a path they implement, for that exact
 mesh source.
 
+`fit-regions` takes no new flags, but its `--spec` declares seven more
+thresholds, each with a rationale like every other: `regime`
+(`auto` | `tessellation` | `scan`), `tessellation_sigma_over_extent` and
+`vertex_precision_rel` for the measurement regime and its noise floor;
+`min_normal_axis_eigengap` and `normal_sigma_theta_floor_deg` for taking a
+cylinder's axis from its facet normals rather than from two rings of vertices
+that cannot determine one; `max_fillet_radius_rel_spread` for chaining a
+fragmented edge round into one fillet; and `boundary_circle_sigmas` for checking
+a bore against the circle its own group boundary traces. `record.regime` is the
+first thing to read: an exact tessellation and a scan need different noise
+floors, and the record states which it decided and on what evidence.
+
 `emit-mesh-rebuild` sections the mesh dump the program was fitted from to derive
 its sketch profiles, and reads that dump only after its bytes hash to the
 program's recorded `dump_sha256`. `emit-mesh-editability` then proves the result

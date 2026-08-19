@@ -12,6 +12,8 @@ from fusion_design.mesh_fitting import (
     classify_polyline,
     fit_face_group,
     fit_primitive,
+    normal_constrained_axis,
+    route_kinematic_surface,
     propose_design_intent,
     propose_nominal,
     section_mesh,
@@ -1031,6 +1033,373 @@ class IntentVocabularyTests(unittest.TestCase):
                 deviation=0.0,
                 deviation_unit="deg",
             )
+
+
+# --------------------------------------------------------------------------
+# the kinematic router
+#
+# Tested on its *judgement*, not on its arithmetic: which verdict a region
+# deserves, and when it refuses rather than picking an eigenvector out of a
+# degenerate subspace. The geometry either produces those verdicts or the gates
+# are wrong.
+# --------------------------------------------------------------------------
+
+
+def _unitise(vector):
+    length = math.sqrt(sum(c * c for c in vector))
+    return tuple(c / length for c in vector)
+
+
+def extruded_cam_samples(n=40, m=12, height=30.0):
+    """An irregular outline swept along z: the rung-1 case, prismatic but unfittable."""
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        r = 10.0 + 2.0 * math.cos(2.0 * t) + 1.5 * math.sin(3.0 * t)
+        dr = -4.0 * math.sin(2.0 * t) + 4.5 * math.cos(3.0 * t)
+        x, y = r * math.cos(t), r * math.sin(t)
+        tx = dr * math.cos(t) - r * math.sin(t)
+        ty = dr * math.sin(t) + r * math.cos(t)
+        normal = _unitise((ty, -tx, 0.0))
+        for j in range(m):
+            points.append((x, y, height * j / m))
+            normals.append(normal)
+    return points, normals
+
+
+def revolved_samples(n=40, m=12):
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        for j in range(m):
+            z = j * 2.0
+            radius = 8.0 + 0.5 * z - 0.01 * z * z
+            slope = 0.5 - 0.02 * z
+            nr, nz = _unitise((1.0, -slope))[0], _unitise((1.0, -slope))[1]
+            points.append((radius * math.cos(t), radius * math.sin(t), z))
+            normals.append((nr * math.cos(t), nr * math.sin(t), nz))
+    return points, normals
+
+
+def helicoid_samples(n=140, pitch=4.0, base=2.0, rungs=14):
+    points, normals = [], []
+    for k in range(n):
+        s = k * 0.06
+        for j in range(rungs):
+            u = 1.0 + j
+            points.append(((base + u) * math.cos(s), (base + u) * math.sin(s), pitch * s))
+            normals.append(_unitise((pitch * math.sin(s), -pitch * math.cos(s), base + u)))
+    return points, normals
+
+
+def plane_samples(n=20):
+    points = [(i * 1.0, j * 1.0, 0.0) for i in range(n) for j in range(n)]
+    return points, [(0.0, 0.0, 1.0)] * len(points)
+
+
+def cylinder_samples(n=40, m=10):
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        for j in range(m):
+            points.append((8.0 * math.cos(t), 8.0 * math.sin(t), j * 1.0))
+            normals.append((math.cos(t), math.sin(t), 0.0))
+    return points, normals
+
+
+def ellipsoid_samples(n=24, a=14.0, b=9.0, c=6.0):
+    points, normals = [], []
+    for i in range(n):
+        for j in range(n):
+            u = math.pi * (i + 0.5) / n
+            v = 2.0 * math.pi * j / n
+            x, y, z = a * math.sin(u) * math.cos(v), b * math.sin(u) * math.sin(v), c * math.cos(u)
+            points.append((x, y, z))
+            normals.append(_unitise((x / (a * a), y / (b * b), z / (c * c))))
+    return points, normals
+
+
+GATES = {
+    "sigma_theta_rad": 0.005,
+    "residual_sigma_factor": 3.0,
+    "eigengap_min": 0.005,
+    "translation_epsilon": 0.05,
+    "pitch_epsilon": 0.02,
+}
+
+
+class KinematicRouterTests(unittest.TestCase):
+    def test_a_swept_irregular_outline_routes_to_extrusion_along_its_own_axis(self) -> None:
+        verdict = route_kinematic_surface(*extruded_cam_samples(), **GATES)
+        self.assertEqual("extrusion", verdict["verdict"])
+        self.assertIsNone(verdict["refusal"])
+        # This is the whole rung-1 claim: no primitive fits this wall, and the
+        # router still recovers the direction an extrude has to be built along.
+        self.assertAlmostEqual(1.0, abs(verdict["direction"][2]), places=6)
+
+    def test_a_surface_of_revolution_routes_to_revolution_about_its_own_axis(self) -> None:
+        verdict = route_kinematic_surface(*revolved_samples(), **GATES)
+        self.assertEqual("revolution", verdict["verdict"])
+        self.assertAlmostEqual(1.0, abs(verdict["direction"][2]), places=6)
+        self.assertLessEqual(abs(verdict["pitch_scaled"]), GATES["pitch_epsilon"])
+
+    def test_a_screw_surface_routes_to_helical_and_recovers_its_pitch(self) -> None:
+        verdict = route_kinematic_surface(*helicoid_samples(), **GATES)
+        self.assertEqual("helical", verdict["verdict"])
+        self.assertAlmostEqual(4.0, verdict["pitch"], places=6)
+
+    def test_a_plane_and_a_cylinder_refuse_rather_than_pick_from_a_degenerate_family(self) -> None:
+        # A plane admits a three-parameter family of invariant motions and a
+        # cylinder a two-parameter one. Reporting either as "an extrusion" would
+        # be picking an eigenvector out of a null space with no single direction.
+        for name, samples in (("plane", plane_samples()), ("cylinder", cylinder_samples())):
+            with self.subTest(name):
+                verdict = route_kinematic_surface(*samples, **GATES)
+                self.assertEqual("router-ambiguous", verdict["refusal"])
+                self.assertEqual("none", verdict["verdict"])
+                self.assertLess(verdict["eigengap"], GATES["eigengap_min"])
+
+    def test_a_doubly_curved_surface_reaches_no_verdict(self) -> None:
+        verdict = route_kinematic_surface(*ellipsoid_samples(), **GATES)
+        self.assertEqual("none", verdict["verdict"])
+        self.assertGreater(verdict["residual_rad"], verdict["residual_gate_rad"])
+
+    def test_the_residual_gate_is_tied_to_the_measured_noise_and_not_to_a_constant(self) -> None:
+        points, normals = extruded_cam_samples()
+        loose = route_kinematic_surface(points, normals, **dict(GATES, sigma_theta_rad=0.05))
+        tight = route_kinematic_surface(points, normals, **dict(GATES, sigma_theta_rad=1e-9))
+        self.assertEqual(loose["residual_rad"], tight["residual_rad"])
+        self.assertGreater(loose["residual_gate_rad"], tight["residual_gate_rad"])
+
+    def test_a_doubly_curved_signature_contradicting_a_translation_falls_through(self) -> None:
+        points, normals = extruded_cam_samples()
+        verdict = route_kinematic_surface(points, normals, signature="peak-pit", **GATES)
+        self.assertEqual("router-signature-conflict", verdict["refusal"])
+        self.assertEqual("none", verdict["verdict"])
+
+    def test_a_region_with_fewer_samples_than_unknowns_is_refused_not_fitted(self) -> None:
+        points, normals = plane_samples(n=2)
+        with self.assertRaises(ValueError):
+            route_kinematic_surface(points, normals, **GATES)
+
+
+# --------------------------------------------------------------------------
+# normals as fit data
+#
+# The measured failure this exists for: a bore tessellated as two vertex rings
+# determines a radius and no axis, and 85 of them across 11 production STLs were
+# refused for exactly that. The facets between the rings determine the axis to
+# float precision, and these tests are about that determination and its honesty
+# -- both that it is tight when the normals really do span the ring, and that it
+# refuses when they do not.
+# --------------------------------------------------------------------------
+
+
+def two_ring_bore(radius=5.0, height=2.0, sides=32, axis=(0.0, 0.0, 1.0)):
+    """A cylinder tessellated with two rings of vertices and nothing between.
+
+    Returns the vertex list plus the per-facet centroids, unit normals and areas
+    a caller reads off its own topology.
+    """
+    ring_low, ring_high = [], []
+    for k in range(sides):
+        t = 2.0 * math.pi * k / sides
+        x, y = radius * math.cos(t), radius * math.sin(t)
+        ring_low.append((x, y, 0.0))
+        ring_high.append((x, y, height))
+    points = ring_low + ring_high
+    centroids, normals, areas = [], [], []
+    for k in range(sides):
+        j = (k + 1) % sides
+        for tri in ((ring_low[k], ring_low[j], ring_high[k]), (ring_low[j], ring_high[j], ring_high[k])):
+            a, b, c = tri
+            centroid = tuple(sum(p[i] for p in tri) / 3.0 for i in range(3))
+            ab = tuple(b[i] - a[i] for i in range(3))
+            ac = tuple(c[i] - a[i] for i in range(3))
+            cross = (
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            )
+            length = math.sqrt(sum(v * v for v in cross))
+            centroids.append(centroid)
+            normals.append(tuple(v / length for v in cross))
+            areas.append(0.5 * length)
+    if axis != (0.0, 0.0, 1.0):  # pragma: no cover - the fixture is used upright
+        raise ValueError("this fixture builds a z-axis bore")
+    return points, centroids, normals, areas
+
+
+NORMAL_GATES = {
+    "normal_axis_eigengap_min": 0.05,
+    "normal_sigma_theta_floor_deg": 1e-06,
+    "cylinder_perpendicular_deg": 5.0,
+}
+
+
+class NormalConstrainedAxisTests(unittest.TestCase):
+    def test_a_two_ring_bore_determines_its_axis_from_the_facets(self) -> None:
+        _points, centroids, normals, areas = two_ring_bore()
+        evidence = normal_constrained_axis(
+            centroids, normals, facet_areas=areas, sigma_theta_floor_deg=1e-06
+        )
+        self.assertIsNotNone(evidence)
+        self.assertAlmostEqual(1.0, abs(evidence["axis"][2]), places=12)
+        # A full ring of normals puts half the spectrum in each of the two
+        # directions perpendicular to the axis and none along it.
+        self.assertAlmostEqual(0.5, evidence["eigengap"], places=6)
+        self.assertLess(evidence["axis_tilt_sigma_deg"], 1e-04)
+
+    def test_the_declared_floor_stops_an_exact_mesh_reporting_zero_uncertainty(self) -> None:
+        """Empty means unknown and zero means certain; neither is true here."""
+        _points, centroids, normals, areas = two_ring_bore()
+        loose = normal_constrained_axis(
+            centroids, normals, facet_areas=areas, sigma_theta_floor_deg=0.5
+        )
+        tight = normal_constrained_axis(
+            centroids, normals, facet_areas=areas, sigma_theta_floor_deg=1e-06
+        )
+        self.assertGreater(loose["axis_tilt_sigma_deg"], tight["axis_tilt_sigma_deg"])
+        self.assertEqual(0.5, loose["sigma_theta_deg"])
+        self.assertLess(loose["measured_sigma_theta_deg"], 1e-06)
+
+    def test_a_narrow_arc_of_facets_does_not_determine_an_axis_either(self) -> None:
+        """The normals refuse too, and the eigengap is how they say so."""
+        _points, centroids, normals, areas = two_ring_bore(sides=64)
+        keep = 4  # a couple of degrees of arc
+        evidence = normal_constrained_axis(
+            centroids[: 2 * keep],
+            normals[: 2 * keep],
+            facet_areas=areas[: 2 * keep],
+            sigma_theta_floor_deg=1e-06,
+        )
+        self.assertLess(evidence["eigengap"], 0.05)
+
+    def test_unreadable_normals_refuse_rather_than_defaulting_to_an_axis(self) -> None:
+        _points, centroids, normals, areas = two_ring_bore()
+        dead = [(0.0, 0.0, 0.0)] * len(normals)
+        self.assertIsNone(
+            normal_constrained_axis(centroids, dead, facet_areas=areas, sigma_theta_floor_deg=0.0)
+        )
+
+    def test_the_area_weighted_moment_is_the_router_matrix_corner(self) -> None:
+        """One accumulation, two consumers: the cylinder reads the router's block."""
+        from fusion_design.mesh_fitting import _centroid, _extent, _normal_moments
+
+        _points, centroids, normals, areas = two_ring_bore()
+        matrix, used, weight = _normal_moments(
+            centroids, normals, _centroid(centroids), _extent(centroids), areas
+        )
+        self.assertEqual(len(normals), used)
+        self.assertAlmostEqual(float(len(normals)), weight, places=9)
+        # The normal block is the lower-right corner and nothing else.
+        for i in range(3):
+            for j in range(3):
+                expected = sum(
+                    (a / (sum(areas) / len(areas))) * n[i] * n[j] for n, a in zip(normals, areas)
+                )
+                self.assertAlmostEqual(expected, matrix[3 + i][3 + j], places=6)
+
+
+class NormalConstrainedFitTests(unittest.TestCase):
+    def test_the_fitted_cylinder_takes_its_axis_from_the_normals_and_says_so(self) -> None:
+        points, centroids, normals, areas = two_ring_bore(radius=5.0, height=2.0)
+        fits = fit_face_group(
+            points,
+            kinds=("plane", "cylinder", "sphere"),
+            facet_normals=normals,
+            facet_centroids=centroids,
+            facet_areas=areas,
+            **NORMAL_GATES,
+        )
+        best = fits[0]
+        self.assertEqual("cylinder", best.kind)
+        self.assertTrue(best.accepted)
+        self.assertEqual("facet-normals", best.support["axis_evidence"]["source"])
+        self.assertIn("normal-constrained-axis", best.support["checked"])
+        self.assertAlmostEqual(1.0, abs(best.parameters["axis_direction"][2]), places=12)
+        self.assertAlmostEqual(5.0, best.parameters["radius"], places=9)
+
+    def test_the_reported_axis_sigma_comes_from_the_system_that_determined_it(self) -> None:
+        from fusion_design.mesh_fitting import parameter_uncertainty
+
+        points, centroids, normals, areas = two_ring_bore(radius=5.0, height=2.0)
+        fits = fit_face_group(
+            points,
+            kinds=("plane", "cylinder", "sphere"),
+            facet_normals=normals,
+            facet_centroids=centroids,
+            facet_areas=areas,
+            **NORMAL_GATES,
+        )
+        best = fits[0]
+        sigma = parameter_uncertainty(best, points)
+        joint = best.support["axis_evidence"]["axis_tilt_sigma_deg"]
+        self.assertEqual(joint, sigma["axis_tilt_deg"])
+        self.assertEqual(joint, sigma["axis_direction_deg"])
+        # The vertex answer is kept beside it rather than thrown away -- and on
+        # an exact mesh it is the *more* flattering of the two, which is the
+        # trap. `sigma^2 (J^T J)^-1` with a residual of zero reports certainty
+        # however badly conditioned the matrix is, so two rings two millimetres
+        # apart claim an axis good to 1e-15 degrees. The joint number is larger
+        # because it is floored by a measurement precision somebody declared.
+        self.assertLess(sigma["axis_tilt_vertices_deg"], 1e-12)
+        self.assertGreater(sigma["axis_tilt_deg"], sigma["axis_tilt_vertices_deg"])
+
+    def test_the_joint_axis_sigma_falls_as_more_facets_are_added(self) -> None:
+        """It is a real sigma over a real count, not a constant wearing units."""
+        from fusion_design.mesh_fitting import parameter_uncertainty
+
+        sigmas = []
+        for sides in (16, 64, 256):
+            _points, centroids, normals, areas = two_ring_bore(sides=sides)
+            evidence = normal_constrained_axis(
+                centroids, normals, facet_areas=areas, sigma_theta_floor_deg=0.05
+            )
+            sigmas.append(evidence["axis_tilt_sigma_deg"])
+        self.assertLess(sigmas[1], sigmas[0])
+        self.assertLess(sigmas[2], sigmas[1])
+        # Four times the facets, half the sigma.
+        self.assertAlmostEqual(2.0, sigmas[0] / sigmas[1], places=6)
+        self.assertAlmostEqual(2.0, sigmas[1] / sigmas[2], places=6)
+
+    def test_normals_that_do_not_determine_an_axis_leave_the_vertex_fit_alone(self) -> None:
+        points, centroids, normals, areas = two_ring_bore(sides=64)
+        keep = 6
+        fits = fit_face_group(
+            points,
+            kinds=("plane", "cylinder", "sphere"),
+            facet_normals=normals[: 2 * keep],
+            facet_centroids=centroids[: 2 * keep],
+            facet_areas=areas[: 2 * keep],
+            **NORMAL_GATES,
+        )
+        for fit in fits:
+            if fit.accepted and fit.kind == "cylinder":
+                evidence = fit.support.get("axis_evidence")
+                self.assertIsNotNone(evidence)
+                self.assertEqual("vertices", evidence["source"])
+                self.assertIn("do not determine an axis", evidence["reason"])
+                self.assertNotIn("normal-constrained-axis", fit.support.get("checked", ()))
+
+    def test_a_partial_declaration_is_refused_rather_than_completed(self) -> None:
+        points, centroids, normals, areas = two_ring_bore()
+        with self.assertRaises(ValueError) as caught:
+            fit_face_group(
+                points,
+                kinds=("cylinder",),
+                facet_normals=normals,
+                cylinder_perpendicular_deg=5.0,
+                facet_centroids=centroids,
+                facet_areas=areas,
+            )
+        self.assertIn("together", str(caught.exception))
+
+    def test_a_plane_and_a_sphere_have_no_axis_to_pin(self) -> None:
+        points, _centroids, _normals, _areas = two_ring_bore()
+        with self.assertRaises(ValueError):
+            fit_primitive(points, "sphere", fixed_axis=(0.0, 0.0, 1.0))
+
 
 
 if __name__ == "__main__":

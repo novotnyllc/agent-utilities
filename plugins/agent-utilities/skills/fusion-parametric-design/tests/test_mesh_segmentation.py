@@ -20,6 +20,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import unittest
 
@@ -215,6 +216,8 @@ def unweld(vertices, triangles, groups=None, jitter=1e-7, seed=9):
 # the reference spec
 # --------------------------------------------------------------------------
 
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
 REFERENCE = {
     "max_triangles": (200000, "the density above which extra triangles are noise samples, not information"),
     "weld_tolerance": (0.0, "this fixture is exported from a solid modeller, so exact duplicates are the only duplicates"),
@@ -222,6 +225,13 @@ REFERENCE = {
     "normal_alpha_deg": (25.0, "loose on purpose: the normal check separates surfaces, it does not re-segment"),
     "curvature_dead_zone_sigmas": (2.0, "two estimator sigmas of curvature is indistinguishable from flat"),
     "cylinder_normal_perpendicular_deg": (5.0, "every one of the 367 measured two-ring bores held its facet normals inside five degrees of perpendicular, and no sphere's do"),
+    "regime": ("auto", "let the mesh's own dihedral distribution and measured sigma decide, and report which"),
+    "vertex_precision_rel": (1.2e-07, "a binary STL stores float32, so a vertex is quantized to about a ten-millionth of its own magnitude"),
+    "tessellation_sigma_over_extent": (1e-9, "an exporter's vertices sit on the analytic surface to float precision; a scan's never do"),
+    "min_normal_axis_eigengap": (0.05, "a twentieth of the normal spectrum away from the axis is a full ring of facets, not a sliver"),
+    "normal_sigma_theta_floor_deg": (1e-06, "double precision over a millimetre-scale part leaves about a microdegree of normal direction"),
+    "max_fillet_radius_rel_spread": (0.02, "a constant-radius round is constant; two percent is the tessellation's own radius wobble"),
+    "boundary_circle_sigmas": (3.0, "three joint sigmas before an independent boundary circle counts as disagreeing"),
     "max_fillet_arc_deg": (180.0, "a bore or a boss closes on itself; an edge round never sweeps past a half turn"),
     "max_relative_residual": (0.02, "two percent of the sampled extent is the residual gate this skill already uses"),
     "max_radius_ratio": (5.0, "a radius beyond five extents is the near-flat-strip pathology"),
@@ -356,9 +366,26 @@ class WeldTests(unittest.TestCase):
 
 
 class NoiseTests(unittest.TestCase):
-    def test_a_clean_mesh_measures_essentially_zero_noise(self) -> None:
+    def test_a_clean_mesh_measures_noise_down_to_its_own_storage_precision(self) -> None:
+        """Both estimators read zero, and sigma still stops at the declared floor.
+
+        No estimator can see below the precision the coordinates are *stored* at,
+        and a sigma of zero would divide every downstream standard error by
+        nothing -- which is how a float32 STL's quantization comes to read as
+        systematic residual structure. The record says which of the two it is
+        reporting.
+        """
         dump = make_dump(*box_mesh())
         record = seg.fit_regions(dump, spec())
+        noise = record["noise"]
+        self.assertEqual(0.0, noise["sigma_quadric"])
+        self.assertEqual(0.0, noise["sigma_dihedral"])
+        self.assertTrue(noise["precision_floor_binds"])
+        self.assertEqual(noise["vertex_precision_floor"], noise["sigma"])
+        self.assertAlmostEqual(1.2e-07, noise["sigma_over_extent"])
+
+    def test_a_declared_precision_floor_of_zero_is_still_honoured_as_declared(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec(vertex_precision_rel=1e-15))
         self.assertLess(record["noise"]["sigma"], 1e-9)
 
     def test_noise_estimators_recover_the_injected_sigma_on_flat_surface(self) -> None:
@@ -518,7 +545,23 @@ class DetectionTests(unittest.TestCase):
             [r["triangle_indices"] for r in first["regions"]],
             [r["triangle_indices"] for r in second["regions"]],
         )
-        payload = json.dumps(second)
+        # Scanned with the measured floats and the content hashes replaced
+        # first: both are digit strings, so a raw substring search over the whole
+        # record collides with arithmetic and passes or fails by luck. What is
+        # left is every name, key and integer the record actually carries, and no
+        # temp id may appear among them.
+        def scrubbed(value):
+            if isinstance(value, float):
+                return "<measured>"
+            if isinstance(value, str):
+                return "<digest>" if _SHA256.fullmatch(value) else value
+            if isinstance(value, dict):
+                return {key: scrubbed(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [scrubbed(item) for item in value]
+            return value
+
+        payload = json.dumps(scrubbed(second))
         for temp_id in sorted({901 + 7 * g for g in groups}):
             self.assertNotIn(str(temp_id), payload, temp_id)
         self.assertNotEqual(low.sha256, high.sha256)
@@ -633,6 +676,7 @@ class TorusTests(unittest.TestCase):
             "region_hash": name,
             "triangle_indices": [index],
             "welded_triangle_indices": [index],
+            "area": 1.0,
             "fit": fit,
         }
 
@@ -646,7 +690,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         blend = accepted[2]
         self.assertTrue(blend["fillet_candidate"])
         self.assertEqual(2.0, blend["fillet"]["radius"])
@@ -666,7 +710,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         blend = accepted[2]
         self.assertTrue(blend["fillet_candidate"])
         self.assertEqual(2.0, blend["fillet"]["radius"])
@@ -683,7 +727,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[2]["fillet_candidate"])
         self.assertNotIn("fillet", accepted[2])
 
@@ -698,7 +742,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[2]["fillet_candidate"])
 
     def test_a_blend_needs_two_non_blend_neighbours(self) -> None:
@@ -712,7 +756,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[1, 2], [0, 2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[1]["fillet_candidate"])
         self.assertFalse(accepted[2]["fillet_candidate"])
 
@@ -1216,6 +1260,194 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 "triangle-budget-exceeded", _json.loads(out.getvalue())["refusal"]["reason"]
             )
+
+
+# --------------------------------------------------------------------------
+# normals as fit data, the measurement regime, and the evidence they unlock
+#
+# The measured failure these exist for: across 11 production STLs, 85 full-turn
+# bores were refused because two rings of vertices carry no axial baseline. The
+# facets between the rings carry the axis exactly, and none of the declared
+# thresholds moves.
+# --------------------------------------------------------------------------
+
+
+class NormalConstrainedRegionTests(unittest.TestCase):
+    def _shallow_bore(self):
+        # One stack: two rings of vertices and nothing between them, which is how
+        # a solid modeller tessellates a shallow bore.
+        return make_dump(*cylinder_mesh(radius=5.0, height=2.0, sides=48, stacks=1))
+
+    def test_a_shallow_two_ring_bore_is_accepted_on_its_facet_normals(self) -> None:
+        record = seg.fit_regions(self._shallow_bore(), spec())
+        cylinders = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"]
+        self.assertTrue(cylinders, record["refusal"] or record["unfitted_regions"])
+        support = cylinders[0]["fit"]["support"]
+        self.assertEqual("facet-normals", support["axis_evidence"]["source"])
+        self.assertEqual("facet-normals", support["axis_determined_by"])
+        self.assertFalse(support["axial_span_floor_applied"])
+        # The floor was still *measured*, and the bore is still short of it. What
+        # changed is which evidence the fit rests on, not the number.
+        self.assertLess(support["axial_span"], support["axial_span_floor"])
+        self.assertAlmostEqual(5.0, cylinders[0]["fit"]["parameters"]["radius"], places=6)
+
+    def test_the_same_bore_is_refused_when_the_normals_do_not_determine_it_either(self) -> None:
+        """The floor is not loosened; it is applied to whatever determined the axis.
+
+        Declaring an eigengap floor no facet ring can reach takes the normals out
+        of the determination, and the vertex evidence then faces exactly the
+        floor it always faced -- at exactly the same value.
+        """
+        dump = self._shallow_bore()
+        passed = seg.fit_regions(dump, spec())
+        refused = seg.fit_regions(dump, spec(min_normal_axis_eigengap=0.9))
+        cylinder = [r for r in refused["regions"] if r["fit"]["kind"] == "cylinder"][0]
+        self.assertFalse(cylinder["accepted"])
+        self.assertIn("support floors", cylinder["fit"]["rejection"])
+        self.assertEqual("vertices", cylinder["fit"]["support"]["axis_determined_by"])
+        self.assertTrue(cylinder["fit"]["support"]["axial_span_floor_applied"])
+        # Same declared floor, same measured span, opposite verdict -- and the
+        # only difference between the two runs is which evidence was allowed to
+        # determine the axis.
+        accepted = [r for r in passed["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"][0]
+        for key in ("axial_span", "axial_span_floor"):
+            self.assertAlmostEqual(
+                accepted["fit"]["support"][key], cylinder["fit"]["support"][key], places=9
+            )
+        self.assertEqual(
+            passed["thresholds"]["min_axial_span_ratio"],
+            refused["thresholds"]["min_axial_span_ratio"],
+        )
+
+    def test_a_bore_is_corroborated_by_the_circle_its_own_boundary_traces(self) -> None:
+        record = seg.fit_regions(self._shallow_bore(), spec())
+        cylinder = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"][0]
+        boundary = cylinder["fit"]["support"]["boundary_circle"]
+        self.assertAlmostEqual(5.0, boundary["loop_radius"], places=6)
+        self.assertIsNone(boundary["flag"])
+        self.assertTrue(boundary["agrees_on_radius"])
+        self.assertLess(boundary["loop_normal_to_axis_deg"], 1e-06)
+        self.assertIn("boundary-circle-corroboration", cylinder["fit"]["support"]["checked"])
+        # Corroboration is reported beside the fit, never folded into it: the
+        # parameters still carry the surface fit's own radius and the loop's is a
+        # second, separately named number.
+        self.assertEqual(cylinder["fit"]["parameters"]["radius"], boundary["fitted_radius"])
+        self.assertIn("loop_radius", boundary)
+
+    def test_a_closed_surface_has_no_boundary_to_be_corroborated_by(self) -> None:
+        """Absent evidence is absent, not agreement."""
+        record = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=3.0))
+        tori = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "torus"]
+        self.assertTrue(tori, record["refusal"])
+        support = tori[0]["fit"]["support"]
+        self.assertNotIn("boundary_circle", support)
+        self.assertNotIn("boundary-circle-corroboration", support["checked"])
+
+
+class RegimeTests(unittest.TestCase):
+    def test_an_exact_tessellation_is_detected_and_stops_the_noise_flag(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        regime = record["regime"]
+        self.assertEqual("tessellation", regime["regime"])
+        self.assertEqual("tessellation", regime["detected"])
+        self.assertTrue(regime["evidence"]["vertices_read_as_exact"])
+        self.assertTrue(regime["evidence"]["dihedral_reads_as_bimodal"])
+        self.assertNotIn("noise-model-inconsistent", record["flags"])
+
+    def test_a_noisy_mesh_reads_as_a_scan(self) -> None:
+        record = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )
+        self.assertEqual("scan", record["regime"]["regime"])
+        self.assertFalse(record["regime"]["evidence"]["vertices_read_as_exact"])
+
+    def test_a_declared_regime_overrides_the_detection_and_records_both(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec(regime="scan"))
+        self.assertEqual("scan", record["regime"]["regime"])
+        self.assertEqual("tessellation", record["regime"]["detected"])
+        self.assertTrue(record["regime"]["overridden"])
+
+    def test_a_regime_outside_the_vocabulary_is_refused_at_spec_load(self) -> None:
+        with self.assertRaises(seg.SegmentationSpecError):
+            spec(regime="exact")
+
+
+class FilletChainTests(unittest.TestCase):
+    def _blend(self, name, index, radius, span=90.0):
+        return {
+            "region_hash": name,
+            "triangle_indices": [index],
+            "welded_triangle_indices": [index],
+            "area": 1.0,
+            "fit": {
+                "kind": "cylinder",
+                "parameters": {"radius": radius},
+                "support": {"angular_span_deg": span},
+            },
+        }
+
+    def _face(self, name, index):
+        return {
+            "region_hash": name,
+            "triangle_indices": [index],
+            "welded_triangle_indices": [index],
+            "area": 1.0,
+            "fit": {"kind": "plane", "parameters": {}},
+        }
+
+    def test_a_run_of_blends_along_one_edge_is_one_fillet_not_three(self) -> None:
+        """The 298-group bucket: a round cut into fragments is still one round."""
+        accepted = [
+            self._face("a", 0),
+            self._face("b", 1),
+            self._blend("r1", 2, 2.0),
+            self._blend("r2", 3, 2.01),
+            self._blend("r3", 4, 1.99),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2, 3, 4], [2, 3, 4], [0, 1, 3], [0, 1, 2, 4], [0, 1, 3]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        blends = accepted[2:]
+        self.assertTrue(all(r["fillet_candidate"] for r in blends))
+        self.assertEqual(1, len({r["fillet"]["chain_id"] for r in blends}))
+        self.assertEqual([3], sorted({r["fillet"]["chain_member_count"] for r in blends}))
+        self.assertEqual(["a", "b"], blends[0]["fillet"]["between"])
+        self.assertAlmostEqual(2.0, blends[0]["fillet"]["radius"], places=9)
+
+    def test_a_chain_whose_radius_drifts_is_not_one_constant_radius_round(self) -> None:
+        accepted = [
+            self._face("a", 0),
+            self._face("b", 1),
+            self._blend("r1", 2, 2.0),
+            self._blend("r2", 3, 3.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2, 3], [2, 3], [0, 1, 3], [0, 1, 2]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        for region in accepted[2:]:
+            self.assertFalse(region["fillet_candidate"])
+            self.assertFalse(region["fillet_chain"]["accepted"])
+            self.assertIn("spread", region["fillet_chain"]["reason"])
+
+    def test_a_chain_is_still_refused_without_two_accepted_primaries(self) -> None:
+        accepted = [
+            self._face("a", 0),
+            self._blend("r1", 1, 2.0),
+            self._blend("r2", 2, 2.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[1, 2], [0, 2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        for region in accepted[1:]:
+            self.assertFalse(region["fillet_candidate"])
+            self.assertIn("exactly two", region["fillet_chain"]["reason"])
+
 
 
 if __name__ == "__main__":

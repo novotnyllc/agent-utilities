@@ -288,6 +288,24 @@ Do not convert a dense mesh to B-rep merely to claim parametric editability. Con
   --classification build/classification.json --face-group-spec build/face-groups.json -o build/mesh-face-groups.py
 ```
 
+**The facet normals are fit data, not decoration.** A bore tessellated as two
+vertex rings determines a radius and no axis, and 85 full-turn bores across 11
+production STLs were refused for exactly that. Every facet normal on a cylinder
+is perpendicular to its axis by construction, so `fit-regions` takes the axis
+from the area-weighted facet-normal second moment and reports the closed-form
+sigma that determination carries; `min_axial_span_ratio` still applies to every
+fit whose axis came from the vertices, and a fit whose axis came from the normals
+records the floor as measured-and-not-applied with the eigengap that replaced it.
+The detection spec therefore declares seven more thresholds, each with its own
+rationale like every other: `regime` (`auto`, `tessellation` or `scan`),
+`tessellation_sigma_over_extent`, `vertex_precision_rel`,
+`min_normal_axis_eigengap`, `normal_sigma_theta_floor_deg`,
+`max_fillet_radius_rel_spread` and `boundary_circle_sigmas`. Read
+`record.regime` before anything else: an exact tessellation and a scan need
+different noise floors, the record says which it decided and on what evidence,
+and a caller who knows what they captured can say so instead.
+
+
 **A `parametric-rebuild` produces a timeline, and the claim that it is editable is measured, not asserted.** `plan-reconstruction` decides what will be built before anything is; `emit-mesh-rebuild` sections the mesh dump the program was fitted from — reading it only after its bytes hash to the program's recorded `dump_sha256` — and emits one data-driven transaction that verifies, constructs, measures and reports, making no choices of its own. A feature it cannot build exactly as declared is a named refusal with full rollback and no geometry; `replan-without` then turns that refusal into a smaller program in one explicit, recorded command rather than letting anything improvise inside Fusion.
 
 Then prove the result. `designType == ParametricDesignType` establishes nothing — it is equally true of a faceted body with no timeline. `emit-mesh-editability` perturbs each user parameter one at a time, asserts the observable that parameter *declares* it moves (`volume`, `centroid` or `bbox` — volume alone would report a correct hole-position or plane-offset parameter as dead), restores it, and asserts the model came back within the declared epsilon. A failure names which parameter broke which feature. `check-editability` is the gate and cannot pass a report that asserts more than the run performed.

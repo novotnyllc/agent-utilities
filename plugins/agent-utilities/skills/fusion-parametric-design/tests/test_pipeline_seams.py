@@ -386,6 +386,112 @@ class GroupingToFitSeamTests(unittest.TestCase):
         self.assertIsNone(body.mesh.triangleFaceGroupTempIds)
 
 
+class NormalsAcrossTheDumpSeamTests(GroupingToFitSeamTests):
+    """The facet data the new fitting path needs has to survive the dump.
+
+    Nothing in the dump carries a normal. The fitters reconstruct every facet
+    normal, centroid and area from `triangleNodeIndices` and the node
+    coordinates, host-side, after welding -- so a winding the extraction
+    transaction reordered, or a weld that collapsed the wrong node, would silently
+    produce normals that point somewhere else and an axis determined from them
+    would be confidently wrong. This runs the real grouping and extraction
+    transactions over a shallow two-ring bore and checks the axis that comes out
+    the far end, because that is the only place the round trip is actually tested.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The brick, plus a shallow tube standing beside it. One stack: two rings
+        # of vertices and nothing between them, which is how a solid modeller
+        # tessellates a shallow bore -- and the shape that 85 face groups across
+        # 11 production STLs were refused for. The brick is there because the
+        # grouping transaction refuses a body it can only find one group in, and
+        # one group over a whole body is not a segmentation.
+        brick_v, brick_t, brick_g = ts.box_mesh(size=20.0, divisions=6)
+        tube_v, tube_t, _tube_g = ts.cylinder_mesh(radius=5.0, height=2.0, sides=48, stacks=1)
+        offset = len(brick_v)
+        self.vertices_cm = [(x * 0.1, y * 0.1, z * 0.1) for x, y, z in brick_v] + [
+            ((x + 60.0) * 0.1, y * 0.1, z * 0.1) for x, y, z in tube_v
+        ]
+        self.triangles = list(brick_t) + [tuple(i + offset for i in t) for t in tube_t]
+        self.groups = list(brick_g) + [max(brick_g) + 1] * len(tube_t)
+
+    def _run_both(self):
+        body = self._mesh_body()
+        grouping = self._run(
+            emit_mesh_face_groups_script(
+                self.manifest,
+                self.classification,
+                self.source,
+                {"component_path": "", "body_name": "bracket_scan"},
+            ),
+            body,
+        )[0]
+        self.assertTrue(grouping["ok"], grouping)
+        extraction = self._run(
+            emit_mesh_extract_script(
+                self.manifest, self.classification, self.source, self._extract_spec()
+            ),
+            body,
+        )[0]
+        self.assertTrue(extraction["ok"], extraction)
+        return read_mesh_dump(extraction["dump_path"], extraction["dump_sha256"])
+
+    def test_extraction_without_the_grouping_stage_produces_a_dump_that_refuses(self) -> None:
+        super().test_extraction_without_the_grouping_stage_produces_a_dump_that_refuses()
+
+    def test_a_grouping_that_did_not_stick_never_reaches_a_dump(self) -> None:
+        super().test_a_grouping_that_did_not_stick_never_reaches_a_dump()
+
+    def test_the_grouping_transaction_feeds_extraction_which_feeds_the_fitters(self) -> None:
+        """Overridden: this fixture is one group, so the brick's assertions do not apply."""
+        dump = self._run_both()
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        self.assertEqual(7, record["face_groups"]["group_count"])
+
+    def test_the_bore_survives_the_dump_and_takes_its_axis_from_the_facets(self) -> None:
+        dump = self._run_both()
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        cylinders = [
+            r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"
+        ]
+        self.assertTrue(cylinders, record["unfitted_regions"])
+        fit = cylinders[0]["fit"]
+        support = fit["support"]
+        self.assertEqual("facet-normals", support["axis_evidence"]["source"])
+        # The reconstructed normals put the axis on z to float precision. A dump
+        # that had lost the winding would put it anywhere.
+        self.assertAlmostEqual(1.0, abs(fit["parameters"]["axis_direction"][2]), places=9)
+        self.assertAlmostEqual(5.0, fit["parameters"]["radius"], places=6)
+        self.assertAlmostEqual(0.5, support["axis_evidence"]["eigengap"], places=6)
+        # And the boundary the grouping left behind agrees with it, independently.
+        self.assertAlmostEqual(5.0, support["boundary_circle"]["loop_radius"], places=6)
+        self.assertIsNone(support["boundary_circle"]["flag"])
+
+    def test_the_record_the_new_path_produces_still_parses_for_the_planner(self) -> None:
+        """The uncertainty names U3 licenses from are the ones the joint system writes."""
+        dump = self._run_both()
+        record = seg.fit_regions(dump, ts.spec())
+        parsed = parse_fit_record(record)
+        cylinder = [r for r in parsed.regions if r.accepted and r.fit.kind == "cylinder"][0]
+        for key in ("axis_direction_deg", "axis_point", "radius"):
+            self.assertIsNotNone(cylinder.sigma(key), key)
+        # The axis sigma the planner reads is the joint one, not the vertex one.
+        raw = next(
+            r for r in record["regions"] if r["region_hash"] == cylinder.region_hash
+        )
+        self.assertEqual(
+            raw["fit"]["support"]["axis_evidence"]["axis_tilt_sigma_deg"],
+            cylinder.sigma("axis_direction_deg"),
+        )
+        self.assertNotEqual(
+            raw["fit"]["uncertainty"]["axis_tilt_vertices_deg"],
+            cylinder.sigma("axis_direction_deg"),
+        )
+
+
 class PlanToRebuildSeamTests(unittest.TestCase):
     """A real program, emitted and run: the cap ordering has to survive the frame."""
 
