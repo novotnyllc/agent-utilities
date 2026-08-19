@@ -124,21 +124,49 @@ def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
     }
 
 
-def blend_cylinder(label, axis, axis_point, radius, area, *, between):
+def _chain_id(name: str) -> str:
+    """A chain id shaped like U2's: a hex digest over the chain's own members."""
+    return hashlib.sha256(f"chain:{name}".encode("utf-8")).hexdigest()
+
+
+def _chain_block(name: str, radius: float) -> dict[str, Any]:
+    """U2's chain record for a blend: which edge it is, and that the walk kept it."""
+    return {
+        "id": _chain_id(name),
+        "members": [region_hash(name)],
+        "member_count": 1,
+        "radius_spread_rel": 0.0,
+        "max_radius_rel_spread": 0.02,
+        "mean_radius": radius,
+        "accepted": True,
+        "reason": None,
+    }
+
+
+def blend_cylinder(label, axis, axis_point, radius, area, *, between, chain=None):
     """An accepted *partial-arc cylinder* carrying U2's fillet proposal.
 
     The other shape a blend arrives as, and the only one a face-grouped mesh
     actually produces.  The arc that separates an edge round from a bore is
     measured upstream against U2's own declared ceiling; the fit record carries
     the proposal, not the span, so nothing downstream re-measures it.
+
+    ``chain`` names the *edge* this fragment lies on, as U2's blend chaining does:
+    fragments of one round share a chain, and two rounds between the same pair of
+    faces are two chains.  It defaults to the region's own label, which is what a
+    lone fragment gets.  A record that named no chain would leave the planner
+    unable to tell one rounded edge of a face pair from the next, and it says so
+    rather than pooling them.
     """
     region = cylinder(label, axis, axis_point, radius, area, 8.0)
     region["fillet_candidate"] = True
     region["fillet"] = {
         "radius": radius,
         "between": [region_hash(name) for name in between],
+        "chain_id": _chain_id(chain or label),
         "emission": "filletFeatures on the shared edge, radius = the cylinder radius over a partial arc",
     }
+    region["fillet_chain"] = _chain_block(chain or label, radius)
     return region
 
 
@@ -191,8 +219,10 @@ def torus(label, radius, minor_radius, area, *, between, candidate=True):
         region["fillet"] = {
             "radius": minor_radius,
             "between": [region_hash(name) for name in between],
+            "chain_id": _chain_id(label),
             "emission": "filletFeatures on the shared edge, radius = the torus minor radius",
         }
+        region["fillet_chain"] = _chain_block(label, minor_radius)
     return region
 
 

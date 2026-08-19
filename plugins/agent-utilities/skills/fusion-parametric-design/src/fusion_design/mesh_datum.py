@@ -206,6 +206,14 @@ class RegionFit:
     # U2's fillet proposal for this region: ``{"radius", "between"}`` when an
     # accepted torus is adjacent to exactly two non-torus primaries, else None.
     fillet: dict[str, Any] | None = None
+    # Whether U2 measured this surface as a *round* -- an arc short enough to be
+    # an edge blend against the caller's declared ceiling -- as opposed to a wall
+    # that closes on itself.  ``fillet`` is the accepted proposal; this is the
+    # shape, and it stays true for a round whose chain was refused.  The planner
+    # needs the distinction because a round's axis runs along an edge, which may
+    # lie along the sweep direction or across it, while a wall's axis is the
+    # sweep direction.
+    blend_shaped: bool = False
     # The kinematic router's raw moment block over this region's own facets, as
     # ``mesh_fitting.region_motion_moments`` builds it.  ``None`` on a record
     # written before this field existed, or on a region whose facets carried no
@@ -254,6 +262,7 @@ class RegionFit:
             material_side=self.material_side,
             orientation_gate=self.orientation_gate,
             fillet=self.fillet,
+            blend_shaped=self.blend_shaped,
             motion_moments=self.motion_moments,
         )
 
@@ -394,7 +403,21 @@ def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | 
             "exactly two region hashes; a blend that touches one region, or three, is not the "
             "two-neighbour adjacency a constant-radius fillet edge is",
         )
-    return {"radius": radius, "between": sorted(str(item) for item in between)}
+    # Which edge this fragment lies on, as U2's blend chaining named it: a chain
+    # is a run of adjacent fragments that agree in radius and lie between the
+    # same two primaries, which is exactly one rounded edge. Absent is not
+    # malformed -- a record written before chaining existed carries none -- and
+    # the planner refuses rather than pooling fragments whose edge it cannot tell
+    # apart. Present and not a string is malformed: an edge identity that is not
+    # an identity would silently pool two edges into one fillet.
+    chain_id = body.get("chain_id")
+    if chain_id is not None and not isinstance(chain_id, str):
+        raise _malformed(f"{path}.fillet.chain_id", "a string when present")
+    return {
+        "radius": radius,
+        "between": sorted(str(item) for item in between),
+        "chain_id": chain_id,
+    }
 
 
 def _parse_motion_moments(raw: Any, path: str) -> dict[str, Any] | None:
@@ -511,6 +534,12 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 material_side=material_side,
                 orientation_gate=orientation_gate,
                 fillet=_parse_fillet(raw_region, f"{path}"),
+                # U2 walked this surface as a blend: its measured arc was short
+                # enough to be an edge round rather than a wall that closes on
+                # itself. True even when the chain was then refused, because the
+                # *shape* is what this flag reports and the refusal is about the
+                # chain's neighbours or its radius spread.
+                blend_shaped=isinstance(raw_region.get("fillet_chain"), dict),
                 motion_moments=_parse_motion_moments(
                     raw_region.get("motion_moments"), f"{path}.motion_moments"
                 ),

@@ -414,8 +414,10 @@ def _project(point: Vec3, origin: Vec3, u: Vec3, v: Vec3) -> tuple[float, float]
     return (_dot(offset, u), _dot(offset, v))
 
 
-def _single_closed(section: Any, archetype_id: str, station: float) -> Any:
-    """The one closed polyline at this station, or a refusal.
+def _single_closed(
+    section: Any, archetype_id: str, station: float, bores: Sequence[Any] = ()
+) -> Any:
+    """The one closed polyline at this station that is not a bore, or a refusal.
 
     Deliberately not "the largest": choosing among candidate loops is a decision,
     and E1 puts every decision host-side *and under test* rather than in a
@@ -423,6 +425,11 @@ def _single_closed(section: Any, archetype_id: str, station: float) -> Any:
     void or a second solid at this station, which is geometry this emitter does
     not build -- so it refuses by name instead of silently rebuilding the outer
     shell and quietly losing the bore.
+
+    ``bores`` are the loops the caller *identified* as holes this same program
+    cuts, matched to their declared centres and radii. Those are not a second
+    profile: they are features of their own, already in the program and ordered
+    after this one. Everything else still refuses.
     """
     closed = [line for line in section.polylines if line.closed and len(line.points) >= 3]
     if not closed:
@@ -438,18 +445,74 @@ def _single_closed(section: Any, archetype_id: str, station: float) -> Any:
             },
         )
     if len(closed) > 1:
+        bore_ids = {id(line) for line in bores}
+        outer = [line for line in closed if id(line) not in bore_ids]
+        if len(outer) == 1:
+            return outer[0]
         raise _refuse(
             "profile-ambiguous",
             f"the section at station {station:.6g} mm closed {len(closed)} loops for "
-            f"{archetype_id}; a single-loop profile cannot describe it and picking one would "
-            "discard the rest without saying so.",
+            f"{archetype_id}, of which {len(closed) - len(outer)} are bores this program cuts; "
+            "a single-loop profile cannot describe what is left and picking one would discard "
+            "the rest without saying so.",
             {
                 "archetype_id": archetype_id,
                 "station_mm": station,
                 "closed_loop_point_counts": [len(line.points) for line in closed],
+                "loops_matched_to_holes": len(closed) - len(outer),
             },
         )
     return closed[0]
+
+
+def _loops_cut_by_holes(
+    closed: Sequence[Any],
+    holes: Sequence[Mapping[str, Any]],
+    origin: Vec3,
+    u: Vec3,
+    v: Vec3,
+    tolerance: float,
+) -> list[Any]:
+    """Which of a section's closed loops are bores this same program cuts.
+
+    A plate with thirteen bores down it sections into fourteen loops, and the one
+    that matters is the outline: the other thirteen are the holes this program
+    already carries as their own cut features, and rebuilding them into the
+    profile would cut each of them twice.  This is not "take the largest loop" --
+    that is the heuristic ``_single_closed`` exists to refuse.  Each interior loop
+    has to be *identified*: its centre within the caller's declared
+    ``entity_match_tolerance_mm`` of a hole's own declared centre, and its radius
+    within that of the hole's own declared radius, both in the datum frame the
+    hole's position is stated in.  A loop nothing matches leaves the section
+    ambiguous and the refusal stands.
+    """
+    matched: list[Any] = []
+    for line in closed:
+        points = [_project(point, origin, u, v) for point in line.points]
+        centre = (
+            sum(point[0] for point in points) / len(points),
+            sum(point[1] for point in points) / len(points),
+        )
+        radii = [math.dist(point, centre) for point in points]
+        radius = sum(radii) / len(radii)
+        for hole in holes:
+            position = (hole.get("hole") or {}).get("position") or {}
+            u_value = (position.get("u") or {}).get("value")
+            v_value = (position.get("v") or {}).get("value")
+            diameter = ((hole.get("hole") or {}).get("diameter") or {}).get("value")
+            if not all(isinstance(item, (int, float)) for item in (u_value, v_value, diameter)):
+                # A hole that does not state where it is cannot claim a loop. It
+                # is left unmatched rather than defaulted to the origin, which
+                # would claim whichever loop happened to sit there.
+                continue
+            declared = (float(u_value), float(v_value))
+            if (
+                math.dist(centre, declared) <= tolerance
+                and abs(radius - float(diameter) / 2.0) <= tolerance
+            ):
+                matched.append(line)
+                break
+    return matched
 
 
 def _entities_2d(
@@ -504,6 +567,7 @@ def _extrude_profile(
     dump: MeshDump,
     datum: Mapping[str, Any],
     thresholds: Mapping[str, Any],
+    holes: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Section the dump midway between the caps and classify the result.
 
@@ -512,6 +576,12 @@ def _extrude_profile(
     so the outline there is the least robust place to measure a cross-section
     that is the same everywhere along the extrusion.  The station is recorded
     with this reason so the choice is reviewable rather than implied.
+
+    ``holes`` are the cut features this same program places in this body. A
+    midpoint section of a bored plate closes one loop per bore it crosses, and
+    those loops are already carried as their own features; they are identified
+    against the holes' declared centres and radii and left out of the profile,
+    never simply discarded as "the smaller loops".
     """
     axes = _frame_axes(datum)
     origin = tuple(float(v) for v in datum["origin"])
@@ -561,7 +631,16 @@ def _extrude_profile(
                     "mirrored_station_mm": mirrored,
                 },
             )
-    polyline = _single_closed(section, str(group["id"]), station)
+    closed = [line for line in section.polylines if line.closed and len(line.points) >= 3]
+    bores = _loops_cut_by_holes(
+        closed,
+        holes,
+        origin,
+        u,
+        v,
+        _value(thresholds, "entity_match_tolerance_mm"),
+    )
+    polyline = _single_closed(section, str(group["id"]), station, bores)
     entities = classify_polyline(
         polyline.points,
         tolerance=_value(thresholds, "classify_tolerance_mm"),
@@ -1049,7 +1128,7 @@ ADOPTED_CONSTRAINT_NOTE = (
 # --------------------------------------------------------------------------
 
 
-def _expression(value: float, unit: str) -> str:
+def _expression(value: float, unit: str, *, zero_is_a_value: bool = False) -> str:
     """Format one parameter expression, or refuse a value it cannot represent.
 
     Fixed-point rather than ``repr``: ``repr(1e-05)`` is ``'1e-05'``, and an
@@ -1057,8 +1136,16 @@ def _expression(value: float, unit: str) -> str:
     inside Fusion.  Six decimals of a millimetre is a nanometre, which is below
     anything a mesh can carry -- but a *non-zero* value that formats to zero
     would be a silent no-op, so it refuses instead.
+
+    ``zero_is_a_value`` says that for this quantity zero is not a no-op: a hole
+    *on* the datum axis has u = 0, and the station comes off the frame at float
+    noise -- 4e-07 mm on the benchmark -- so refusing it would refuse the whole
+    program over a nanometre nobody measured. A depth or a radius has no such
+    reading, and those still refuse.
     """
     text = f"{value:.6f}"
+    if zero_is_a_value and float(text) == 0.0:
+        return f"0.000000 {unit}"
     if value != 0.0 and float(text) == 0.0:
         raise _refuse(
             "program-parameter-unbound",
@@ -1067,6 +1154,36 @@ def _expression(value: float, unit: str) -> str:
             {"value": value, "unit": unit},
         )
     return f"{text} {unit}"
+
+
+def _edge_evidence_cm(evidence: Any) -> dict[str, Any] | None:
+    """A fillet's edge evidence in centimetres, or ``None`` when it carries none.
+
+    Absent is the older contract, not a malformation: a program planned before
+    the evidence existed names one fillet per face-set pair and its fillet rounds
+    every edge that pair shares, exactly as it did.  What must not happen is a
+    *present* evidence block being read loosely, so the shape is checked whole.
+    """
+    if evidence is None:
+        return None
+    if not isinstance(evidence, dict):
+        raise _refuse(
+            "program-schema-violation",
+            "a fillet's edge_evidence must be an object naming the datum-frame box its blend "
+            "fragments occupy.",
+            {"edge_evidence": evidence},
+        )
+    out: dict[str, Any] = {}
+    for key in ("box_min", "box_max", "centroid"):
+        value = evidence.get(key)
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise _refuse(
+                "program-schema-violation",
+                f"a fillet's edge_evidence.{key} must be three datum-frame stations.",
+                {"edge_evidence": evidence},
+            )
+        out[key + "_cm"] = [float(item) * MM_TO_CM for item in value]
+    return out
 
 
 def _datum_transform_cm(datum: Mapping[str, Any], dump: MeshDump) -> dict[str, Any]:
@@ -1273,7 +1390,9 @@ def plan_emission(
                 "be written for it.",
                 {"parameter": name},
             )
-        row["expression"] = _expression(float(row["nominal"]), units)
+        row["expression"] = _expression(
+            float(row["nominal"]), units, zero_is_a_value=row["quantity"] == "position"
+        )
         seen[name] = row
         parameters.append(row)
 
@@ -1323,6 +1442,18 @@ def plan_emission(
                     "radius_parameter": str(radius["parameter"]),
                     "between": between,
                     "edge_faces": edge_faces if len(between) == 1 else None,
+                    # One face-set pair carries as many rounded edges as the part
+                    # has rounds on it, and the API hands back all of them. This
+                    # is where the plan says which one -- the datum-frame extent
+                    # of the blend fragments it was planned from, in centimetres
+                    # because that is the unit the built body is measured in.
+                    "edge_evidence": _edge_evidence_cm(group.get("edge_evidence")),
+                    # The same tolerance that binds a parameter to a curve: two
+                    # edges this close to equally near the evidence are not told
+                    # apart by it, and the fillet says so rather than guessing.
+                    "edge_match_tolerance_cm": (
+                        _value(thresholds, "entity_match_tolerance_mm") * MM_TO_CM
+                    ),
                     # Resolved to the ExtrudeFeature member names here rather than
                     # inside the transaction: the mapping is this emitter's
                     # knowledge of the Fusion API, and the script that runs in
@@ -1381,7 +1512,13 @@ def plan_emission(
                 ),
             }
         else:
-            entities, evidence = _extrude_profile(group, dump, program["datum"], thresholds)
+            entities, evidence = _extrude_profile(
+                group,
+                dump,
+                program["datum"],
+                thresholds,
+                [g for g in archetypes if g["kind"] == "hole" and identifier in g["dependencies"]],
+            )
         dimensions, dimension_parameters = _dimension_set(
             entities, identifier, units, thresholds
         )
@@ -1833,6 +1970,73 @@ def _internal_edges(faces, missing):
     return [seen[key][0] for key in sorted(seen) if seen[key][1] > 1]
 
 
+def _edge_centre(edge, missing):
+    """The centre of an edge's bounding box, in centimetres, or None.
+
+    Every member is probed rather than read: an edge whose box this build cannot
+    produce must make the fillet skip by name, never fall back to a point at the
+    origin, which would select whichever edge happens to sit nearest there.
+    """
+    box = _probe(edge, "boundingBox", missing, "BRepEdge.boundingBox")
+    if box is None:
+        return None
+    low = _probe(box, "minPoint", missing, "BoundingBox3D.minPoint")
+    high = _probe(box, "maxPoint", missing, "BoundingBox3D.maxPoint")
+    if low is None or high is None:
+        return None
+    centre = []
+    for axis in ("x", "y", "z"):
+        a = _probe(low, axis, missing, "Point3D." + axis)
+        b = _probe(high, axis, missing, "Point3D." + axis)
+        if a is None or b is None:
+            return None
+        centre.append((float(a) + float(b)) / 2.0)
+    return centre
+
+
+def _box_distance(point, low, high):
+    """Distance from a point to an axis-aligned box; zero inside it."""
+    return sum(
+        max(low[i] - point[i], 0.0, point[i] - high[i]) ** 2 for i in range(3)
+    ) ** 0.5
+
+
+def _edge_for_evidence(edges, evidence, tolerance, missing):
+    """Which of a face-set pair's edges this round was measured on.
+
+    A lid's outer wall meets its top cap along two dozen separate rounds, and
+    ``_internal_edges`` hands back every one of those edges.  The plan says which
+    edge each radius belongs on by carrying where its blend fragments were
+    measured, and the answer here is the nearest edge to that box.
+
+    Nearest, and *distinguishably* nearest: two edges within the caller's
+    declared ``entity_match_tolerance_mm`` of the same distance are not told
+    apart by this evidence, and the fillet is skipped by name rather than rounding
+    whichever sorted first.  Returns ``(edges, None)`` or ``(None, reason)``.
+    """
+    ranked = []
+    for edge in edges:
+        centre = _edge_centre(edge, missing)
+        if centre is None:
+            return None, (
+                "fillet-capability",
+                "this Fusion does not expose " + ", ".join(missing),
+            )
+        ranked.append((_box_distance(centre, evidence["box_min_cm"], evidence["box_max_cm"]), edge))
+    ranked.sort(key=lambda entry: entry[0])
+    best = ranked[0][0]
+    contenders = [entry for entry in ranked if entry[0] - best <= tolerance]
+    if len(contenders) > 1:
+        return None, (
+            "entity-resolution-ambiguous",
+            f"{len(contenders)} of this face pair's {len(ranked)} edges lie within "
+            f"{tolerance:.6g} cm of the same distance from where this round's blend fragments "
+            f"were measured ({best:.6g} cm). The plan's evidence does not tell them apart, and "
+            "rounding the wrong edge is worse than rounding none.",
+        )
+    return [ranked[0][1]], None
+
+
 def _shared_edges(first, second, missing):
     """Edges belonging to a face of both features, keyed by temp id.
 
@@ -1995,6 +2199,22 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
             }
         )
         return
+    evidence = step.get("edge_evidence")
+    selection = None
+    if evidence is not None and len(edges) > 1:
+        # More than one edge and a plan that says which: select. One edge needs
+        # no selection, and a plan carrying no evidence names no edge to prefer.
+        chosen, refusal = _edge_for_evidence(
+            edges, evidence, float(step["edge_match_tolerance_cm"]), missing
+        )
+        if chosen is None:
+            reason, detail = refusal
+            skipped.append(
+                {"archetype_id": step["archetype_id"], "reason": reason, "detail": detail}
+            )
+            return
+        selection = {"candidates": len(edges), "selected": len(chosen)}
+        edges = chosen
     collection = adsk.core.ObjectCollection.create()
     for edge in edges:
         collection.add(edge)
@@ -2025,6 +2245,14 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
             "feature_name": feature.name,
             "operation": step["operation"],
             "edge_count": len(edges),
+            # Which edges, not just how many: with several rounds on one face
+            # pair the count is one either way and only the identity says the
+            # right edge was taken.
+            "edge_tokens": [_token(edge) for edge in edges],
+            # Present only when the plan's evidence chose among several edges,
+            # so a reader can see that a choice was made and how wide the field
+            # was; null when the face pair offered exactly one edge.
+            "edge_selection": selection,
             "between": list(step["between"]),
             "edge_faces": step["edge_faces"],
             "token": _token(feature),

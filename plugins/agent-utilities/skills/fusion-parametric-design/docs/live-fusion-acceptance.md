@@ -480,8 +480,8 @@ does, and only for the release it ran against.
    step 3), `plane-unmappable`, `hole-base-ambiguous`, `hole-base-not-extruded`,
    `hole-axis-oblique`, `hole-not-contained`, `fillet-fit-unaccepted`,
    `fillet-region-already-reconstructed`, `fillet-neighbour-unreconstructed`,
-   `fillet-neighbour-shared`, `fillet-radius-undeclared`, and
-   `fillet-radius-disagrees`. **A gate is
+   `fillet-neighbour-shared`, `fillet-radius-undeclared`,
+   `fillet-radius-disagrees`, and `fillet-edge-unidentified`. **A gate is
    a result, not an error.** A refusal, by contrast, exits 2 printing a JSON
    record whose `reason` is one of `fit-record-malformed`,
    `fit-record-missing-axial-span`, `fit-record-missing-uncertainty`,

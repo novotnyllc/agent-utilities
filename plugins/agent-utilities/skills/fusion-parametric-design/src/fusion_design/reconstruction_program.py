@@ -847,34 +847,91 @@ def _cap_station(region: RegionFit, normal: Vec3) -> float:
 
 
 def _extrude_caps(
-    regions: Sequence[RegionFit], angle_tolerance_deg: float
-) -> tuple[RegionFit, RegionFit, Vec3] | None:
-    """The most separated pair of parallel planes, chosen deterministically."""
+    regions: Sequence[RegionFit], angle_tolerance_deg: float, axis: Vec3
+) -> tuple[RegionFit, RegionFit, Vec3, dict[str, Any]] | None:
+    """The caps of the extrude: a parallel plane pair, most separated, on the datum axis.
+
+    Separation alone was the whole rule and it is a fact about the part's
+    *bounding box* rather than about how the part was built.  On POD-A1-LID --
+    140 x 95 x 6.6 with thirteen bores down it -- the most separated parallel
+    pair is two 70 mm2 facelets on the +-y side walls 59 mm apart, so the extrude
+    came out sideways on datum YZ and all thirteen bores read
+    ``hole-axis-oblique`` against it.  Measured over the eleven-part benchmark,
+    separation alone picked the part's own principal axis on three parts of
+    eleven.
+
+    So the *direction* comes from the datum frame and separation only ranks the
+    pairs on it.  The datum primary axis is not a new measurement and carries no
+    new threshold: ``derive_datum_frame`` already picked it from the accepted
+    fits by radius x axial span, already refused ``frame-ambiguous`` when its
+    two best candidates were within the caller's declared ``frame_margin``, and
+    every other archetype in this program is already expressed against it -- a
+    revolve turns about datum Z, a hole is placed on a datum plane.  An extrude
+    that ran across it would be the one feature in the program built in some
+    other frame.
+
+    When no parallel plane pair is perpendicular to that axis, this falls back to
+    the old rule over every direction: the frame names a direction the *caps* do
+    not exist for, and refusing to plan an extrude at all would lose a body over
+    a preference.  ``cap_selection`` records which of the two happened.
+    """
     planes = [
         region
         for region in regions
         if region.fit is not None and region.fit.kind == "plane" and region.anchor() is not None
     ]
-    best: tuple[Any, ...] | None = None
-    for index, first in enumerate(planes):
-        for second in planes[index + 1 :]:
-            a, b = first.direction(), second.direction()
-            if a is None or b is None or _angle_deg(a, b) > angle_tolerance_deg:
-                continue
-            separation = abs(_cap_station(second, a) - _cap_station(first, a))
-            if separation <= 0.0:
-                continue
-            key = (-separation, first.region_hash, second.region_hash)
-            if best is None or key < best[0]:
-                low, high = (
-                    (first, second)
-                    if _cap_station(first, a) <= _cap_station(second, a)
-                    else (second, first)
-                )
-                best = (key, low, high, a)
+
+    def most_separated(on_axis: bool) -> tuple[Any, ...] | None:
+        best: tuple[Any, ...] | None = None
+        for index, first in enumerate(planes):
+            for second in planes[index + 1 :]:
+                a, b = first.direction(), second.direction()
+                if a is None or b is None or _angle_deg(a, b) > angle_tolerance_deg:
+                    continue
+                if on_axis and _angle_deg(a, axis) > angle_tolerance_deg:
+                    continue
+                separation = abs(_cap_station(second, a) - _cap_station(first, a))
+                if separation <= 0.0:
+                    continue
+                key = (-separation, first.region_hash, second.region_hash)
+                if best is None or key < best[0]:
+                    low, high = (
+                        (first, second)
+                        if _cap_station(first, a) <= _cap_station(second, a)
+                        else (second, first)
+                    )
+                    best = (key, low, high, a)
+        return best
+
+    best = most_separated(True)
+    if best is not None:
+        selection = {
+            "rule": "datum-primary-axis",
+            "direction": list(axis),
+            "separation": -best[0][0],
+            "cap_area": best[1].area + best[2].area,
+            "detail": (
+                "the caps are the most separated parallel plane pair perpendicular to the datum "
+                "primary axis, which the frame derived from this part's own accepted fits. The "
+                "extrude runs along the axis the rest of the program is expressed against."
+            ),
+        }
+        return best[1], best[2], best[3], selection
+    best = most_separated(False)
     if best is None:
         return None
-    return best[1], best[2], best[3]
+    selection = {
+        "rule": "max-separation",
+        "direction": None,
+        "separation": -best[0][0],
+        "cap_area": best[1].area + best[2].area,
+        "detail": (
+            "no parallel plane pair is perpendicular to the datum primary axis, so there are no "
+            "caps on it. The most separated pair over every direction is taken instead, and the "
+            "extrude runs across the frame the rest of the program is expressed against."
+        ),
+    }
+    return best[1], best[2], best[3], selection
 
 
 def _is_extrude_side(region: RegionFit, normal: Vec3, angle_tolerance_deg: float) -> bool:
@@ -1063,6 +1120,7 @@ def _same_feature_edge(
 def _plan_fillets(
     regions: Sequence[RegionFit],
     groups: Sequence[Mapping[str, Any]],
+    frame: DatumFrame,
     *,
     equal_radius_tolerance: float | None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -1089,13 +1147,23 @@ def _plan_fillets(
     box's own top edge runs between two faces of one extrude and Fusion rounds it
     without complaint; what this stage has to establish is that the edge is
     **nameable**, which for an extrude it is -- ``_same_feature_edge`` picks the
-    pair of face sets -- and for a revolve it is not.  Blends landing on the same
-    face-set pair of the same feature are one fillet, not several: they are
-    fragments of one round, and emitting one archetype each would ask Fusion to
-    round an already-rounded edge.  They may only be pooled when the caller has
-    declared an ``equal_radius_tolerance`` and every fragment's measured radius
-    lies inside it -- otherwise the fragments disagree about the round and
-    choosing between them here would be inventing the measurement.
+    pair of face sets -- and for a revolve it is not.
+
+    Blends landing on the same face-set pair are one fillet **per edge**, and the
+    edge is what the pooling key has to name.  A lid's outer wall meets its top
+    cap along twenty-four separate rounds -- four corners at 12 mm, tabs at 2 mm,
+    steps at 8.45 and 9.65 -- and every one of them is a ``side-side`` pair of the
+    same extrude.  Keyed on the face-set pair alone they pool into one fillet
+    carrying four different radii, and the honest refusal that follows
+    (``fillet-radius-disagrees``) is a refusal of the *key*, not of the geometry.
+    Which fragments lie on one edge is not re-derived here: U2 already walked
+    group adjacency to chain a run of partial-arc cylinders into one round, and
+    ``fillet.chain_id`` is that walk's answer -- adjacent, agreeing in radius, and
+    between the same two primaries.  One chain is one edge, so the key carries it.
+
+    Within a chain the radius check stays: fragments that measured one round must
+    agree to within the caller's declared ``equal_radius_tolerance``, and a chain
+    whose members disagree is still not one round.
     """
     gates: dict[str, str] = {}
     owner: dict[str, str] = {}
@@ -1103,7 +1171,7 @@ def _plan_fillets(
     for group in groups:
         for region_hash in group["regions"]:
             owner[str(region_hash)] = str(group["id"])
-    same_feature: dict[tuple[str, str], list[RegionFit]] = {}
+    pooled: dict[tuple[tuple[str, ...], str | None, str | None], list[RegionFit]] = {}
 
     fillets: list[dict[str, Any]] = []
     for region in regions:
@@ -1137,16 +1205,39 @@ def _plan_fillets(
                 "round."
             )
             continue
+        selector: str | None = None
         if len(owners) != 2:
             selector, refusal = _same_feature_edge(by_id[owners[0]], first, second)
             if selector is None:
                 gates[region.region_hash] = "fillet-neighbour-shared: " + str(refusal)
-            else:
-                same_feature.setdefault((owners[0], selector), []).append(region)
-            continue
-        fillets.append(_fillet_archetype([region], owners, None))
+                continue
+        pooled.setdefault(
+            (tuple(owners), selector, region.fillet["chain_id"]), []
+        ).append(region)
 
-    for (owner_id, selector), members in sorted(same_feature.items()):
+    # How many *edges* each face-set pair carries, so a record that names no
+    # chain can say what it is unable to tell apart rather than pooling blindly.
+    per_pair: dict[tuple[tuple[str, ...], str | None], int] = {}
+    for (owners_key, selector, _chain), members in pooled.items():
+        per_pair[(owners_key, selector)] = per_pair.get((owners_key, selector), 0) + len(members)
+
+    for (owners_key, selector, chain_id), members in sorted(
+        pooled.items(), key=lambda item: (item[0][0], item[0][1] or "", item[0][2] or "")
+    ):
+        if chain_id is None and per_pair[(owners_key, selector)] > 1:
+            # Without a chain id the record does not say which fragments lie on
+            # one edge, and this pair carries more than one fragment. Pooling
+            # them would round several edges as one; splitting them would round
+            # one edge several times. Neither is a measurement.
+            for region in members:
+                gates[region.region_hash] = (
+                    "fillet-edge-unidentified: "
+                    f"{per_pair[(owners_key, selector)]} blend fragments lie between the same faces "
+                    f"of {', '.join(owners_key)} and the fit record carries no chain id for them, so "
+                    "which of them lie on one edge is not stated. Re-run `fit-regions` against the "
+                    "same dump to chain the blends."
+                )
+            continue
         # Largest fragment first: its measured radius is the one emitted, so the
         # program carries a radius something actually measured rather than a mean
         # of several, which no fit ever produced.
@@ -1157,25 +1248,65 @@ def _plan_fillets(
             for region in members:
                 gates[region.region_hash] = (
                     f"fillet-radius-undeclared: {len(members)} blend fragments land on the same edge "
-                    f"of {owner_id}, and whether they measured one round or several turns on an "
-                    "equal_radius_tolerance this caller did not declare."
+                    f"of {', '.join(owners_key)}, and whether they measured one round or several "
+                    "turns on an equal_radius_tolerance this caller did not declare."
                 )
             continue
         if len(members) > 1 and spread > equal_radius_tolerance:
             for region in members:
                 gates[region.region_hash] = (
                     f"fillet-radius-disagrees: {len(members)} blend fragments land on the same edge "
-                    f"of {owner_id} carrying radii that spread by {spread:.4g}, beyond the declared "
-                    f"equal_radius_tolerance {equal_radius_tolerance:g}. They do not describe one "
-                    "round, and this stage does not choose between them."
+                    f"of {', '.join(owners_key)} carrying radii that spread by {spread:.4g}, beyond "
+                    f"the declared equal_radius_tolerance {equal_radius_tolerance:g}. They do not "
+                    "describe one round, and this stage does not choose between them."
                 )
             continue
-        fillets.append(_fillet_archetype(members, [owner_id], selector))
+        fillets.append(_fillet_archetype(members, list(owners_key), selector, frame))
     return fillets, gates
 
 
+def _edge_evidence(members: Sequence[RegionFit], frame: DatumFrame) -> dict[str, Any]:
+    """Where this round's fragments sit, in the datum frame the rebuild is built in.
+
+    One face-set pair can carry many rounded edges -- a lid's outer wall meets its
+    top cap along twenty-four of them -- and the emitter's ``_internal_edges`` and
+    ``_shared_edges`` hand back *every* edge that pair shares.  Something has to
+    say which one this fillet's radius belongs on, and the only thing that can is
+    where the fragments were measured.
+
+    The box is stated in datum-frame stations, not mesh coordinates: the rebuilt
+    body is placed in the datum frame, so a box in mesh coordinates would be
+    comparing the scan's frame against the model's.  All eight corners of each
+    fragment's axis-aligned box are projected, because the box is axis-aligned in
+    *mesh* coordinates and the datum axes need not be.
+    """
+    axes = (frame.x_axis, frame.y_axis, frame.z_axis)
+    spans = [
+        [_station_range(frame, axis, region.bounding_box) for region in members] for axis in axes
+    ]
+    total = sum(region.area for region in members) or 1.0
+    return {
+        "frame": "datum",
+        "box_min": [min(low for low, _ in axis_spans) for axis_spans in spans],
+        "box_max": [max(high for _, high in axis_spans) for axis_spans in spans],
+        "centroid": [
+            sum(region.area * (low + high) / 2.0 for region, (low, high) in zip(members, axis_spans))
+            / total
+            for axis_spans in spans
+        ],
+        "note": (
+            "The datum-frame extent of this round's blend fragments, area-weighted at the centroid. "
+            "It identifies which of a face-set pair's edges carries this radius; it is evidence for "
+            "selection, never geometry the rebuild sketches."
+        ),
+    }
+
+
 def _fillet_archetype(
-    members: Sequence[RegionFit], owners: Sequence[str], edge_faces: str | None
+    members: Sequence[RegionFit],
+    owners: Sequence[str],
+    edge_faces: str | None,
+    frame: DatumFrame,
 ) -> dict[str, Any]:
     hashes = sorted(region.region_hash for region in members)
     if edge_faces is None:
@@ -1205,6 +1336,7 @@ def _fillet_archetype(
         "radius": {"parameter": None, "value": members[0].fillet["radius"]},
         "between": [str(item) for item in owners],
         "edge_faces": edge_faces,
+        "edge_evidence": _edge_evidence(members, frame),
         "profile": None,
         "profile_source": None,
         "constraints": [],
@@ -1337,13 +1469,21 @@ def plan_archetypes(
         if region.fit is not None
         and region.fit.kind == "cylinder"
         and region.material_side == "inside"
+        # A bore closes on itself; an edge round never sweeps past the half turn
+        # U2 measured it against. An inward cylinder U2 measured as a round is a
+        # concave blend in a pocket corner, and cutting a *full* cylinder there
+        # would remove the 180-plus degrees of material nobody measured. It goes
+        # to the fillet path, which is the archetype its arc supports -- and the
+        # *shape* decides rather than the accepted proposal, because a round
+        # whose chain was refused over its neighbours is still a round.
+        and not region.blend_shaped
     ]
     bore_hashes = {region.region_hash for region in bores}
     remaining = [region for region in remaining if region.region_hash not in bore_hashes]
 
-    caps = _extrude_caps(remaining, angle_tolerance_deg)
+    caps = _extrude_caps(remaining, angle_tolerance_deg, z)
     if caps is not None:
-        low, high, normal = caps
+        low, high, normal, cap_selection = caps
         sides = [
             region
             for region in remaining
@@ -1385,6 +1525,10 @@ def plan_archetypes(
                         "offset": low_station,
                         "rotation": None,
                     },
+                    # Which rule chose these caps, and on what evidence. A reader
+                    # asking why the extrude runs the way it does gets the answer
+                    # here rather than re-deriving it from the region list.
+                    "cap_selection": cap_selection,
                     # Station order, not hash order: the low cap is the one the
                     # sketch sits on, which is the feature's `startFaces`, and a
                     # fillet on a cap-to-side edge has to name which cap.
@@ -1431,7 +1575,7 @@ def plan_archetypes(
     # Fillets last: they depend on the features they round, so they can only be
     # judged once every base, cut and hole has claimed its regions.
     fillets, fillet_gates = _plan_fillets(
-        regions, groups, equal_radius_tolerance=equal_radius_tolerance
+        regions, groups, frame, equal_radius_tolerance=equal_radius_tolerance
     )
     for group in fillets:
         claimed.update(group["regions"])
@@ -2153,6 +2297,10 @@ _ARCHETYPE_FIELDS = {
     "plane",
     "axis",
     "cap_regions",
+    # sketch-extrude only: which rule chose the caps -- the direction the group's
+    # own turned walls measure it as swept along, or the most separated parallel
+    # pair when no wall names a direction -- and the evidence behind it.
+    "cap_selection",
     "profile",
     "profile_source",
     "extent",
@@ -2171,6 +2319,9 @@ _ARCHETYPE_FIELDS = {
     # fillet only: which pair of that single feature's face sets, when `between`
     # names one archetype; null when it names two.
     "edge_faces",
+    # fillet only: where this round's blend fragments sit in the datum frame, so
+    # the emitter can tell one rounded edge of a face-set pair from the next.
+    "edge_evidence",
     # revolve and sketch-extrude: the kinematic router's verdict on the revolve
     # candidate group -- what licensed a revolve, or what refused one and sent
     # these regions here instead. Null when no revolve was ever a candidate.

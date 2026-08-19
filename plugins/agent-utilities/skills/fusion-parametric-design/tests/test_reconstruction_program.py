@@ -267,8 +267,15 @@ class ArchetypeTests(unittest.TestCase):
         group = program["archetypes"][0]
         self.assertEqual(len(group["regions"]), 6)
         self.assertEqual(group["operation"], "new-body")
-        self.assertEqual(group["plane"]["datum_plane"], "XZ")
-        self.assertAlmostEqual(group["extent"]["value"], 20.0)
+        # A 10 x 20 x 5 box is a legal prism in all three directions, so which
+        # one it plans as is a *rule* rather than a measurement, and the rule is
+        # the datum frame: the caps are the pair perpendicular to the primary
+        # axis, and the extrude runs along the axis every other archetype in the
+        # program is already expressed against. Under the old rule this was the
+        # box's longest dimension, which is a fact about its bounding box.
+        self.assertEqual(group["plane"]["datum_plane"], "XY")
+        self.assertEqual("datum-primary-axis", group["cap_selection"]["rule"])
+        self.assertAlmostEqual(group["extent"]["value"], 5.0)
         self.assertEqual(program["covered_area_fraction"], 1.0)
         self.assertEqual(program["unreconstructed"], [])
 
@@ -364,12 +371,18 @@ class ArchetypeTests(unittest.TestCase):
         # direction by the total area facing it, so two 60 mm2 oblique faces
         # would otherwise outweigh one 100 mm2 flat and the datum would rotate
         # to meet them -- leaving nothing oblique for this gate to catch.
+        #
+        # The oblique pair is the *only* parallel pair here, and that is what
+        # this gate now needs: the caps follow the datum primary axis whenever a
+        # pair lies on it, so a body with a z pair would take that and never
+        # reach an oblique plane at all. One z face and no second one is a body
+        # whose only two parallel faces are the oblique cut, which is exactly the
+        # shape this refusal exists for.
         sqrt2 = 2.0**0.5
         oblique = (1.0 / sqrt2, 1.0 / sqrt2, 0.0)
         record = fx.record(
             [
                 fx.plane("z-lo", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 200.0),
-                fx.plane("z-hi", (0.0, 0.0, 1.0), (0.0, 0.0, 5.0), 200.0),
                 fx.plane("x-flat", (1.0, 0.0, 0.0), (5.0, 0.0, 2.5), 150.0),
                 fx.plane("cut-lo", oblique, (0.0, 0.0, 2.5), 60.0),
                 fx.plane("cut-hi", oblique, (7.0, 7.0, 2.5), 60.0),
@@ -533,11 +546,17 @@ class HoleAndFilletTests(unittest.TestCase):
             sum(g["area_fraction"] for g in program["archetypes"]),
         )
 
-    def _blend(self, label, between, radius=1.0, area=40.0, y=4.0, axis=(1.0, 0.0, 0.0)):
+    def _blend(self, label, between, radius=1.0, area=40.0, y=4.0, axis=(1.0, 0.0, 0.0), chain=None):
         # The axis must not be parallel to the extrude's cap normal or the round
         # is claimed as one of its sides and never reaches the fillet gate at all.
+        #
+        # `chain` names the edge: fragments of one round share it. Two fragments
+        # with no chain in common are two rounds on two edges, which is what a
+        # lone fragment gets by default.
         return fx.oriented(
-            fx.blend_cylinder(label, axis, (6.0, y, 2.0), radius, area, between=between),
+            fx.blend_cylinder(
+                label, axis, (6.0, y, 2.0), radius, area, between=between, chain=chain
+            ),
             None,
         )
 
@@ -603,9 +622,11 @@ class HoleAndFilletTests(unittest.TestCase):
         self.assertIn("cannot partition into named sets", gates)
 
     def test_two_fragments_of_one_round_become_one_fillet_over_both_regions(self) -> None:
+        # One edge, cut into two groups by the face grouping: U2 chained them, so
+        # they name one chain and pool into one fillet.
         extras = [
-            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
-            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0),
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0, chain="round"),
         ]
         program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
         fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
@@ -618,9 +639,12 @@ class HoleAndFilletTests(unittest.TestCase):
         self.assertAlmostEqual(1.0, fillets[0]["radius"]["value"])
 
     def test_fragments_whose_radii_disagree_refuse_rather_than_pick_one(self) -> None:
+        # Disagreement *within one edge*: both fragments name the same chain and
+        # measured different rounds, which is the case this gate is for. Two
+        # radii on two different edges are two fillets, not a disagreement.
         extras = [
-            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
-            self._blend("right", ["x-lo", "y-lo"], radius=3.0, area=20.0, y=6.0),
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=3.0, area=20.0, y=6.0, chain="round"),
         ]
         program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
         self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
@@ -632,8 +656,8 @@ class HoleAndFilletTests(unittest.TestCase):
         spec = fx.spec()
         spec["thresholds"].pop("equal_radius_tolerance")
         extras = [
-            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
-            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0),
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0, chain="round"),
         ]
         program = build(fx.bored_post_record("inside", extras=extras), spec)
         self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])

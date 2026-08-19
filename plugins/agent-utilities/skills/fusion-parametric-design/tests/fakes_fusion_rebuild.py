@@ -263,10 +263,18 @@ class FakeFeature:
         sides = design.behaviour.get("extrude_side_count", 4)
         base = getattr(design, "_face_edge_base", 0) + 1000
         design._face_edge_base = base
-        self._start_faces = [FakeFace(edge_ids + [base + i for i in range(sides)])]
-        self._end_faces = [FakeFace(edge_ids + [base + 100 + i for i in range(sides)])]
+        boxes = design.behaviour.get("edge_boxes")
+        expose = not design.behaviour.get("no_edge_box")
+        self._start_faces = [FakeFace(edge_ids + [base + i for i in range(sides)], boxes, expose)]
+        self._end_faces = [
+            FakeFace(edge_ids + [base + 100 + i for i in range(sides)], boxes, expose)
+        ]
         self._side_faces = [
-            FakeFace([base + i, base + 100 + i, base + 200 + i, base + 200 + (i - 1) % sides])
+            FakeFace(
+                [base + i, base + 100 + i, base + 200 + i, base + 200 + (i - 1) % sides],
+                boxes,
+                expose,
+            )
             for i in range(sides)
         ]
         self._faces = [*self._start_faces, *self._side_faces, *self._end_faces]
@@ -304,15 +312,35 @@ class FakeFeature:
         return True
 
 
+class FakeBoundingBox:
+    def __init__(self, low, high):
+        self.minPoint = FakePoint(*low)
+        self.maxPoint = FakePoint(*high)
+
+
 class FakeEdge:
-    def __init__(self, temp_id):
+    """An edge with a place, because a fillet has to pick one edge out of many.
+
+    ``edge_boxes`` in the behaviour maps a temp id to its box in centimetres; an
+    id nobody placed gets a distinct unit box along the diagonal, so two edges
+    are never accidentally at the same distance from anything. ``no_edge_box``
+    strips the member entirely, which is the Fusion that cannot answer where its
+    edges are.
+    """
+
+    def __init__(self, temp_id, boxes=None, expose_box=True):
         self.tempId = temp_id
         self.entityToken = f"token-edge-{temp_id}"
+        if expose_box:
+            low, high = (boxes or {}).get(
+                temp_id, ((temp_id, temp_id, temp_id), (temp_id + 1, temp_id + 1, temp_id + 1))
+            )
+            self.boundingBox = FakeBoundingBox(low, high)
 
 
 class FakeFace:
-    def __init__(self, edges):
-        self._edges = [FakeEdge(temp_id) for temp_id in edges]
+    def __init__(self, edges, boxes=None, expose_box=True):
+        self._edges = [FakeEdge(temp_id, boxes, expose_box) for temp_id in edges]
         self.entityToken = f"token-face-{id(self)}"
 
     @property

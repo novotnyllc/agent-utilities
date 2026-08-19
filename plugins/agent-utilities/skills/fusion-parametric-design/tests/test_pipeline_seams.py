@@ -815,8 +815,11 @@ class SameFeatureFilletSeamTests(unittest.TestCase):
         fillet = self.fillet()
         self.assertEqual(1, len(fillet["between"]))
         # A cap face and a side face: the plan recorded its caps in station
-        # order, so the emitter can tell startFaces from endFaces.
-        self.assertEqual("start-side", fillet["edge_faces"])
+        # order, so the emitter can tell startFaces from endFaces. The round is
+        # on the plinth's *top* edge and the extrude now runs up the datum
+        # primary axis from the bottom face, so the cap it touches is the far one
+        # -- the feature's endFaces.
+        self.assertEqual("end-side", fillet["edge_faces"])
         self.assertAlmostEqual(4.0, fillet["radius"]["value"], places=6)
         self.assertEqual(fillet["between"], fillet["dependencies"])
         self.assertEqual(self.program["order"][-1], fillet["id"])
@@ -853,7 +856,7 @@ class SameFeatureFilletSeamTests(unittest.TestCase):
         self.assertEqual(1, len(built), report)
         self.assertEqual(self.fillet()["id"], built[0]["archetype_id"])
         self.assertEqual(self.fillet()["between"], built[0]["between"])
-        self.assertEqual("start-side", built[0]["edge_faces"])
+        self.assertEqual("end-side", built[0]["edge_faces"])
         # The edges the start cap shares with the side faces, and no others: the
         # feature's own interior edges are not all of them.
         self.assertGreater(built[0]["edge_count"], 0)
@@ -1195,7 +1198,9 @@ class MotionEvidenceSeamTests(unittest.TestCase):
         # between two face sets of one nameable feature and Fusion builds it.
         fillets = [g for g in self.program["archetypes"] if g["kind"] == "fillet"]
         self.assertEqual(1, len(fillets), self.program["unreconstructed"])
-        self.assertEqual("start-side", fillets[0]["edge_faces"])
+        # The round is on the plate's top edge, and the extrude runs up from the
+        # bottom face: the cap that edge touches is the feature's endFaces.
+        self.assertEqual("end-side", fillets[0]["edge_faces"])
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "mesh.bin"
             path.write_bytes(_dump_bytes(self.dump))
@@ -1232,6 +1237,353 @@ class MotionEvidenceSeamTests(unittest.TestCase):
         # The top face is in it, which is the case the change must not break.
         self.assertGreater(revolves[0]["area_fraction"], 0.3)
 
+def bored_plate_mesh(width=60.0, depth=44.0, thickness=6.0, radius=4.0, nx=10, ny=8, rings=6):
+    """A wide thin plate with one bore straight down it.
+
+    The shape the cap rule was getting wrong.  The plate is ten times wider than
+    it is thick, so its *most separated* parallel plane pair is a pair of side
+    walls, and an extrude taking those runs across the plate with the bore --
+    which goes down the thickness -- oblique to it.
+
+    Each face is a grid of rings interpolated from the bore's rim out to the
+    plate's outline, so its triangles are small in both directions.  A fan
+    straight from rim to outline would be slivers, and the segmentation would
+    then read the part's own noise floor as larger than the features it is asked
+    to find (`feature-scale-below-noise`), which is a fixture failing rather than
+    a stage.
+    """
+    vertices: list[tuple[float, float, float]] = []
+    index: dict[tuple, int] = {}
+    triangles: list[tuple[int, int, int]] = []
+    groups: list[int] = []
+    centre = (width / 2.0, depth / 2.0)
+    perimeter = 2 * (nx + ny)
+
+    def node(key, point):
+        if key not in index:
+            index[key] = len(vertices)
+            vertices.append(point)
+        return index[key]
+
+    def span(lo, hi, steps, i):
+        return lo + (hi - lo) * i / steps
+
+    def outline_point(i):
+        i %= perimeter
+        if i < nx:
+            return (span(0.0, width, nx, i), 0.0)
+        if i < nx + ny:
+            return (width, span(0.0, depth, ny, i - nx))
+        if i < 2 * nx + ny:
+            return (span(width, 0.0, nx, i - nx - ny), depth)
+        return (0.0, span(depth, 0.0, ny, i - 2 * nx - ny))
+
+    def rim_point(i):
+        angle = 2.0 * math.pi * (i % perimeter) / perimeter
+        return (centre[0] + radius * math.cos(angle), centre[1] + radius * math.sin(angle))
+
+    def ring(level, r, i):
+        inner, outer = rim_point(i), outline_point(i)
+        t = r / rings
+        return node(
+            ("g", level, r, i % perimeter),
+            (
+                inner[0] + (outer[0] - inner[0]) * t,
+                inner[1] + (outer[1] - inner[1]) * t,
+                thickness * level,
+            ),
+        )
+
+    def quad(a, b, c, d, group):
+        triangles.append((a, b, c))
+        groups.append(group)
+        triangles.append((a, c, d))
+        groups.append(group)
+
+    for level, group in ((0, 0), (1, 1)):
+        for r in range(rings):
+            for i in range(perimeter):
+                a, b = ring(level, r, i), ring(level, r, i + 1)
+                c, d = ring(level, r + 1, i + 1), ring(level, r + 1, i)
+                quad(a, b, c, d, group) if level else quad(a, d, c, b, group)
+    for i in range(perimeter):
+        lo_a, lo_b = ring(0, rings, i), ring(0, rings, i + 1)
+        hi_a, hi_b = ring(1, rings, i), ring(1, rings, i + 1)
+        wall = 2 + (0 if i < nx else 1 if i < nx + ny else 2 if i < 2 * nx + ny else 3)
+        quad(lo_a, hi_a, hi_b, lo_b, wall)
+    # The bore wall, wound so its normals face its own axis: that is what makes
+    # `material_side` read "inside", and reading "inside" is what makes it a bore.
+    for i in range(perimeter):
+        lo_a, lo_b = ring(0, 0, i), ring(0, 0, i + 1)
+        hi_a, hi_b = ring(1, 0, i), ring(1, 0, i + 1)
+        quad(lo_a, lo_b, hi_b, hi_a, 6)
+    return vertices, triangles, groups
+
+
+def _most_separated_pair(record):
+    """The caps the *pre-change* rule would have taken, over every direction.
+
+    Written out here rather than imported, because the rule it describes no
+    longer exists in the planner: it is the claim under test, not a helper.
+    """
+    planes = [
+        region
+        for region in record["regions"]
+        if region["accepted"] and region["fit"]["kind"] == "plane"
+    ]
+    best = None
+    for index, first in enumerate(planes):
+        for second in planes[index + 1 :]:
+            a = tuple(first["fit"]["parameters"]["normal"])
+            b = tuple(second["fit"]["parameters"]["normal"])
+            if mf._angle_deg(a, b) > 2.0:
+                continue
+            separation = abs(
+                mf._dot(a, tuple(second["fit"]["parameters"]["point_on_plane"]))
+                - mf._dot(a, tuple(first["fit"]["parameters"]["point_on_plane"]))
+            )
+            if best is None or separation > best[0]:
+                best = (separation, a)
+    return best
+
+
+class CapDirectionSeamTests(unittest.TestCase):
+    """Which parallel plane pair an extrude sweeps, on a real wide thin plate.
+
+    `_extrude_caps` ranked candidate pairs by *separation* alone, which is a fact
+    about the part's bounding box rather than about how the part was built. On
+    POD-A1-LID -- 140 x 95 x 6.6 with thirteen bores down it -- the most
+    separated pair is two 70 mm2 facelets on the side walls 59 mm apart, so the
+    extrude came out on datum YZ and all thirteen bores read
+    `hole-axis-oblique` against it: 86 refusals over the eleven benchmark parts.
+
+    The direction now comes from the datum frame, which `derive_datum_frame`
+    already derived from these same accepted fits and already refused as
+    `frame-ambiguous` when its candidates were too close to call. Nothing else in
+    the program was ever expressed in any other frame.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        vertices, triangles, groups = bored_plate_mesh()
+        cls.dump = ts.make_dump(vertices, triangles, face_groups=groups)
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def test_the_producer_gives_the_planner_a_plate_and_a_bore(self) -> None:
+        # If this fixture ever stops delivering an inward cylinder the rest of
+        # the class would pass for the wrong reason.
+        kinds = sorted(r["fit"]["kind"] for r in self.record["regions"] if r["accepted"])
+        self.assertEqual(["cylinder"] + ["plane"] * 6, kinds)
+        bore = next(r for r in self.record["regions"] if r["fit"]["kind"] == "cylinder")
+        self.assertEqual("inside", bore["orientation"]["material_side"])
+        self.assertAlmostEqual(4.0, bore["fit"]["parameters"]["radius"], places=6)
+
+    def test_the_pre_change_rule_would_have_taken_the_side_walls(self) -> None:
+        # The measurement that made this a bug rather than a preference: the
+        # widest separation on this plate is ten times the thickness, and it is
+        # across a pair of walls whose normal is nothing like the bore's axis.
+        separation, normal = _most_separated_pair(self.record)
+        self.assertAlmostEqual(60.0, separation, places=6)
+        self.assertGreater(mf._angle_deg(normal, (0.0, 0.0, 1.0)), 45.0)
+
+    def test_the_caps_the_planner_takes_are_the_ones_on_the_datum_axis(self) -> None:
+        extrudes = [g for g in self.program["archetypes"] if g["kind"] == "sketch-extrude"]
+        self.assertEqual(1, len(extrudes), self.program["archetypes"])
+        selection = extrudes[0]["cap_selection"]
+        self.assertEqual("datum-primary-axis", selection["rule"])
+        self.assertAlmostEqual(6.0, selection["separation"], places=6)
+        self.assertEqual("XY", extrudes[0]["plane"]["datum_plane"])
+        self.assertAlmostEqual(6.0, extrudes[0]["extent"]["value"], places=6)
+        # The direction is the frame's, not this stage's own reading of it.
+        self.assertLessEqual(
+            mf._angle_deg(tuple(selection["direction"]), tuple(self.program["datum"]["z_axis"])),
+            1e-9,
+        )
+
+    def test_the_bore_plans_as_a_hole_instead_of_reading_oblique(self) -> None:
+        holes = [g for g in self.program["archetypes"] if g["kind"] == "hole"]
+        self.assertEqual(1, len(holes), self.program["unreconstructed"])
+        self.assertAlmostEqual(8.0, holes[0]["hole"]["diameter"]["value"], places=6)
+        self.assertAlmostEqual(6.0, holes[0]["extent"]["value"], places=6)
+        gates = " ".join(entry["gate"] for entry in self.program["unreconstructed"])
+        self.assertNotIn("hole-axis-oblique", gates)
+        self.assertAlmostEqual(1.0, self.program["covered_area_fraction"], places=6)
+
+    def test_the_plate_emits_and_the_transaction_builds_both_features(self) -> None:
+        # And the section it sketches is the plate's outline, not the bore's: the
+        # midpoint section of a bored plate closes two loops, and the second one
+        # is identified against the hole this same program cuts rather than being
+        # discarded as "the smaller loop".
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        report, error = run_transaction(source, fakes.make_design(), self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(
+            ["component", "sketch-extrude", "hole"],
+            [entry["kind"] for entry in report["created"]],
+            report,
+        )
+        # Four entities in the sketch: the plate's outline. The bore's loop was
+        # identified against the hole and left out, rather than sketched a second
+        # time or refused as a second profile.
+        sketch = next(
+            entry for entry in report["sketches"] if entry["archetype_id"].startswith("sketch-")
+        )
+        self.assertEqual(4, sketch["entity_count"], sketch)
+
+
+class PerEdgeFilletSeamTests(unittest.TestCase):
+    """Two rounds, two radii, one face-set pair -- and one fillet per edge.
+
+    The same-feature fillet pooled every fragment on one `(feature, face-set
+    pair)` key regardless of which edge it lay on. POD-A1-LID's outer wall meets
+    its top cap along twenty-four separate rounds -- corners at 12 mm, tabs at
+    2 mm, steps at 8.45 and 9.65 -- and pooled on that key they arrive as one
+    fillet carrying four radii, which the stage then correctly refuses as
+    `fillet-radius-disagrees`. The refusal is right and the key is wrong.
+
+    The plinth here carries the same shape in miniature: its front-top edge is
+    rounded at 4 mm and its back-top edge at 6 mm, both between the top cap and a
+    side wall of one extrude. The record's own chain ids say which fragments lie
+    on which edge, so the two pool separately and each carries the radius it was
+    measured with.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        vertices, triangles, groups = ts.rounded_plinth_mesh(post_inward=True, back_radius=6.0)
+        cls.dump = ts.make_dump(vertices, triangles, face_groups=groups)
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def fillets(self):
+        found = [g for g in self.program["archetypes"] if g["kind"] == "fillet"]
+        return sorted(found, key=lambda g: g["radius"]["value"])
+
+    def test_the_producer_marks_two_rounds_and_names_the_edge_of_each(self) -> None:
+        marked = [r for r in self.record["regions"] if r.get("fillet_candidate")]
+        self.assertEqual(2, len(marked), [r["region_hash"] for r in marked])
+        radii = sorted(round(r["fillet"]["radius"], 6) for r in marked)
+        self.assertEqual([4.0, 6.0], radii)
+        chains = {r["fillet"]["chain_id"] for r in marked}
+        self.assertEqual(2, len(chains), "two edges are two chains")
+
+    def test_each_edge_plans_its_own_fillet_with_its_own_radius(self) -> None:
+        fillets = self.fillets()
+        self.assertEqual(2, len(fillets), self.program["unreconstructed"])
+        self.assertAlmostEqual(4.0, fillets[0]["radius"]["value"], places=6)
+        self.assertAlmostEqual(6.0, fillets[1]["radius"]["value"], places=6)
+        # Both between the *same* face sets of the same feature: this is the key
+        # that used to pool them, and pooling them is what has to stop.
+        self.assertEqual([1, 1], [len(g["between"]) for g in fillets])
+        self.assertEqual({"end-side"}, {g["edge_faces"] for g in fillets})
+        self.assertEqual(1, len({g["between"][0] for g in fillets}))
+        gates = " ".join(entry["gate"] for entry in self.program["unreconstructed"])
+        self.assertNotIn("fillet-radius-disagrees", gates)
+
+    def test_each_fillet_carries_where_its_own_fragments_were_measured(self) -> None:
+        # Enough to tell one edge of the pair from the other, in the datum frame
+        # the rebuild is built in -- not in the mesh's.
+        small, large = self.fillets()
+        for fillet in (small, large):
+            evidence = fillet["edge_evidence"]
+            self.assertEqual("datum", evidence["frame"])
+            for low, high in zip(evidence["box_min"], evidence["box_max"]):
+                self.assertLessEqual(low, high)
+        # The two boxes are disjoint along the datum Y axis: one round is on the
+        # front edge and one on the back, which is what emission has to resolve.
+        self.assertLess(small["edge_evidence"]["box_max"][1], large["edge_evidence"]["box_min"][1])
+
+    def test_the_transaction_rounds_a_different_edge_for_each_fillet(self) -> None:
+        # The doubles place the extrude's four end-to-side edges where this
+        # plinth's really are, in centimetres and in the datum frame: the front
+        # edge at y = -1.7, the back at y = +1.3, and the two ends at x = +-1.0.
+        # The first feature built takes edge ids 1100..1103 for that face pair.
+        boxes = {
+            1100: ((-1.0, -1.7, 1.2), (1.0, -1.7, 1.2)),
+            1101: ((1.0, -1.7, 1.2), (1.0, 1.3, 1.2)),
+            1102: ((-1.0, 1.3, 1.2), (1.0, 1.3, 1.2)),
+            1103: ((-1.0, -1.7, 1.2), (-1.0, 1.3, 1.2)),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        design = fakes.make_design(behaviour={"edge_boxes": boxes})
+        report, error = run_transaction(source, design, self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        built = {
+            entry["archetype_id"]: entry
+            for entry in report["created"]
+            if entry["kind"] == "fillet"
+        }
+        self.assertEqual(2, len(built), report)
+        self.assertEqual([], report["fillets_skipped"], report)
+        small, large = self.fillets()
+        # One edge each, chosen out of the four the face pair shares, and not the
+        # same one twice.
+        for fillet in (small, large):
+            entry = built[fillet["id"]]
+            self.assertEqual(1, entry["edge_count"], entry)
+            self.assertEqual({"candidates": 4, "selected": 1}, entry["edge_selection"])
+        self.assertNotEqual(
+            built[small["id"]]["edge_tokens"], built[large["id"]]["edge_tokens"]
+        )
+        # And the *right* edge each: the 4 mm round is on the front edge, the
+        # 6 mm round on the back one.
+        self.assertEqual(["token-edge-1100"], built[small["id"]]["edge_tokens"])
+        self.assertEqual(["token-edge-1102"], built[large["id"]]["edge_tokens"])
+
+    def test_two_edges_the_evidence_cannot_tell_apart_refuse_by_name(self) -> None:
+        # The other half of the rule: nearest wins only when it is
+        # *distinguishably* nearest. Two edges at the same distance from where
+        # the fragments were measured are not resolved by this evidence, and
+        # rounding whichever sorted first is exactly the guess this refuses.
+        boxes = {
+            1100: ((-1.0, -1.7, 1.2), (1.0, -1.7, 1.2)),
+            1101: ((-1.0, -1.7, 1.2), (1.0, -1.7, 1.2)),
+            1102: ((-1.0, 1.3, 1.2), (1.0, 1.3, 1.2)),
+            1103: ((-1.0, 1.3, 1.2), (1.0, 1.3, 1.2)),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        design = fakes.make_design(behaviour={"edge_boxes": boxes})
+        report, error = run_transaction(source, design, self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual([], [e for e in report["created"] if e["kind"] == "fillet"])
+        reasons = {entry["reason"] for entry in report["fillets_skipped"]}
+        self.assertEqual({"entity-resolution-ambiguous"}, reasons, report["fillets_skipped"])
 
 if __name__ == "__main__":
     unittest.main()

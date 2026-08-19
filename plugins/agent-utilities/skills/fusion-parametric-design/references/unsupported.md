@@ -396,9 +396,15 @@ the named gate rather than producing an approximate feature:
    `sketch-extrude` — its `startFaces`, `endFaces` and `sideFaces` name the edge,
    and the plan records its caps in station order so the right one is picked —
    but a `revolve` exposes no such partition and an edge inside one is not
-   nameable. Two blend fragments landing on the same edge are pooled into one
-   fillet, and only when an `equal_radius_tolerance` is declared and they agree
-   inside it (`fillet-radius-undeclared`, `fillet-radius-disagrees`). **Or whose
+   nameable. Blend fragments are pooled **per edge**, which the fit record's own
+   `fillet.chain_id` names -- a chain is a run of adjacent fragments that agree
+   in radius and lie between the same two primaries, which is one rounded edge.
+   Two edges between the same pair of face sets are two fillets, each carrying
+   its own radius; the fragments of one edge are pooled into one fillet, and only
+   when an `equal_radius_tolerance` is declared and they agree inside it
+   (`fillet-radius-undeclared`, `fillet-radius-disagrees`). A record that names no
+   chain for a pair carrying more than one fragment cannot say which fragments
+   share an edge and is refused (`fillet-edge-unidentified`). **Or whose
    own blend surface another archetype already rebuilds**
    (`fillet-region-already-reconstructed`) — a partial-arc cylinder can be a side
    of an extrude or the wall of a bore, where a torus never could, and a region

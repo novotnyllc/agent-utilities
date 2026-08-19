@@ -197,7 +197,7 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
 def rounded_plinth_mesh(
     width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
     post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6, post_inward=False,
-    post_centre=None,
+    post_centre=None, back_radius=0.0,
 ):
     """A closed plinth whose top-front edge is rounded, under a coaxial post.
 
@@ -223,6 +223,12 @@ def rounded_plinth_mesh(
     top face joins the *extrude* that already owns the front face, and the round
     then sits between two faces of one feature -- a side and a cap. That is the
     same-feature edge, on a real mesh rather than a fixture of one.
+
+    ``back_radius`` rounds the *back*-top edge as well, to a different radius.
+    Both rounds then lie between the same two face sets of the same extrude --
+    the top cap and a side wall -- which is the shape a lid arrives as: POD-A1-LID
+    carries twenty-four rounds on that one pair of face sets at four radii, and
+    what has to come out is one fillet per edge carrying that edge's own radius.
 
     Closed and outward-wound, because the rebuild sections the dump for its
     profiles and an open surface has no section to give.
@@ -254,32 +260,43 @@ def rounded_plinth_mesh(
     def span(lo, hi, steps, i):
         return lo + (hi - lo) * i / steps
 
-    def round_point(a):
+    def round_point(a, r=None):
         # The endpoints are written exactly rather than evaluated: cos(pi/2) is
         # 6e-17 and not 0, and the 4e-16 gap that follows is enough to cost the
         # round its adjacency to the top face, which is the whole point here.
+        r = radius if r is None else r
         if a == 0:
-            return 0.0, height - radius
+            return 0.0, height - r
         if a == arc:
-            return radius, height
+            return r, height
         angle = math.pi / 2 * a / arc
-        return radius * (1.0 - math.cos(angle)), height - radius * (1.0 - math.sin(angle))
+        return r * (1.0 - math.cos(angle)), height - r * (1.0 - math.sin(angle))
 
     def bottom(i, j):
         return node(("b", i, j), (span(0.0, width, nx, i), span(0.0, depth, ny, j), 0.0))
 
     def top(i, j):
-        return node(("t", i, j), (span(0.0, width, nx, i), span(radius, depth, ny, j), height))
+        return node(
+            ("t", i, j),
+            (span(0.0, width, nx, i), span(radius, depth - back_radius, ny, j), height),
+        )
 
     def front(i, k):
         return node(("f", i, k), (span(0.0, width, nx, i), 0.0, span(0.0, height - radius, nz, k)))
 
     def back(i, k):
-        return node(("k", i, k), (span(0.0, width, nx, i), depth, span(0.0, height, nz, k)))
+        return node(
+            ("k", i, k),
+            (span(0.0, width, nx, i), depth, span(0.0, height - back_radius, nz, k)),
+        )
 
     def blend(i, a):
         y, z = round_point(a)
         return node(("r", i, a), (span(0.0, width, nx, i), y, z))
+
+    def back_blend(i, a):
+        y, z = round_point(a, back_radius)
+        return node(("q", i, a), (span(0.0, width, nx, i), depth - y, z))
 
     def rim(level, s):
         angle = 2.0 * math.pi * (s % post_sides) / post_sides
@@ -300,7 +317,16 @@ def rounded_plinth_mesh(
             quad(front(i, k), front(i + 1, k), front(i + 1, k + 1), front(i, k + 1), 2)
             quad(back(i, k), back(i, k + 1), back(i + 1, k + 1), back(i + 1, k), 3)
         for a in range(arc):
-            quad(blend(i, a), blend(i + 1, a), blend(i + 1, a + 1), blend(i, a + 1), 6 + min(2, i // (nx // 3)))
+            band = min(2, i // (nx // 3))
+            quad(blend(i, a), blend(i + 1, a), blend(i + 1, a + 1), blend(i, a + 1), 6 + band)
+            if back_radius > 0.0:
+                quad(
+                    back_blend(i, a),
+                    back_blend(i, a + 1),
+                    back_blend(i + 1, a + 1),
+                    back_blend(i + 1, a),
+                    11 + band,
+                )
 
     # The two side faces, fanned from an interior hub over a boundary ring that
     # reuses its neighbours' own nodes -- so every edge of the ring is an edge
@@ -310,6 +336,7 @@ def rounded_plinth_mesh(
         ring = (
             [bottom(column, j) for j in range(ny)]
             + [back(column, k) for k in range(nz)]
+            + ([back_blend(column, a) for a in range(arc)] if back_radius > 0.0 else [])
             + [top(column, ny - j) for j in range(ny)]
             + [blend(column, arc - a) for a in range(arc)]
             + [front(column, nz - k) for k in range(nz)]
