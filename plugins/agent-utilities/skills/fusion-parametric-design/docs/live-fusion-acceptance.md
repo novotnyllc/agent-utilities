@@ -191,7 +191,7 @@ Retain passing inventory as `before.json`; change one user parameter or product 
 
 Run the deterministic export transaction against the verified document:
 
-1. Save the passing verification report from step 8 to a file (the JSON between the report delimiters), then emit the export script bound to it:
+1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it:
    `scripts/fusion-design emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --export-dir <fusion-host dir> -o build/export.py`
    (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report).
 2. Execute `build/export.py` through the MCP. **Pass:** the report is `kind: export-handoff`, `ok: true`; the enclosure base, lid, and fit coupon each produce the requested STEP/3MF files; `export-index__*.json` sits beside them; recomputing `shasum -a 256` on the Fusion host matches every `sha256` in the index; byte sizes match.

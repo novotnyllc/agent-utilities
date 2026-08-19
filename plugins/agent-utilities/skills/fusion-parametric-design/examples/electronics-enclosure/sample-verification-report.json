@@ -41,5 +41,6 @@
   "manifest_sha256": "7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e",
   "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
   "ok": true,
-  "project": "wearable-controller-pod"
+  "project": "wearable-controller-pod",
+  "sample": true
 }

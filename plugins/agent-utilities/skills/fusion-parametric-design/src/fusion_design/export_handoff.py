@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import re
 from typing import Any
 
@@ -43,7 +44,10 @@ def _validate_bounds(path: str, bounds: Any) -> dict[str, list[float]]:
         corner = bounds[key]
         if not isinstance(corner, list) or len(corner) != 3:
             raise ValueError(f"Verification bounds for {path!r} must be three-axis boxes.")
-        validated[key] = [float(value) for value in corner]
+        values = [float(value) for value in corner]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f"Verification bounds for {path!r} must be finite; NaN/Infinity would vacuously pass the staleness gate.")
+        validated[key] = values
     return validated
 
 
@@ -116,6 +120,15 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
                 },
             }
         )
+    filename_owners: dict[str, str] = {f"export-index__{digest[:8]}.json": "<index>"}
+    for part in parts:
+        for filename in part["filenames"].values():
+            if filename in filename_owners:
+                raise ValueError(
+                    f"Deterministic filenames collide: {part['path']!r} and {filename_owners[filename]!r} "
+                    f"both produce {filename!r}; rename one component path."
+                )
+            filename_owners[filename] = part["path"]
     specs = {
         "export_dir": str(config.export_dir),
         "formats": list(config.formats),
@@ -357,17 +370,18 @@ def run(context):
                     target = os.path.join(export_dir, filename)
                     constructor = FORMAT_OPTION_ATTRIBUTES[export_format]
                     if export_format == "step":
-                        try:
-                            options = export_manager.createSTEPExportOptions(target, occurrence)
-                            export_scope = "occurrence"
-                        except Exception:
-                            options = export_manager.createSTEPExportOptions(target, occurrence.component)
-                            export_scope = "component"
+                        # STEP options take a Component (live-verified: the root-context
+                        # occurrence proxy is rejected); the occurrence transform is
+                        # recorded per artifact so the assembly frame stays recoverable.
+                        options = export_manager.createSTEPExportOptions(target, occurrence.component)
+                        export_scope = "component"
                     else:
                         options = getattr(export_manager, constructor)(body, target)
                         export_scope = "body"
                     if not options:
                         raise RuntimeError("Fusion failed to create export options for " + filename)
+                    if os.path.lexists(target):
+                        raise RuntimeError("Output appeared after preflight; refusing to overwrite " + target)
                     created_paths.append(target)
                     executed = export_manager.execute(options)
                     if not executed or not os.path.isfile(target) or os.path.getsize(target) <= 0:
@@ -393,6 +407,7 @@ def run(context):
                 "export_run_id": export_run_id,
                 "document_name": target_document.name,
                 "document_saved": document_saved,
+                "document_modified": bool(getattr(target_document, "isModified", False)),
                 "document_version": document_version,
                 "units": units,
                 "export_dir": export_dir,
@@ -405,7 +420,7 @@ def run(context):
                     "| " + artifact["filename"]
                     + " | " + json.dumps(document_version)
                     + " | " + artifact["part_path"]
-                    + " | " + str(units)
+                    + " | " + (units if units else "unknown")
                     + " | " + artifact["export_options"]["constructor"] + " (defaults)"
                     + " | " + str(artifact["byte_size"])
                     + " | " + artifact["sha256"]
@@ -414,8 +429,8 @@ def run(context):
                     + " | \\u2014 | |"
                 )
             index_path = os.path.join(export_dir, EXPORT_SPECS["index_filename"])
-            created_paths.append(index_path)
             with open(index_path, "x", encoding="utf-8") as handle:
+                created_paths.append(index_path)
                 handle.write(json.dumps(index, indent=2, sort_keys=True))
                 handle.write("\\n")
         except Exception as error:
@@ -471,17 +486,13 @@ def example_verification_report(manifest: Manifest) -> dict[str, Any]:
     stays consistent with the golden-path geometry. Live acceptance always uses
     a real verification report instead of this sample.
     """
-    from .positive_control import _box_specs
+    from .positive_control import _bounds, _box_specs
     from .scripts import manifest_sha256
 
     bounds_by_path = {}
     for spec in _box_specs(manifest):
-        origin = [float(value) for value in spec["origin_mm"]]
-        size = [float(value) for value in spec["size_mm"]]
-        bounds_by_path[spec["path"]] = {
-            "min": origin,
-            "max": [origin[index] + size[index] for index in range(3)],
-        }
+        minimum, maximum = _bounds(spec)
+        bounds_by_path[spec["path"]] = {"min": minimum, "max": maximum}
     boxes = {}
     for path in manifest.verification.get("expected_print_parts", []):
         if path not in bounds_by_path:
@@ -490,6 +501,7 @@ def example_verification_report(manifest: Manifest) -> dict[str, Any]:
     return {
         "kind": "verification",
         "ok": True,
+        "sample": True,
         "project": manifest.project_name,
         "manifest_sha256": manifest_sha256(manifest),
         "brep_bounding_boxes_mm": boxes,

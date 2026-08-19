@@ -86,7 +86,7 @@ Use only `not run`, `pass`, `fail`, or `not applicable`.
 
 ## Exports
 
-| Artifact | Fusion version/checkpoint | Configuration | Units | Export options | Byte size | File SHA-256 | Export run ID | Verification report | Slicer/profile | Notes |
+| Artifact | Fusion version/checkpoint | Component path | Units | Export options | Byte size | File SHA-256 | Export run ID | Verification report | Slicer/profile | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
 | None | — | — | — | — | — | — | — | — | — | — |
 

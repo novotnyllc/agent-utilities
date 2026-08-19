@@ -165,6 +165,43 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing for print parts"):
             emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, partial_bounds))
 
+    def test_filename_collisions_fail_at_emit_time(self) -> None:
+        good = self._config("/tmp/example-exports")
+        colliding = json.loads(json.dumps(self.manifest.to_dict()))
+        # Two component paths whose slugs collide (lowercase folding).
+        colliding["component_tree"].extend(["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"])
+        colliding["verification"]["expected_print_parts"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
+        from fusion_design.manifest import Manifest
+
+        manifest = Manifest.from_data(colliding)
+        bounds = {
+            "10_PRODUCT/PROD__CASE": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+            "10_PRODUCT/prod__case": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+        }
+        with self.assertRaisesRegex(ValueError, "filenames collide"):
+            emit_export_script(
+                manifest,
+                ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, bounds),
+            )
+
+    def test_bounds_validation_rejects_malformed_and_non_finite_shapes(self) -> None:
+        good = self._config("/tmp/example-exports")
+        part = self.print_parts[0]
+        for bad in (
+            ["not-a-dict"],
+            {"min": [0.0, 0.0, 0.0]},
+            {"min": [0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+            {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, float("nan")]},
+            {"min": [float("inf"), 0.0, 0.0], "max": [1.0, 1.0, 1.0]},
+        ):
+            bounds = dict(good.expected_bounds_mm)
+            bounds[part] = bad
+            with self.assertRaises(ValueError):
+                emit_export_script(
+                    self.manifest,
+                    ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, bounds),
+                )
+
     def test_verification_binding_rejects_mismatched_reports(self) -> None:
         report = example_verification_report(self.manifest)
         with self.assertRaisesRegex(ValueError, "expected 'verification'"):
@@ -190,11 +227,11 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.export_dir = Path(self.temp.name)
 
-    def _namespace(self, formats=("step", "3mf"), export_manager=None, occurrences=None):
+    def _namespace(self, formats=("step", "3mf"), export_manager=None, occurrences=None, export_dir=None):
         report = example_verification_report(self.manifest)
         bounds = verification_binding_from_report(self.manifest, report)
         config = ExportConfig(
-            export_dir=str(self.export_dir),
+            export_dir=str(export_dir if export_dir is not None else self.export_dir),
             formats=tuple(formats),
             verification_report_sha256=hashlib.sha256(example_verification_report_bytes(self.manifest)).hexdigest(),
             expected_bounds_mm=bounds,
@@ -264,7 +301,7 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
             self.assertTrue(target.is_file())
             self.assertEqual(artifact["byte_size"], target.stat().st_size)
             self.assertEqual(artifact["sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
-            expected_scope = "occurrence" if artifact["format"] == "step" else "body"
+            expected_scope = "component" if artifact["format"] == "step" else "body"
             self.assertEqual(expected_scope, artifact["export_scope"])
             self.assertEqual(16, len(artifact["transform"]))
 
@@ -375,32 +412,88 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         self.assertIn("ExportManager.createC3MFExportOptions", reports[0]["missing_export_capabilities"])
 
     def test_missing_output_dir_blocks(self) -> None:
+        namespace = self._namespace(export_dir=self.export_dir / "does-not-exist")
+        reports = self._run_expect_failure(namespace, "missing-output-dir")
+        self.assertEqual(["missing-output-dir"], reports[0]["failures"])
+
+    def test_saved_document_records_version_identity(self) -> None:
         namespace = self._namespace()
-        missing_dir = self.export_dir / "does-not-exist"
-        report = example_verification_report(self.manifest)
-        bounds = verification_binding_from_report(self.manifest, report)
-        config = ExportConfig(
-            export_dir=str(missing_dir),
-            formats=("step", "3mf"),
-            verification_report_sha256=hashlib.sha256(example_verification_report_bytes(self.manifest)).hexdigest(),
-            expected_bounds_mm=bounds,
+        data_file = SimpleNamespace(id="doc-id-123", versionNumber=7)
+        app = SimpleNamespace(
+            activeDocument=SimpleNamespace(name=self.manifest.fusion_document, isSaved=True, dataFile=data_file)
         )
-        source = emit_export_script(self.manifest, config)
-        namespace = load_generated_script(source)
-        occurrences = {
-            path: FakeOccurrence([FakeBody("BODY")], bounds[path]) for path in self.print_parts
-        }
         design = SimpleNamespace(
-            exportManager=FakeExportManager(),
+            exportManager=self.export_manager,
             rootComponent=SimpleNamespace(),
             unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
         )
-        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document, isSaved=False))
         namespace["_active_design"] = lambda: (app, design)
-        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), {})
-        namespace["_bbox_mm"] = lambda occurrence: occurrence.bounds
-        reports = self._run_expect_failure(namespace, "missing-output-dir")
-        self.assertEqual(["missing-output-dir"], reports[0]["failures"])
+        report = self._run(namespace)[0]
+        self.assertTrue(report["document_saved"])
+        self.assertEqual({"id": "doc-id-123", "version_number": 7}, report["document_version"])
+
+    def test_saved_document_with_failing_datafile_records_unsaved(self) -> None:
+        namespace = self._namespace()
+
+        class Document:
+            name = self.manifest.fusion_document
+            isSaved = True
+            isModified = True
+
+            @property
+            def dataFile(self):
+                raise RuntimeError("dataFile unavailable")
+
+        app = SimpleNamespace(activeDocument=Document())
+        design = SimpleNamespace(
+            exportManager=self.export_manager,
+            rootComponent=SimpleNamespace(),
+            unitsManager=SimpleNamespace(defaultLengthUnits="mm"),
+        )
+        namespace["_active_design"] = lambda: (app, design)
+        report = self._run(namespace)[0]
+        self.assertTrue(report["document_saved"])
+        self.assertTrue(report["document_modified"])
+        self.assertEqual("unsaved", report["document_version"])
+
+    def test_target_appearing_after_preflight_fails_closed(self) -> None:
+        outer = self
+
+        class RacingManager(FakeExportManager):
+            def createC3MFExportOptions(self, geometry, filename):
+                Path(filename).write_bytes(b"concurrent-writer")
+                return super().createC3MFExportOptions(geometry, filename)
+
+        namespace = self._namespace(export_manager=RacingManager())
+        reports = self._run_expect_failure(namespace, "appeared after preflight")
+        report = reports[0]
+        self.assertIn("export-incomplete", report["failures"])
+        survivors = sorted(path.name for path in outer.export_dir.iterdir())
+        self.assertEqual(1, len(survivors))
+        self.assertTrue(survivors[0].endswith(".3mf"))
+        self.assertEqual(b"concurrent-writer", (outer.export_dir / survivors[0]).read_bytes())
+
+    def test_unremovable_file_reports_cleanup_incomplete(self) -> None:
+        export_dir = self.export_dir
+
+        class SwappingManager(FakeExportManager):
+            def execute(self, options):
+                if len(self.executed) == 1:
+                    first = Path(self.executed[0])
+                    first.unlink()
+                    first.mkdir()
+                    raise RuntimeError("simulated export failure")
+                return super().execute(options)
+
+        namespace = self._namespace(export_manager=SwappingManager())
+        reports = self._run_expect_failure(namespace, "cleanup left partial artifacts")
+        report = reports[0]
+        self.assertIn("export-incomplete", report["failures"])
+        self.assertIn("cleanup-incomplete", report["failures"])
+        self.assertEqual(1, len(report["cleanup_errors"]))
+        leftover = [path for path in export_dir.iterdir()]
+        self.assertEqual(1, len(leftover))
+        self.assertTrue(leftover[0].is_dir())
 
     def test_partial_export_failure_cleans_up_and_writes_no_index(self) -> None:
         namespace = self._namespace(export_manager=FakeExportManager(fail_after=1))

@@ -87,13 +87,16 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
 
     report_bytes = Path(args.verification_report).read_bytes()
     manifest = load_manifest(args.manifest)
+    report_data = json.loads(report_bytes.decode("utf-8"))
+    if isinstance(report_data, dict) and report_data.get("sample"):
+        raise ValueError(
+            "refusing to bind a sample verification report; run the live verification transaction and pass its saved report"
+        )
     config = ExportConfig(
         export_dir=args.export_dir,
         formats=formats,
         verification_report_sha256=hashlib.sha256(report_bytes).hexdigest(),
-        expected_bounds_mm=verification_binding_from_report(
-            manifest, json.loads(report_bytes.decode("utf-8"))
-        ),
+        expected_bounds_mm=verification_binding_from_report(manifest, report_data),
     )
     _write_output(emit_export_script(manifest, config), args.output)
     return 0

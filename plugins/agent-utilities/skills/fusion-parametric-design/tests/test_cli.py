@@ -67,8 +67,10 @@ class CliTests(unittest.TestCase):
 
 
 class EmitExportCliTests(unittest.TestCase):
-    def _write_report(self, directory: Path, mutate=None) -> Path:
+    def _write_report(self, directory: Path, mutate=None, keep_sample_marker=False) -> Path:
         report = example_verification_report(load_manifest(EXAMPLE))
+        if not keep_sample_marker:
+            report.pop("sample", None)
         if mutate:
             mutate(report)
         path = directory / "verification-report.json"
@@ -171,6 +173,15 @@ class EmitExportCliTests(unittest.TestCase):
             )
             self.assertEqual(2, code)
             self.assertIn("must not repeat", errors)
+
+    def test_emit_export_rejects_sample_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = self._write_report(Path(temporary), keep_sample_marker=True)
+            code, _, errors = self._run(
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+            )
+            self.assertEqual(2, code)
+            self.assertIn("sample verification report", errors)
 
     def test_emit_export_rejects_unknown_format(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

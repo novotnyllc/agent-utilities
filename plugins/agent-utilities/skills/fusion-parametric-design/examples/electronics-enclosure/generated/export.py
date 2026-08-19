@@ -193,7 +193,7 @@ import hashlib
 import os
 import uuid
 
-EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__7f3e64db.json","parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__base__7f3e64db.step"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__lid__7f3e64db.step"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.step"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"9a4a159bc60b6a32f37f24adbf7d2c40ac132fda2cfb7f895c586d273cd8402c"}')
+EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__7f3e64db.json","parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__base__7f3e64db.step"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__7f3e64db.3mf","step":"wearable-controller-pod__10_product-prod__lid__7f3e64db.step"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__7f3e64db.step"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"d0ce59a4a25e1950ea27145cefe1ce33c774a50a63360d92978aaae38da02d0b"}')
 EXPORT_STALENESS_TOLERANCE_MM = 1e-3
 FORMAT_OPTION_ATTRIBUTES = {
     "step": "createSTEPExportOptions",
@@ -422,17 +422,18 @@ def run(context):
                     target = os.path.join(export_dir, filename)
                     constructor = FORMAT_OPTION_ATTRIBUTES[export_format]
                     if export_format == "step":
-                        try:
-                            options = export_manager.createSTEPExportOptions(target, occurrence)
-                            export_scope = "occurrence"
-                        except Exception:
-                            options = export_manager.createSTEPExportOptions(target, occurrence.component)
-                            export_scope = "component"
+                        # STEP options take a Component (live-verified: the root-context
+                        # occurrence proxy is rejected); the occurrence transform is
+                        # recorded per artifact so the assembly frame stays recoverable.
+                        options = export_manager.createSTEPExportOptions(target, occurrence.component)
+                        export_scope = "component"
                     else:
                         options = getattr(export_manager, constructor)(body, target)
                         export_scope = "body"
                     if not options:
                         raise RuntimeError("Fusion failed to create export options for " + filename)
+                    if os.path.lexists(target):
+                        raise RuntimeError("Output appeared after preflight; refusing to overwrite " + target)
                     created_paths.append(target)
                     executed = export_manager.execute(options)
                     if not executed or not os.path.isfile(target) or os.path.getsize(target) <= 0:
@@ -458,6 +459,7 @@ def run(context):
                 "export_run_id": export_run_id,
                 "document_name": target_document.name,
                 "document_saved": document_saved,
+                "document_modified": bool(getattr(target_document, "isModified", False)),
                 "document_version": document_version,
                 "units": units,
                 "export_dir": export_dir,
@@ -470,7 +472,7 @@ def run(context):
                     "| " + artifact["filename"]
                     + " | " + json.dumps(document_version)
                     + " | " + artifact["part_path"]
-                    + " | " + str(units)
+                    + " | " + (units if units else "unknown")
                     + " | " + artifact["export_options"]["constructor"] + " (defaults)"
                     + " | " + str(artifact["byte_size"])
                     + " | " + artifact["sha256"]
@@ -479,8 +481,8 @@ def run(context):
                     + " | \u2014 | |"
                 )
             index_path = os.path.join(export_dir, EXPORT_SPECS["index_filename"])
-            created_paths.append(index_path)
             with open(index_path, "x", encoding="utf-8") as handle:
+                created_paths.append(index_path)
                 handle.write(json.dumps(index, indent=2, sort_keys=True))
                 handle.write("\n")
         except Exception as error:
