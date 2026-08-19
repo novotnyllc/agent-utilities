@@ -6,6 +6,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -59,9 +60,24 @@ FORBIDDEN_CLAIM_KEYS = {
 # else inside it is still subject to the forbidden-claim gate.
 INTENT_EXEMPT_KEYS = frozenset({"support_policy"})
 
+# Keys are not the only channel: a whole slicer preset pasted into a prose field
+# (printer_requirements, a rationale, a risk) reaches the index as a string value
+# and reads to a key-only sweep as nothing at all. Each pattern reports the
+# forbidden claim it is evidence of, so the existing key assertions catch it.
+# Naming the product on the spool is what `formulation` is for, so a brand name
+# is not a claim; a machine model and a process preset are.
+FORBIDDEN_CLAIM_VALUE_PATTERNS = (
+    ("printer", r"\bmk\d|\bbambu\w*|\bender\b|\bvoron\b|\bx1c\b|\bp1s\b"),
+    ("filament", r"\bfilament[ _-](?:profile|preset)"),
+    (
+        "process_profile",
+        r"process profile|print profile|\bpreset\w*|\bperimeters\b|\binfill\b|layer height|\bgyroid\b|prusaslicer",
+    ),
+)
+
 
 def _collect_keys(value, keys, exempt=frozenset()):
-    """Collect every key that would read as a slicer claim.
+    """Collect every key — and every string value — that reads as a slicer claim.
 
     manufacturing_intent is descended into, exempting only its own declared
     support_policy, so a planted printer/filament/slicing key still trips.
@@ -74,6 +90,10 @@ def _collect_keys(value, keys, exempt=frozenset()):
     elif isinstance(value, list):
         for child in value:
             _collect_keys(child, keys, exempt)
+    elif isinstance(value, str):
+        for claim, pattern in FORBIDDEN_CLAIM_VALUE_PATTERNS:
+            if re.search(pattern, value, re.IGNORECASE):
+                keys.add(claim)
 
 
 class FakeBody:
@@ -244,6 +264,28 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         legitimate: set = set()
         _collect_keys({"material_decision": {**MATERIAL_DECISION, "printer_requirements": "Any nozzle."}}, legitimate)
         self.assertFalse(legitimate & FORBIDDEN_CLAIM_KEYS)
+
+    def test_forbidden_claim_gate_inspects_string_values_not_only_keys(self) -> None:
+        """A slicer preset is a forbidden claim wherever it is written, key or value."""
+        preset = (
+            "Prusa MK4S with a hardened steel nozzle; Prusament PA11CF Carbon Fiber; "
+            "STRUCTURAL process profile, five perimeters, gyroid infill."
+        )
+        for field in ("printer_requirements", "rationale"):
+            with self.subTest(field=field):
+                planted: set = set()
+                _collect_keys({"material_decision": {**MATERIAL_DECISION, field: preset}}, planted)
+                self.assertEqual(
+                    {"printer", "process_profile"}, planted & FORBIDDEN_CLAIM_KEYS
+                )
+        # The brand name alone is legitimate: naming the product on the spool is
+        # exactly what `formulation` is for.
+        legitimate: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "formulation": "Prusament PETG"}}, legitimate)
+        self.assertFalse(legitimate & FORBIDDEN_CLAIM_KEYS)
+        nested: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "unresolved_risks": [preset]}}, nested)
+        self.assertTrue(nested & FORBIDDEN_CLAIM_KEYS)
 
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")

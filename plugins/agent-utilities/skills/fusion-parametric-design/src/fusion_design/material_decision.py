@@ -35,6 +35,8 @@ MATERIAL_DECISION_FIELDS = {
     "rationale",
     "unresolved_risks",
     "printer_requirements",
+    "nozzle",
+    "drying",
 }
 
 # Filled and hygroscopic families are not drop-in filaments: carbon and glass
@@ -42,22 +44,23 @@ MATERIAL_DECISION_FIELDS = {
 # change what actually prints. Both must be declared, not assumed away.
 FILLED_FAMILIES = {family for family in MATERIAL_FAMILIES if family.endswith("_CF")} | {"PA"}
 
-# No bare "steel": a stainless steel bed or a steel frame is not an
-# abrasion-resistant nozzle, and "harden" already covers "hardened steel", which
-# is the phrasing references/material-selection.md prescribes.
-_ABRASION_TERMS = ("harden", "abrasion", "ruby", "tungsten", "carbide")
-# The abrasion term has to qualify the nozzle, not merely share the string with
-# it: "Brass nozzle is fine, stainless steel bed." discharges nothing.
-_ABRASION_NOZZLE_RE = re.compile(
-    r"(?:{terms})[^.;]{{0,40}}nozzle|nozzle[^.;]{{0,40}}(?:{terms})".format(
-        terms="|".join(_ABRASION_TERMS)
-    ),
+# The machine constraints are closed enums, not prose. A safety gate read out of
+# free text is satisfiable by text that denies the constraint ("No hardened
+# nozzle here") and by text that is about something else entirely ("PEI steel
+# sheet", "dry-fit the lid"), because a string sweep has no negation and no
+# scope. printer_requirements survives as human prose and discharges nothing.
+NOZZLE_MATERIALS = {"brass", "hardened_steel", "ruby", "tungsten_carbide"}
+ABRASION_RESISTANT_NOZZLES = NOZZLE_MATERIALS - {"brass"}
+DRYING_STATES = {"required", "done", "not_needed"}
+
+# R4: "TPU" alone is not a decision — the rationale has to say how hard or how
+# flexible the part needs to be. The hardness route needs an actual figure next
+# to the word; "the offshore supplier stocks it" is not a durometer.
+_TPU_HARDNESS_RE = re.compile(
+    r"(?<!\w)(?:shore|durometer|hardness)\w*[^.;]{0,24}\d|\d[^.;]{0,24}(?<!\w)(?:shore|durometer|hardness)",
     re.IGNORECASE,
 )
-_DRYING_TERMS = ("dry", "desiccant")
-# R4: "TPU" alone is not a decision — the rationale has to say how hard or how
-# flexible the part needs to be.
-_TPU_RATIONALE_TERMS = ("shore", "durometer", "hardness", "flex", "elastic")
+_TPU_FLEX_TERMS = ("flex", "flexible", "elastic", "elastomeric")
 
 
 def _text(value: Any) -> str:
@@ -102,11 +105,6 @@ def _names(haystack: str, needle: str) -> bool:
     return re.search(pattern, _normalized(haystack)) is not None
 
 
-def _mentions(value: str, terms: tuple[str, ...]) -> bool:
-    lowered = value.lower()
-    return any(term in lowered for term in terms)
-
-
 def _validate_material_decision(
     issues: list[ValidationIssue],
     decision: Any,
@@ -131,9 +129,13 @@ def _validate_material_decision(
         return
     _reject_unknown_fields(issues, decision, MATERIAL_DECISION_FIELDS, "material_decision")
 
+    # Closed-enum and identifier fields are tested raw, never stripped: the value
+    # that leaves in Manifest.material_decision and in the export index is the
+    # raw one, so validating a stripped copy would bless "  PETG\n" as PETG and
+    # ship a family the published schema's enum does not contain.
     raw_family = decision.get("family")
-    family = _text(raw_family)
-    if not _in_closed_set(family, MATERIAL_FAMILIES):
+    family = raw_family if isinstance(raw_family, str) else ""
+    if not _in_closed_set(raw_family, MATERIAL_FAMILIES):
         issues.append(
             ValidationIssue(
                 "material-decision-unknown-family",
@@ -162,8 +164,10 @@ def _validate_material_decision(
             )
         )
 
-    source_id = _text(decision.get("source_id"))
+    raw_source_id = decision.get("source_id")
+    source_id = raw_source_id if isinstance(raw_source_id, str) else ""
     if not source_id or not _VALID_NAME_RE.fullmatch(source_id):
+        source_id = ""
         issues.append(
             ValidationIssue(
                 "material-decision-unknown-source",
@@ -180,8 +184,9 @@ def _validate_material_decision(
             )
         )
 
-    confidence = _text(decision.get("confidence"))
-    if not _in_closed_set(confidence, SOURCE_CONFIDENCES):
+    raw_confidence = decision.get("confidence")
+    confidence = raw_confidence if isinstance(raw_confidence, str) else ""
+    if not _in_closed_set(raw_confidence, SOURCE_CONFIDENCES):
         issues.append(
             ValidationIssue(
                 "material-decision-unknown-confidence",
@@ -191,14 +196,29 @@ def _validate_material_decision(
         )
         confidence = ""
 
+    # A coupon that is never printed cannot settle anything, so component_tree
+    # membership is not enough: reference geometry, keep-outs and bare container
+    # nodes all live there. A manifest that declares no printable_parts at all is
+    # the pre-printable-parts shape and falls back to the component tree.
+    if isinstance(printable_parts, list):
+        coupon_scope = {
+            part["path"]
+            for part in printable_parts
+            if isinstance(part, dict) and isinstance(part.get("path"), str)
+        }
+        coupon_scope_name = "a declared printable part"
+    else:
+        coupon_scope = component_path_set
+        coupon_scope_name = "declared in component_tree"
     raw_coupon = decision.get("coupon_component")
-    coupon = _text(raw_coupon)
-    if raw_coupon is not None and (not coupon or coupon not in component_path_set):
+    coupon = raw_coupon if isinstance(raw_coupon, str) else ""
+    if raw_coupon is not None and coupon not in coupon_scope:
         issues.append(
             ValidationIssue(
                 "material-decision-unknown-coupon",
                 "material_decision.coupon_component",
-                f"coupon_component {raw_coupon!r} is not declared in component_tree.",
+                f"coupon_component {raw_coupon!r} is not {coupon_scope_name}; "
+                "a coupon that is never printed cannot settle a material-dependent fit.",
             )
         )
         coupon = ""
@@ -238,8 +258,7 @@ def _validate_material_decision(
             risks.append(risk)
 
     raw_requirements = decision.get("printer_requirements")
-    requirements = _text(raw_requirements)
-    if raw_requirements is not None and not requirements:
+    if raw_requirements is not None and not _text(raw_requirements):
         issues.append(
             ValidationIssue(
                 "material-decision-invalid-printer-requirements",
@@ -248,21 +267,45 @@ def _validate_material_decision(
             )
         )
 
+    raw_nozzle = decision.get("nozzle")
+    nozzle = raw_nozzle if _in_closed_set(raw_nozzle, NOZZLE_MATERIALS) else ""
+    if raw_nozzle is not None and not nozzle:
+        issues.append(
+            ValidationIssue(
+                "material-decision-unknown-nozzle",
+                "material_decision.nozzle",
+                f"nozzle must be one of {', '.join(sorted(NOZZLE_MATERIALS))}, "
+                "or null when the machine is unconstrained.",
+            )
+        )
+
+    raw_drying = decision.get("drying")
+    drying = raw_drying if _in_closed_set(raw_drying, DRYING_STATES) else ""
+    if raw_drying is not None and not drying:
+        issues.append(
+            ValidationIssue(
+                "material-decision-unknown-drying",
+                "material_decision.drying",
+                f"drying must be one of {', '.join(sorted(DRYING_STATES))}, "
+                "or null when the family does not need it.",
+            )
+        )
+
     if family in FILLED_FAMILIES:
-        # Either route is acceptable: an open risk keeps the decision honest, and
-        # a printer_requirements string discharges it only when it actually names
-        # the abrasion-resistant nozzle (plus drying, for the PA families).
-        guarded_by_requirements = _ABRASION_NOZZLE_RE.search(requirements) is not None
-        if guarded_by_requirements and family.startswith("PA"):
-            guarded_by_requirements = _mentions(requirements, _DRYING_TERMS)
-        if not risks and not guarded_by_requirements:
+        # Only the structured fields discharge this. An unresolved risk is
+        # advisory here — "Lid colour not chosen yet." is a risk, and it says
+        # nothing about the nozzle that is about to wear open.
+        guarded = nozzle in ABRASION_RESISTANT_NOZZLES
+        if guarded and family.startswith("PA"):
+            guarded = drying in {"required", "done"}
+        if not guarded:
             issues.append(
                 ValidationIssue(
                     "material-decision-filled-material-unguarded",
-                    "material_decision.printer_requirements",
-                    f"Family {family!r} needs at least one unresolved risk or printer_requirements naming an "
-                    "abrasion-resistant nozzle"
-                    + (" and drying" if family.startswith("PA") else "")
+                    "material_decision.nozzle",
+                    f"Family {family!r} requires nozzle to be one of "
+                    f"{', '.join(sorted(ABRASION_RESISTANT_NOZZLES))}"
+                    + (" and drying to be 'required' or 'done'" if family.startswith("PA") else "")
                     + "; filled and hygroscopic filaments are not drop-in.",
                 )
             )
@@ -276,12 +319,15 @@ def _validate_material_decision(
                     "family 'TPU' requires a formulation; 'TPU' alone is not a material decision.",
                 )
             )
-        if not _mentions(rationale, _TPU_RATIONALE_TERMS):
+        states_hardness = _TPU_HARDNESS_RE.search(rationale) is not None
+        states_flex = any(_names(rationale, term) for term in _TPU_FLEX_TERMS)
+        if not states_hardness and not states_flex:
             issues.append(
                 ValidationIssue(
                     "material-decision-tpu-underspecified",
                     "material_decision.rationale",
-                    "A TPU rationale must state the needed hardness (Shore/durometer) or flex behavior.",
+                    "A TPU rationale must state the needed hardness as a Shore/durometer figure, "
+                    "or the flex behavior the part needs.",
                 )
             )
 
@@ -291,6 +337,27 @@ def _validate_material_decision(
                 "material-decision-provisional-unbound",
                 "material_decision",
                 "A provisional material decision must name a coupon_component or record at least one unresolved risk.",
+            )
+        )
+
+    # A decision may not claim more than the source it rests on. Mirrors
+    # scan-parameter-not-provisional in manifest.py, which refuses the same move
+    # for a critical parameter cited to a scan.
+    source = source_map.get(source_id)
+    if (
+        isinstance(source, dict)
+        and source.get("confidence") == "provisional"
+        and confidence
+        and confidence != "provisional"
+        and not (coupon and risks)
+    ):
+        issues.append(
+            ValidationIssue(
+                "material-decision-outranks-source",
+                "material_decision.confidence",
+                f"confidence {confidence!r} claims more than source {source_id!r}, which is provisional. "
+                "Keep the decision provisional, or bind the stronger claim to both a coupon_component "
+                "and an unresolved risk.",
             )
         )
 
@@ -308,6 +375,14 @@ def _validate_part_material_consistency(
 
     if not isinstance(printable_parts, list) or (not family and not formulation):
         return
+    # Families the decision itself names, so a formulation like "Fiberon PET-CF17"
+    # under the OTHER sentinel does not read as naming a foreign family. OTHER is
+    # never foreign: it is a sentinel, not a chemistry.
+    decided_names = {"OTHER"} | {
+        member
+        for member in MATERIAL_FAMILIES
+        if _names(family, member) or (formulation and _names(formulation, member))
+    }
     for index, part in enumerate(printable_parts):
         if not isinstance(part, dict):
             continue
@@ -323,17 +398,34 @@ def _validate_part_material_consistency(
         # Bidirectional on the formulation: R6 asks that the part not name a
         # *different* material, not that it repeat the decision verbatim, so a
         # shortened product name ("PET-CF17" under "Fiberon PET-CF17") is a match.
-        if (
-            _names(assumption, family)
+        # The family route is skipped for OTHER, which word-matches plain English
+        # ("Same as the other lid part."); OTHER always has a formulation to match.
+        names_decision = (
+            (family != "OTHER" and _names(assumption, family))
             or _names(assumption, formulation)
             or _names(formulation, assumption)
-        ):
-            continue
-        issues.append(
-            ValidationIssue(
-                "material-decision-part-mismatch",
-                f"printable_parts[{index}].material.assumption",
-                f"Part material assumption {assumption!r} names neither the decided family {family!r} "
-                f"nor the formulation {formulation!r}.",
-            )
         )
+        if not names_decision:
+            issues.append(
+                ValidationIssue(
+                    "material-decision-part-mismatch",
+                    f"printable_parts[{index}].material.assumption",
+                    f"Part material assumption {assumption!r} names neither the decided family {family!r} "
+                    f"nor the formulation {formulation!r}.",
+                )
+            )
+            continue
+        # Naming the decision is not enough — it has to be the only material
+        # named, or "PETG for now, ABS if it runs hot" survives as intent.
+        foreign = sorted(
+            member for member in MATERIAL_FAMILIES - decided_names if _names(assumption, member)
+        )
+        if foreign:
+            issues.append(
+                ValidationIssue(
+                    "material-decision-part-mismatch",
+                    f"printable_parts[{index}].material.assumption",
+                    f"Part material assumption {assumption!r} also names {', '.join(foreign)}, "
+                    "which the project did not decide; a part assumes one material, not a choice.",
+                )
+            )

@@ -161,6 +161,23 @@
             "null"
           ],
           "minLength": 1
+        },
+        "nozzle": {
+          "enum": [
+            "brass",
+            "hardened_steel",
+            "ruby",
+            "tungsten_carbide",
+            null
+          ]
+        },
+        "drying": {
+          "enum": [
+            "required",
+            "done",
+            "not_needed",
+            null
+          ]
         }
       }
     },

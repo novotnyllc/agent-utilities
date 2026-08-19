@@ -20,13 +20,13 @@ Carbon-filled, glass-filled, and other short-fiber composites are not drop-in su
 
 What changes, at minimum:
 
-- **Nozzle.** Fill is abrasive. A brass nozzle wears open during a single large part, which silently moves every extrusion width and every printed fit. Hardened steel, ruby, or tungsten carbide is a requirement of the decision, not an accessory. Record it in `printer_requirements`.
+- **Nozzle.** Fill is abrasive. A brass nozzle wears open during a single large part, which silently moves every extrusion width and every printed fit. Hardened steel, ruby, or tungsten carbide is a requirement of the decision, not an accessory. Record it in the decision's `nozzle` field, which is a closed enum — not in prose.
 - **Stiffness up, toughness down.** Fiber raises modulus and lowers elongation and impact resistance. Snap arms, clips, and hinges that depend on strain recovery get worse, not better. A filled polymer is the wrong answer to a flexure problem.
 - **Layer adhesion.** Fiber aligns with the extrusion, so in-plane strength rises while Z strength does not keep pace. Anisotropy is stronger, not weaker, than in the unfilled base.
 - **Surface and dimension.** Filled prints are matte and hide their own defects; a filled part that looks clean can still be under-extruded from a worn nozzle.
 - **Handling and safety.** Fine fiber dust from sanding or machining is a respiratory hazard, cut ends are sharp, and some filled and styrene-family filaments emit enough to want ventilation or filtration. This belongs in the recorded decision where the person printing it will read it, not in a footnote.
 
-The validator enforces the visible half of this: a `*_CF` family — and `PA`, which absorbs enough water from a room to change what prints — must carry an open risk or a `printer_requirements` string naming the abrasion-resistant nozzle, and for the polyamide families, drying. That check confirms the constraint was declared. It cannot confirm it was understood; the data sheet does that.
+The validator enforces the visible half of this: a `*_CF` family — and `PA`, which absorbs enough water from a room to change what prints — must set `nozzle` to an abrasion-resistant value, and the polyamide families must also set `drying`. Both are closed enums, because a safety gate read out of free text is discharged by text that denies the constraint as readily as by text that declares it, and `printer_requirements` prose therefore discharges nothing. An open risk does not discharge it either: a risk about the lid colour says nothing about the nozzle that is about to wear open. That check confirms the constraint was declared. It cannot confirm it was understood; the data sheet does that.
 
 ### Published generic tolerances are not measured truth
 
@@ -98,11 +98,13 @@ Each entry states what the family does to geometry. Numbers come from the formul
 - `family` — the design envelope, from the closed enum.
 - `formulation` — the specific product, or null when only the family is settled. Never a guess.
 - `source_id` — the declared source the decision rests on: the data sheet, the standard, the coupon record, or the user's stated requirement.
-- `confidence` — from the same vocabulary as every other source. `provisional` until something measured supports it.
-- `coupon_component` — the declared component that will settle the material-dependent fits; by convention a `VAL__` article, though the validator accepts any path in the component tree.
-- `rationale` — why this family, in terms of the requirement it satisfies. For TPU, this must state the hardness or flex behavior.
-- `unresolved_risks` — what is still unproven. Filled and hygroscopic families must carry either a risk or an explicit `printer_requirements` string naming the abrasion-resistant nozzle, and drying for the polyamides.
-- `printer_requirements` — nozzle, drying, enclosure, ventilation. Constraints on the machine, not a slicer profile: printer, filament, and process profiles stay in the slicer.
+- `confidence` — from the same vocabulary as every other source. `provisional` until something measured supports it, and never stronger than the cited source's own confidence unless the decision is bound by both a coupon and a recorded risk.
+- `coupon_component` — the declared printable part that will settle the material-dependent fits; by convention a `VAL__` article. A component that is never printed cannot settle anything, so the validator requires a printable part.
+- `rationale` — why this family, in terms of the requirement it satisfies. For TPU, this must state the hardness as a Shore or durometer figure, or the flex behavior the part needs.
+- `unresolved_risks` — what is still unproven. Advisory to the filled-material gate: a risk does not stand in for a declared nozzle.
+- `nozzle` — closed enum: brass, hardened steel, ruby, or tungsten carbide. Filled and hygroscopic families require an abrasion-resistant value here.
+- `drying` — closed enum: required, done, or not needed. The polyamide families must declare it, and `not_needed` does not satisfy the gate.
+- `printer_requirements` — free prose for anything the enums do not carry: enclosure, ventilation, handling. It records context and discharges no gate, and it is not a slicer profile: printer, filament, and process profiles stay in the slicer.
 
 Per-part `material.assumption` values must name the decided family or formulation. A part quietly assuming something else is a validation error, not a divergence to be reconciled later.
 

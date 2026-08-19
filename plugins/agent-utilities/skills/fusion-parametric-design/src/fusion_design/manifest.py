@@ -23,9 +23,12 @@ from .printable_parts import (  # noqa: F401
 
 # Same re-export contract for the project-level material decision.
 from .material_decision import (  # noqa: F401
+    ABRASION_RESISTANT_NOZZLES,
+    DRYING_STATES,
     FILLED_FAMILIES,
     MATERIAL_DECISION_FIELDS,
     MATERIAL_FAMILIES,
+    NOZZLE_MATERIALS,
     _validate_material_decision,
 )
 

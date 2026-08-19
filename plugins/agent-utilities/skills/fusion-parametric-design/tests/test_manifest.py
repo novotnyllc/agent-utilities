@@ -480,70 +480,70 @@ class ManifestValidationTests(unittest.TestCase):
         unguarded = self._with_decision(family="PA_CF", formulation="Some PA-CF", unresolved_risks=[])
         self.assertIn("material-decision-filled-material-unguarded", self._codes(unguarded))
 
-        by_risk = self._with_decision(
-            family="PA_CF",
-            formulation="Some PA-CF",
-            unresolved_risks=["Layer adhesion is unproven for this filled filament."],
-        )
-        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(by_risk))
-
-        by_requirements = self._with_decision(
-            family="PET_CF",
-            formulation="Some PET-CF",
-            printer_requirements="Hardened steel nozzle required for the abrasive fill.",
-        )
-        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(by_requirements))
-
-        # PA* additionally needs drying declared on the printer_requirements route.
-        nozzle_only = self._with_decision(
-            family="PA",
-            formulation="Some PA",
-            printer_requirements="Hardened steel nozzle required for the abrasive fill.",
-        )
-        self.assertIn("material-decision-filled-material-unguarded", self._codes(nozzle_only))
-
-        with_drying = self._with_decision(
-            family="PA",
-            formulation="Some PA",
-            printer_requirements="Hardened steel nozzle; dry the spool for 8 hours before printing.",
-        )
-        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(with_drying))
-
-        # PA_CF takes the same drying sub-requirement as plain PA.
-        cf_nozzle_only = self._with_decision(
-            family="PA_CF",
-            formulation="Some PA-CF",
-            unresolved_risks=[],
-            printer_requirements="Hardened steel nozzle required for the abrasive fill.",
-        )
-        self.assertIn("material-decision-filled-material-unguarded", self._codes(cf_nozzle_only))
-        cf_with_drying = self._with_decision(
-            family="PA_CF",
-            formulation="Some PA-CF",
-            unresolved_risks=[],
-            printer_requirements="Hardened steel nozzle; dry the spool before printing.",
-        )
-        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(cf_with_drying))
-
-        # The AND boundary: half a guard is not a guard, and the abrasion term
-        # has to qualify the nozzle rather than merely share the string with it.
+        # Prose discharges nothing, however emphatic — including prose that
+        # denies the constraint or that names the abrasion word on other hardware.
         for label, requirements in (
-            ("abrasion term, no nozzle", "Hardened steel tip required for the abrasive fill."),
-            ("nozzle, no abrasion term", "Use a brass nozzle."),
-            ("abrasion term on other hardware", "Brass nozzle is fine, stainless steel bed."),
-            ("abrasion term in another clause", "Any nozzle. Hardened tooling for post-processing."),
+            ("denies the requirement", "No hardened nozzle here; stock brass nozzle, skip drying."),
+            ("build plate, not nozzle", "Print on the smooth PEI steel sheet with the stock nozzle."),
+            ("affirms it in prose only", "Hardened steel nozzle required; dry the spool before printing."),
         ):
             with self.subTest(case=label):
-                half = self._with_decision(
-                    family="PET_CF",
-                    formulation="Some PET-CF",
+                prose = self._with_decision(
+                    family="PA_CF",
+                    formulation="Some PA-CF",
                     unresolved_risks=[],
                     printer_requirements=requirements,
                 )
-                self.assertIn("material-decision-filled-material-unguarded", self._codes(half))
+                self.assertIn("material-decision-filled-material-unguarded", self._codes(prose))
+
+        # An unrelated open risk is advisory, not a discharge.
+        by_risk = self._with_decision(
+            family="PA_CF",
+            formulation="Some PA-CF",
+            unresolved_risks=["Lid colour not chosen yet."],
+        )
+        self.assertIn("material-decision-filled-material-unguarded", self._codes(by_risk))
+
+        # Only the structured fields discharge it.
+        by_nozzle = self._with_decision(
+            family="PET_CF", formulation="Some PET-CF", nozzle="hardened_steel"
+        )
+        self.assertNotIn("material-decision-filled-material-unguarded", self._codes(by_nozzle))
+
+        brass = self._with_decision(family="PET_CF", formulation="Some PET-CF", nozzle="brass")
+        self.assertIn("material-decision-filled-material-unguarded", self._codes(brass))
+
+        # PA* additionally needs the drying state declared, and 'not_needed' is
+        # a declaration that the gate rejects rather than one it accepts.
+        for label, overrides, expected in (
+            ("nozzle only", {"nozzle": "ruby"}, True),
+            ("nozzle and drying required", {"nozzle": "ruby", "drying": "required"}, False),
+            ("nozzle and drying done", {"nozzle": "ruby", "drying": "done"}, False),
+            ("nozzle but drying not needed", {"nozzle": "ruby", "drying": "not_needed"}, True),
+            ("drying only", {"drying": "done"}, True),
+        ):
+            for family in ("PA", "PA_CF"):
+                with self.subTest(case=label, family=family):
+                    data = self._with_decision(
+                        family=family, formulation=f"Some {family}", unresolved_risks=[], **overrides
+                    )
+                    codes = self._codes(data)
+                    if expected:
+                        self.assertIn("material-decision-filled-material-unguarded", codes)
+                    else:
+                        self.assertNotIn("material-decision-filled-material-unguarded", codes)
 
         # Unfilled families are not asked for either guard.
         self.assertEqual([], validate_manifest_data(self._with_decision()))
+
+    def test_machine_constraint_fields_are_closed_enums(self) -> None:
+        for field, bad in (("nozzle", "hardened steel"), ("drying", "maybe")):
+            with self.subTest(field=field):
+                self.assertIn(
+                    f"material-decision-unknown-{field}", self._codes(self._with_decision(**{field: bad}))
+                )
+        # Both are optional on an unfilled decision.
+        self.assertEqual([], validate_manifest_data(self._with_decision(nozzle=None, drying=None)))
 
     def test_tpu_requires_formulation_and_hardness_rationale(self) -> None:
         tpu_rationale = "Shore 95A gives the strain relief the boot needs."
@@ -561,6 +561,27 @@ class ManifestValidationTests(unittest.TestCase):
             family="TPU", formulation="Some TPU 95A", rationale=tpu_rationale
         )
         self.assertNotIn("material-decision-tpu-underspecified", self._codes(specified))
+
+        # Substrings are not statements of hardness, and the hardness word on its
+        # own is not a figure.
+        for rationale in (
+            "Chosen because the offshore supplier stocks it and lead time is short.",
+            "Matches the reflex housing used on the prior revision.",
+            "The hardness will be decided once the grommet is prototyped.",
+        ):
+            with self.subTest(rationale=rationale):
+                vague = self._with_decision(
+                    family="TPU", formulation="Some TPU", rationale=rationale
+                )
+                self.assertIn("material-decision-tpu-underspecified", self._codes(vague))
+
+        # The flex route stays open to a genuine statement about flex behavior.
+        by_flex = self._with_decision(
+            family="TPU",
+            formulation="Some TPU",
+            rationale="The strain relief must flex through the full cable bend without taking a set.",
+        )
+        self.assertNotIn("material-decision-tpu-underspecified", self._codes(by_flex))
 
     def test_provisional_decision_must_be_bound(self) -> None:
         unbound = self._with_decision(confidence="provisional", coupon_component=None, unresolved_risks=[])
@@ -668,12 +689,75 @@ class ManifestValidationTests(unittest.TestCase):
     def test_printer_requirements_may_be_null(self) -> None:
         self.assertEqual([], validate_manifest_data(self._with_decision(printer_requirements=None)))
 
+    def test_family_other_does_not_match_the_english_word(self) -> None:
+        data = self._with_decision(family="OTHER", formulation="Weird Co ExoPoly")
+        for part in data["printable_parts"]:
+            part["material"]["assumption"] = "Same as the other lid part."
+        self.assertIn("material-decision-part-mismatch", self._codes(data))
+
+    def test_part_assumption_may_not_hedge_between_two_materials(self) -> None:
+        data = self._with_decision(family="PETG", formulation=None)
+        for part in data["printable_parts"]:
+            part["material"]["assumption"] = "PETG for now, ABS if it runs hot"
+        self.assertIn("material-decision-part-mismatch", self._codes(data))
+
+    def test_decision_may_not_claim_more_confidence_than_its_source(self) -> None:
+        # enclosure_material_requirements is a conservative_proxy at provisional.
+        for confidence in ("published", "measured", "coupon_verified"):
+            with self.subTest(confidence=confidence):
+                data = self._with_decision(
+                    source_id="enclosure_material_requirements",
+                    confidence=confidence,
+                    coupon_component=None,
+                    unresolved_risks=[],
+                )
+                self.assertIn("material-decision-outranks-source", self._codes(data))
+
+        # A stronger claim is allowed only when it is bound by both a coupon and
+        # a recorded risk.
+        bound = self._with_decision(
+            source_id="enclosure_material_requirements",
+            confidence="coupon_verified",
+            unresolved_risks=["Snap-rim cycle life is still unproven."],
+        )
+        self.assertNotIn("material-decision-outranks-source", self._codes(bound))
+
+        # A measured source carries a measured decision without complaint.
+        self.assertEqual([], validate_manifest_data(self._with_decision()))
+
+    def test_coupon_component_must_be_a_printable_part(self) -> None:
+        for path in ("00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC", "20_FIXTURES", "10_PRODUCT"):
+            with self.subTest(path=path):
+                data = self._with_decision(
+                    confidence="provisional", coupon_component=path, unresolved_risks=[]
+                )
+                codes = self._codes(data)
+                self.assertIn("material-decision-unknown-coupon", codes)
+                self.assertIn("material-decision-provisional-unbound", codes)
+
+    def test_enum_fields_are_validated_raw_so_the_index_ships_what_was_checked(self) -> None:
+        """Padded values are rejected, not silently accepted and then exported raw."""
+        for field, padded, expected in (
+            ("family", "  PETG\n", "material-decision-unknown-family"),
+            ("confidence", " measured ", "material-decision-unknown-confidence"),
+            ("source_id", " pd_trigger_board_measurement ", "material-decision-unknown-source"),
+            (
+                "coupon_component",
+                " 90_VALIDATION/VAL__PD_FIT_COUPON ",
+                "material-decision-unknown-coupon",
+            ),
+        ):
+            with self.subTest(field=field):
+                self.assertIn(expected, self._codes(self._with_decision(**{field: padded})))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CONTACT_FACES,
+            DRYING_STATES,
             MATERIAL_DECISION_FIELDS,
             MATERIAL_FAMILIES,
             MATERIAL_STATUSES,
+            NOZZLE_MATERIALS,
             PRINT_AS_VALUES,
             PRINTABLE_PART_FIELDS,
             PROTECTED_FEATURE_KINDS,
@@ -706,6 +790,10 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual(MATERIAL_DECISION_FIELDS, set(decision["properties"]))
         self.assertEqual(MATERIAL_FAMILIES, set(decision["properties"]["family"]["enum"]))
         self.assertEqual(SOURCE_CONFIDENCES, set(decision["properties"]["confidence"]["enum"]))
+        self.assertEqual(
+            NOZZLE_MATERIALS | {None}, set(decision["properties"]["nozzle"]["enum"])
+        )
+        self.assertEqual(DRYING_STATES | {None}, set(decision["properties"]["drying"]["enum"]))
         # Property names and enums are not enough: the coupon-verified /
         # coupon_verified drift got through a check that pinned only those. Pin
         # requiredness against what the validator actually rejects when absent.
