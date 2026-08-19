@@ -428,6 +428,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" plan-reconstruction <manifest> --fit-record <fit.json> --program-spec <program-spec.json> [-o program.json]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]

@@ -4,6 +4,7 @@ import math
 import unittest
 
 from fusion_design.mesh_fitting import (
+    INTENT_KINDS,
     IntentProposal,
     PrimitiveFit,
     SketchEntity,
@@ -699,6 +700,207 @@ class SerialisationTests(unittest.TestCase):
         proposal = propose_nominal("bore diameter", 10.03, tolerance=0.05).to_dict()
         self.assertEqual(proposal["kind"], "nominal")
         self.assertEqual(proposal["subjects"], ["bore diameter"])
+
+
+# --------------------------------------------------------------------------
+# 5. tangency, equal radius, and the widened symmetry proposal
+# --------------------------------------------------------------------------
+
+
+def plane_fit(normal, point, extent=20.0) -> PrimitiveFit:
+    offset = sum(n * p for n, p in zip(normal, point))
+    return PrimitiveFit(
+        kind="plane",
+        accepted=True,
+        rms_residual=0.0,
+        relative_residual=0.0,
+        extent=extent,
+        parameters={"normal": normal, "offset": offset, "point_on_plane": point},
+    )
+
+
+def cone_fit(apex, axis_direction, half_angle_deg, extent=20.0) -> PrimitiveFit:
+    return PrimitiveFit(
+        kind="cone",
+        accepted=True,
+        rms_residual=0.0,
+        relative_residual=0.0,
+        extent=extent,
+        parameters={
+            "apex": apex,
+            "axis_direction": axis_direction,
+            "half_angle_deg": half_angle_deg,
+            "reference_radius": 2.0,
+        },
+    )
+
+
+def sphere_fit(centre, radius, extent=20.0) -> PrimitiveFit:
+    return PrimitiveFit(
+        kind="sphere",
+        accepted=True,
+        rms_residual=0.0,
+        relative_residual=0.0,
+        extent=extent,
+        parameters={"center": centre, "radius": radius},
+    )
+
+
+class TangentProposalTests(unittest.TestCase):
+    def test_a_cylinder_resting_on_a_plane_proposes_tangency_with_its_deviation(self) -> None:
+        wall = plane_fit((1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        boss = cylinder_fit((5.02, 0.0, 0.0), (0.0, 0.0, 1.0), 5.0)
+        proposals = propose_design_intent(
+            {"wall": wall, "boss": boss}, tangent_tolerance=0.1
+        )
+        tangent = [p for p in proposals if p.kind == "tangent"]
+        self.assertEqual(len(tangent), 1)
+        self.assertAlmostEqual(tangent[0].deviation, 0.02, places=12)
+        self.assertEqual(tangent[0].deviation_unit, "length")
+        self.assertAlmostEqual(tangent[0].detail["axis_to_plane_distance"], 5.02, places=12)
+
+    def test_without_a_declared_tolerance_nothing_is_proposed(self) -> None:
+        wall = plane_fit((1.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        boss = cylinder_fit((5.0, 0.0, 0.0), (0.0, 0.0, 1.0), 5.0)
+        proposals = propose_design_intent({"wall": wall, "boss": boss})
+        self.assertEqual([p for p in proposals if p.kind == "tangent"], [])
+
+    def test_a_cylinder_crossing_a_plane_is_left_unproposed(self) -> None:
+        # The axis is perpendicular to the plane, so it passes through it; the
+        # axis-to-plane distance is not a clearance and means nothing here.
+        floor = plane_fit((0.0, 0.0, 1.0), (0.0, 0.0, 0.0))
+        boss = cylinder_fit((0.0, 0.0, 5.0), (0.0, 0.0, 1.0), 5.0)
+        proposals = propose_design_intent(
+            {"floor": floor, "boss": boss}, tangent_tolerance=0.1
+        )
+        self.assertEqual([p for p in proposals if p.kind == "tangent"], [])
+
+    def test_two_cylinders_touching_externally_propose_tangency(self) -> None:
+        left = cylinder_fit((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 3.0)
+        right = cylinder_fit((7.99, 0.0, 0.0), (0.0, 0.0, 1.0), 5.0)
+        proposals = propose_design_intent(
+            {"left": left, "right": right}, tangent_tolerance=0.1
+        )
+        tangent = [p for p in proposals if p.kind == "tangent"]
+        self.assertEqual(len(tangent), 1)
+        self.assertEqual(tangent[0].proposed_value, "external")
+        self.assertAlmostEqual(tangent[0].deviation, 0.01, places=12)
+
+    def test_coincident_axes_are_coaxial_and_never_internally_tangent(self) -> None:
+        inner = cylinder_fit((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 3.0)
+        outer = cylinder_fit((0.0, 0.0, 4.0), (0.0, 0.0, 1.0), 3.0)
+        proposals = propose_design_intent(
+            {"inner": inner, "outer": outer}, tangent_tolerance=0.1
+        )
+        self.assertEqual([p for p in proposals if p.kind == "tangent"], [])
+        self.assertEqual(len([p for p in proposals if p.kind == "coaxial"]), 1)
+
+
+class EqualRadiusProposalTests(unittest.TestCase):
+    def test_four_near_equal_bores_propose_every_pair(self) -> None:
+        bores = {
+            f"bore_{i}": cylinder_fit((10.0 * i, 0.0, 0.0), (0.0, 0.0, 1.0), radius)
+            for i, radius in enumerate((2.5, 2.503, 2.498, 2.502))
+        }
+        proposals = propose_design_intent(bores, equal_radius_tolerance=0.01)
+        equal = [p for p in proposals if p.kind == "equal_radius"]
+        self.assertEqual(len(equal), 6)
+        for proposal in equal:
+            self.assertLessEqual(proposal.deviation, 0.01)
+            self.assertEqual(proposal.deviation_unit, "length")
+            self.assertAlmostEqual(
+                proposal.proposed_value,
+                (proposal.detail["radius_a"] + proposal.detail["radius_b"]) / 2.0,
+            )
+
+    def test_a_radius_beyond_the_tolerance_is_not_proposed(self) -> None:
+        proposals = propose_design_intent(
+            {
+                "a": cylinder_fit((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.5),
+                "b": cylinder_fit((10.0, 0.0, 0.0), (0.0, 0.0, 1.0), 4.0),
+            },
+            equal_radius_tolerance=0.01,
+        )
+        self.assertEqual([p for p in proposals if p.kind == "equal_radius"], [])
+
+    def test_spheres_carry_a_radius_and_reach_the_proposal(self) -> None:
+        proposals = propose_design_intent(
+            {"ball_a": sphere_fit((0.0, 0.0, 0.0), 4.0), "ball_b": sphere_fit((20.0, 0.0, 0.0), 4.002)},
+            equal_radius_tolerance=0.01,
+        )
+        self.assertEqual(len([p for p in proposals if p.kind == "equal_radius"]), 1)
+
+    def test_a_cone_reference_radius_is_not_treated_as_a_diameter(self) -> None:
+        # reference_radius is the radius at whichever axis point the search
+        # landed on, so equating two of them would compare two arbitrary
+        # stations. Left unproposed rather than approximated.
+        proposals = propose_design_intent(
+            {
+                "csk_a": cone_fit((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 45.0),
+                "csk_b": cone_fit((20.0, 0.0, 0.0), (0.0, 0.0, 1.0), 45.0),
+            },
+            equal_radius_tolerance=0.01,
+        )
+        self.assertEqual([p for p in proposals if p.kind == "equal_radius"], [])
+
+
+class WidenedSymmetryTests(unittest.TestCase):
+    def test_two_parallel_axis_cones_now_propose_a_mirror_plane(self) -> None:
+        proposals = propose_design_intent(
+            {
+                "csk_left": cone_fit((-15.0, 0.0, 0.0), (0.0, 0.0, 1.0), 45.0),
+                "csk_right": cone_fit((15.0, 0.0, 0.0), (0.0, 0.0, 1.0), 45.2),
+            }
+        )
+        symmetric = [p for p in proposals if p.kind == "symmetric"]
+        self.assertEqual(len(symmetric), 1)
+        self.assertEqual(symmetric[0].deviation_unit, "deg")
+        self.assertAlmostEqual(symmetric[0].deviation, 0.2, places=9)
+        self.assertAlmostEqual(symmetric[0].proposed_value["offset"], 0.0, places=12)
+
+    def test_a_cylinder_and_a_cone_are_not_each_others_mirror_image(self) -> None:
+        proposals = propose_design_intent(
+            {
+                "bore": cylinder_fit((-15.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.5),
+                "csk": cone_fit((15.0, 0.0, 0.0), (0.0, 0.0, 1.0), 45.0),
+            }
+        )
+        self.assertEqual([p for p in proposals if p.kind == "symmetric"], [])
+
+    def test_two_spheres_are_deliberately_left_unproposed(self) -> None:
+        # Any two spheres are mirror-symmetric about the bisector of their
+        # centres, so the proposal would carry no evidence at all.
+        proposals = propose_design_intent(
+            {"ball_a": sphere_fit((-15.0, 0.0, 0.0), 4.0), "ball_b": sphere_fit((15.0, 0.0, 0.0), 4.0)},
+            equal_radius_tolerance=0.01,
+        )
+        self.assertEqual([p for p in proposals if p.kind == "symmetric"], [])
+
+
+class IntentVocabularyTests(unittest.TestCase):
+    def test_the_closed_set_now_covers_all_seven_kinds(self) -> None:
+        self.assertEqual(
+            INTENT_KINDS,
+            {
+                "coaxial",
+                "parallel",
+                "perpendicular",
+                "symmetric",
+                "tangent",
+                "equal_radius",
+                "nominal",
+            },
+        )
+
+    def test_a_kind_outside_the_set_is_still_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            IntentProposal(
+                kind="concentric-ish",
+                subjects=("a", "b"),
+                statement="",
+                deviation=0.0,
+                deviation_unit="deg",
+            )
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ from .export_handoff import (
 )
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .mesh_convert import emit_mesh_convert_script
+from .mesh_datum import ReconstructionRefused, parse_fit_record
+from .reconstruction_program import build_reconstruction_program
 from .mesh_deviation import emit_mesh_deviation_script
 from .mesh_source import (
     emit_mesh_capture_script,
@@ -195,6 +197,28 @@ def _mesh_path_command(args: argparse.Namespace, spec_name: str, function: Calla
     # value against itself and could never fail.
     source_record = mesh_source_record(manifest, args.mesh_source_id)
     _write_output(function(manifest, classification, source_record, spec), args.output)
+    return 0
+
+
+def _cmd_plan_reconstruction(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest), ("fit-record", args.fit_record), ("program-spec", args.program_spec)]
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    fit_record = parse_fit_record(json.loads(Path(args.fit_record).read_text(encoding="utf-8")))
+    spec = json.loads(Path(args.program_spec).read_text(encoding="utf-8"))
+    try:
+        program = build_reconstruction_program(
+            fit_record, spec, manifest_sha256=manifest_sha256(manifest)
+        )
+    except ReconstructionRefused as refused:
+        # A refusal is a result, not a crash: it prints its named reason and the
+        # alternative on stdout so the record can be kept as evidence.
+        print(json.dumps(refused.to_dict(), indent=2, sort_keys=True))
+        return 2
+    _write_output(json.dumps(program, indent=2, sort_keys=True), args.output)
     return 0
 
 
@@ -489,6 +513,30 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_deviation.set_defaults(
         handler=lambda args: _mesh_path_command(args, "deviation_spec", emit_mesh_deviation_script)
     )
+
+    plan_reconstruction = subparsers.add_parser(
+        "plan-reconstruction",
+        help=(
+            "Derive the datum frame, license and adopt relationships, and emit the versioned "
+            "reconstruction program from a fit record. Host-side only; no Fusion needed."
+        ),
+    )
+    plan_reconstruction.add_argument("manifest")
+    plan_reconstruction.add_argument(
+        "--fit-record",
+        required=True,
+        help="Path to the fit record JSON produced by the fitting stage, bound to a mesh dump hash.",
+    )
+    plan_reconstruction.add_argument(
+        "--program-spec",
+        required=True,
+        help=(
+            "Path to the program spec JSON: the declared thresholds with their rationales, and the "
+            "adoption decision for each proposal that is adopted."
+        ),
+    )
+    plan_reconstruction.add_argument("-o", "--output")
+    plan_reconstruction.set_defaults(handler=_cmd_plan_reconstruction)
 
     emit_export = subparsers.add_parser(
         "emit-export",
