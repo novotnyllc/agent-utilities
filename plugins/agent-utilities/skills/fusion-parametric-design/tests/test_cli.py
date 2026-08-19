@@ -13,6 +13,7 @@ import fusion_design.cli as cli_module
 from fusion_design.cli import main
 from fusion_design.export_handoff import example_verification_report
 from fusion_design.manifest import load_manifest
+from fusion_design.scripts import manifest_sha256
 from test_prusaslicer_project import _Fixture, _config_root, _intent, process_execution_offenses
 from test_prusaslicer_slice import _fake_slicer
 
@@ -622,6 +623,99 @@ class DiffReportsCliTests(unittest.TestCase):
             code, _, errors = self._run(["diff-reports", str(before), str(after)])
             self.assertEqual(2, code)
             self.assertIn("cannot be diffed", errors)
+
+
+class PlanVariantsCliTests(unittest.TestCase):
+    VARIANTS = [
+        {"id": "small", "description": "Compact enclosure.", "parameters": {"des_corner_radius": "3 mm"}},
+        {"id": "large", "description": "Large enclosure.", "parameters": {"des_corner_radius": "8 mm"}},
+    ]
+
+    def _manifest_path(self, directory: Path) -> Path:
+        data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        data["variants"] = self.VARIANTS
+        path = directory / "fusion-project.json"
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        output = io.StringIO()
+        errors = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_plan_is_emitted_in_capture_variant_restore_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            code, output, errors = self._run(["plan-variants", str(manifest)])
+        self.assertEqual(0, code, errors)
+        payload = json.loads(output)
+        steps = [(step["step_id"], step["variant_id"]) for step in payload["steps"]]
+        self.assertEqual(("capture-initial-state", ""), steps[0])
+        self.assertEqual(("verify-restore", ""), steps[-1])
+        self.assertEqual(
+            [("apply", "small"), ("inventory", "small"), ("verify", "small")], steps[1:4]
+        )
+        for step in payload["steps"]:
+            if step["script"]:
+                compile(step["script"], step["report_name"], "exec")
+
+    def test_export_gives_each_variant_its_own_directory_and_a_deferred_script(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            code, output, errors = self._run(
+                ["plan-variants", str(manifest), "--export-dir", "/exports", "--format", "step"]
+            )
+        self.assertEqual(0, code, errors)
+        payload = json.loads(output)
+        self.assertTrue(payload["export_requested"])
+        exports = [step for step in payload["steps"] if step["step_id"] == "export"]
+        self.assertEqual(["small", "large"], [step["variant_id"] for step in exports])
+        for step in exports:
+            self.assertIsNone(step["script"])
+            self.assertIn("verification report", step["deferred_reason"])
+
+    def test_a_manifest_without_variants_exits_two_with_a_clear_message(self) -> None:
+        code, _, errors = self._run(["plan-variants", str(EXAMPLE)])
+        self.assertEqual(2, code)
+        self.assertIn("declares no variants", errors)
+
+    def test_path_aliasing_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            code, _, errors = self._run(["plan-variants", str(manifest), "-o", str(manifest)])
+        self.assertEqual(2, code)
+        self.assertIn("manifest and output must name different files", errors)
+
+    def test_folding_saved_reports_reports_the_next_step_without_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            reports = Path(temporary) / "reports"
+            reports.mkdir()
+            code, output, errors = self._run(
+                ["plan-variants", str(manifest), "--reports-dir", str(reports)]
+            )
+        self.assertEqual(0, code, errors)
+        record = json.loads(output)
+        self.assertFalse(record["complete"])
+        self.assertEqual([], record["failures"])
+        self.assertEqual("capture-initial-state", record["next_step"]["step_id"])
+
+    def test_a_failed_step_report_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest_path(Path(temporary))
+            reports = Path(temporary) / "reports"
+            reports.mkdir()
+            digest = manifest_sha256(load_manifest(manifest))
+            (reports / f"capture-initial-state__{digest[:8]}.json").write_text(
+                json.dumps({"kind": "inventory", "manifest_sha256": digest, "ok": False}), encoding="utf-8"
+            )
+            code, output, _ = self._run(["plan-variants", str(manifest), "--reports-dir", str(reports)])
+        self.assertEqual(2, code)
+        record = json.loads(output)
+        self.assertIn("initial-state-capture", record["failures"])
+        self.assertFalse(record["ok"])
 
 
 if __name__ == "__main__":
