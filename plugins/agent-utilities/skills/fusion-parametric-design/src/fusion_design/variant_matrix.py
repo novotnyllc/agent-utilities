@@ -44,7 +44,12 @@ from .scripts import (
     emit_verification_script,
     manifest_sha256,
 )
-from .variants import variant_configuration, variant_id, variant_parameter_overrides
+from .variants import (
+    MAXIMUM_VARIANTS,
+    variant_configuration,
+    variant_id,
+    variant_parameter_overrides,
+)
 
 
 FAILURE_POLICIES = {"stop", "continue"}
@@ -100,6 +105,9 @@ class MatrixConfig:
             return
         if not str(self.export_dir).strip():
             raise ValueError("export_dir must be a non-empty Fusion-host path when export is requested.")
+        # Normalized once, here, so every consumer — the per-variant directory,
+        # the record, the emitted script — sees one path and not " /exports ".
+        object.__setattr__(self, "export_dir", str(self.export_dir).strip())
         # The same preconditions emit_export_script enforces, checked here so a
         # rejected format is refused at plan time rather than mid-run, with the
         # document already sitting on the first variant's expressions.
@@ -340,6 +348,13 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
         raise ValueError(
             "Manifest declares no variants; add a 'variants' section before planning a matrix run."
         )
+    # Re-checked here, not only in the validator: Manifest.from_data(validate=False)
+    # reaches the planner without ever having seen the cap.
+    if len(variants) > MAXIMUM_VARIANTS:
+        raise ValueError(
+            f"A variant matrix runs against a live Fusion session; at most {MAXIMUM_VARIANTS} variants "
+            f"may be declared, found {len(variants)}."
+        )
     base_digest = manifest_sha256(manifest)
     short = base_digest[:8]
     slow_after = float(config.slow_step_seconds)
@@ -466,7 +481,14 @@ def build_matrix_plan(manifest: Manifest, config: MatrixConfig) -> tuple[MatrixS
 
 
 def _canonical_report_bytes(report: Any) -> bytes:
-    return (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    """The bytes Fusion itself printed, reconstructed from the parsed report.
+
+    Byte-for-byte the form ``_emit`` writes in ``scripts._script_prelude``
+    (compact, sorted, ``default=str``, one trailing newline from ``print``).  An
+    export binds to the hash of this, so any other spelling would bind to a file
+    that does not exist.  Prefer the executor's real bytes when it has them.
+    """
+    return (json.dumps(report, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode("utf-8")
 
 
 def _coerce_executor_result(value: Any) -> tuple[Any, bytes | None]:
@@ -542,8 +564,18 @@ class _MatrixRun:
             "initial_state": {"captured": False},
             "variants": [],
             # ok starts false: the document is only certified safe by a read-back
-            # that actually happened, never by a default nobody updated.
-            "restore": {"required": False, "attempted": False, "ok": False, "verified": False, "steps": []},
+            # that actually happened, never by a default nobody updated.  Every
+            # key a consumer reads is present on every exit path — an absent
+            # "mismatches" reads as "no mismatches" to anyone checking it.
+            "restore": {
+                "required": False,
+                "attempted": False,
+                "ok": False,
+                "verified": False,
+                "mismatches": [],
+                "reason": "The run did not reach restoration.",
+                "steps": [],
+            },
             "failures": [],
             "complete": False,
             "ok": False,
@@ -762,7 +794,11 @@ class _MatrixRun:
                         script=self._export_script(derived, identity, verification_report, verification_bytes),
                         deferred_reason=None,
                     )
-                except (ValueError, TypeError) as error:
+                except Exception as error:  # noqa: BLE001 - stays this row's failure
+                    # Broad on purpose: whatever the emitter objects to, it is
+                    # this variant's evidence that is wrong.  Narrower catching
+                    # sent the rest into runner-error and stopped the matrix
+                    # even under the continue policy.
                     row["failures"].append("export")
                     row["steps"].append(
                         {"step_id": step_id, "variant_id": identity, "ok": False, "error": str(error)}
@@ -878,6 +914,9 @@ class _MatrixRun:
             return
         restore["ok"] = True
         restore["verified"] = True
+        restore["reason"] = (
+            f"Read back {len(self.snapshot)} captured parameter expression(s); all matched."
+        )
 
     # -- driver ---------------------------------------------------------
 
@@ -974,6 +1013,12 @@ def run_variant_matrix(
     an export binds to the hash of the file that really exists.  Raising
     :class:`StepReportUnavailable` halts the run as incomplete rather than
     failed, and the record names the step to run next.
+
+    Enforcing ``step.slow_step_seconds`` is the *executor's* job: the runner
+    calls it synchronously and cannot interrupt a blocked Fusion transaction.
+    An executor that wants a real budget must raise :class:`TimeoutError`, which
+    is recorded as that step's ``timed_out`` failure.  The runner's own elapsed
+    check is an after-the-fact overrun assertion, nothing more.
     """
     return _MatrixRun(manifest, config, executor, clock).run()
 

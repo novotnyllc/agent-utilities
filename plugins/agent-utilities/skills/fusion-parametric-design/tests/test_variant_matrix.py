@@ -8,8 +8,8 @@ import tempfile
 import unittest
 
 from fusion_design.export_handoff import example_verification_report
-from fusion_design.manifest import Manifest
-from fusion_design.scripts import manifest_sha256
+from fusion_design.manifest import Manifest, ManifestValidationError
+from fusion_design.scripts import emit_inventory_script, manifest_sha256
 from fusion_design.variant_matrix import (
     CAPTURE_CONFIGURATION_STEP,
     CAPTURE_STATE_STEP,
@@ -25,8 +25,9 @@ from fusion_design.variant_matrix import (
     saved_report_executor,
     variant_manifest,
 )
-from fusion_design.variant_matrix import _MatrixRun
-from fusion_design.variants import variant_id
+# Private, deliberately: these two are the seams the guard tests need.
+from fusion_design.variant_matrix import _MatrixRun, _canonical_report_bytes
+from fusion_design.variants import MAXIMUM_VARIANTS, variant_id
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,7 @@ def _document_parameters(manifest: Manifest, **overrides: str) -> dict[str, str]
     state.update(INITIAL_DRIFT)
     state.update(overrides)
     return state
+
 
 VARIANTS = [
     {"id": "small", "description": "Compact enclosure.", "parameters": {"des_corner_radius": "3 mm"}},
@@ -464,6 +466,84 @@ class RestoreCoverageTests(unittest.TestCase):
         self.assertIn("cannot be turned into a manifest", record["restore"]["reason"])
 
 
+class RestoreRecordShapeTests(unittest.TestCase):
+    """docs/live-fusion-acceptance.md tells the operator to read these keys."""
+
+    KEYS = {"required", "attempted", "ok", "verified", "mismatches", "reason", "steps"}
+
+    def _restores(self):
+        manifest = _manifest([VARIANTS[0]])
+        fake = _FakeFusion(manifest)
+        yield "clean run", _run(manifest, _FakeFusion(manifest))["restore"]
+        yield "no capture", _run(
+            manifest, _FakeFusion(manifest, fail_steps={("", CAPTURE_STATE_STEP)})
+        )["restore"]
+        yield "failed restore step", _run(
+            manifest, _FakeFusion(manifest, fail_steps={("", RESTORE_PARAMETERS_STEP)})
+        )["restore"]
+        yield "failed read-back", _run(
+            manifest, _FakeFusion(manifest, fail_steps={("", VERIFY_RESTORE_STEP)})
+        )["restore"]
+        yield "halted", run_variant_matrix(
+            manifest, MatrixConfig(), _halting(fake, ("small", "inventory")), clock=fake.clock
+        )["restore"]
+
+    def test_every_exit_path_reports_the_whole_restore_block(self) -> None:
+        for label, restore in self._restores():
+            with self.subTest(path=label):
+                self.assertEqual(self.KEYS, set(restore))
+                self.assertIsInstance(restore["mismatches"], list)
+                self.assertTrue(restore["reason"].strip())
+                # Never "ok" without the read-back that earns it.
+                self.assertEqual(restore["ok"] and restore["required"], restore["verified"])
+
+
+class ExportConstructionTests(unittest.TestCase):
+    def test_an_unusable_verification_report_fails_only_that_variants_export(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+
+        def executor(step):
+            report = fake(step)
+            if (step.variant_id, step.step_id) == ("small", "verify"):
+                # Passes _report_rejection, but the export emitter cannot bind
+                # to it.
+                report.pop("brep_bounding_boxes_mm")
+            return report
+
+        record = run_variant_matrix(
+            manifest,
+            MatrixConfig(export_dir="/exports", on_failure="continue"),
+            executor,
+            clock=fake.clock,
+        )
+        rows = record["variants"]
+        self.assertEqual([False, True, True], [row["ok"] for row in rows])
+        self.assertEqual(["export"], rows[0]["failures"])
+        self.assertIn("brep_bounding_boxes_mm", rows[0]["steps"][-1]["error"])
+        self.assertNotIn("runner-error", record["failures"])
+
+    def test_any_emitter_fault_stays_this_variants_failure(self) -> None:
+        manifest = _manifest()
+        fake = _FakeFusion(manifest)
+        run = _MatrixRun(manifest, MatrixConfig(export_dir="/exports", on_failure="continue"), fake, fake.clock)
+        calls: list[str] = []
+
+        def boom(derived, identity, report, raw):
+            calls.append(identity)
+            if identity == "small":
+                raise RuntimeError("the export emitter blew up in a new way")
+            return _MatrixRun._export_script(run, derived, identity, report, raw)
+
+        run._export_script = boom
+        record = run.run()
+
+        self.assertEqual(["small", "medium", "large"], calls)
+        self.assertEqual(["export"], record["variants"][0]["failures"])
+        self.assertNotIn("runner-error", record["failures"])
+        self.assertEqual([False, True, True], [row["ok"] for row in record["variants"]])
+
+
 class ReportTrustTests(unittest.TestCase):
     """The report directory is hand-maintained across many invocations."""
 
@@ -544,6 +624,19 @@ class ReportTrustTests(unittest.TestCase):
         self.assertFalse(record["ok"])
         self.assertIn(
             "(report, raw_report_bytes)", record["initial_state"]["steps"][0]["error"]
+        )
+
+    def test_the_fallback_digest_uses_the_bytes_fusion_actually_prints(self) -> None:
+        # An executor with no raw bytes makes the runner reconstruct them; a
+        # different spelling would bind the export to a file that never existed.
+        manifest = _manifest([VARIANTS[0]])
+        emitted = 'json.dumps(report, sort_keys=True, separators=(",", ":"), default=str)'
+        self.assertIn(emitted, emit_inventory_script(manifest))
+
+        report = {"kind": "verification", "ok": True, "values": [1, "two"], "nested": {"b": 1, "a": 2}}
+        self.assertEqual(
+            (eval(emitted, {"json": json, "report": report}) + "\n").encode("utf-8"),
+            _canonical_report_bytes(report),
         )
 
     def test_the_export_binds_to_the_saved_bytes_not_a_reserialisation(self) -> None:
@@ -711,6 +804,44 @@ class VariantMatrixPlanTests(unittest.TestCase):
                     MatrixConfig(export_dir="/exports", formats=formats)
         # Without an export there is nothing to constrain.
         MatrixConfig(formats=("3mf",))
+
+    def test_the_variant_cap_holds_even_when_validation_was_skipped(self) -> None:
+        # Manifest.from_data(validate=False) reaches the planner without ever
+        # having seen the cap, and the planner is what talks to a live session.
+        data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        data["variants"] = [
+            {"id": f"v{index}", "description": "One.", "parameters": {"des_corner_radius": f"{index + 1} mm"}}
+            for index in range(MAXIMUM_VARIANTS + 1)
+        ]
+        unvalidated = Manifest.from_data(data, validate=False)
+        with self.assertRaises(ValueError) as context:
+            build_matrix_plan(unvalidated, MatrixConfig())
+        self.assertIn(f"at most {MAXIMUM_VARIANTS} variants", str(context.exception))
+        # The planner's own precondition, refused up front. Without it the cap
+        # still held — but only later, as a validation failure of a *derived*
+        # manifest, reported against a manifest the author never wrote.
+        self.assertNotIsInstance(context.exception, ManifestValidationError)
+
+        data["variants"] = data["variants"][:-1]
+        build_matrix_plan(Manifest.from_data(data, validate=False), MatrixConfig())
+
+    def test_a_padded_export_dir_does_not_leak_into_the_variant_paths(self) -> None:
+        manifest = _manifest([VARIANTS[0]])
+        config = MatrixConfig(export_dir="  /exports  ")
+        self.assertEqual("/exports", config.export_dir)
+
+        fake = _FakeFusion(manifest)
+        captured: dict[str, str] = {}
+
+        def executor(step):
+            if step.step_id == "export":
+                captured["script"] = step.script or ""
+            return fake(step)
+
+        record = run_variant_matrix(manifest, config, executor, clock=fake.clock)
+        self.assertTrue(record["ok"], record["failures"])
+        self.assertIn('"/exports/small"', captured["script"])
+        self.assertNotIn("/exports /small", captured["script"])
 
     def test_variant_ids_differing_only_in_case_are_refused(self) -> None:
         # The report directory and export root live on a case-insensitive

@@ -51,6 +51,17 @@ def _same_path(left: str, right: str) -> bool:
     return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
 
 
+def _reject_output_inside(directory: str, output: str, label: str) -> None:
+    """An output written into an evidence directory destroys evidence.
+
+    Both sides are resolved first, so a symlink or a ``..`` segment cannot walk
+    into the directory behind the check.
+    """
+    root = Path(directory).resolve(strict=False)
+    if Path(output).resolve(strict=False).is_relative_to(root):
+        raise ValueError(f"output must not be written inside {label}")
+
+
 def _validate_named_paths(named_paths: list[tuple[str, str]]) -> None:
     for index, (left_name, left_path) in enumerate(named_paths):
         for right_name, right_path in named_paths[index + 1 :]:
@@ -261,6 +272,10 @@ def _cmd_plan_variants(args: argparse.Namespace) -> int:
     if args.reports_dir:
         named_paths.append(("reports-dir", args.reports_dir))
     _validate_named_paths(named_paths)
+    if args.reports_dir and args.output:
+        # Writing the record over a saved step report either loses that
+        # evidence or feeds the record back to a later fold as evidence.
+        _reject_output_inside(args.reports_dir, args.output, "reports-dir")
 
     formats = tuple(args.formats or ("step", "3mf"))
     if len(set(formats)) != len(formats):

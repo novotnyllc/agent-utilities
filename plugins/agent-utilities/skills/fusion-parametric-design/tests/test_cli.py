@@ -704,6 +704,36 @@ class PlanVariantsCliTests(unittest.TestCase):
         self.assertEqual([], record["failures"])
         self.assertEqual("capture-initial-state", record["next_step"]["step_id"])
 
+    def test_an_output_inside_the_reports_directory_is_refused(self) -> None:
+        # Writing the record over a saved report either destroys that evidence
+        # or feeds the record back to the next fold as evidence.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self._manifest_path(root)
+            reports = root / "reports"
+            reports.mkdir()
+            digest = manifest_sha256(load_manifest(manifest))
+            for output in (
+                reports / f"capture-initial-state__{digest[:8]}.json",
+                reports / "nested" / "record.json",
+                # Containment has to be tested after resolution, not before.
+                root / "elsewhere" / ".." / "reports" / "record.json",
+            ):
+                with self.subTest(output=str(output)):
+                    code, _, errors = self._run(
+                        ["plan-variants", str(manifest), "--reports-dir", str(reports), "-o", str(output)]
+                    )
+                    self.assertEqual(2, code)
+                    self.assertIn("must not be written inside reports-dir", errors)
+                    self.assertFalse(output.exists())
+
+            outside = root / "record.json"
+            code, _, errors = self._run(
+                ["plan-variants", str(manifest), "--reports-dir", str(reports), "-o", str(outside)]
+            )
+            self.assertEqual(0, code, errors)
+            self.assertTrue(outside.exists())
+
     def test_a_complete_successful_fold_exits_zero(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest = self._manifest_path(Path(temporary))

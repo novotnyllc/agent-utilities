@@ -755,6 +755,26 @@ class ManifestValidationTests(unittest.TestCase):
         data["variants"] = list(variants)
         return data
 
+    def test_two_whitespace_equivalent_base_parameters_are_one_duplicate(self) -> None:
+        # A variant strips the names it overrides, so it cannot tell these two
+        # apart: one override would be substituted into both parameter entries
+        # and restoration would write one captured expression to both.
+        data = self._with_variants(
+            {"id": "small", "description": "Compact.", "parameters": {"des_corner_radius": "3 mm"}}
+        )
+        twin = copy.deepcopy(
+            next(entry for entry in data["parameters"] if entry["name"] == "des_corner_radius")
+        )
+        twin["name"] = " des_corner_radius "
+        data["parameters"].append(twin)
+
+        issues = validate_manifest_data(data)
+        self.assertIn("duplicate-parameter-name", [issue.code for issue in issues])
+        self.assertIn(
+            "'des_corner_radius' is duplicated",
+            " ".join(issue.message for issue in issues),
+        )
+
     def test_manifest_without_variants_is_still_valid(self) -> None:
         self.assertNotIn("variants", self.data)
         self.assertEqual([], validate_manifest_data(self.data))

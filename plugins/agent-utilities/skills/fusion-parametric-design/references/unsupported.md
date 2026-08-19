@@ -49,8 +49,10 @@ Two boundaries remain:
    parameters away from their manifest expressions, because verification reports
    that as a parameter mismatch. Declare such a family as parameter-set variants.
 2. **The matrix does not invent variants.** Each entry names its own parameters
-   or configuration, and the family is capped at the declared maximum so a matrix
-   cannot run unbounded against a live session.
+   or configuration, and a manifest may declare at most 16 variants. A 17th is a
+   validation failure (`variants-exceed-maximum`), and the planner refuses the
+   same manifest again even when validation was skipped, so a matrix cannot run
+   unbounded against a live session.
 
 The runner also refuses to start when the initial expression of a parameter some
 variant overrides cannot be read: a run that could not be restored must not

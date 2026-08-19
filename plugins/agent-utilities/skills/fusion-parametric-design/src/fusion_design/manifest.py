@@ -301,9 +301,12 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
     parameters = _as_list(data.get("parameters"))
     parameter_names = [str(parameter.get("name", "")) for parameter in parameters if isinstance(parameter, dict)]
     # Stripped exactly as the per-parameter loop below strips, so a variant and
-    # its base parameter agree on what the declared name is.
-    declared_parameter_names = {name.strip() for name in parameter_names if name.strip()}
-    for duplicate in sorted(_duplicates(parameter_names)):
+    # its base parameter agree on what the declared name is — and deduplicated
+    # on that same stripped form: two entries a variant cannot tell apart are
+    # one parameter, and one override would otherwise be written to both.
+    normalized_parameter_names = [name.strip() for name in parameter_names]
+    declared_parameter_names = {name for name in normalized_parameter_names if name}
+    for duplicate in sorted(_duplicates(normalized_parameter_names)):
         issues.append(
             ValidationIssue("duplicate-parameter-name", "parameters", f"Parameter {duplicate!r} is duplicated.")
         )
