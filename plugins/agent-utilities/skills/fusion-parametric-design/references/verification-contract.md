@@ -39,8 +39,8 @@ Rules that make the numbers mean something:
 
 - Thresholds are declared per reconstruction with a rationale and recorded with the verdict; they are never module constants.
 - Percentiles may use a strided sample; **any distance compared against a threshold is measured exactly**.
-- `PolygonMesh.compareWith` is preview and API-only. When it is absent, or when the connected Fusion returns only unsigned magnitudes, the run fails closed and the invented-material verdict is reported `not-established` — never a pass, never a fabricated number.
-- Containment uses a native B-Rep query (`BRepBody.pointContainment`), not a mesh-only occurrence, so this stays consistent with the clearance/interference rule above.
+- `PolygonMesh.compareWith` is preview and API-only. When it is absent, when the connected Fusion returns only unsigned magnitudes, or when its sign convention cannot be established, the run fails closed and the invented-material verdict is reported `not-established` — never a pass, never a fabricated number.
+- Containment uses a native B-Rep query (`BRepBody.pointContainment`), not a mesh-only occurrence, so this stays consistent with the clearance/interference rule above. It is a hard capability: it is the only evidence in the run that does not rest on `compareWith`'s sign, and it is what measures that sign.
 - A small deviation in either direction is not a fitness claim. A fit coupon is still required before any claim of physical mating.
 
 ## Parametric robustness

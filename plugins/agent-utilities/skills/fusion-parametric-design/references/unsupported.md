@@ -162,7 +162,7 @@ The raw material *is* scriptable, which is why the fallback is our own arithmeti
 `fusion-design emit-mesh-deviation` therefore fails closed rather than degrading:
 
 - when `compareWith` is absent, the report is `deviation-capability` with the API name and the connected Fusion version — never a silent skip and never a fabricated number;
-- when the connected Fusion returns only unsigned magnitudes, invented material cannot be separated from omitted detail, so the invented-material verdict is reported `not-established` rather than as a pass;
+- when the connected Fusion returns only unsigned magnitudes, or when the sign convention cannot be established by probing `BRepBody.pointContainment` against the returned signs, invented material cannot be separated from omitted detail, so the invented-material verdict is reported `not-established` rather than as a pass. The polarity is never assumed: nothing documents it, and assuming it turns invented material into a pass under an inverted convention;
 - the two directions are reported as distinct questions and are never collapsed into a single "deviation: X mm". A small maximum deviation from the reconstruction to the scan does not establish that the reconstruction captured every scanned feature.
 
 Facet ceilings are likewise never hardcoded: the widely-cited 10,000/50,000 numbers are unverified and version-specific, so the faceted refusal ladder quotes `errorOrWarningMessage`/`healthState` from Fusion itself. `MeshConvertFeatures.add` and `MeshGenerateFaceGroupsFeatures.add` are documented to return null for non-parametric operations even when the operation succeeded, and the emitted transaction handles that rather than assuming a feature object.

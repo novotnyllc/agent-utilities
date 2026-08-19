@@ -128,6 +128,10 @@ SOURCE_TO_RECONSTRUCTION_QUESTION = (
     "solid? This answers whether the rebuild captured what was scanned. It says nothing about material "
     "the rebuild added where the scan has no points."
 )
+INVENTED_MEANING = (
+    "Rebuilt material outside the source solid is invented geometry, and that is categorically worse "
+    "than omitted detail."
+)
 VERDICT_NOTE = (
     "These two numbers answer different questions and neither certifies the other. A small maximum "
     "deviation from the reconstruction to the scan does not establish that the reconstruction captured "
@@ -196,6 +200,41 @@ def _node_points_mm(mesh):
     return [[point.x * 10.0, point.y * 10.0, point.z * 10.0] for point in coordinates]
 
 
+def _probe_sign_convention(containment_values, distances, floor, outside_enum, inside_enum):
+    """Read compareWith's sign convention off the native containment query.
+
+    Nothing documents which sign means outside, and assuming it is how an
+    inverted convention turns invented material into a pass.  Every source node
+    whose distance clears the floor has an independent inside/outside answer
+    from ``BRepBody.pointContainment``, so the convention is measured, not
+    guessed.  Disagreement -- which is also what unsigned magnitudes look like
+    -- yields ``None`` and no verdict.
+    """
+    tally = {"outside_positive": 0, "outside_negative": 0, "inside_positive": 0, "inside_negative": 0}
+    for index, containment in enumerate(containment_values):
+        if index >= len(distances):
+            break
+        distance = distances[index]
+        if abs(distance) <= floor:
+            continue
+        if containment == outside_enum:
+            side = "outside"
+        elif containment == inside_enum:
+            side = "inside"
+        else:
+            continue
+        tally[side + ("_positive" if distance > 0.0 else "_negative")] += 1
+    positive_outside = tally["outside_positive"] + tally["inside_negative"]
+    negative_outside = tally["outside_negative"] + tally["inside_positive"]
+    tally["samples"] = positive_outside + negative_outside
+    tally["floor_mm"] = floor
+    if positive_outside and not negative_outside:
+        return "positive-is-outside", tally
+    if negative_outside and not positive_outside:
+        return "negative-is-outside", tally
+    return None, tally
+
+
 def _worst(points, distances, threshold, count):
     ranked = sorted(range(len(distances)), key=lambda index: -distances[index])
     worst = []
@@ -261,17 +300,35 @@ def run(context):
         missing = []
         source_mesh = _polygon_mesh(source_body, "source", missing)
         recon_mesh = _polygon_mesh(recon_body, "reconstruction", missing)
-        if source_mesh is None or recon_mesh is None or not hasattr(source_mesh, "compareWith"):
-            if source_mesh is not None and not hasattr(source_mesh, "compareWith"):
-                missing.append("PolygonMesh.compareWith")
+        for label, mesh in (("source", source_mesh), ("reconstruction", recon_mesh)):
+            if mesh is not None and not hasattr(mesh, "compareWith"):
+                missing.append("PolygonMesh.compareWith (" + label + ")")
+        # Containment is the only evidence here that does not rest on compareWith's
+        # sign, and it is what establishes that sign. It is a hard capability, never
+        # a conditional: a missing enum must not read as "nothing was outside".
+        if recon_kind != "bRepBodies":
+            missing.append("reconstruction must be a BRepBody for BRepBody.pointContainment")
+        elif getattr(recon_body, "pointContainment", None) is None:
+            missing.append("BRepBody.pointContainment")
+        if not (getattr(source_mesh, "nodeCoordinates", None) or []):
+            missing.append("PolygonMesh.nodeCoordinates (source)")
+        if not fusion_version:
+            missing.append("Application.version")
+        containment_enum = getattr(adsk.fusion, "PointContainment", None)
+        for name in ("PointOutsidePointContainment", "PointInsidePointContainment"):
+            if getattr(containment_enum, name, None) is None:
+                missing.append("adsk.fusion.PointContainment." + name)
+        if missing:
             report["failures"] = ["deviation-capability"]
             report["missing_capabilities"] = missing
             report["unsupported"] = (
                 "PolygonMesh.compareWith is the only API-level deviation mechanism in Fusion; Mesh "
                 "Section Sketch and Fit Curves are UI-only and cannot be scripted. compareWith is a "
-                "preview API (July 2026) and is absent from Fusion version "
+                "preview API (July 2026), and BRepBody.pointContainment is what establishes its sign "
+                "convention. Fusion version "
                 + str(fusion_version)
-                + " as connected, so no deviation number is available and none is invented."
+                + " as connected does not expose all of them, so no deviation verdict is available "
+                "and none is invented."
             )
             report_attempted = True
             _emit(report)
@@ -298,7 +355,9 @@ def run(context):
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: deviation-comparison-empty")
 
-        signed = any(value < 0.0 for value in recon_to_source)
+        signed = any(value < 0.0 for value in recon_to_source) or any(
+            value < 0.0 for value in source_to_recon
+        )
         recon_points = _node_points_mm(recon_mesh)
         source_points = _node_points_mm(source_mesh)
         invented_threshold = float(thresholds["invented_material"])
@@ -306,7 +365,6 @@ def run(context):
 
         # Direction 1: reconstruction to source. Exact per-node values decide the
         # threshold comparison; only the percentiles may be sampled.
-        outside = [value for value in recon_to_source if value > 0.0] if signed else []
         percentiles_1, sampled_1, stride_1 = _percentiles(
             [abs(value) for value in recon_to_source], int(thresholds["percentile_sample_limit"])
         )
@@ -321,23 +379,22 @@ def run(context):
         }
 
         # Direction 2: source to reconstruction, with containment answered by the
-        # native B-Rep query when the reconstruction is a solid.
-        containment = None
-        outside_solid = None
-        point_containment = getattr(recon_body, "pointContainment", None)
-        if recon_kind == "bRepBodies" and point_containment is not None and source_points:
-            outside_enum = getattr(
-                getattr(adsk.fusion, "PointContainment", None), "PointOutsidePointContainment", None
-            )
-            try:
-                nodes = getattr(source_mesh, "nodeCoordinates", None) or []
-                outside_solid = sum(
-                    1 for node in nodes if point_containment(node) == outside_enum
-                )
-                containment = "BRepBody.pointContainment"
-            except Exception:
-                outside_solid = None
-                containment = None
+        # native B-Rep query. The capability check above guarantees it is present,
+        # so a failure here is a failure, never a zero.
+        outside_enum = adsk.fusion.PointContainment.PointOutsidePointContainment
+        inside_enum = adsk.fusion.PointContainment.PointInsidePointContainment
+        try:
+            containment_values = [
+                recon_body.pointContainment(node)
+                for node in (getattr(source_mesh, "nodeCoordinates", None) or [])
+            ]
+        except Exception as error:
+            report["failures"] = ["containment-query-failed"]
+            report["error"] = str(error)
+            report_attempted = True
+            _emit(report)
+            raise
+        outside_solid = sum(1 for value in containment_values if value == outside_enum)
         percentiles_2, sampled_2, stride_2 = _percentiles(
             [abs(value) for value in source_to_recon], int(thresholds["percentile_sample_limit"])
         )
@@ -354,14 +411,15 @@ def run(context):
             "percentiles_mm": percentiles_2,
             "percentiles_sampled": sampled_2,
             "percentile_stride": stride_2,
-            "containment_query": containment,
+            "containment_query": "BRepBody.pointContainment",
             "nodes_outside_reconstruction_solid": outside_solid,
         }
 
+        omitted_count = report["source_to_reconstruction"]["beyond_omitted_threshold"]
         omitted = {
-            "severity": "advisory",
+            "severity": "advisory" if omitted_count else "pass",
             "threshold_mm": omitted_threshold,
-            "count": report["source_to_reconstruction"]["beyond_omitted_threshold"],
+            "count": omitted_count,
             "worst_points": omitted_points,
             "meaning": "Scanned detail the rebuild did not model. Advisory: a rebuild models only the "
                        "geometry the edit requires.",
@@ -385,8 +443,58 @@ def run(context):
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: deviation-unsigned-comparison")
 
-        beyond = [value for value in outside if value > invented_threshold]
-        invented_points = _worst(recon_points, recon_to_source, invented_threshold, 5)
+        # No reconstructed node lies further than the threshold from the source in
+        # *either* direction, so the verdict holds whichever way the sign runs and
+        # the convention does not need establishing.
+        candidates = [value for value in recon_to_source if abs(value) > invented_threshold]
+        if not candidates:
+            report["verdict"] = {
+                "invented_material": {
+                    "severity": "pass",
+                    "threshold_mm": invented_threshold,
+                    "count": 0,
+                    "max_mm": 0.0,
+                    "worst_points": [],
+                    "sign_convention": "not required: no reconstructed node lies further than the "
+                                       "threshold from the source in either direction, so no sign "
+                                       "reading could change this verdict.",
+                    "meaning": INVENTED_MEANING,
+                },
+                "omitted_detail": omitted,
+            }
+            report["ok"] = True
+            report_attempted = True
+            _emit(report)
+            return
+
+        convention, evidence = _probe_sign_convention(
+            containment_values, source_to_recon, invented_threshold, outside_enum, inside_enum
+        )
+        if convention is None:
+            # The sign is what separates invented material from omitted detail, and
+            # an unverified premise must never produce a passing severity.
+            report["failures"] = ["sign-convention-unestablished"]
+            report["verdict"] = {
+                "invented_material": {
+                    "severity": "not-established",
+                    "threshold_mm": invented_threshold,
+                    "sign_convention": "unestablished",
+                    "sign_probe": evidence,
+                    "meaning": "Reconstructed nodes lie beyond the threshold, but probing "
+                               "BRepBody.pointContainment against compareWith's own signs did not "
+                               "agree on which sign means outside. Whether that material is invented "
+                               "is NOT established by this run.",
+                },
+                "omitted_detail": omitted,
+            }
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError("Deviation verdict failed closed: sign-convention-unestablished")
+
+        outward = 1.0 if convention == "positive-is-outside" else -1.0
+        outside_mm = [value * outward for value in recon_to_source]
+        beyond = [value for value in outside_mm if value > invented_threshold]
+        invented_points = _worst(recon_points, outside_mm, invented_threshold, 5)
         report["verdict"] = {
             "invented_material": {
                 "severity": "failure" if beyond else "pass",
@@ -394,11 +502,9 @@ def run(context):
                 "count": len(beyond),
                 "max_mm": max(beyond) if beyond else 0.0,
                 "worst_points": invented_points,
-                "sign_convention": "PolygonMesh.compareWith returns a signed distance; a positive value "
-                                   "is read as lying outside the compared body. Confirm that convention "
-                                   "once on this Fusion version before trusting a pass.",
-                "meaning": "Rebuilt material outside the source solid is invented geometry, and that is "
-                           "categorically worse than omitted detail.",
+                "sign_convention": convention,
+                "sign_probe": evidence,
+                "meaning": INVENTED_MEANING,
             },
             "omitted_detail": omitted,
         }

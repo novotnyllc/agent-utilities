@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .manifest import Manifest
 
 
-CONVERT_SPEC_FIELDS = {"component_path", "body_name", "max_faces_per_face_group"}
+CONVERT_SPEC_FIELDS = {"component_path", "body_name", "max_faces_per_face_group", "rationale"}
 
 
 def validate_convert_spec(spec: Any) -> list[ValidationIssue]:
@@ -43,6 +43,16 @@ def validate_convert_spec(spec: Any) -> list[ValidationIssue]:
         "max_faces_per_face_group must be a positive number declared for this conversion; "
         "the editability ceiling is never a module constant.",
     )
+    rationale = spec.get("rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        issues.append(
+            ValidationIssue(
+                "convert-spec-invalid-rationale",
+                "convert_spec.rationale",
+                "Record why this editability ceiling is the right one for this part; a ceiling nobody "
+                "justified can be set high enough that the rung never fires.",
+            )
+        )
     return issues
 
 
@@ -73,6 +83,7 @@ def emit_mesh_convert_script(
         "component_path": spec["component_path"],
         "body_name": spec["body_name"],
         "max_faces_per_face_group": float(spec["max_faces_per_face_group"]),
+        "editability_rationale": str(spec["rationale"]).strip(),
     }
 
     transaction = '''CONVERT_SPECS = json.loads(__CONVERT_SPECS__)
@@ -80,6 +91,11 @@ def emit_mesh_convert_script(
 FACETED_NOTE = (
     "This body is faceted, never parametric: it carries no sketches, constraints, dimensions, or "
     "feature history, and a converted cylinder has no circular edge to select."
+)
+HANDOFF_NOTE = (
+    "Nothing downstream reads this label: the manifest has no field marking a print part faceted, and "
+    "emit-export never reads this report. Carry the label into DESIGN-STATE.md and the handoff by hand, "
+    "or the exported body arrives labelled as nothing."
 )
 
 
@@ -149,6 +165,11 @@ def _missing_convert_capabilities(component):
         missing.append("adsk.core.ObjectCollection")
     if getattr(getattr(adsk.fusion, "MeshConvertMethodTypes", None), "FacetedMeshConvertMethodType", None) is None:
         missing.append("adsk.fusion.MeshConvertMethodTypes.FacetedMeshConvertMethodType")
+    # Without this enum the health rung has nothing to compare against. An absent
+    # enum must fail closed here, never quietly disable the rung that catches an
+    # unhealthy conversion being reported as a successful faceted body.
+    if getattr(getattr(adsk.fusion, "FeatureHealthStates", None), "HealthyFeatureHealthState", None) is None:
+        missing.append("adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState")
     return missing, features
 
 
@@ -186,6 +207,8 @@ def run(context):
             "failures": [],
             "preview_apis": ["MeshConvertFeature", "MeshBody.mesh"],
             "note": FACETED_NOTE,
+            "handoff_note": HANDOFF_NOTE,
+            "editability_rationale": CONVERT_SPECS["editability_rationale"],
         }
 
         component, resolution_error = _target_component(design, CONVERT_SPECS["component_path"])
@@ -201,6 +224,8 @@ def run(context):
             raise RuntimeError("Faceted conversion refused: source-not-found")
 
         missing_capabilities, features = _missing_convert_capabilities(component)
+        if not fusion_version:
+            missing_capabilities.append("Application.version")
         if missing_capabilities:
             report["failures"] = ["mesh-convert-capability"]
             report["missing_capabilities"] = missing_capabilities
@@ -297,7 +322,7 @@ def run(context):
         if feature is not None:
             complaint = getattr(feature, "errorOrWarningMessage", None)
             health = getattr(feature, "healthState", None)
-        healthy = getattr(adsk.fusion.FeatureHealthStates, "HealthyFeatureHealthState", None)
+        healthy = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
 
         refusals = report["refusals"]
         if complaint:
@@ -307,7 +332,7 @@ def run(context):
                 "This is Fusion's own complaint about this mesh on this version, quoted verbatim; no "
                 "facet ceiling is hardcoded here. Take the parametric-rebuild path.",
             ))
-        elif health is not None and healthy is not None and health != healthy:
+        elif health is not None and health != healthy:
             refusals.append(_refuse(
                 "fusion-refused-conversion",
                 {"errorOrWarningMessage": None, "healthState": str(health)},
@@ -353,24 +378,33 @@ def run(context):
 
         if refusals:
             cleanup_errors = _remove(created if feature is None else [feature])
+            # Re-enumerate rather than infer emptiness from the absence of an
+            # exception: deleting the feature does not always take its bodies.
+            survivors = [
+                body for body in (_brep_body_names(component) or []) if id(body) not in before
+            ]
             report["failures"] = sorted({refusal["reason"] for refusal in refusals})
-            if cleanup_errors:
+            if cleanup_errors or survivors:
                 report["failures"].append("cleanup-incomplete")
+            if cleanup_errors:
                 report["cleanup_errors"] = cleanup_errors
-            report["bodies_created"] = 0 if not cleanup_errors else len(created)
+            if survivors:
+                report["surviving_bodies"] = [getattr(body, "name", None) for body in survivors]
+            report["bodies_created"] = len(survivors)
             if editability is not None:
                 report["editability"] = editability
             report_attempted = True
             _emit(report)
             raise RuntimeError("Faceted conversion refused: " + ", ".join(report["failures"]))
 
-        source_present = True
         try:
-            source_present = bool(getattr(mesh_body, "isValid", True))
+            source_present = getattr(mesh_body, "isValid", None)
         except Exception:
-            source_present = False
-        if not source_present:
+            source_present = None
+        # Unreadable is not proof the source survived; only True is.
+        if source_present is not True:
             report["failures"] = ["source-mesh-consumed"]
+            report["source_mesh_body_present"] = source_present
             report["bodies_created"] = len(created)
             report_attempted = True
             _emit(report)

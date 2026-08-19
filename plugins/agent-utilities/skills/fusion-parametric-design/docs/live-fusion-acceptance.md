@@ -325,7 +325,7 @@ section: every mesh API used here is preview.**
    geometry operation runs.
 4. **Negative control on the gate.** Emit a faceted conversion against that
    record:
-   `scripts/fusion-design emit-mesh-convert fusion-project.json --classification build/classification.json --convert-spec build/convert.json`
+   `scripts/fusion-design emit-mesh-convert fusion-project.json --mesh-source-id <id> --classification build/classification.json --convert-spec build/convert.json`
    **Pass:** exit 2 with `classification-path-forbids-operation`; nothing is
    emitted. Then hand-edit the record's `path` to `faceted-brep` without touching
    its inputs. **Pass:** exit 2 with `classification-path-contradicts-inputs`.
@@ -345,7 +345,7 @@ section: every mesh API used here is preview.**
    package is host-side arithmetic; sketch emission from a fit is **not built**,
    so this step is authored in Fusion.
 7. Grade the rebuild:
-   `scripts/fusion-design emit-mesh-deviation fusion-project.json --classification build/classification.json --deviation-spec build/deviation.json`
+   `scripts/fusion-design emit-mesh-deviation fusion-project.json --mesh-source-id <id> --classification build/classification.json --deviation-spec build/deviation.json`
    with thresholds declared for *this* part and a stated rationale. Execute it.
    **Pass, in one of three honest forms:**
    - `ok: true` with **both** directions reported separately, each carrying the
@@ -353,13 +353,21 @@ section: every mesh API used here is preview.**
      finding advisory rather than fatal;
    - `ok: false` with `invented-material` and the coordinates of the offending
      points;
-   - `ok: false` with `deviation-capability` naming `PolygonMesh.compareWith` and
-     the Fusion version, or `deviation-unsigned-comparison` with the
-     invented-material verdict reported `not-established`.
+   - `ok: false` with `deviation-capability` (naming `PolygonMesh.compareWith`,
+     `BRepBody.pointContainment` or a `PointContainment` member, plus the Fusion
+     version), `deviation-unsigned-comparison`, or
+     `sign-convention-unestablished` — each with the invented-material verdict
+     reported `not-established` and carrying no `count` or `max_mm`.
+
+   When the verdict passes, record the `sign_convention` it observed and its
+   `sign_probe` tally. **This is the reading to sanity-check by hand once per
+   Fusion version:** the polarity is measured against `BRepBody.pointContainment`
+   rather than assumed, so confirm it matches a case you can see.
 
    **Fail** if any report states a single combined deviation number, if a missing
-   `compareWith` is silently skipped, or if an unsigned comparison is reported as
-   a pass.
+   `compareWith` or `PointContainment` is silently skipped, if an unsigned
+   comparison is reported as a pass, or if `severity: "pass"` appears alongside
+   an unestablished sign convention.
 8. Confirm `DESIGN-STATE.md` records the mesh source, its hash, the recorded
    path with its rationale, the bound Fusion body, and both deviation directions
    with the question each answers.

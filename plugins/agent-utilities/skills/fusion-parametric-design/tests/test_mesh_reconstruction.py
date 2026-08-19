@@ -388,7 +388,12 @@ def _source_mesh_body(**overrides):
     return SimpleNamespace(**body)
 
 
-CONVERT_SPEC = {"component_path": "", "body_name": "bracket_scan", "max_faces_per_face_group": 4.0}
+CONVERT_SPEC = {
+    "component_path": "",
+    "body_name": "bracket_scan",
+    "max_faces_per_face_group": 4.0,
+    "rationale": "Three fitted face groups; more than four faces each means nothing selectable.",
+}
 
 
 def _faceted_record(source: dict) -> dict:
@@ -403,7 +408,7 @@ class FacetedConversionTests(unittest.TestCase):
         self.manifest = _manifest(self.source)
         self.record = _faceted_record(self.source)
 
-    def _namespace(self, mesh_body, *, spec=None, **feature_kwargs):
+    def _namespace(self, mesh_body, *, spec=None, version="2.0.20000", **feature_kwargs):
         script = emit_mesh_convert_script(
             self.manifest, self.record, self.source, spec or CONVERT_SPEC
         )
@@ -416,10 +421,9 @@ class FacetedConversionTests(unittest.TestCase):
             features=SimpleNamespace(meshConvertFeatures=_MeshConvertFeatures(brep, **feature_kwargs)),
         )
         design = SimpleNamespace(rootComponent=component)
-        app = SimpleNamespace(
-            version="2.0.20000",
-            activeDocument=SimpleNamespace(name=self.manifest.fusion_document),
-        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=self.manifest.fusion_document))
+        if version is not None:
+            app.version = version
         namespace["_active_design"] = lambda: (app, design)
         namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
         namespace["adsk"].core.ObjectCollection = SimpleNamespace(create=_ObjectCollection)
@@ -512,6 +516,45 @@ class FacetedConversionTests(unittest.TestCase):
         )[0]
         self.assertIn("conversion-produced-nothing", report["failures"])
 
+    def test_an_unhealthy_feature_with_no_message_is_never_reported_successful(self) -> None:
+        # The named failure mode of this whole feature: a faceted result reported
+        # as a successful conversion because the health rung quietly disabled.
+        namespace = self._namespace(_source_mesh_body(), health="error", complaint=None)
+        report = self._run(namespace, failure="fusion-refused-conversion")[0]
+        self.assertFalse(report["ok"])
+        self.assertIsNone(report["label"])
+        self.assertEqual(0, namespace["_component"].bRepBodies.count)
+
+    def test_a_missing_health_enum_fails_closed_rather_than_disabling_the_rung(self) -> None:
+        namespace = self._namespace(_source_mesh_body(), health="error")
+        namespace["adsk"].fusion.FeatureHealthStates = SimpleNamespace()
+        report = self._run(namespace, failure="mesh-convert capability is unavailable")[0]
+        self.assertEqual(["mesh-convert-capability"], report["failures"])
+        self.assertIn(
+            "adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState",
+            report["missing_capabilities"],
+        )
+
+    def test_a_body_surviving_rollback_is_re_enumerated_not_assumed_gone(self) -> None:
+        # add() returned null, so there is no feature to delete, and a body whose
+        # own deleteMe silently does nothing must be reported rather than inferred
+        # away from the absence of an exception.
+        namespace = self._namespace(_source_mesh_body(), faces=9000, returns_feature=False)
+        features = namespace["_component"].features.meshConvertFeatures
+        original_add = features.add
+
+        def add_undeletable(convert_input):
+            result = original_add(convert_input)
+            body = namespace["_component"].bRepBodies.item(0)
+            body.deleteMe = lambda: True
+            return result
+
+        features.add = add_undeletable
+        report = self._run(namespace, failure="not-editable")[0]
+        self.assertIn("cleanup-incomplete", report["failures"])
+        self.assertEqual(1, report["bodies_created"])
+        self.assertEqual(["bracket_scan (Converted)"], report["surviving_bodies"])
+
     def test_a_missing_preview_feature_class_fails_closed(self) -> None:
         namespace = self._namespace(_source_mesh_body())
         namespace["adsk"].fusion.MeshConvertMethodTypes = None
@@ -521,6 +564,23 @@ class FacetedConversionTests(unittest.TestCase):
             "adsk.fusion.MeshConvertMethodTypes.FacetedMeshConvertMethodType",
             report["missing_capabilities"],
         )
+
+    def test_a_source_mesh_that_did_not_survive_is_a_failure(self) -> None:
+        # False and unreadable both fail: absent is not proof the source survived.
+        for value in (False, None):
+            with self.subTest(is_valid=value):
+                body = _source_mesh_body()
+                if value is None:
+                    del body.isValid
+                else:
+                    body.isValid = value
+                report = self._run(self._namespace(body), failure="consumed the source mesh")[0]
+                self.assertEqual(["source-mesh-consumed"], report["failures"])
+
+    def test_a_conversion_that_cannot_record_the_fusion_version_fails_closed(self) -> None:
+        namespace = self._namespace(_source_mesh_body(), version=None)
+        report = self._run(namespace, failure="mesh-convert capability is unavailable")[0]
+        self.assertIn("Application.version", report["missing_capabilities"])
 
     def test_the_gate_refuses_a_conversion_the_classification_did_not_choose(self) -> None:
         rebuild = classify(request(edit_kind="dimensional"), self.source).to_dict()
@@ -551,8 +611,17 @@ class FacetedConversionTests(unittest.TestCase):
         )
 
 
-def _point(x, y, z):
-    return SimpleNamespace(x=x, y=y, z=z)
+def _point(x, y, z, index):
+    # Tagged so the fake pointContainment can answer per node, the way a real
+    # B-Rep query answers per point.
+    return SimpleNamespace(x=x, y=y, z=z, index=index)
+
+
+def _containment(kinds):
+    def query(node):
+        return kinds[node.index] if node.index < len(kinds) else "on-boundary"
+
+    return query
 
 
 class _PolygonMesh:
@@ -563,7 +632,9 @@ class _PolygonMesh:
     """
 
     def __init__(self, nodes_mm, distances_mm=None, *, comparable=True):
-        self.nodeCoordinates = [_point(x / 10.0, y / 10.0, z / 10.0) for x, y, z in nodes_mm]
+        self.nodeCoordinates = [
+            _point(x / 10.0, y / 10.0, z / 10.0, index) for index, (x, y, z) in enumerate(nodes_mm)
+        ]
         if comparable:
             self.compareWith = _compare_with(distances_mm)
 
@@ -595,7 +666,16 @@ class DeviationVerdictTests(unittest.TestCase):
         self.manifest = _manifest(self.source)
         self.record = classify(request(edit_kind="dimensional"), self.source).to_dict()
 
-    def _namespace(self, *, recon_distances, source_distances, compare=True, containment=None):
+    def _namespace(
+        self,
+        *,
+        recon_distances,
+        source_distances,
+        compare=True,
+        containment=("inside", "inside", "inside"),
+        point_containment=True,
+        containment_enum=True,
+    ):
         script = emit_mesh_deviation_script(
             self.manifest, self.record, self.source, DEVIATION_SPEC
         )
@@ -612,8 +692,8 @@ class DeviationVerdictTests(unittest.TestCase):
             name="bracket_rebuild",
             meshManager=SimpleNamespace(displayMeshes=SimpleNamespace(bestMesh=recon_mesh)),
         )
-        if containment is not None:
-            recon_body.pointContainment = containment
+        if point_containment:
+            recon_body.pointContainment = _containment(containment)
         component = SimpleNamespace(
             meshBodies=_Bodies([source_body]), bRepBodies=_Bodies([recon_body])
         )
@@ -624,9 +704,11 @@ class DeviationVerdictTests(unittest.TestCase):
         )
         namespace["_active_design"] = lambda: (app, design)
         namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
-        namespace["adsk"].fusion.PointContainment = SimpleNamespace(
-            PointOutsidePointContainment="outside"
-        )
+        if containment_enum:
+            namespace["adsk"].fusion.PointContainment = SimpleNamespace(
+                PointOutsidePointContainment="outside",
+                PointInsidePointContainment="inside",
+            )
         return namespace
 
     def _run(self, namespace, failure=None):
@@ -643,7 +725,7 @@ class DeviationVerdictTests(unittest.TestCase):
         report = self._run(
             self._namespace(
                 recon_distances=[0.0, -0.01, 0.9],
-                source_distances=[0.0, -0.01, -0.02],
+                source_distances=[0.0, -0.01, -0.9],
             ),
             failure="invented material",
         )[0]
@@ -663,6 +745,7 @@ class DeviationVerdictTests(unittest.TestCase):
             self._namespace(
                 recon_distances=[0.0, -0.004, -0.002],
                 source_distances=[0.0, -0.002, -3.4],
+                containment=("inside", "inside", "outside"),
             )
         )[0]
         self.assertTrue(report["ok"])
@@ -678,6 +761,7 @@ class DeviationVerdictTests(unittest.TestCase):
             self._namespace(
                 recon_distances=[0.0, -0.004, -0.002],
                 source_distances=[0.0, -0.002, -3.4],
+                containment=("inside", "inside", "outside"),
             )
         )[0]
         forward = report["reconstruction_to_source"]
@@ -691,7 +775,9 @@ class DeviationVerdictTests(unittest.TestCase):
 
     def test_the_declared_thresholds_and_their_rationale_are_recorded(self) -> None:
         report = self._run(
-            self._namespace(recon_distances=[0.0, -0.004, -0.002], source_distances=[0.0, 0.0, 0.0])
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002], source_distances=[0.0, 0.0, -0.9]
+            )
         )[0]
         self.assertEqual(DEVIATION_SPEC["thresholds_mm"], report["declared_thresholds_mm"])
         self.assertEqual(DEVIATION_SPEC["rationale"], report["threshold_rationale"])
@@ -703,12 +789,96 @@ class DeviationVerdictTests(unittest.TestCase):
             self._namespace(
                 recon_distances=[0.0, -0.004, -0.002],
                 source_distances=[0.0, -0.002, -3.4],
-                containment=lambda point: "outside" if point.z > 0.0 or point.y > 0.5 else "inside",
+                containment=("inside", "inside", "outside"),
             )
         )[0]
         backward = report["source_to_reconstruction"]
         self.assertEqual("BRepBody.pointContainment", backward["containment_query"])
         self.assertEqual(1, backward["nodes_outside_reconstruction_solid"])
+
+    def test_an_inverted_sign_convention_reaches_the_same_verdict(self) -> None:
+        # Identical geometry to the invented-material case with every distance
+        # negated: the same blob is still invented. Reading the sign off the
+        # native containment query is what makes both runs agree; assuming
+        # positive-is-outside turns this one into a pass.
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, 0.01, -0.9],
+                source_distances=[0.0, 0.01, 0.9],
+            ),
+            failure="invented material",
+        )[0]
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("negative-is-outside", verdict["sign_convention"])
+        self.assertEqual("failure", verdict["severity"])
+        self.assertAlmostEqual(0.9, verdict["max_mm"])
+        self.assertEqual([5.0, 5.0, 9.0], verdict["worst_points"][0]["point_mm"])
+
+    def test_an_unreadable_sign_convention_yields_no_passing_severity(self) -> None:
+        # The containment query and the signs disagree, so which sign means
+        # outside is unknown. A premise this run cannot verify must never produce
+        # a green severity.
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.01, 0.9],
+                source_distances=[-0.9, 0.9, -0.9],
+                containment=("inside", "inside", "outside"),
+            ),
+            failure="sign-convention-unestablished",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["sign-convention-unestablished"], report["failures"])
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("not-established", verdict["severity"])
+        self.assertEqual("unestablished", verdict["sign_convention"])
+        # No zero anyone could misread as "nothing was invented".
+        self.assertNotIn("count", verdict)
+        self.assertNotIn("max_mm", verdict)
+
+    def test_a_verdict_within_tolerance_needs_no_sign_convention(self) -> None:
+        # Nothing clears the threshold in either direction, so no sign reading
+        # could change the answer and none is demanded.
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, 0.002], source_distances=[0.0, 0.0, 0.0]
+            )
+        )[0]
+        self.assertTrue(report["ok"])
+        self.assertEqual("pass", report["verdict"]["invented_material"]["severity"])
+        self.assertIn("not required", report["verdict"]["invented_material"]["sign_convention"])
+
+    def test_a_missing_containment_enum_is_a_capability_failure_not_a_clean_result(self) -> None:
+        # Nothing equals a None enum, so the sum would be 0 and the report would
+        # assert the native query ran and found nothing outside.
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002],
+                source_distances=[0.0, -0.002, -3.4],
+                containment=("inside", "inside", "outside"),
+                containment_enum=False,
+            ),
+            failure="Deviation verdict unsupported",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["deviation-capability"], report["failures"])
+        self.assertIn(
+            "adsk.fusion.PointContainment.PointOutsidePointContainment",
+            report["missing_capabilities"],
+        )
+        self.assertNotIn("source_to_reconstruction", report)
+        self.assertNotIn("verdict", report)
+
+    def test_a_reconstruction_without_the_containment_query_fails_closed(self) -> None:
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002],
+                source_distances=[0.0, -0.002, -3.4],
+                point_containment=False,
+            ),
+            failure="Deviation verdict unsupported",
+        )[0]
+        self.assertEqual(["deviation-capability"], report["failures"])
+        self.assertIn("BRepBody.pointContainment", report["missing_capabilities"])
 
     def test_a_missing_compare_with_fails_closed_naming_the_api_and_version(self) -> None:
         report = self._run(
@@ -740,7 +910,7 @@ class DeviationVerdictTests(unittest.TestCase):
         script = emit_mesh_deviation_script(self.manifest, self.record, self.source, spec)
         namespace = load_generated_script(script)
         distances = [-0.001] * 40 + [0.9]
-        source_mesh = _PolygonMesh([(0.0, 0.0, 0.0)] * 41, [-0.001] * 41)
+        source_mesh = _PolygonMesh([(0.0, 0.0, 0.0)] * 41, [-0.001] * 40 + [-0.9])
         recon_mesh = _PolygonMesh([(float(index), 0.0, 0.0) for index in range(41)], distances)
         component = SimpleNamespace(
             meshBodies=_Bodies([SimpleNamespace(name="bracket_scan", mesh=source_mesh)]),
@@ -749,6 +919,7 @@ class DeviationVerdictTests(unittest.TestCase):
                     SimpleNamespace(
                         name="bracket_rebuild",
                         meshManager=SimpleNamespace(displayMeshes=SimpleNamespace(bestMesh=recon_mesh)),
+                        pointContainment=_containment(("inside",) * 41),
                     )
                 ]
             ),
@@ -758,7 +929,9 @@ class DeviationVerdictTests(unittest.TestCase):
         )
         namespace["_active_design"] = lambda: (app, SimpleNamespace(rootComponent=component))
         namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
-        namespace["adsk"].fusion.PointContainment = SimpleNamespace(PointOutsidePointContainment="outside")
+        namespace["adsk"].fusion.PointContainment = SimpleNamespace(
+            PointOutsidePointContainment="outside", PointInsidePointContainment="inside"
+        )
         report = self._run(namespace, failure="invented material")[0]
         self.assertTrue(report["reconstruction_to_source"]["percentiles_sampled"])
         # The single point beyond the threshold is caught by the exact scan even

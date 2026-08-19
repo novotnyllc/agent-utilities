@@ -74,10 +74,13 @@ The path is **re-derived** from the recorded inputs on every rehydration, so a h
 | 7 | `face-groups-unavailable` | Fusion's own face grouping is what editability is measured against. |
 | 8 | `fusion-refused-conversion` | Fusion's own `errorOrWarningMessage`/`healthState` complained, quoted verbatim. **No facet ceiling is hardcoded anywhere**: the widely-cited 10k/50k numbers are unverified and version-specific. |
 | 9 | `conversion-produced-nothing` | No B-Rep body appeared. `add()` returning null is documented for non-parametric operations, but a missing body is a real failure. |
-| 10 | `not-editable` | Faces per face group exceeded the **declared** `max_faces_per_face_group`. "Converted successfully into 9,000 unselectable facets" is a poor outcome, not a success. |
-| 11 | `source-mesh-consumed` | The immutable source must survive every operation. |
+| 10 | `not-editable` | Faces per face group exceeded the **declared** `max_faces_per_face_group`, which must carry a `rationale` — a ceiling nobody justified can be set high enough that the rung never fires. "Converted successfully into 9,000 unselectable facets" is a poor outcome, not a success. |
+| 11 | `source-mesh-consumed` | The immutable source must survive every operation. An unreadable `isValid` fails here too: absent is not proof the source survived. |
+| — | `cleanup-incomplete` | A rolled-back refusal re-enumerates the component and reports any body that survived, rather than inferring emptiness from the absence of a `deleteMe` exception. |
 
 A success is labeled `"label": "faceted", "parametric": false`, and the report carries the note that the body has no sketches, constraints, dimensions, or feature history.
+
+**That label has no downstream consumer.** The manifest has no field marking a print part faceted, and `emit-export` never reads this report, so the exported body arrives labelled as nothing. Carry the label into `DESIGN-STATE.md` and the handoff by hand. (`is_parametric` in the verification report is the design-level fact and is true of a faceted body, so it does not stand in for this.)
 
 ## The deviation verdict is asymmetric, and reports two questions
 
@@ -90,10 +93,19 @@ The verdict is asymmetric: rebuilt material **outside** the source is *invented 
 
 Thresholds (`invented_material`, `omitted_detail`, `percentile_sample_limit`) are **declared per reconstruction with a rationale** and recorded with the verdict, never module constants. Percentiles may be computed from a strided sample; every comparison against a threshold scans the exact per-node values.
 
-Two fail-closed cases produce no verdict rather than a number:
+### The sign convention is measured, not assumed
 
-- **`deviation-capability`** — `PolygonMesh.compareWith` is a **preview** API (July 2026) and is the *only* API-level deviation mechanism Fusion has. Its absence is reported as unsupported, naming the API and the connected Fusion version.
-- **`deviation-unsigned-comparison`** — the connected Fusion returned only unsigned magnitudes, which cannot separate invented material from omitted detail. The invented-material verdict is then reported as `not-established`, never as a pass. Where signs are present, the report states the sign convention it read as an assumption to confirm once per Fusion version.
+Nothing documents which sign `compareWith` uses for "outside", and assuming it is how an inverted convention turns invented material into a pass. The run reads the convention off the native containment query instead: every source node whose distance clears the invented-material threshold has an independent inside/outside answer from `BRepBody.pointContainment`, and the observed pairing decides whether positive or negative means outside. The observed convention and the sample tally are recorded in the verdict.
+
+If no reconstructed node lies further than the threshold from the source **in either direction**, no sign reading could change the answer, so the verdict passes without establishing a convention and says so.
+
+Three fail-closed cases produce no verdict rather than a number:
+
+- **`deviation-capability`** — `PolygonMesh.compareWith` is a **preview** API (July 2026) and is the *only* API-level deviation mechanism Fusion has. `BRepBody.pointContainment` and both `PointContainment` members are equally required: containment is the only evidence here that does not rest on the sign, and it is what establishes the sign. A missing enum must never read as "nothing was outside", so each is a hard capability, never a conditional. The refusal names the API and the connected Fusion version.
+- **`deviation-unsigned-comparison`** — the connected Fusion returned only unsigned magnitudes, which cannot separate invented material from omitted detail.
+- **`sign-convention-unestablished`** — material lies beyond the threshold, but the containment probe and the returned signs did not agree on which sign means outside.
+
+In all three the invented-material verdict is `not-established`, never a pass, and it carries no `count` or `max_mm` that could be misread as a zero.
 
 ## What is not built here
 

@@ -189,14 +189,11 @@ def _mesh_path_command(args: argparse.Namespace, spec_name: str, function: Calla
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     if not isinstance(classification, dict):
         raise ValueError("The classification record must be a JSON object.")
-    source_id = classification.get("inputs", {}).get("source_id") if isinstance(
-        classification.get("inputs"), dict
-    ) else None
-    if not isinstance(source_id, str):
-        raise ValueError(
-            "The classification record must carry inputs.source_id naming the mesh source it was decided for."
-        )
-    source_record = mesh_source_record(manifest, source_id)
+    # The source is named independently of the record, so the gate's identity
+    # check compares two values that came from different places. Reading the id
+    # out of the record and then looking the record up by it would compare a
+    # value against itself and could never fail.
+    source_record = mesh_source_record(manifest, args.mesh_source_id)
     _write_output(function(manifest, classification, source_record, spec), args.output)
     return 0
 
@@ -429,6 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mesh_convert.add_argument("manifest")
     mesh_convert.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_convert.add_argument(
         "--classification",
         required=True,
         help="Path to the recorded classification JSON; its path must be 'faceted-brep'.",
@@ -451,6 +453,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     mesh_deviation.add_argument("manifest")
+    mesh_deviation.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
     mesh_deviation.add_argument(
         "--classification",
         required=True,

@@ -275,9 +275,9 @@ Do not convert a dense mesh to B-rep merely to claim parametric editability. Con
 
 ```bash
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture fusion-project.json -o build/mesh-capture.py
-"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert fusion-project.json \
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert fusion-project.json --mesh-source-id scan_bracket \
   --classification build/classification.json --convert-spec build/convert.json -o build/mesh-convert.py
-"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation fusion-project.json \
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation fusion-project.json --mesh-source-id scan_bracket \
   --classification build/classification.json --deviation-spec build/deviation.json -o build/mesh-deviation.py
 ```
 
@@ -422,8 +422,8 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]
-"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
-"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --mesh-source-id <id> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --mesh-source-id <id> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]

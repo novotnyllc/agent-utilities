@@ -866,7 +866,12 @@ class MeshCliTests(unittest.TestCase):
         spec = self.root / "convert.json"
         spec.write_text(
             json.dumps(
-                {"component_path": "", "body_name": "bracket_scan", "max_faces_per_face_group": 4.0}
+                {
+                    "component_path": "",
+                    "body_name": "bracket_scan",
+                    "max_faces_per_face_group": 4.0,
+                    "rationale": "Three face groups; more than four faces each leaves nothing selectable.",
+                }
             ),
             encoding="utf-8",
         )
@@ -875,6 +880,8 @@ class MeshCliTests(unittest.TestCase):
             [
                 "emit-mesh-convert",
                 str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
                 "--classification",
                 str(rebuild),
                 "--convert-spec",
@@ -894,6 +901,8 @@ class MeshCliTests(unittest.TestCase):
             [
                 "emit-mesh-convert",
                 str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
                 "--classification",
                 str(faceted),
                 "--convert-spec",
@@ -927,6 +936,8 @@ class MeshCliTests(unittest.TestCase):
             [
                 "emit-mesh-deviation",
                 str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
                 "--classification",
                 str(self._classification("rebuild.json")),
                 "--deviation-spec",
@@ -940,14 +951,33 @@ class MeshCliTests(unittest.TestCase):
         self.assertIn("PolygonMesh.compareWith", source)
         self.assertIn("neither certifies the other", source)
 
-    def test_a_classification_naming_an_undeclared_source_exits_two(self) -> None:
+    def test_an_undeclared_source_id_exits_two(self) -> None:
+        spec = self.root / "deviation.json"
+        spec.write_text(json.dumps({"source": {}, "reconstruction": {}}), encoding="utf-8")
+        code, _, errors = self._run(
+            [
+                "emit-mesh-deviation",
+                str(self.manifest),
+                "--mesh-source-id",
+                "scan_absent",
+                "--classification",
+                str(self._classification("rebuild.json")),
+                "--deviation-spec",
+                str(spec),
+            ]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("mesh-source-unknown-id", errors)
+
+    def test_a_classification_decided_for_another_source_exits_two(self) -> None:
+        # The id is supplied independently of the record, so this comparison is
+        # between two values from different places and can actually fail.
         from fusion_design.mesh_reconstruction import classify
 
-        source = load_manifest(self.manifest).mesh_sources[0]
+        other = dict(load_manifest(self.manifest).mesh_sources[0], id="scan_lid", sha256="b" * 64)
         record = classify(
-            {"edit_kind": "dimensional", "watertight": True, "facet_count": 8}, source
+            {"edit_kind": "dimensional", "watertight": True, "facet_count": 8}, other
         ).to_dict()
-        record["inputs"]["source_id"] = "scan_absent"
         path = self.root / "stray.json"
         path.write_text(json.dumps(record), encoding="utf-8")
         spec = self.root / "deviation.json"
@@ -956,6 +986,8 @@ class MeshCliTests(unittest.TestCase):
             [
                 "emit-mesh-deviation",
                 str(self.manifest),
+                "--mesh-source-id",
+                "scan_bracket",
                 "--classification",
                 str(path),
                 "--deviation-spec",
@@ -963,7 +995,7 @@ class MeshCliTests(unittest.TestCase):
             ]
         )
         self.assertEqual(2, code)
-        self.assertIn("mesh-source-unknown-id", errors)
+        self.assertIn("classification-source-mismatch", errors)
 
 
 class CliDocumentationTests(unittest.TestCase):
