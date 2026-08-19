@@ -16,6 +16,7 @@ from .export_handoff import (
     verification_binding_from_report,
 )
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
+from .mesh_source import emit_mesh_capture_script
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
 from .planner import build_plan
 from .prusaslicer_project import build_project, resolve_presets
@@ -351,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
         "emit-inventory": emit_inventory_script,
         "emit-parameter-sync": emit_parameter_sync_script,
         "emit-scaffold": emit_scaffold_script,
+        "emit-mesh-capture": emit_mesh_capture_script,
     }
     for name, emitter in emitters.items():
         command = subparsers.add_parser(name, help=f"Emit the {name.removeprefix('emit-')} Fusion Python script.")
