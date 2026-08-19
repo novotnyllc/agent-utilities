@@ -1,0 +1,13 @@
+{
+  "inputs": {
+    "brep_source_available": true,
+    "edit_kind": "dimensional",
+    "facet_count": 556,
+    "provenance": "designed_export",
+    "source_id": "honeycomb_organizer_stl",
+    "source_sha256": "d352299bf79a8bef43a0309def7a66f812bced86b28b29310bddc282385a37e4",
+    "watertight": true
+  },
+  "path": "parametric-rebuild",
+  "rationale": "Edit kind 'dimensional' changes the geometry itself, and no conversion recovers sketches, constraints, or feature history; rebuild only the geometry the edit requires. A B-Rep source is recorded and should be preferred, noting that it does not restore design intent and may not match the mesh that was actually printed."
+}

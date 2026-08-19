@@ -1,0 +1,2609 @@
+{
+  "bodies": [
+    {
+      "area_mm2": 19394.271773,
+      "bbox_max_mm": [
+        24.0,
+        8.0,
+        18.5
+      ],
+      "bbox_min_mm": [
+        -24.0,
+        -133.118,
+        -18.5
+      ],
+      "component_path": "",
+      "edge_count": 189,
+      "face_count": 55,
+      "faces": [
+        {
+          "area_mm2": 5.0,
+          "index": 0,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 1,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 2,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 3,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 4,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 5,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -24.0,
+            8.0,
+            13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 6,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 7,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -20.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 8,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 9,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 10,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 144.68415,
+          "index": 11,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 126.017043,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 12,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 13,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 14,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 15,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 16,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 17,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 18,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            24.0,
+            8.0,
+            -13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 19,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 20,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            20.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 21,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 22,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 23,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            23.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 144.68415,
+          "index": 24,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 35.002346,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 25,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 0.5,
+          "minor_radius_mm": 2.0,
+          "origin_mm": [
+            -0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 0.785398,
+          "index": 26,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -131.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 4.050897,
+          "index": 27,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 4.050897,
+          "index": 28,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 4.050897,
+          "index": 29,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 4.050969,
+          "index": 30,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 213.6283,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 31,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 17.0
+        },
+        {
+          "area_mm2": 159.147608,
+          "index": 32,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 159.147608,
+          "index": 33,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 159.147565,
+          "index": 34,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 159.147608,
+          "index": 35,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1900.662217,
+          "index": 36,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1900.662217,
+          "index": 37,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1900.662217,
+          "index": 38,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1900.218907,
+          "index": 39,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 92.203932,
+          "axis": [
+            -0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 40,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 0.5,
+          "minor_radius_mm": 3.5,
+          "origin_mm": [
+            -0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 0.785398,
+          "index": 41,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -133.118,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 5.921168,
+          "index": 42,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.921062,
+          "index": 43,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.920599,
+          "index": 44,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.920721,
+          "index": 45,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 456.65811,
+          "index": 46,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 175.045966,
+          "index": 47,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 175.011216,
+          "index": 48,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 174.972003,
+          "index": 49,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 174.992039,
+          "index": 50,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2197.34265,
+          "index": 51,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2197.77718,
+          "index": 52,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2197.766402,
+          "index": 53,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2196.772031,
+          "index": 54,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body1",
+      "vertex_count": 141,
+      "volume_mm3": 14357.678332
+    },
+    {
+      "area_mm2": 19067.400922,
+      "bbox_max_mm": [
+        24.0,
+        8.0,
+        18.5
+      ],
+      "bbox_min_mm": [
+        -24.0,
+        -133.118,
+        -18.5
+      ],
+      "component_path": "/Unicorn Horn Parametric_3x v10:1",
+      "edge_count": 162,
+      "face_count": 49,
+      "faces": [
+        {
+          "area_mm2": 5.0,
+          "index": 0,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 1,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 2,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 3,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 4,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 5,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -24.0,
+            8.0,
+            13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 6,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 7,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -20.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 8,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 9,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 10,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 144.68415,
+          "index": 11,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 134.006144,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 12,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 13,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 14,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 15,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 16,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 17,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 18,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            24.0,
+            8.0,
+            -13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 19,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 20,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            20.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 21,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 16.723484,
+          "index": 22,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 23,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            23.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 144.68415,
+          "index": 24,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 35.002346,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 25,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 0.5,
+          "minor_radius_mm": 2.0,
+          "origin_mm": [
+            -0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 0.785398,
+          "index": 26,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.015135,
+            -131.618,
+            0.00113
+          ]
+        },
+        {
+          "area_mm2": 4.128652,
+          "index": 27,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.006103,
+          "index": 28,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.032995,
+          "index": 29,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 213.6283,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 30,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 17.0
+        },
+        {
+          "area_mm2": 246.108613,
+          "index": 31,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 162.618673,
+          "index": 32,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 246.105916,
+          "index": 33,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1900.662087,
+          "index": 34,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2773.24301,
+          "index": 35,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2730.365441,
+          "index": 36,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 94.534336,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 37,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 0.5,
+          "minor_radius_mm": 3.5,
+          "origin_mm": [
+            0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 0.785398,
+          "index": 38,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.015135,
+            -133.118,
+            0.00113
+          ]
+        },
+        {
+          "area_mm2": 6.087699,
+          "index": 39,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 8.428106,
+          "index": 40,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 9.035206,
+          "index": 41,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 456.65811,
+          "index": 42,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 265.039312,
+          "index": 43,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 179.376105,
+          "index": 44,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 274.987747,
+          "index": 45,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 2197.348627,
+          "index": 46,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3224.753062,
+          "index": 47,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3190.84493,
+          "index": 48,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body1",
+      "vertex_count": 120,
+      "volume_mm3": 14106.993339
+    },
+    {
+      "area_mm2": 6366.483066,
+      "bbox_max_mm": [
+        49.823993,
+        34.165066,
+        10.0
+      ],
+      "bbox_min_mm": [
+        -53.057384,
+        1.569314,
+        -10.0
+      ],
+      "component_path": "/Unicorn Horn Parametric_3x v10:1",
+      "edge_count": 38,
+      "face_count": 16,
+      "faces": [
+        {
+          "area_mm2": 31.189656,
+          "index": 0,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 30.295027,
+          "index": 1,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 55.91411,
+          "index": 2,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 59.778165,
+          "index": 3,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.318914,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.001349,
+            5.950018,
+            10.0
+          ]
+        },
+        {
+          "area_mm2": 55.029384,
+          "index": 5,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1412.457432,
+          "index": 6,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1523.799274,
+          "index": 7,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1387.817009,
+          "index": 8,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.327046,
+          "index": 9,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 62.280049,
+          "index": 10,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 57.45505,
+          "index": 11,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.166985,
+          "index": 12,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -0.001349,
+            6.049982,
+            -10.0
+          ]
+        },
+        {
+          "area_mm2": 61.344505,
+          "index": 13,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1481.459888,
+          "index": 14,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.850571,
+          "index": 15,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body2",
+      "vertex_count": 24,
+      "volume_mm3": 3323.495899
+    },
+    {
+      "area_mm2": 22262.606666,
+      "bbox_max_mm": [
+        24.0,
+        8.0,
+        19.635555
+      ],
+      "bbox_min_mm": [
+        -24.0,
+        -133.118,
+        -19.636087
+      ],
+      "component_path": "/Unicorn Horn Parametric_2x v2:1",
+      "edge_count": 146,
+      "face_count": 44,
+      "faces": [
+        {
+          "area_mm2": 142.189317,
+          "index": 0,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 16.707506,
+          "index": 1,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 2,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 3,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 5,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 6,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 7,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -24.0,
+            8.0,
+            13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 8,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 9,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -20.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 16.707503,
+          "index": 10,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 11,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 54.631529,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 12,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 54.63153,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 13,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 142.189317,
+          "index": 14,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 16.707506,
+          "index": 15,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 16,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 17,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 18,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 19,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 20,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 21,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            24.0,
+            8.0,
+            -13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 22,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 23,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            20.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 16.707503,
+          "index": 24,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 25,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            23.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 44.87195,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 26,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 1.0,
+          "minor_radius_mm": 2.0,
+          "origin_mm": [
+            -0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "index": 27,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -131.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 9.762372,
+          "index": 28,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 9.762709,
+          "index": 29,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 213.6283,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 30,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 17.0
+        },
+        {
+          "area_mm2": 340.972938,
+          "index": 31,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 340.972751,
+          "index": 32,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 4470.486189,
+          "index": 33,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 4470.523593,
+          "index": 34,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 112.122344,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 35,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 1.0,
+          "minor_radius_mm": 3.5,
+          "origin_mm": [
+            0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "index": 36,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -133.118,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 13.260013,
+          "index": 37,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 13.259921,
+          "index": 38,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 456.65811,
+          "index": 39,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 368.953199,
+          "index": 40,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 368.984506,
+          "index": 41,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5109.399405,
+          "index": 42,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5107.667098,
+          "index": 43,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body1",
+      "vertex_count": 108,
+      "volume_mm3": 16507.400902
+    },
+    {
+      "area_mm2": 6366.483066,
+      "bbox_max_mm": [
+        49.823993,
+        34.165066,
+        10.0
+      ],
+      "bbox_min_mm": [
+        -53.057384,
+        1.569314,
+        -10.0
+      ],
+      "component_path": "/Unicorn Horn Parametric_2x v2:1",
+      "edge_count": 38,
+      "face_count": 16,
+      "faces": [
+        {
+          "area_mm2": 31.189656,
+          "index": 0,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 30.295027,
+          "index": 1,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 55.91411,
+          "index": 2,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 59.778165,
+          "index": 3,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.318914,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.001349,
+            5.950018,
+            10.0
+          ]
+        },
+        {
+          "area_mm2": 55.029384,
+          "index": 5,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1412.457432,
+          "index": 6,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1523.799274,
+          "index": 7,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1387.817009,
+          "index": 8,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.327046,
+          "index": 9,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 62.280049,
+          "index": 10,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 57.45505,
+          "index": 11,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.166985,
+          "index": 12,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -0.001349,
+            6.049982,
+            -10.0
+          ]
+        },
+        {
+          "area_mm2": 61.344505,
+          "index": 13,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1481.459888,
+          "index": 14,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.850571,
+          "index": 15,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body2",
+      "vertex_count": 24,
+      "volume_mm3": 3323.495899
+    },
+    {
+      "area_mm2": 22866.068505,
+      "bbox_max_mm": [
+        24.0,
+        8.0,
+        20.600736
+      ],
+      "bbox_min_mm": [
+        -24.0,
+        -133.118,
+        -20.522224
+      ],
+      "component_path": "/Unicorn Horn Parametric_Multi v3:1",
+      "edge_count": 180,
+      "face_count": 51,
+      "faces": [
+        {
+          "area_mm2": 142.273495,
+          "index": 0,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 16.716337,
+          "index": 1,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 2,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 3,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 5,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 6,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 7,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -24.0,
+            8.0,
+            13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 8,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            -23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 9,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -20.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 16.7101,
+          "index": 10,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 11,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -23.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 47.010278,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 12,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 47.16947,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 13,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 14,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 15,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            21.75,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 5.0,
+          "index": 16,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            11.5
+          ]
+        },
+        {
+          "area_mm2": 46.0,
+          "index": 17,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            19.25,
+            8.0,
+            -11.5
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 18,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 52.0,
+          "index": 19,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            24.0,
+            8.0,
+            -13.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "axis": [
+            0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 20,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            23.0,
+            8.0,
+            -13.0
+          ],
+          "radius_mm": 1.0
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 21,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            20.0,
+            8.0,
+            -14.0
+          ]
+        },
+        {
+          "area_mm2": 16.546956,
+          "index": 22,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 16.56351,
+          "index": 23,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.0,
+          "index": 24,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            23.0,
+            8.0,
+            14.0
+          ]
+        },
+        {
+          "area_mm2": 143.176472,
+          "index": 25,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            17.954467,
+            6.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 255.365759,
+          "index": 26,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 0.034762,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 27,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 18.5
+        },
+        {
+          "area_mm2": 255.55473,
+          "index": 28,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 44.87195,
+          "axis": [
+            -0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 29,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 1.0,
+          "minor_radius_mm": 2.0,
+          "origin_mm": [
+            -0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "index": 30,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -131.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 6.55157,
+          "index": 31,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.551584,
+          "index": 32,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 6.551584,
+          "index": 33,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 213.6283,
+          "axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "index": 34,
+          "kind": "CylinderSurfaceType",
+          "origin_mm": [
+            0.0,
+            6.0,
+            0.0
+          ],
+          "radius_mm": 17.0
+        },
+        {
+          "area_mm2": 233.516002,
+          "index": 35,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 233.516001,
+          "index": 36,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 233.516001,
+          "index": 37,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3080.450244,
+          "index": 38,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3080.424277,
+          "index": 39,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3080.424276,
+          "index": 40,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 108.522819,
+          "axis": [
+            -0.0,
+            -1.0,
+            -0.0
+          ],
+          "index": 41,
+          "kind": "TorusSurfaceType",
+          "major_radius_mm": 1.0,
+          "minor_radius_mm": 3.5,
+          "origin_mm": [
+            0.0,
+            -129.618,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 3.141593,
+          "index": 42,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            -1.0,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -133.118,
+            -0.0
+          ]
+        },
+        {
+          "area_mm2": 8.888686,
+          "index": 43,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 8.89099,
+          "index": 44,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 8.889067,
+          "index": 45,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 456.65811,
+          "index": 46,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "origin_mm": [
+            0.0,
+            8.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 250.543352,
+          "index": 47,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3500.373405,
+          "index": 48,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3499.43862,
+          "index": 49,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 3495.890243,
+          "index": 50,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body1",
+      "vertex_count": 135,
+      "volume_mm3": 16952.151337
+    },
+    {
+      "area_mm2": 6366.483066,
+      "bbox_max_mm": [
+        49.823993,
+        34.165066,
+        10.0
+      ],
+      "bbox_min_mm": [
+        -53.057384,
+        1.569314,
+        -10.0
+      ],
+      "component_path": "/Unicorn Horn Parametric_Multi v3:1",
+      "edge_count": 38,
+      "face_count": 16,
+      "faces": [
+        {
+          "area_mm2": 31.189656,
+          "index": 0,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 30.295027,
+          "index": 1,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 55.91411,
+          "index": 2,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 59.778165,
+          "index": 3,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.318914,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            -0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.001349,
+            5.950018,
+            10.0
+          ]
+        },
+        {
+          "area_mm2": 55.029384,
+          "index": 5,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1412.457432,
+          "index": 6,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1523.799274,
+          "index": 7,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1387.817009,
+          "index": 8,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.327046,
+          "index": 9,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 62.280049,
+          "index": 10,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 57.45505,
+          "index": 11,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 15.166985,
+          "index": 12,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            -0.001349,
+            6.049982,
+            -10.0
+          ]
+        },
+        {
+          "area_mm2": 61.344505,
+          "index": 13,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 1481.459888,
+          "index": 14,
+          "kind": "NurbsSurfaceType"
+        },
+        {
+          "area_mm2": 58.850571,
+          "index": 15,
+          "kind": "NurbsSurfaceType"
+        }
+      ],
+      "is_solid": true,
+      "name": "Body2",
+      "vertex_count": 24,
+      "volume_mm3": 3323.495899
+    }
+  ],
+  "fusion_version": "2705.0.108",
+  "source": "unicorn-horn-4examples-v3.step",
+  "units": "mm"
+}

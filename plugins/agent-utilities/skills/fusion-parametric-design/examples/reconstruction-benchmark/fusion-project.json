@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "reconstruction-benchmark",
+    "units": "mm",
+    "process": "FDM",
+    "material": "PLA",
+    "fusion_document": "Untitled"
+  },
+  "sources": [
+    {
+      "id": "downloaded_parts",
+      "kind": "third_party_cad",
+      "locator": "file://examples/reconstruction-benchmark/parts",
+      "revision": "2026-08-19 download",
+      "confidence": "measured",
+      "notes": "Four real downloaded parts kept byte-for-byte as fixtures, each recorded with its sha256 in benchmark-manifest.json. Two carry a vendor B-Rep (STEP) or the native parametric original (F3D), which is what the reconstruction is graded against."
+    }
+  ],
+  "material_decision": {
+    "family": "PLA",
+    "formulation": null,
+    "source_id": "downloaded_parts",
+    "confidence": "provisional",
+    "coupon_component": null,
+    "rationale": "Nothing in this project is printed: it is a measurement fixture for the mesh reconstruction pipeline. The material is declared only because the manifest requires one, PLA is the material the downloaded organiser models were published for, and every material-dependent value is therefore provisional and unused.",
+    "unresolved_risks": [
+      "No part in this project is printed, so no material claim here has been or will be validated.",
+      "The declared family is inherited from the download listings, not from a data sheet."
+    ]
+  },
+  "parameters": [
+    {
+      "name": "src_honeycomb_bbox_x",
+      "expression": "152.5 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "downloaded_parts",
+      "critical": true,
+      "provisional": false,
+      "description": "Honeycomb organiser bounding-box X, read off the vendor STEP B-Rep in Fusion (ground-truth/honeycomb-tool-organizer.step.brep.json)."
+    },
+    {
+      "name": "src_honeycomb_bbox_z",
+      "expression": "102 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "downloaded_parts",
+      "critical": true,
+      "provisional": false,
+      "description": "Honeycomb organiser bounding-box Z, read off the vendor STEP B-Rep in Fusion (ground-truth/honeycomb-tool-organizer.step.brep.json)."
+    }
+  ],
+  "component_tree": [
+    "00_REFERENCES",
+    "00_REFERENCES/REF__HONEYCOMB__MESH",
+    "10_PRODUCT",
+    "10_PRODUCT/PROD__HONEYCOMB_REBUILD"
+  ],
+  "references": [],
+  "verification": {
+    "required_components": [
+      "10_PRODUCT/PROD__HONEYCOMB_REBUILD"
+    ],
+    "clearance_checks": [],
+    "interference_checks": [],
+    "expected_print_parts": []
+  },
+  "printable_parts": [],
+  "mesh_sources": [
+    {
+      "id": "honeycomb_organizer_stl",
+      "path": "parts/honeycomb-tool-organizer.stl",
+      "sha256": "d352299bf79a8bef43a0309def7a66f812bced86b28b29310bddc282385a37e4",
+      "units": "mm",
+      "unit_source": "declared",
+      "provenance": "designed_export",
+      "alignment_transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "brep_source": {
+        "path": "parts/honeycomb-tool-organizer.step",
+        "sha256": "0cf70f65cc87dd3ac261afacca84265357a3bc53ba46a89a4ae088c8346326a7",
+        "trusted": true,
+        "rationale": "The STEP and the STL were downloaded together from the same publication of the same model, and the STEP is the vendor's own B-Rep. It is the ground truth this benchmark grades the STL reconstruction against, so it is trusted as a measurement reference -- not as evidence of the original feature tree, which a STEP does not carry."
+      }
+    },
+    {
+      "id": "unicorn_horn_3mf",
+      "path": "parts/unicorn-horn-4examples-v3.3mf",
+      "sha256": "f5a06b02ad2ebbf6695a430464b6f145848e663b4d771013ada9c6fecac77d42",
+      "units": "mm",
+      "unit_source": "file",
+      "provenance": "designed_export",
+      "alignment_transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "brep_source": {
+        "path": "parts/unicorn-horn-4examples-v3.step",
+        "sha256": "352d9bf656c62c62ad3f6ba6225bda4c02dc51eaaee35e9e27d3589239a32807",
+        "trusted": true,
+        "rationale": "Exported from the same Fusion design as the mesh, alongside the native F3D archive whose timeline is recorded in ground-truth/. The STEP fixes the surfaces; the F3D fixes the features. Both are references for grading, neither is the thing being reconstructed."
+      }
+    },
+    {
+      "id": "tropical_leaves_stl",
+      "path": "parts/tropical-leaves.stl",
+      "sha256": "995681e3801a4304d6a7c93eb249c1a8c1cd3a1826ea5adef2e01432851a6f1d",
+      "units": "mm",
+      "unit_source": "guess",
+      "unit_guess": {
+        "heuristic": "bounding-box longest edge under the printable envelope",
+        "threshold": 300.0
+      },
+      "provenance": "designed_export",
+      "alignment_transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "id": "desktop_organiser_3mf",
+      "path": "parts/desktop-organiser-bambulab-v0.3mf",
+      "sha256": "9a9e28f371aa4c4bfd96bc4eae435740728e6b1947924b00a84f435d8c2e9954",
+      "units": "mm",
+      "unit_source": "file",
+      "provenance": "designed_export",
+      "alignment_transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  ]
+}

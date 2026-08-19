@@ -1,0 +1,305 @@
+{
+  "all_parameter_count": 49,
+  "components": [
+    {
+      "bodies": [
+        "coil tool",
+        "unicorn",
+        "Body10",
+        "Body12"
+      ],
+      "features": 12,
+      "name": "Untitled",
+      "sketches": [
+        "base circles",
+        "height",
+        "Sketch22",
+        "bottom",
+        "tip",
+        "Sketch18",
+        "Sketch19",
+        "Sketch20",
+        "Sketch21"
+      ]
+    }
+  ],
+  "design_type": "ParametricDesignType",
+  "fusion_version": "2705.0.108",
+  "source": "unicorn-horn-parametric-multi-v3.f3d",
+  "timeline": [
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 0,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "base circles"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 1,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "height"
+    },
+    {
+      "entity_type": "adsk::fusion::ConstructionPlane",
+      "health": 0,
+      "index": 2,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Plane1"
+    },
+    {
+      "entity_type": "adsk::fusion::CoilFeature",
+      "health": 0,
+      "index": 3,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "CoilPrimitive1"
+    },
+    {
+      "entity_type": "adsk::fusion::SweepFeature",
+      "health": 0,
+      "index": 4,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sweep4"
+    },
+    {
+      "entity_type": "adsk::fusion::ConstructionPlane",
+      "health": 0,
+      "index": 5,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Plane4"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 6,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "bottom"
+    },
+    {
+      "entity_type": "adsk::fusion::LoftFeature",
+      "health": 0,
+      "index": 7,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Loft6"
+    },
+    {
+      "entity_type": "adsk::fusion::ExtrudeFeature",
+      "health": 0,
+      "index": 8,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Extrude9"
+    },
+    {
+      "entity_type": "adsk::fusion::ConstructionPlane",
+      "health": 0,
+      "index": 9,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Plane5"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 10,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "tip"
+    },
+    {
+      "entity_type": "adsk::fusion::LoftFeature",
+      "health": 0,
+      "index": 11,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Loft5"
+    },
+    {
+      "entity_type": "adsk::fusion::ExtrudeFeature",
+      "health": 0,
+      "index": 12,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Extrude8"
+    },
+    {
+      "entity_type": "adsk::fusion::FilletFeature",
+      "health": 0,
+      "index": 13,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Fillet12"
+    },
+    {
+      "entity_type": "adsk::fusion::ShellFeature",
+      "health": 0,
+      "index": 14,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Shell3"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 15,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sketch18"
+    },
+    {
+      "entity_type": "adsk::fusion::ExtrudeFeature",
+      "health": 0,
+      "index": 16,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Extrude10"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 17,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sketch19"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 18,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sketch20"
+    },
+    {
+      "entity_type": "adsk::fusion::ConstructionPlane",
+      "health": 0,
+      "index": 19,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Plane6"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 20,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sketch21"
+    },
+    {
+      "entity_type": "adsk::fusion::SweepFeature",
+      "health": 0,
+      "index": 21,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sweep5"
+    },
+    {
+      "entity_type": "adsk::fusion::Sketch",
+      "health": 0,
+      "index": 22,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Sketch22"
+    },
+    {
+      "entity_type": "adsk::fusion::SplitBodyFeature",
+      "health": 0,
+      "index": 23,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Split1"
+    },
+    {
+      "entity_type": "adsk::fusion::MoveFeature",
+      "health": 0,
+      "index": 24,
+      "is_group": false,
+      "is_suppressed": false,
+      "name": "Move3"
+    }
+  ],
+  "user_parameters": [
+    {
+      "comment": "",
+      "expression": "30 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "circsize",
+      "unit": "mm",
+      "value": 3.0
+    },
+    {
+      "comment": "",
+      "expression": "140 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "height",
+      "unit": "mm",
+      "value": 14.0
+    },
+    {
+      "comment": "",
+      "expression": "40 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "diameter",
+      "unit": "mm",
+      "value": 4.0
+    },
+    {
+      "comment": "",
+      "expression": "6 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "bottom",
+      "unit": "mm",
+      "value": 0.6
+    },
+    {
+      "comment": "",
+      "expression": "34 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "botDiameter",
+      "unit": "mm",
+      "value": 3.4
+    },
+    {
+      "comment": "",
+      "expression": "6 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "capCircle",
+      "unit": "mm",
+      "value": 0.6
+    },
+    {
+      "comment": "",
+      "expression": "3",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "multiplicity",
+      "unit": "",
+      "value": 3.0
+    },
+    {
+      "comment": "",
+      "expression": "4.5 mm",
+      "is_favorite": false,
+      "kind": "user",
+      "name": "CenterOffset",
+      "unit": "mm",
+      "value": 0.45
+    }
+  ]
+}

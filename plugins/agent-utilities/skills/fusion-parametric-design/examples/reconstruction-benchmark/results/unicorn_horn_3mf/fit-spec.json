@@ -1,0 +1,126 @@
+{
+  "boundary_circle_sigmas": {
+    "rationale": "three joint sigmas before an independent boundary circle counts as disagreeing",
+    "value": 3.0
+  },
+  "bounds_margin_ratio": {
+    "rationale": "an anchor one extent outside the part is not describing the part",
+    "value": 1.0
+  },
+  "curvature_dead_zone_sigmas": {
+    "rationale": "two estimator sigmas of curvature is indistinguishable from flat",
+    "value": 2.0
+  },
+  "cylinder_normal_perpendicular_deg": {
+    "rationale": "measured two-ring bores hold their facet normals inside five degrees",
+    "value": 5.0
+  },
+  "directional_bin_sigmas": {
+    "rationale": "four standard errors over two adjacent bins is structure, not luck",
+    "value": 4.0
+  },
+  "heldout_ratio_max": {
+    "rationale": "far outside the concentration of a correct model, immediate for an overfit one",
+    "value": 1.5
+  },
+  "max_axis_sigma_deg": {
+    "rationale": "an axis uncertain by more than two degrees makes coaxiality unlicensable",
+    "value": 2.0
+  },
+  "max_fillet_arc_deg": {
+    "rationale": "a bore or a boss closes on itself; an edge round never sweeps past a half turn",
+    "value": 180.0
+  },
+  "max_fillet_radius_rel_spread": {
+    "rationale": "a constant-radius round is constant; two percent is radius wobble",
+    "value": 0.02
+  },
+  "max_radius_ratio": {
+    "rationale": "a radius beyond five extents is the near-flat-strip pathology",
+    "value": 5.0
+  },
+  "max_radius_rel_sigma": {
+    "rationale": "a radius uncertain by more than two percent cannot drive a dimension",
+    "value": 0.02
+  },
+  "max_relative_residual": {
+    "rationale": "two percent of the sampled extent is the residual gate this skill already uses",
+    "value": 0.02
+  },
+  "max_triangles": {
+    "rationale": "the density above which extra triangles are noise samples, not information",
+    "value": 200000
+  },
+  "min_angular_span_deg": {
+    "rationale": "below sixty degrees of arc the radius is not determined by the data",
+    "value": 60.0
+  },
+  "min_axial_span_ratio": {
+    "rationale": "half a radius of length before an axis direction means anything",
+    "value": 0.5
+  },
+  "min_covered_area_fraction": {
+    "rationale": "this run measures detection, so coverage is reported and never gated",
+    "value": 0.0
+  },
+  "min_feature_size": {
+    "rationale": "the horn's own cap fillet is a millimetre; below that the 3MF carries nothing to fit",
+    "value": 1.0
+  },
+  "min_normal_axis_eigengap": {
+    "rationale": "a twentieth of the normal spectrum away from the axis is a full ring",
+    "value": 0.05
+  },
+  "min_plane_aspect": {
+    "rationale": "a footprint narrower than one in twenty does not fix a normal about its long axis",
+    "value": 0.05
+  },
+  "min_sphere_occupancy": {
+    "rationale": "half a sphere's diameter of extent before it is a sphere",
+    "value": 0.5
+  },
+  "min_taper_ratio": {
+    "rationale": "below one percent taper a cone is a cylinder and should be reported as one",
+    "value": 0.01
+  },
+  "min_torus_major_ratio": {
+    "rationale": "a major radius under 1.2 tubes is a spindle, not a fillet",
+    "value": 1.2
+  },
+  "moran_baseline_slack": {
+    "rationale": "how far above the part's own best plane another feature may sit",
+    "value": 4.0
+  },
+  "moran_z_max": {
+    "rationale": "scanner noise is itself mildly correlated, so the iid null is conservative-false",
+    "value": 6.0
+  },
+  "normal_alpha_deg": {
+    "rationale": "loose on purpose: the normal check separates surfaces, it does not re-segment",
+    "value": 25.0
+  },
+  "normal_sigma_theta_floor_deg": {
+    "rationale": "double precision over a millimetre part leaves a microdegree",
+    "value": 1e-06
+  },
+  "parsimony_alpha": {
+    "rationale": "a richer primitive must clear one percent to earn its extra parameters",
+    "value": 0.01
+  },
+  "regime": {
+    "rationale": "let the mesh's own dihedral distribution and measured sigma decide, and report which",
+    "value": "auto"
+  },
+  "tessellation_sigma_over_extent": {
+    "rationale": "an exporter's vertices sit on the analytic surface to float precision",
+    "value": 1e-09
+  },
+  "vertex_precision_rel": {
+    "rationale": "a binary STL stores float32, so a vertex is quantized to a ten-millionth",
+    "value": 1.2e-07
+  },
+  "weld_tolerance": {
+    "rationale": "exported from a solid modeller, so exact duplicates are the only duplicates",
+    "value": 0.0
+  }
+}

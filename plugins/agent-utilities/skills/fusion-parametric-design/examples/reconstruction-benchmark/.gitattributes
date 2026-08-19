@@ -1,0 +1,9 @@
+# These are byte-exact fixtures. Their sha256 is recorded in
+# benchmark-manifest.json and in fusion-project.json's mesh_sources, and the
+# test suite re-hashes every one of them on every run, so git must not touch a
+# single byte on the way in or out. The repository normalises line endings by
+# default (`* text=auto eol=lf` at the root); the vendor STEP files are CRLF
+# exactly as their exporter wrote them and the ASCII STL is LF, and normalising
+# either would change the digest the whole benchmark is bound to.
+parts/*  -text
+dumps/*  -text

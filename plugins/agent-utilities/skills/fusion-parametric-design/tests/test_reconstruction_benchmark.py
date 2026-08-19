@@ -1,0 +1,382 @@
+"""The downloaded-part benchmark: four real parts, two of them with ground truth.
+
+`examples/reconstruction-benchmark/` holds four models somebody actually
+downloaded and printed, byte for byte, together with what the reconstruction
+pipeline measured on each. Two of them carry an answer key that did not come
+from this pipeline:
+
+* the honeycomb organiser ships the vendor's own **STEP**, read as a B-Rep in
+  Fusion and recorded in `ground-truth/`. It is 145 planar faces in exactly four
+  directions and not one curved surface, so "did the STL come back matching the
+  STEP" is a checkable question rather than an opinion.
+* the unicorn horn ships the **F3D archive** it was exported from, so the real
+  timeline and the real user parameters are recorded too -- what parametric
+  looked like *before* anybody exported a mesh.
+
+What the tests here assert, and what they deliberately do not:
+
+* The fixtures are byte-exact and the benchmark's own project manifest still
+  agrees with them. That is a gate: a fixture that silently changed makes every
+  number below a fiction.
+* The honeycomb replays from its committed dump to the outcome recorded in
+  `benchmark-manifest.json`, and the numbers that *can* be checked against the
+  STEP -- area, volume, bounding box -- are checked against it. The honeycomb is
+  556 triangles, so this runs in under a tenth of a second and stays a gate.
+* The three larger parts are a **measurement**, not a gate, and are env-gated
+  like the two sweeps in `test_mesh_segmentation.py`. Together they take about a
+  minute.
+
+The recorded outcome today is that **no part in this corpus reaches a built
+reconstruction**, and each stops at a different named gate. Asserting the gates
+is the point: when one of them is fixed, this test fails and the manifest has to
+be re-measured rather than the improvement going unrecorded.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BENCH = ROOT / "examples" / "reconstruction-benchmark"
+MANIFEST = json.loads((BENCH / "benchmark-manifest.json").read_text(encoding="utf-8"))
+
+#: The closed role vocabulary the fixture table is allowed to use. A role
+#: outside it means the manifest is describing something this benchmark does not
+#: know how to treat, which is a defect and not a new capability.
+FIXTURE_ROLES = {"stl-input", "step-ground-truth", "f3d-ground-truth", "3mf-input", "mesh-dump"}
+
+# --- tolerances, each with the measurement it was set from -----------------
+#
+# The honeycomb STL and the honeycomb STEP describe the same solid, and that
+# solid is bounded entirely by planes. A tessellation of a planar face has
+# *exactly* the face's area and encloses exactly its volume, so these are not
+# approximation tolerances -- they are the width of the float32 the STL stores
+# its vertices in, and the agreement measured through them.
+
+#: Measured agreement between the mesh dump's summed facet area and the STEP
+#: body's analytic area is 3.2e-08. A binary STL holds float32, so a vertex
+#: carries about 1.2e-07 of relative quantization; 1e-06 is an order above that
+#: and thirty times the measured disagreement. Anything larger than this means
+#: the STL is not a tessellation of this STEP.
+STEP_AREA_REL_TOLERANCE = 1.0e-06
+
+#: Measured agreement between the mesh body's volume and the STEP body's is
+#: 7.7e-07. Volume is cubic in the coordinates, so it carries three times the
+#: relative vertex error; 1e-05 is an order above the measurement and still far
+#: below any difference a real modelling change would make.
+STEP_VOLUME_REL_TOLERANCE = 1.0e-05
+
+#: The two bounding boxes agree to 2.3e-06 mm. A thousandth of a millimetre is
+#: below the resolution of any process that would make this organiser, so a
+#: disagreement above it is a transform or a unit error rather than rounding.
+STEP_BBOX_ABS_TOLERANCE_MM = 1.0e-03
+
+#: The refusal this benchmark records carries computed floats. They are
+#: deterministic, but asserting them bit-for-bit would make a platform's
+#: last-place rounding into a test failure, so they are compared relatively at a
+#: width no real change to the estimator could hide inside.
+RECORDED_FLOAT_REL_TOLERANCE = 1.0e-09
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fit(source_id: str):
+    """Replay one part's fit stage from its committed, hash-bound dump."""
+    from fusion_design import mesh_segmentation as seg
+    from fusion_design.mesh_dump import read_mesh_dump
+
+    row = MANIFEST["results"][source_id]
+    spec = seg.load_spec(
+        json.loads((BENCH / "results" / source_id / "fit-spec.json").read_text(encoding="utf-8"))
+    )
+    dump = read_mesh_dump(BENCH / "dumps" / row["dump"], row["dump_sha256"])
+    return row, seg.fit_regions(dump, spec)
+
+
+def _plan(record):
+    """Run the planner, returning either the program or the refusal it raised."""
+    from fusion_design.manifest import load_manifest
+    from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
+    from fusion_design.reconstruction_program import build_reconstruction_program
+    from fusion_design.scripts import manifest_sha256
+
+    spec = json.loads((BENCH / "program-spec.json").read_text(encoding="utf-8"))
+    digest = manifest_sha256(load_manifest(BENCH / "fusion-project.json"))
+    try:
+        return build_reconstruction_program(
+            parse_fit_record(record), spec, manifest_sha256=digest
+        ), None
+    except ReconstructionRefused as refused:
+        return None, refused
+
+
+class BenchmarkFixtureTests(unittest.TestCase):
+    """The corpus itself: byte-exact, self-describing, and still bound to the manifest."""
+
+    def test_every_recorded_fixture_is_present_and_byte_exact(self) -> None:
+        # These files are the benchmark. A fixture that drifted -- re-exported,
+        # line-ending normalised, re-saved by a viewer -- would leave every
+        # measured number below describing a model nobody has any more.
+        self.assertTrue(MANIFEST["fixtures"], "the fixture table is empty")
+        for fixture in MANIFEST["fixtures"]:
+            path = BENCH / fixture["file"]
+            with self.subTest(fixture=fixture["file"]):
+                self.assertTrue(path.is_file(), f"{fixture['file']} is missing")
+                self.assertEqual(fixture["bytes"], path.stat().st_size)
+                self.assertEqual(fixture["sha256"], _sha256(path))
+                self.assertIn(fixture["role"], FIXTURE_ROLES)
+
+    def test_the_ground_truth_files_the_manifest_names_all_exist(self) -> None:
+        for name in MANIFEST["ground_truth"]:
+            with self.subTest(ground_truth=name):
+                self.assertTrue((BENCH / "ground-truth" / name).is_file())
+
+    def test_the_benchmark_project_manifest_validates_and_still_matches_its_files(self) -> None:
+        # mesh_sources records a file by digest, so this is the check that the
+        # project manifest and the fixtures have not drifted apart.
+        from fusion_design.manifest import load_manifest, validate_manifest_data
+        from fusion_design.mesh_source import verify_manifest_mesh_sources
+
+        path = BENCH / "fusion-project.json"
+        self.assertEqual([], validate_manifest_data(json.loads(path.read_text(encoding="utf-8"))))
+        manifest = load_manifest(path)
+        # It raises on a swapped or edited file and otherwise returns the digest
+        # it re-hashed for each source, so the mapping is the evidence.
+        self.assertEqual(
+            {str(record["id"]): str(record["sha256"]) for record in manifest.mesh_sources},
+            verify_manifest_mesh_sources(manifest, path),
+        )
+
+    def test_every_recorded_part_carries_a_classification_and_a_declared_fit_spec(self) -> None:
+        for source_id in MANIFEST["results"]:
+            with self.subTest(part=source_id):
+                classification = json.loads(
+                    (BENCH / "results" / source_id / "classification.json").read_text(encoding="utf-8")
+                )
+                # The gate re-derives the path from the recorded inputs, so a
+                # hand-edited record cannot smuggle a different one through.
+                self.assertEqual("parametric-rebuild", classification["path"])
+                self.assertEqual(source_id, classification["inputs"]["source_id"])
+                spec = json.loads(
+                    (BENCH / "results" / source_id / "fit-spec.json").read_text(encoding="utf-8")
+                )
+                for name, declared in spec.items():
+                    self.assertIn("value", declared, name)
+                    self.assertTrue(str(declared.get("rationale", "")).strip(), name)
+
+
+class HoneycombAgainstItsStepTests(unittest.TestCase):
+    """"Does the STL come back matching what the STEP says?", as an executable check.
+
+    556 triangles, so this is fast enough to be a gate rather than a measurement.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.brep = json.loads(
+            (BENCH / "ground-truth" / "honeycomb-tool-organizer.step.brep.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.comparison = MANIFEST["step_comparison"]["honeycomb_organizer_stl"]
+        cls.row, cls.record = _fit("honeycomb_organizer_stl")
+
+    def test_the_step_ground_truth_is_planes_only_in_four_directions(self) -> None:
+        # Everything else in this class rests on this: if the vendor STEP ever
+        # stopped being an all-planar part, the comparison would be measuring
+        # something other than what it claims to.
+        body, = self.brep["bodies"]
+        kinds = {}
+        for face in body["faces"]:
+            kinds[face["kind"]] = kinds.get(face["kind"], 0) + 1
+        self.assertEqual({"PlaneSurfaceType": 145}, kinds)
+
+        families = set()
+        for face in body["faces"]:
+            normal = face["normal"]
+            sign = 1.0
+            for value in normal:
+                if abs(value) > 1e-9:
+                    sign = 1.0 if value > 0.0 else -1.0
+                    break
+            families.add(tuple(round(value / sign, 3) + 0.0 for value in normal))
+        self.assertEqual(4, len(families), sorted(families))
+
+    def test_the_stl_is_the_same_solid_the_step_describes(self) -> None:
+        body, = self.brep["bodies"]
+        self.assertAlmostEqual(
+            body["area_mm2"],
+            self.record["total_area"],
+            delta=STEP_AREA_REL_TOLERANCE * body["area_mm2"],
+        )
+        self.assertAlmostEqual(
+            body["volume_mm3"],
+            self.comparison["mesh_volume_mm3"],
+            delta=STEP_VOLUME_REL_TOLERANCE * body["volume_mm3"],
+        )
+        step_extent = [
+            high - low for low, high in zip(body["bbox_min_mm"], body["bbox_max_mm"])
+        ]
+        for axis, (expected, measured) in enumerate(
+            zip(step_extent, self.comparison["mesh_bbox_extent_mm"])
+        ):
+            with self.subTest(axis="xyz"[axis]):
+                self.assertAlmostEqual(expected, measured, delta=STEP_BBOX_ABS_TOLERANCE_MM)
+
+    def test_the_pipeline_refuses_this_part_and_claims_nothing_while_refusing(self) -> None:
+        # The recorded outcome, and the reason it is worth asserting: the
+        # honeycomb is refused before a single primitive is fitted, because the
+        # dihedral noise estimator reads the part's own 60-degree cell walls as
+        # noise. An honest refusal claims nothing, and that is checked here as
+        # well as the reason -- a refusal that still emitted fits would be worse
+        # than the refusal.
+        refusal = self.record["refusal"]
+        self.assertIsNotNone(refusal, "the honeycomb is expected to refuse; re-measure the manifest")
+        self.assertEqual(self.row["fit"]["refusal"], refusal["reason"])
+        self.assertEqual("feature-scale-below-noise", refusal["reason"])
+        self.assertEqual([], self.record["regions"])
+        self.assertEqual(0.0, self.record["covered_area_fraction"])
+
+        recorded = self.row["fit"]["refusal_detail"]
+        for field in ("sigma", "recoverable_feature_size", "min_feature_size"):
+            with self.subTest(field=field):
+                self.assertAlmostEqual(
+                    recorded[field],
+                    refusal["detail"][field],
+                    delta=RECORDED_FLOAT_REL_TOLERANCE * abs(recorded[field]),
+                )
+
+    def test_the_recorded_diagnosis_still_describes_this_mesh(self) -> None:
+        # The gap entry blames one estimator by name and one number. Both are
+        # re-read here, so the diagnosis cannot rot into folklore while the
+        # mesh underneath it changes.
+        gap, = [g for g in MANIFEST["known_gaps"] if g["part"] == "honeycomb_organizer_stl"]
+        evidence = gap["evidence"]
+        noise = self.record["noise"]
+        self.assertEqual(0.0, noise["sigma_quadric"])
+        self.assertEqual("tessellation", self.record["regime"]["regime"])
+        for recorded, measured in (
+            (evidence["sigma_dihedral"], noise["sigma_dihedral"]),
+            (evidence["median_abs_dihedral_deg"], noise["median_abs_dihedral_deg"]),
+        ):
+            self.assertAlmostEqual(
+                recorded, measured, delta=RECORDED_FLOAT_REL_TOLERANCE * abs(recorded)
+            )
+        self.assertEqual(evidence["interior_edge_count"], noise["interior_edge_count"])
+
+
+@unittest.skipUnless(
+    os.environ.get("FUSION_DESIGN_RECONSTRUCTION_BENCHMARK"),
+    "the three large downloaded parts are a measurement, not a gate; "
+    "set FUSION_DESIGN_RECONSTRUCTION_BENCHMARK=1 (about a minute)",
+)
+class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurement
+    """The other three parts, replayed against what the manifest recorded.
+
+    86k and 88k triangles each, so about a minute in total. Every assertion is
+    against a number this repository already carries; the point is that the
+    recorded corpus stays true, and that a fix anywhere upstream shows up here
+    as a failure demanding a re-measurement instead of passing unnoticed.
+    """
+
+    def _replay(self, source_id):
+        row, record = _fit(source_id)
+        self.assertEqual(row["fit"]["refusal"],
+                         None if record["refusal"] is None else record["refusal"]["reason"])
+        accepted = [r for r in record["regions"] if r["accepted"]]
+        self.assertEqual(row["fit"]["accepted"], len(accepted))
+        self.assertEqual(row["fit"]["regions"], len(record["regions"]))
+        kinds = {}
+        for region in accepted:
+            kinds[region["fit"]["kind"]] = kinds.get(region["fit"]["kind"], 0) + 1
+        self.assertEqual(row["fit"]["accepted_kinds"], kinds)
+        self.assertAlmostEqual(
+            row["fit"]["covered_area_fraction"], record["covered_area_fraction"], places=9
+        )
+        return row, record
+
+    def test_the_unicorn_horn_fits_a_little_and_then_cannot_find_a_datum(self) -> None:
+        # The horn is a coil swept along a lofted profile: the archetype
+        # vocabulary has no member for any of that, and the F3D timeline in
+        # ground-truth/ says so in the designer's own features.
+        row, record = self._replay("unicorn_horn_3mf")
+        program, refused = _plan(record)
+        self.assertIsNone(program, "the horn is expected to refuse at the planner")
+        self.assertEqual(row["plan"]["refusal"], refused.reason)
+        self.assertEqual("frame-x-underdetermined", refused.reason)
+
+    def test_the_tropical_leaves_refuse_honestly_rather_than_inventing_a_primitive(self) -> None:
+        # The assertion that matters on an organic part is not how much it
+        # recovers but what it declines to claim: no cylinder, no cone, no
+        # torus anywhere in the accepted set.
+        row, record = self._replay("tropical_leaves_stl")
+        claimed = set(row["fit"]["accepted_kinds"])
+        self.assertEqual(set(), claimed & {"cylinder", "cone", "torus"})
+        program, refused = _plan(record)
+        self.assertIsNone(refused, "the leaves are expected to plan, then refuse at emission")
+        self.assertEqual(row["plan"]["archetypes"],
+                         {kind: sum(1 for g in program["archetypes"] if g["kind"] == kind)
+                          for kind in row["plan"]["archetypes"]})
+        self.assertAlmostEqual(
+            row["plan"]["covered_area_fraction"], program["covered_area_fraction"], places=9
+        )
+        self.assertEqual(row["rebuild_emission"]["refusal"], self._emit(program, "tropical_leaves_stl"))
+
+    def test_the_bambu_3mf_is_a_supported_intake_and_reaches_an_emitted_rebuild(self) -> None:
+        # 3MF is handled: Fusion's mesh import reads it, the same face-group and
+        # extract scripts write the same dump format, and this is the one part
+        # in the corpus whose rebuild script emits. Its declared
+        # min_feature_size is 2 mm and the fit-spec says why -- at 1 mm this
+        # part refuses feature-scale-below-noise, which is the estimator working
+        # rather than failing.
+        row, record = self._replay("desktop_organiser_3mf")
+        self.assertEqual(2.0, json.loads(
+            (BENCH / "results" / "desktop_organiser_3mf" / "fit-spec.json").read_text(
+                encoding="utf-8")
+        )["min_feature_size"]["value"])
+        program, refused = _plan(record)
+        self.assertIsNone(refused)
+        self.assertIsNone(self._emit(program, "desktop_organiser_3mf"))
+
+    def _emit(self, program, source_id):
+        """Emit the rebuild script; return the refusal reason, or None on success."""
+        from fusion_design.manifest import load_manifest
+        from fusion_design.mesh_datum import ReconstructionRefused
+        from fusion_design.mesh_rebuild import emit_mesh_rebuild_script
+        from fusion_design.mesh_source import mesh_source_record
+
+        manifest = load_manifest(BENCH / "fusion-project.json")
+        spec = json.loads((BENCH / "rebuild-spec.json").read_text(encoding="utf-8"))
+        # dump_path is committed relative to the benchmark directory; the
+        # emitter needs the bytes, so the runner resolves it here.
+        spec["dump_path"] = str(BENCH / "dumps" / MANIFEST["results"][source_id]["dump"])
+        classification = json.loads(
+            (BENCH / "results" / source_id / "classification.json").read_text(encoding="utf-8")
+        )
+        try:
+            emit_mesh_rebuild_script(
+                manifest,
+                classification,
+                mesh_source_record(manifest, source_id),
+                program,
+                spec,
+                "0" * 32,
+            )
+        except ReconstructionRefused as refused:
+            return refused.reason
+        return None
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

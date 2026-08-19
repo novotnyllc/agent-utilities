@@ -1,0 +1,13 @@
+{
+  "inputs": {
+    "brep_source_available": true,
+    "edit_kind": "dimensional",
+    "facet_count": 88334,
+    "provenance": "designed_export",
+    "source_id": "unicorn_horn_3mf",
+    "source_sha256": "f5a06b02ad2ebbf6695a430464b6f145848e663b4d771013ada9c6fecac77d42",
+    "watertight": true
+  },
+  "path": "parametric-rebuild",
+  "rationale": "Edit kind 'dimensional' changes the geometry itself, and no conversion recovers sketches, constraints, or feature history; rebuild only the geometry the edit requires. A B-Rep source is recorded and should be preferred, noting that it does not restore design intent and may not match the mesh that was actually printed."
+}

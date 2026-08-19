@@ -1,0 +1,39 @@
+{
+  "component_name": "PROD__BENCHMARK_REBUILD",
+  "dump_path": "dumps/REPLACED_WITH_THE_PARTS_OWN_DUMP",
+  "rationale": "These four parts span 82 to 250 mm and every one of their meshes is a designed export rather than a scan, so the screening windows below are sized to the storage precision of the vertices and not to a measurement error nobody made. dump_path is written relative to this directory and the runner resolves it: the emitter sections the dump host-side, and it re-hashes those bytes against the program's dump_sha256 before reading any of them. The rejection budget is zero because a constraint this program cannot place is a reconstruction it cannot claim.",
+  "thresholds": {
+    "section_tolerance_mm": {
+      "value": 0.01,
+      "rationale": "a hundredth of a millimetre is below the smallest feature any of these four parts carries, and above the float32 quantization their vertices are stored at."
+    },
+    "classify_tolerance_mm": {
+      "value": 0.01,
+      "rationale": "the same window: a section point nearer than this to a fitted surface came from that surface and not from its neighbour."
+    },
+    "profile_chain_tolerance_mm": {
+      "value": 0.02,
+      "rationale": "two section tolerances, so a chain closes across tessellation jitter without bridging a gap that is really there."
+    },
+    "snap_tolerance_deg": {
+      "value": 0.5,
+      "rationale": "half a degree is below the fitted axis sigma these runs measured, so a snap reports an alignment the evidence already carries rather than inventing one."
+    },
+    "snap_tolerance_mm": {
+      "value": 0.05,
+      "rationale": "five hundredths of a millimetre over parts this size: two features that agree this closely agree."
+    },
+    "constraint_displacement_tolerance_mm": {
+      "value": 0.05,
+      "rationale": "a constraint that moves a sketch further than this changed the geometry instead of describing it, and must be rejected rather than applied."
+    },
+    "constraint_rejection_budget": {
+      "value": 0,
+      "rationale": "zero: a constraint this program cannot place is a reconstruction it cannot claim, and a benchmark that tolerated some would be measuring its own tolerance."
+    },
+    "entity_match_tolerance_mm": {
+      "value": 0.05,
+      "rationale": "the window for binding a built face back to the fitted region it came from, at the scale these parts are modelled to."
+    }
+  }
+}

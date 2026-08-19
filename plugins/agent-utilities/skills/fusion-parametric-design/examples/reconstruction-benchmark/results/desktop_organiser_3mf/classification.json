@@ -1,0 +1,13 @@
+{
+  "inputs": {
+    "brep_source_available": false,
+    "edit_kind": "dimensional",
+    "facet_count": 6502,
+    "provenance": "designed_export",
+    "source_id": "desktop_organiser_3mf",
+    "source_sha256": "9a9e28f371aa4c4bfd96bc4eae435740728e6b1947924b00a84f435d8c2e9954",
+    "watertight": true
+  },
+  "path": "parametric-rebuild",
+  "rationale": "Edit kind 'dimensional' changes the geometry itself, and no conversion recovers sketches, constraints, or feature history; rebuild only the geometry the edit requires."
+}
