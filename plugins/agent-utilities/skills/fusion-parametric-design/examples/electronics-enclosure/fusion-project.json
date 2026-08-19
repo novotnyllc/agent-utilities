@@ -216,6 +216,7 @@
     "required_components": [
       "10_PRODUCT/PROD__BASE",
       "10_PRODUCT/PROD__LID",
+      "90_VALIDATION/VAL__PD_FIT_COUPON",
       "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
       "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"
     ],
@@ -256,7 +257,7 @@
       "print_as": "separate",
       "orientation": {
         "contact_face": "-Z",
-        "rationale": "The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim.",
+        "rationale": "The flat floor sits on the plate, which is why support_policy is 'none' here, and keeps the seam off the mating rim. Whether the part actually needs supports is a slicer result, not a manifest claim.",
         "allowed_alternatives": []
       },
       "support_policy": "none",

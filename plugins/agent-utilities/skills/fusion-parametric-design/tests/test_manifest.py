@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 from fusion_design.manifest import ManifestValidationError, load_manifest, validate_manifest_data
@@ -55,7 +56,7 @@ class ManifestValidationTests(unittest.TestCase):
         data["sources"][0]["kind"] = "scan"
         data["parameters"][0]["provisional"] = False
         issues = validate_manifest_data(data)
-        self.assertIn("scan-parameter-not-provisional", {issue.code for issue in issues})
+        self.assertIn("parameter-confidence-exceeds-source", {issue.code for issue in issues})
 
     def test_coupon_verified_scan_parameter_can_be_final(self) -> None:
         data = copy.deepcopy(self.data)
@@ -63,7 +64,27 @@ class ManifestValidationTests(unittest.TestCase):
         data["sources"][0]["confidence"] = "coupon_verified"
         data["parameters"][0]["provisional"] = False
         issues = validate_manifest_data(data)
-        self.assertNotIn("scan-parameter-not-provisional", {issue.code for issue in issues})
+        self.assertNotIn("parameter-confidence-exceeds-source", {issue.code for issue in issues})
+
+    def test_critical_parameter_may_not_outrank_a_provisional_source_of_any_kind(self) -> None:
+        # The scan rule was only ever one instance of the general contract: a
+        # claim's confidence may never exceed the confidence of its source.
+        for kind in ("user_measurement", "conservative_proxy", "third_party_cad", "manufacturer_drawing"):
+            with self.subTest(kind=kind):
+                data = copy.deepcopy(self.data)
+                data["sources"][0]["kind"] = kind
+                data["sources"][0]["confidence"] = "provisional"
+                self.assertEqual(False, data["parameters"][0]["provisional"])
+                self.assertEqual(True, data["parameters"][0]["critical"])
+                self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+    def test_provisional_source_backs_a_parameter_that_admits_it_is_provisional(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["sources"][0]["confidence"] = "provisional"
+        for parameter in data["parameters"]:
+            if parameter.get("source_id") == "pd_trigger_board_measurement":
+                parameter["provisional"] = True
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
 
     def test_cli_enforces_schema_identity_and_unknown_field_rules(self) -> None:
         data = copy.deepcopy(self.data)
@@ -194,10 +215,33 @@ class ManifestValidationTests(unittest.TestCase):
         issues = validate_manifest_data(data)
         self.assertNotIn("reference-keepout-required", {issue.code for issue in issues})
 
-    def test_manifest_without_printable_parts_is_still_valid(self) -> None:
+    def test_absent_printable_parts_is_recorded_rather_than_silently_satisfied(self) -> None:
         data = copy.deepcopy(self.data)
         data.pop("printable_parts")
+        issues = validate_manifest_data(data)
+        # Omitting the section stays legal (back-compat) ...
+        self.assertEqual([], [issue for issue in issues if issue.severity == "error"])
+        # ... but the absence is recorded, so no consumer can read "no print
+        # intent declared" as "print intent satisfied".
+        absence = [issue for issue in issues if issue.code == "printable-parts-not-declared"]
+        self.assertEqual(1, len(absence), issues)
+        self.assertEqual("warning", absence[0].severity)
+        for expected in data["verification"]["expected_print_parts"]:
+            self.assertIn(expected, absence[0].message)
+
+    def test_absent_printable_parts_is_silent_when_nothing_is_expected(self) -> None:
+        data = copy.deepcopy(self.data)
+        data.pop("printable_parts")
+        data["verification"]["expected_print_parts"] = []
         self.assertEqual([], validate_manifest_data(data))
+
+    def test_absent_printable_parts_does_not_block_loading(self) -> None:
+        data = copy.deepcopy(self.data)
+        data.pop("printable_parts")
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "no_printable_parts.json"
+            broken.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual([], load_manifest(broken).printable_parts)
 
     def test_example_printable_parts_validate(self) -> None:
         self.assertEqual([], validate_manifest_data(self.data))
@@ -738,17 +782,88 @@ class ManifestValidationTests(unittest.TestCase):
                 )
                 self.assertIn("material-decision-outranks-source", self._codes(data))
 
-        # A stronger claim is allowed only when it is bound by both a coupon and
-        # a recorded risk.
+        # A stronger claim is allowed when it is bound by both a coupon and a
+        # recorded risk -- a declared plan to close the gap.
         bound = self._with_decision(
             source_id="enclosure_material_requirements",
-            confidence="coupon_verified",
-            unresolved_risks=["Snap-rim cycle life is still unproven."],
+            confidence="measured",
+            unresolved_risks=["VAL__PD_FIT_COUPON is not printed yet, so the fit is unproven."],
         )
         self.assertNotIn("material-decision-outranks-source", self._codes(bound))
 
+        # ... and the risk must name the coupon. Any coupon path plus any
+        # non-empty string made the bridge free.
+        unbound = self._with_decision(
+            source_id="enclosure_material_requirements",
+            confidence="measured",
+            unresolved_risks=["Snap-rim cycle life is still unproven."],
+        )
+        self.assertIn("material-decision-outranks-source", self._codes(unbound))
+
+        # ... but coupon_verified is not bridgeable. It asserts a coupon was
+        # already printed and measured, and a plan to measure cannot stand in
+        # for a measurement that happened. This is the shipped shape: the
+        # example decision already carries a coupon and three risks, so a
+        # bridgeable coupon_verified would leave the claim unbacked.
+        unbridgeable = self._with_decision(
+            source_id="enclosure_material_requirements",
+            confidence="coupon_verified",
+            unresolved_risks=["VAL__PD_FIT_COUPON is not printed yet, so the fit is unproven."],
+        )
+        self.assertIn("material-decision-outranks-source", self._codes(unbridgeable))
+
         # A measured source carries a measured decision without complaint.
         self.assertEqual([], validate_manifest_data(self._with_decision()))
+
+    def test_decision_confidence_is_ranked_not_string_compared(self) -> None:
+        # The inline predicate only ever tested `source.confidence ==
+        # "provisional"`, so every shortfall between two non-provisional
+        # confidences validated clean.
+        self.assertIn(
+            "material-decision-outranks-source",
+            self._codes(
+                self._with_decision(
+                    source_id="pd_trigger_board_measurement",  # confidence: measured
+                    confidence="coupon_verified",
+                    coupon_component=None,
+                    unresolved_risks=[],
+                )
+            ),
+        )
+
+    def test_decision_may_not_rest_on_an_unverified_scan(self) -> None:
+        # source_backs_claim demotes a scan to provisional whatever it declares,
+        # so the scan rule reaches material decisions without being restated.
+        data = self._with_decision(source_id="scan_source", confidence="measured", unresolved_risks=[])
+        data["sources"].append(
+            {
+                "id": "scan_source",
+                "kind": "scan",
+                "locator": "scan://pd-trigger",
+                "revision": "2026-08-18",
+                "confidence": "measured",
+                "notes": "Structured-light scan of the sample.",
+            }
+        )
+        self.assertIn("material-decision-outranks-source", self._codes(data))
+
+        # Coupon-verifying the scan settles it, exactly as for a parameter.
+        data["sources"][-1]["confidence"] = "coupon_verified"
+        self.assertNotIn("material-decision-outranks-source", self._codes(data))
+
+    def test_filled_material_guard_still_fires_alongside_the_confidence_rule(self) -> None:
+        # Regression guard for the adversarially-found chain: PA_CF plus
+        # coupon_verified against a provisional source must not go quiet.
+        data = self._with_decision(
+            family="PA_CF",
+            formulation="Prusament PA11CF",
+            source_id="enclosure_material_requirements",
+            confidence="coupon_verified",
+            unresolved_risks=["Nozzle wear is unquantified until VAL__PD_FIT_COUPON is printed."],
+        )
+        codes = self._codes(data)
+        self.assertIn("material-decision-filled-material-unguarded", codes)
+        self.assertIn("material-decision-outranks-source", codes)
 
     def test_coupon_component_must_be_a_printable_part(self) -> None:
         for path in ("00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC", "20_FIXTURES", "10_PRODUCT"):
@@ -774,6 +889,176 @@ class ManifestValidationTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn(expected, self._codes(self._with_decision(**{field: padded})))
+    def test_coupon_verified_material_needs_coupon_evidence(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"].pop("source_id", None)
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        # A source may not back a claim stronger than its own confidence.
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["source_id"] = "pd_trigger_board_measurement"
+        self.assertEqual("measured", data["sources"][0]["confidence"])
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["sources"][0]["confidence"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["source_id"] = "pd_trigger_board_measurement"
+        self.assertNotIn("printable-part-invalid-material", self._codes(data))
+
+    def test_contradictory_clearance_and_interference_checks_are_reconciled(self) -> None:
+        pair = ("10_PRODUCT/PROD__BASE", "10_PRODUCT/PROD__LID")
+
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].append(
+            {"id": "base-lid-gap", "one": pair[0], "two": pair[1], "minimum_mm": 2.0}
+        )
+        data["verification"]["interference_checks"].append(
+            {"id": "base-lid-overlap", "one": pair[0], "two": pair[1], "allow_interference": True}
+        )
+        self.assertIn("contradictory-verification-checks", self._codes(data))
+
+        # Reversing 'one' and 'two' describes the same pair and must not hide it.
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].extend(
+            [
+                {"id": "base-lid-gap", "one": pair[0], "two": pair[1], "minimum_mm": 2.0},
+                {"id": "lid-base-gap", "one": pair[1], "two": pair[0], "minimum_mm": 0.5},
+            ]
+        )
+        self.assertIn("contradictory-verification-checks", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["verification"]["interference_checks"][0]["allow_interference"] = True
+        codes = self._codes(data)
+        self.assertIn("keepout-interference-allowed", codes)
+
+    def test_agreeing_checks_on_one_pair_are_not_a_contradiction(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].extend(
+            [
+                {
+                    "id": "base-lid-gap",
+                    "one": "10_PRODUCT/PROD__BASE",
+                    "two": "10_PRODUCT/PROD__LID",
+                    "minimum_mm": 2.0,
+                },
+                {
+                    "id": "lid-base-gap",
+                    "one": "10_PRODUCT/PROD__LID",
+                    "two": "10_PRODUCT/PROD__BASE",
+                    "minimum_mm": 2.0,
+                },
+            ]
+        )
+        self.assertNotIn("contradictory-verification-checks", self._codes(data))
+
+    def test_a_reference_may_not_stand_in_for_its_own_keepout_or_packing_model(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["references"][0]["keepout_components"] = [
+            "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        ]
+        codes = self._codes(data)
+        self.assertIn("keepout-is-own-model", codes)
+        self.assertNotIn("reference-keepout-required", codes)
+
+        data = copy.deepcopy(self.data)
+        data["references"][0]["packing_component"] = "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC"
+        self.assertIn("reference-authoring-equals-packing", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["references"][1]["packing_component"] = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        self.assertIn("duplicate-packing-component", self._codes(data))
+
+    def test_expected_print_parts_are_reconciled_with_required_components(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["verification"]["required_components"] = ["10_PRODUCT/PROD__BASE"]
+        self.assertIn("expected-print-part-not-required", self._codes(data))
+
+        # A packing proxy is somebody else's hardware, never printable output.
+        pack = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        data = copy.deepcopy(self.data)
+        data["verification"]["expected_print_parts"].append(pack)
+        data["printable_parts"].append(copy.deepcopy(data["printable_parts"][0]))
+        data["printable_parts"][-1].update(id="pack_pd_trigger", path=pack)
+        self.assertIn("expected-print-part-is-reference-model", self._codes(data))
+
+    def test_parameter_names_are_deduped_on_the_value_that_is_validated(self) -> None:
+        data = copy.deepcopy(self.data)
+        duplicate = copy.deepcopy(data["parameters"][0])
+        duplicate["name"] = data["parameters"][0]["name"] + " "
+        duplicate["expression"] = "36 mm"
+        data["parameters"].append(duplicate)
+        codes = self._codes(data)
+        self.assertIn("duplicate-parameter-name", codes)
+        self.assertIn("invalid-parameter-name", codes)
+
+    def test_component_path_segments_reject_whitespace(self) -> None:
+        for bad in ("   ", "10_PRODUCT/PROD__LID ", "10_PRODUCT/ PROD__X"):
+            with self.subTest(path=bad):
+                data = copy.deepcopy(self.data)
+                data["component_tree"].append(bad)
+                self.assertIn("invalid-component-path", self._codes(data))
+
+    def test_duplicate_json_keys_are_rejected_at_load(self) -> None:
+        text = EXAMPLE.read_text(encoding="utf-8").replace(
+            '"provisional": false,\n      "description": "Measured PD trigger board length."',
+            '"provisional": true,\n      "provisional": false,\n      "description": "Measured PD trigger board length."',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "duplicate_key.json"
+            broken.write_text(text, encoding="utf-8")
+            with self.assertRaises(ManifestValidationError) as ctx:
+                load_manifest(broken)
+            self.assertIn("manifest-duplicate-key", str(ctx.exception))
+
+    def test_free_text_claims_are_warned_about_on_every_prose_route(self) -> None:
+        # These values are copied verbatim into the export index as
+        # manufacturing_intent, so an invented claim here is re-served
+        # downstream as if it were evidence. Advisory, never blocking.
+        routes = (
+            lambda d, text: d["printable_parts"][0]["orientation"].__setitem__("rationale", text),
+            lambda d, text: d["printable_parts"][0]["protected_features"][0].__setitem__("description", text),
+            lambda d, text: d["printable_parts"][0]["material"].__setitem__("assumption", text),
+            lambda d, text: d["parameters"][0].__setitem__("description", text),
+            lambda d, text: d["sources"][0].__setitem__("notes", text),
+            lambda d, text: d["references"][0].__setitem__("no_keepout_rationale", text),
+            lambda d, text: d["material_decision"].__setitem__("rationale", text),
+            lambda d, text: d["material_decision"].__setitem__("printer_requirements", text),
+            lambda d, text: d["material_decision"].__setitem__("unresolved_risks", [text]),
+        )
+        for index, mutate in enumerate(routes):
+            with self.subTest(route=index):
+                data = copy.deepcopy(self.data)
+                mutate(data, "The flat floor sits on the plate and prints without supports.")
+                hits = [i for i in validate_manifest_data(data) if i.code == "forbidden-claim-text"]
+                self.assertTrue(hits, "route did not reach the claim lint")
+                self.assertEqual(["warning"], sorted({i.severity for i in hits}))
+
+        # Advisory only: on a pure-prose route it must not block loading.
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["orientation"]["rationale"] = "It prints without supports."
+        self.assertEqual([], [i for i in validate_manifest_data(data) if i.severity == "error"])
+
+    def test_claim_lint_does_not_fire_on_legitimate_authoring(self) -> None:
+        # Deliberately NOT drawn from the example manifest and not written
+        # against the patterns: text an author would plausibly write, including
+        # the doctrine the code comment itself states.
+        for text in (
+            "This face requires no support scarring, so keep the seam elsewhere.",
+            "Do not record print time in this manifest; it belongs to the slicer.",
+            "Support placement is the slicer's decision, not ours.",
+            "Choose an orientation that keeps the bridge under 5 mm.",
+            "The rim is a mating face; scarring it changes the fit.",
+            "Wall thickness follows the nozzle, not a folklore 2 mm rule.",
+        ):
+            with self.subTest(text=text):
+                data = copy.deepcopy(self.data)
+                data["printable_parts"][0]["orientation"]["rationale"] = text
+                self.assertNotIn("forbidden-claim-text", self._codes(data))
 
     def _with_variants(self, *variants):
         data = copy.deepcopy(self.data)
@@ -921,9 +1206,218 @@ class ManifestValidationTests(unittest.TestCase):
         ]
         self.assertIn("variants-exceed-maximum", self._codes(self._with_variants(*variants)))
         self.assertNotIn("variants-exceed-maximum", self._codes(self._with_variants(*variants[:-1])))
+    def test_claim_lint_is_advisory_and_its_gaps_are_documented(self) -> None:
+        # Pinning the incompleteness rather than pretending it away. Every one
+        # of these asserts a print outcome and every one walks through: the
+        # false-negative surface is unbounded, which is precisely why the check
+        # is a warning and why patterns must not be piled on to hide it.
+        for evasion in (
+            "The flat floor prints support-free.",
+            "Supports are unnecessary in this orientation.",
+            "The part is printed without supports.",
+            "No support material is needed here.",
+            "Supports will not be required for this face.",
+            "Se imprime sin soportes.",
+        ):
+            with self.subTest(evasion=evasion):
+                data = copy.deepcopy(self.data)
+                data["printable_parts"][0]["orientation"]["rationale"] = evasion
+                self.assertNotIn("forbidden-claim-text", self._codes(data))
+
+    def test_manifest_that_asserts_nothing_is_recorded(self) -> None:
+        empty = {
+            "schema_version": 1,
+            "project": copy.deepcopy(self.data["project"]),
+            "sources": [],
+            "parameters": [],
+            "component_tree": [],
+            "references": [],
+            "verification": {
+                "required_components": [],
+                "clearance_checks": [],
+                "interference_checks": [],
+                "expected_print_parts": [],
+            },
+        }
+        issues = validate_manifest_data(empty)
+        self.assertEqual([], [i for i in issues if i.severity == "error"])
+        floor = [i for i in issues if i.code == "manifest-asserts-nothing"]
+        self.assertEqual(1, len(floor), issues)
+        self.assertEqual("warning", floor[0].severity)
+        # The example asserts plenty; the floor must not fire on it.
+        self.assertNotIn("manifest-asserts-nothing", self._codes(self.data))
+
+    def test_zero_clearance_minimum_is_no_constraint_at_all(self) -> None:
+        for minimum in (0, 0.0, -0.0):
+            with self.subTest(minimum=minimum):
+                data = copy.deepcopy(self.data)
+                data["verification"]["clearance_checks"][0]["minimum_mm"] = minimum
+                self.assertIn("invalid-clearance-minimum", self._codes(data))
+
+    def test_ids_must_be_written_the_way_they_are_validated(self) -> None:
+        # scripts.py writes source_id raw into the Fusion provenance comment,
+        # the same argument that already applied to parameter names.
+        for mutate, expected in (
+            (lambda d: d["parameters"][0].__setitem__("source_id", "pd_trigger_board_measurement "),
+             "invalid-parameter-source-id"),
+            (lambda d: d["sources"][0].__setitem__("id", "pd_trigger_board_measurement "),
+             "invalid-source-id"),
+            (lambda d: d["references"][0].__setitem__("id", "pd_trigger "), "invalid-reference-id"),
+            (lambda d: d["references"][0].__setitem__("source_id", "pd_trigger_board_measurement "),
+             "invalid-reference-source-id"),
+        ):
+            with self.subTest(expected=expected):
+                data = copy.deepcopy(self.data)
+                mutate(data)
+                self.assertIn(expected, self._codes(data))
+
+    def test_a_guess_may_not_self_declare_strong_confidence(self) -> None:
+        # conservative_proxy's entire semantic content is "this is a guess"; the
+        # per-kind cap generalizes the scan carve-out instead of special-casing.
+        data = copy.deepcopy(self.data)
+        data["sources"][0].update(kind="conservative_proxy", confidence="verified_cad")
+        self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+        data["sources"][0]["confidence"] = "coupon_verified"
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
+
+    def test_part_may_not_claim_coupon_verified_past_the_project_decision(self) -> None:
+        # The part-level rule ranks status against the source the *part* cites
+        # and never against the decision governing the same material.
+        data = copy.deepcopy(self.data)
+        self.assertEqual("provisional", data["material_decision"]["confidence"])
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["source_id"] = "enclosure_material_requirements"
+        self.assertIn("material-decision-part-outranks-decision", self._codes(data))
+
+    def test_provisional_starting_assumptions_compose_with_the_confidence_rule(self) -> None:
+        """The example's five sourced provisionals against the provenance rule.
+
+        Those parameters previously carried no source_id at all, which made the
+        confidence rule short-circuit on them. Now that they cite a
+        conservative_proxy source, the rule is live -- so pin both directions.
+        """
+        sourced = (
+            "clr_rigid_xy",
+            "clr_rigid_z",
+            "fab_wall_thickness",
+            "fab_fit_clearance",
+            "pack_usb_c_straight_departure",
+        )
+        for name in sourced:
+            parameter = next(p for p in self.data["parameters"] if p["name"] == name)
+            self.assertEqual("provisional_starting_assumptions", parameter["source_id"])
+            self.assertTrue(parameter["provisional"], name)
+
+        # Declared provisional against a provisional source: satisfied.
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(self.data))
+
+        # Settling one without settling its source is refused.
+        data = copy.deepcopy(self.data)
+        next(p for p in data["parameters"] if p["name"] == "fab_wall_thickness")["provisional"] = False
+        self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+        # And the source cannot be talked up to launder them: the kind cap holds
+        # a conservative_proxy at provisional however it labels itself.
+        data = copy.deepcopy(self.data)
+        next(s for s in data["sources"] if s["id"] == "provisional_starting_assumptions")[
+            "confidence"
+        ] = "measured"
+        for name in sourced:
+            next(p for p in data["parameters"] if p["name"] == name)["provisional"] = False
+        self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+        # A printed and measured coupon is what settles them.
+        next(s for s in data["sources"] if s["id"] == "provisional_starting_assumptions")[
+            "confidence"
+        ] = "coupon_verified"
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
+
+    def test_which_roles_must_cite_provenance_when_critical(self) -> None:
+        """The per-role table. A critical value is either a claim about the
+        world (cite something) or a choice the author made (nothing to cite).
+
+        This is the documentation for the decision: change the table here and
+        in PROVENANCE_REQUIRED_ROLES together, or not at all.
+        """
+        from fusion_design.manifest import PROVENANCE_REQUIRED_ROLES, ROLE_PREFIXES
+
+        requires_provenance = {
+            "source": True,  # a measured or published dimension
+            "clearance": True,  # functional spacing: a fit claim against something real
+            "fabrication": True,  # process capability; "2 mm wall" is folklore alone
+            "packing": True,  # dynamic/service space: a physical envelope
+            "design": False,  # preference; a corner radius is measured against nothing
+            "derived": False,  # computed, so its provenance is its inputs
+        }
+        # Every role is covered, and the table is the constant.
+        self.assertEqual(set(ROLE_PREFIXES), set(requires_provenance))
+        self.assertEqual(
+            {role for role, required in requires_provenance.items() if required},
+            PROVENANCE_REQUIRED_ROLES,
+        )
+
+        for role, required in requires_provenance.items():
+            for provisional in (False, True):
+                with self.subTest(role=role, provisional=provisional):
+                    data = copy.deepcopy(self.data)
+                    data["parameters"] = [
+                        {
+                            "name": f"{ROLE_PREFIXES[role]}probe",
+                            "expression": "1 mm",
+                            "units": "mm",
+                            "role": role,
+                            "critical": True,
+                            "provisional": provisional,
+                            "description": "Probe parameter carrying no source_id.",
+                        }
+                    ]
+                    codes = self._codes(data)
+                    # provisional must not buy an exemption: "not settled yet"
+                    # is not the same claim as "rests on nothing".
+                    self.assertEqual(
+                        required,
+                        "critical-parameter-missing-source" in codes,
+                        f"role={role} provisional={provisional} -> {sorted(codes)}",
+                    )
+
+        # Not critical: nothing is required of any role.
+        for role in requires_provenance:
+            with self.subTest(role=role, critical=False):
+                data = copy.deepcopy(self.data)
+                data["parameters"] = [
+                    {
+                        "name": f"{ROLE_PREFIXES[role]}probe",
+                        "expression": "1 mm",
+                        "units": "mm",
+                        "role": role,
+                        "critical": False,
+                        "provisional": False,
+                        "description": "Probe parameter carrying no source_id.",
+                    }
+                ]
+                self.assertNotIn("critical-parameter-missing-source", self._codes(data))
+
+    def test_empty_string_source_id_is_not_provenance(self) -> None:
+        # The shape the #36 reviewer proved loads, validates and plans clean.
+        data = copy.deepcopy(self.data)
+        data["parameters"] = [
+            {
+                "name": "clr_probe",
+                "expression": "1 mm",
+                "units": "mm",
+                "role": "clearance",
+                "source_id": "",
+                "critical": True,
+                "provisional": False,
+                "description": "Critical clearance citing an empty source id.",
+            }
+        ]
+        self.assertIn("critical-parameter-missing-source", self._codes(data))
 
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
+            CLAIM_CONFIDENCE_RANK,
             CONTACT_FACES,
             DRYING_STATES,
             MATERIAL_DECISION_FIELDS,
@@ -934,13 +1428,50 @@ class ManifestValidationTests(unittest.TestCase):
             PRINTABLE_PART_FIELDS,
             PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
+            PROVENANCE_REQUIRED_ROLES,
+            REFERENCE_REPRESENTATIONS,
+            ROLE_PREFIXES,
             SOURCE_CONFIDENCES,
+            SOURCE_KINDS,
             SUPPORT_POLICIES,
             SUPPORT_REGION_KINDS,
         )
 
         schema = json.loads((ROOT / "schema" / "fusion-project.schema.json").read_text(encoding="utf-8"))
         part = schema["$defs"]["printable_part"]
+
+        self.assertEqual(SOURCE_KINDS, set(schema["$defs"]["source"]["properties"]["kind"]["enum"]))
+        self.assertEqual(
+            SOURCE_CONFIDENCES, set(schema["$defs"]["source"]["properties"]["confidence"]["enum"])
+        )
+        # Every confidence must be rankable, or a new enum value silently ranks
+        # as provisional and quietly blocks every claim that cites it.
+        self.assertEqual(SOURCE_CONFIDENCES, set(CLAIM_CONFIDENCE_RANK))
+        self.assertEqual(
+            REFERENCE_REPRESENTATIONS,
+            set(schema["$defs"]["reference"]["properties"]["representation"]["enum"]),
+        )
+        self.assertEqual(set(ROLE_PREFIXES), set(schema["$defs"]["parameter"]["properties"]["role"]["enum"]))
+        self.assertEqual(
+            PROVENANCE_REQUIRED_ROLES,
+            set(schema["$defs"]["parameter"]["allOf"][0]["if"]["properties"]["role"]["enum"]),
+        )
+        # A zero minimum cannot fail, so the schema must exclude it too.
+        self.assertEqual(
+            {"type": "number", "exclusiveMinimum": 0},
+            schema["$defs"]["clearance_check"]["properties"]["minimum_mm"],
+        )
+        # coupon_verified carries a provenance obligation in both artifacts.
+        self.assertIn(
+            {
+                "if": {
+                    "properties": {"material": {"properties": {"status": {"const": "coupon_verified"}}, "required": ["status"]}},
+                    "required": ["material"],
+                },
+                "then": {"properties": {"material": {"required": ["source_id"]}}},
+            },
+            part["allOf"],
+        )
         self.assertIn("printable_parts", schema["properties"])
         self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
         self.assertEqual(PRINTABLE_PART_REQUIRED_FIELDS, set(part["required"]))
@@ -998,14 +1529,12 @@ class ManifestValidationTests(unittest.TestCase):
     def test_load_manifest_raises_with_all_issues(self) -> None:
         data = copy.deepcopy(self.data)
         data["parameters"][0].pop("source_id")
-        broken = ROOT / "tests" / "_broken_manifest.json"
-        broken.write_text(json.dumps(data), encoding="utf-8")
-        try:
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "broken_manifest.json"
+            broken.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaises(ManifestValidationError) as ctx:
                 load_manifest(broken)
             self.assertIn("critical-parameter-missing-source", str(ctx.exception))
-        finally:
-            broken.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

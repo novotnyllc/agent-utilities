@@ -114,7 +114,15 @@ def _validate_material_decision(
 ) -> None:
     # Imported here, not at module scope: manifest.py imports this module to
     # re-export the enums, so a top-level import would be circular.
-    from .manifest import SOURCE_CONFIDENCES, ValidationIssue, _reject_unknown_fields, _VALID_NAME_RE
+    from .manifest import (
+        SOURCE_CONFIDENCES,
+        ValidationIssue,
+        _reject_unknown_fields,
+        _VALID_NAME_RE,
+        _reject_claim_text,
+        source_backs_claim,
+        source_confidence,
+    )
 
     if decision is None:
         return
@@ -232,6 +240,7 @@ def _validate_material_decision(
                 "rationale must be a non-empty string saying why this material was chosen.",
             )
         )
+    _reject_claim_text(issues, decision.get("rationale"), "material_decision.rationale")
 
     raw_risks = decision.get("unresolved_risks")
     risks: list[str] = []
@@ -256,6 +265,7 @@ def _validate_material_decision(
                 )
                 continue
             risks.append(risk)
+            _reject_claim_text(issues, raw_risk, f"material_decision.unresolved_risks[{index}]")
 
     raw_requirements = decision.get("printer_requirements")
     if raw_requirements is not None and not _text(raw_requirements):
@@ -266,6 +276,7 @@ def _validate_material_decision(
                 "printer_requirements, when present, must be a non-empty string.",
             )
         )
+    _reject_claim_text(issues, raw_requirements, "material_decision.printer_requirements")
 
     raw_nozzle = decision.get("nozzle")
     nozzle = raw_nozzle if _in_closed_set(raw_nozzle, NOZZLE_MATERIALS) else ""
@@ -340,28 +351,38 @@ def _validate_material_decision(
             )
         )
 
-    # A decision may not claim more than the source it rests on. Mirrors
-    # scan-parameter-not-provisional in manifest.py, which refuses the same move
-    # for a critical parameter cited to a scan.
+    # A decision may not claim more than the source it rests on -- the shared
+    # rule in manifest.py, which also demotes a scan to provisional whatever its
+    # confidence field declares. The gap may be bridged by declaring how it will
+    # be closed (a coupon plus an open risk), except for coupon_verified: that
+    # asserts a coupon was already printed and measured, and a plan to measure
+    # cannot stand in for a measurement that happened.
     source = source_map.get(source_id)
-    if (
-        isinstance(source, dict)
-        and source.get("confidence") == "provisional"
-        and confidence
-        and confidence != "provisional"
-        and not (coupon and risks)
-    ):
-        issues.append(
-            ValidationIssue(
-                "material-decision-outranks-source",
-                "material_decision.confidence",
-                f"confidence {confidence!r} claims more than source {source_id!r}, which is provisional. "
-                "Keep the decision provisional, or bind the stronger claim to both a coupon_component "
-                "and an unresolved risk.",
+    if isinstance(source, dict) and confidence and not source_backs_claim(source, confidence):
+        # The bridge was free: any coupon path plus any non-empty string. Make it
+        # bind -- a risk that does not name the coupon is not a plan to close
+        # this gap, it is unrelated prose sitting in the same list.
+        coupon_leaf = coupon.rsplit("/", 1)[-1] if coupon else ""
+        bridging_risk = bool(coupon_leaf) and any(_names(risk, coupon_leaf) for risk in risks)
+        bridged = bridging_risk and confidence != "coupon_verified"
+        if not bridged:
+            issues.append(
+                ValidationIssue(
+                    "material-decision-outranks-source",
+                    "material_decision.confidence",
+                    f"confidence {confidence!r} claims more than source {source_id!r} "
+                    f"(kind {source.get('kind')!r}, confidence {source.get('confidence')!r}), which carries "
+                    f"only {source_confidence(source)!r} evidence. Lower the decision confidence"
+                    + (
+                        ", or cite a coupon_verified source."
+                        if confidence == "coupon_verified"
+                        else ", or bind the stronger claim to a coupon_component plus an unresolved risk "
+                        "that names that coupon."
+                    ),
+                )
             )
-        )
 
-    _validate_part_material_consistency(issues, printable_parts, family, formulation)
+    _validate_part_material_consistency(issues, printable_parts, family, formulation, confidence, source)
 
 
 def _validate_part_material_consistency(
@@ -369,11 +390,35 @@ def _validate_part_material_consistency(
     printable_parts: Any,
     family: str,
     formulation: str,
+    confidence: str,
+    source: Any,
 ) -> None:
     """R6: a part may not silently assume a different material than the project decided."""
-    from .manifest import ValidationIssue
+    from .manifest import ValidationIssue, source_backs_claim
 
-    if not isinstance(printable_parts, list) or (not family and not formulation):
+    if not isinstance(printable_parts, list):
+        return
+    # A part may not out-claim the project decision about the same material.
+    # The part-level rule ranks material.status against the source the *part*
+    # cites and never against the decision, so a part could read
+    # coupon_verified while the decision that governs it is still provisional --
+    # in the shipped manifest, while the decision's own unresolved_risks say the
+    # coupon has not been printed yet.
+    if confidence and not source_backs_claim(source, "coupon_verified"):
+        for index, part in enumerate(printable_parts):
+            if not isinstance(part, dict):
+                continue
+            material = part.get("material")
+            if isinstance(material, dict) and material.get("status") == "coupon_verified":
+                issues.append(
+                    ValidationIssue(
+                        "material-decision-part-outranks-decision",
+                        f"printable_parts[{index}].material.status",
+                        f"Part claims material status 'coupon_verified' while material_decision.confidence is "
+                        f"{confidence!r}; the project decision about this material has not been coupon-verified.",
+                    )
+                )
+    if not family and not formulation:
         return
     # Families the decision itself names, so a formulation like "Fiberon PET-CF17"
     # under the OTHER sentinel does not read as naming a foreign family. OTHER is

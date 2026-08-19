@@ -71,9 +71,35 @@ def _validate_printable_parts(
 ) -> None:
     # Imported here, not at module scope: manifest.py imports this module to
     # re-export the enums, so a top-level import would be circular.
-    from .manifest import ValidationIssue, _duplicates, _reject_unknown_fields, _VALID_NAME_RE
+    from .manifest import (
+        ValidationIssue,
+        _duplicates,
+        _reject_claim_text,
+        _reject_unknown_fields,
+        _VALID_NAME_RE,
+        source_backs_claim,
+        source_confidence,
+    )
 
     if printable_parts is None:
+        # The section stays optional for back-compat: a manifest may decline to
+        # declare print intent. What it may not do is decline *silently* while
+        # verification promises printed parts, because an absent section is
+        # otherwise indistinguishable from a satisfied one. Recorded as a
+        # warning, so it is surfaced without rejecting manifests that predate
+        # the section.
+        if expected_print_part_paths:
+            issues.append(
+                ValidationIssue(
+                    "printable-parts-not-declared",
+                    "printable_parts",
+                    "verification.expected_print_parts promises "
+                    f"{', '.join(sorted(expected_print_part_paths))} but the manifest declares no printable_parts, "
+                    "so no build orientation, support policy, material status, or strength intent is recorded "
+                    "for them. Print-evidence completeness is undeclared, not satisfied.",
+                    severity="warning",
+                )
+            )
         return
     if not isinstance(printable_parts, list):
         issues.append(
@@ -233,6 +259,7 @@ def _validate_printable_parts(
                         "orientation.rationale must be a non-empty string.",
                     )
                 )
+            _reject_claim_text(issues, rationale, f"{path}.orientation.rationale")
             alternatives = orientation.get("allowed_alternatives")
             if not isinstance(alternatives, list):
                 issues.append(
@@ -318,6 +345,7 @@ def _validate_printable_parts(
                             "Support regions need a plain-language description.",
                         )
                     )
+                _reject_claim_text(issues, description, f"{region_path}.description")
         elif "support_regions" in raw_part:
             issues.append(
                 ValidationIssue(
@@ -441,6 +469,7 @@ def _validate_printable_parts(
                             "Protected features need a plain-language description.",
                         )
                     )
+                _reject_claim_text(issues, description, f"{feature_path}.description")
 
         material = raw_part.get("material")
         if not isinstance(material, dict):
@@ -462,6 +491,7 @@ def _validate_printable_parts(
                         "material.assumption must be a non-empty string.",
                     )
                 )
+            _reject_claim_text(issues, assumption, f"{path}.material.assumption")
             if not _in_closed_set(material.get("status"), MATERIAL_STATUSES):
                 issues.append(
                     ValidationIssue(
@@ -488,6 +518,31 @@ def _validate_printable_parts(
                             f"material.source_id references unknown source {material_source!r}.",
                         )
                     )
+            # coupon_verified is a physical claim: a coupon was printed on this
+            # material and measured. Same rule as everywhere else -- the claim
+            # may not be more confident than the source it cites.
+            if material.get("status") == "coupon_verified":
+                if material_source is None:
+                    issues.append(
+                        ValidationIssue(
+                            "printable-part-invalid-material",
+                            f"{path}.material.source_id",
+                            "material.status 'coupon_verified' requires a material.source_id recording the "
+                            "coupon evidence.",
+                        )
+                    )
+                elif isinstance(material_source, str) and material_source in source_map:
+                    source = source_map[material_source]
+                    if not source_backs_claim(source, "coupon_verified"):
+                        issues.append(
+                            ValidationIssue(
+                                "printable-part-invalid-material",
+                                f"{path}.material.status",
+                                f"material.status 'coupon_verified' cites source {material_source!r} "
+                                f"(kind {source.get('kind')!r}, confidence {source.get('confidence')!r}), which "
+                                f"carries only {source_confidence(source)!r} evidence.",
+                            )
+                        )
 
     for duplicate in sorted(_duplicates(part_ids)):
         issues.append(

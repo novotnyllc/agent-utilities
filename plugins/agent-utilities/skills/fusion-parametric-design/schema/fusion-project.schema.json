@@ -351,7 +351,35 @@
           "type": "string",
           "minLength": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "critical": {
+                "const": true
+              },
+              "role": {
+                "enum": [
+                  "source",
+                  "clearance",
+                  "fabrication",
+                  "packing"
+                ]
+              }
+            },
+            "required": [
+              "critical",
+              "role"
+            ]
+          },
+          "then": {
+            "required": [
+              "source_id"
+            ]
+          }
+        }
+      ]
     },
     "reference": {
       "type": "object",
@@ -760,6 +788,34 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "material": {
+                "properties": {
+                  "status": {
+                    "const": "coupon_verified"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "material"
+            ]
+          },
+          "then": {
+            "properties": {
+              "material": {
+                "required": [
+                  "source_id"
+                ]
+              }
+            }
+          }
         }
       ]
     },
@@ -797,7 +853,7 @@
         },
         "minimum_mm": {
           "type": "number",
-          "minimum": 0
+          "exclusiveMinimum": 0
         }
       }
     },

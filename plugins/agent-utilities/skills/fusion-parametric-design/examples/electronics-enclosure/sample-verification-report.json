@@ -49,7 +49,7 @@
     }
   },
   "kind": "verification",
-  "manifest_sha256": "497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c",
+  "manifest_sha256": "dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642",
   "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
   "occurrence_transforms": {
     "10_PRODUCT/PROD__BASE": [

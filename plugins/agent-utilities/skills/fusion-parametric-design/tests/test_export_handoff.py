@@ -306,6 +306,7 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         # Two component paths whose slugs collide (lowercase folding).
         colliding["component_tree"].extend(["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"])
         colliding["verification"]["expected_print_parts"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
+        colliding["verification"]["required_components"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
         from fusion_design.manifest import Manifest
 
         manifest = Manifest.from_data(colliding)
