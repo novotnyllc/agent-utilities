@@ -251,6 +251,7 @@
     {
       "id": "prod_base",
       "path": "10_PRODUCT/PROD__BASE",
+      "minimum_volume_mm3": 1000,
       "quantity": 1,
       "print_as": "separate",
       "orientation": {
@@ -285,6 +286,7 @@
     {
       "id": "prod_lid",
       "path": "10_PRODUCT/PROD__LID",
+      "minimum_volume_mm3": 500,
       "quantity": 1,
       "print_as": "separate",
       "orientation": {
@@ -315,6 +317,7 @@
     {
       "id": "val_pd_fit_coupon",
       "path": "90_VALIDATION/VAL__PD_FIT_COUPON",
+      "minimum_volume_mm3": 100,
       "quantity": 1,
       "print_as": "separate",
       "orientation": {

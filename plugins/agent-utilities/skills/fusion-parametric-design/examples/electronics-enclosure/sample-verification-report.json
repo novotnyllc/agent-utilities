@@ -38,7 +38,7 @@
     }
   },
   "kind": "verification",
-  "manifest_sha256": "9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb",
+  "manifest_sha256": "497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c",
   "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
   "ok": true,
   "project": "wearable-controller-pod",

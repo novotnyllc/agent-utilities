@@ -8,12 +8,13 @@ A release passes only the checks applicable to its intended use. “Generated su
 - Design type is parametric.
 - `Compute All` runs.
 - No timeline error remains; warnings are individually explained.
+- No timeline feature is suppressed (`timeline-suppressed` fails closed; suppression silently changes the shape away from the recorded intent, so it is a failure, not a note).
 - Required parameter names and expressions match the manifest.
 - Managed components and print parts exist once at the intended paths.
-- Each printable part has the intended positive-volume B-rep body count.
+- Each printable part resolves to exactly one positive-volume B-rep solid whose volume is at or above the declared `printable_parts[].minimum_volume_mm3` and whose name matches the declared `body_name` when one is given. A print part with no `printable_parts` entry fails: verification asserts declared expectations, never a bare "some body exists" threshold.
 - The verification report records each checked part's root-context occurrence transform (`occurrence_transforms`: raw Fusion `transform2.asArray()`, translation components in centimetres — deliberately unconverted, unlike the `*_mm` keys; the export index's per-artifact `transform` uses the same convention).
 - When the manifest declares `printable_parts`, its paths exactly match `verification.expected_print_parts`, and a declared `body_name` matches the resolved solid at export (`body-name-mismatch` fails closed).
-- No accidental visibility/selection state is being used as a substitute for geometry.
+- No accidental visibility/selection state is being used as a substitute for geometry: the report records `occurrence_states` (`isSuppressed`/`isLightBulbOn`/`isVisible`) for every checked path, and any suppressed checked occurrence fails closed as `suppressed-occurrence` — a suppressed keep-out contributes no geometry to interference, so "zero interference" and "not in the model" would otherwise be indistinguishable.
 - The report's `ok` is scoped to the gates it names in `checked`, and `checked` is derived from what that run actually performed. A gate the manifest never declared appears in `not_declared`, never in `checked`: "this project declares no clearance checks" is an honest gap and must never read as a passed check. Everything in `unchecked` — printability, structural, thermal, physical — stays `not run` until the sections below are satisfied by external analysis or a printed part. Report it as "passed the gates it declared", not as "verified".
 
 ## Fit and packing
@@ -24,7 +25,7 @@ A release passes only the checks applicable to its intended use. “Generated su
 - Minimum-distance checks meet the recorded requirement.
 - Forbidden interference checks return zero.
 - Intended contacts are documented and excluded from “forbidden” checks.
-- Closed, open, and service states are checked.
+- Closed, open, and service states are checked. **Manual gate:** nothing in the generated transactions poses the assembly or switches configurations. Drive each state in Fusion yourself and re-run verification per state.
 
 ## Parametric robustness
 

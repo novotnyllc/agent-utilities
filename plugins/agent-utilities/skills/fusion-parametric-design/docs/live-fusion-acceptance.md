@@ -146,7 +146,7 @@ The script places the lid so its nearest point is at least 1.0 mm from the PD pa
 
 Run `positive_control.py` a second time, then run inventory and verification.
 
-**Pass:** the first positive-control report lists all seven paths under `created`; the second lists them under `reused` with no duplicate bodies; verification reports positive-volume solids, no relevant path ambiguity, no unhealthy timeline item, clearance at or above 1.0 mm, zero forbidden interference, and overall `ok: true`.
+**Pass:** the first positive-control report lists all seven paths under `created` and carries empty `duplicate_semantic_paths` and `scaffold_identity_failures` (both re-derived after the final event pump); the second lists them under `reused` with no duplicate bodies; neither run emits a second report block; verification reports exactly one solid per print part at or above its declared `minimum_volume_mm3`, no relevant path ambiguity, no unhealthy or suppressed timeline item, no suppressed checked occurrence, clearance at or above 1.0 mm, zero forbidden interference, and overall `ok: true`.
 
 ## 8. Negative controls
 

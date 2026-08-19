@@ -124,6 +124,31 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIn("invalid-clearance-minimum", codes)
         self.assertIn("expected-print-part-not-in-tree", codes)
 
+    def test_zero_clearance_minimum_is_rejected(self) -> None:
+        # measureMinimumDistance returns 0 for touching and for interpenetrating
+        # solids alike, so a zero minimum is a check that can never fail.
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"][0]["minimum_mm"] = 0
+        issues = validate_manifest_data(data)
+        self.assertIn("invalid-clearance-minimum", {issue.code for issue in issues})
+        self.assertIn(
+            "interference check",
+            next(issue.message for issue in issues if issue.code == "invalid-clearance-minimum"),
+        )
+
+    def test_printable_part_requires_a_positive_minimum_volume(self) -> None:
+        for minimum_volume in (None, 0, -1, "big", float("nan")):
+            with self.subTest(minimum_volume=minimum_volume):
+                data = copy.deepcopy(self.data)
+                if minimum_volume is None:
+                    data["printable_parts"][0].pop("minimum_volume_mm3")
+                else:
+                    data["printable_parts"][0]["minimum_volume_mm3"] = minimum_volume
+                self.assertIn(
+                    "printable-part-invalid-minimum-volume",
+                    {issue.code for issue in validate_manifest_data(data)},
+                )
+
     def test_clearance_minimum_must_be_finite(self) -> None:
         for minimum in (float("nan"), 10**400):
             with self.subTest(minimum=minimum):

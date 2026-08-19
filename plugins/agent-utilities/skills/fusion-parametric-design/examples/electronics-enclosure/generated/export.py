@@ -5,9 +5,14 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
+MANIFEST_SHA256 = '497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+
+
+class DocumentChangedError(RuntimeError):
+    """The active document is no longer ours; the transaction must touch nothing further."""
+
 
 def _emit(report):
     print(REPORT_BEGIN)
@@ -43,7 +48,7 @@ def _pump_events(app, design, target_document):
         or target_document.name != FUSION_DOCUMENT_NAME
         or active_design != design
     ):
-        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+        raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
 
 
 def _pump_events_periodically(app, design, target_document, index):
@@ -154,8 +159,31 @@ def _body_summary(occurrence):
     }
 
 
+def _occurrence_state(occurrence):
+    """Participation state for a root-context occurrence.
+
+    A suppressed occurrence is still returned by allOccurrences and still owns
+    its component's bodies, but contributes no geometry to interference or
+    measurement -- so 'no interference' and 'not in the model' look identical
+    unless this state is recorded.
+    """
+    state = {}
+    for key, attribute in (
+        ("is_suppressed", "isSuppressed"),
+        ("is_light_bulb_on", "isLightBulbOn"),
+        ("is_visible", "isVisible"),
+    ):
+        try:
+            value = getattr(occurrence, attribute)
+        except Exception:
+            value = None
+        state[key] = None if value is None else bool(value)
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
+    suppressed = []
     informational = []
     healthy_state = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
     warning_state = adsk.fusion.FeatureHealthStates.WarningFeatureHealthState
@@ -178,7 +206,11 @@ def _timeline_health(design):
 
         if state in (warning_state, error_state, rolled_back_state):
             unhealthy.append(row)
-        elif state in (suppressed_state, unknown_state):
+        elif state == suppressed_state:
+            # Suppression silently changes the shape away from recorded intent,
+            # so it is reported separately instead of buried in informational.
+            suppressed.append(row)
+        elif state == unknown_state:
             informational.append(row)
         elif state != healthy_state:
             unhealthy.append(row)
@@ -186,6 +218,7 @@ def _timeline_health(design):
     return {
         "count": design.timeline.count,
         "unhealthy": unhealthy,
+        "suppressed": suppressed,
         "informational": informational,
     }
 
@@ -193,7 +226,7 @@ import hashlib
 import os
 import uuid
 
-EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__9bff3afb.json","material_decision":{"confidence":"provisional","coupon_component":"90_VALIDATION/VAL__PD_FIT_COUPON","family":"PETG","formulation":null,"rationale":"The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.","source_id":"enclosure_material_requirements","unresolved_risks":["No formulation is named, so no data-sheet number backs any material-dependent value.","fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.","Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."]},"parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__9bff3afb.3mf","step":"wearable-controller-pod__10_product-prod__base__9bff3afb.step"},"manufacturing_intent":{"id":"prod_base","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim."},"print_as":"separate","protected_features":[{"description":"Top rim mates with the lid; keep it support-free and unscarred.","kind":"mating-face"},{"description":"USB-C insertion opening must stay dimensionally clean.","kind":"hole"}],"quantity":1,"strength":{"infill_percent":{"max":40,"min":20,"target":25},"min_perimeters":3},"support_policy":"none"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__9bff3afb.3mf","step":"wearable-controller-pod__10_product-prod__lid__9bff3afb.step"},"manufacturing_intent":{"id":"prod_lid","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":["-Z"],"contact_face":"+Z","rationale":"Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible."},"print_as":"separate","protected_features":[{"description":"Snap rim engages the base; supports must not touch it.","kind":"mating-face"}],"quantity":1,"strength":{"infill_percent":{"target":20},"min_perimeters":3},"support_policy":"build-plate-only"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__9bff3afb.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__9bff3afb.step"},"manufacturing_intent":{"id":"val_pd_fit_coupon","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"Coupon prints flat in the same orientation as the base pocket it validates."},"print_as":"separate","protected_features":[{"description":"Pocket walls are the measured fit surfaces.","kind":"critical-surface"}],"quantity":1,"strength":{"infill_percent":{"target":15},"min_perimeters":2},"support_policy":"none"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"49c8212cedbd192e44ee8cbb97721e1353725685357c7426a0d6d78572bef461"}')
+EXPORT_SPECS = json.loads('{"export_dir":"FUSION_EXPORT_DIR","formats":["step","3mf"],"index_filename":"export-index__497dc556.json","material_decision":{"confidence":"provisional","coupon_component":"90_VALIDATION/VAL__PD_FIT_COUPON","family":"PETG","formulation":null,"rationale":"The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.","source_id":"enclosure_material_requirements","unresolved_risks":["No formulation is named, so no data-sheet number backs any material-dependent value.","fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.","Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."]},"parts":[{"expected_bounds_mm":{"max":[100.0,110.0,2.0],"min":[0.0,50.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__base__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__base__497dc556.step"},"manufacturing_intent":{"id":"prod_base","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"The flat floor sits on the plate, prints without supports, and keeps the seam off the mating rim."},"print_as":"separate","protected_features":[{"description":"Top rim mates with the lid; keep it support-free and unscarred.","kind":"mating-face"},{"description":"USB-C insertion opening must stay dimensionally clean.","kind":"hole"}],"quantity":1,"strength":{"infill_percent":{"max":40,"min":20,"target":25},"min_perimeters":3},"support_policy":"none"},"path":"10_PRODUCT/PROD__BASE"},{"expected_bounds_mm":{"max":[35.0,13.0,12.0],"min":[0.0,0.0,10.0]},"filenames":{"3mf":"wearable-controller-pod__10_product-prod__lid__497dc556.3mf","step":"wearable-controller-pod__10_product-prod__lid__497dc556.step"},"manufacturing_intent":{"id":"prod_lid","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":["-Z"],"contact_face":"+Z","rationale":"Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible."},"print_as":"separate","protected_features":[{"description":"Snap rim engages the base; supports must not touch it.","kind":"mating-face"}],"quantity":1,"strength":{"infill_percent":{"target":20},"min_perimeters":3},"support_policy":"build-plate-only"},"path":"10_PRODUCT/PROD__LID"},{"expected_bounds_mm":{"max":[10.0,110.0,2.0],"min":[0.0,100.0,0.0]},"filenames":{"3mf":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.3mf","step":"wearable-controller-pod__90_validation-val__pd_fit_coupon__497dc556.step"},"manufacturing_intent":{"id":"val_pd_fit_coupon","material":{"assumption":"PETG","status":"provisional"},"orientation":{"allowed_alternatives":[],"contact_face":"-Z","rationale":"Coupon prints flat in the same orientation as the base pocket it validates."},"print_as":"separate","protected_features":[{"description":"Pocket walls are the measured fit surfaces.","kind":"critical-surface"}],"quantity":1,"strength":{"infill_percent":{"target":15},"min_perimeters":2},"support_policy":"none"},"path":"90_VALIDATION/VAL__PD_FIT_COUPON"}],"verification_report_sha256":"598d4aeb11d4e20d26670e1af8c8a8d4ccde8882ac99c43c8e0b8bb03b16b4a3"}')
 EXPORT_STALENESS_TOLERANCE_MM = 1e-3
 FORMAT_OPTION_ATTRIBUTES = {
     "step": "createSTEPExportOptions",

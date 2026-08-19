@@ -30,6 +30,7 @@ PRINTABLE_PART_FIELDS = {
     "id",
     "path",
     "body_name",
+    "minimum_volume_mm3",
     "quantity",
     "print_as",
     "orientation",
@@ -138,6 +139,28 @@ def _validate_printable_parts(
                     "printable-part-invalid-body-name",
                     f"{path}.body_name",
                     "body_name, when present, must be a non-empty string.",
+                )
+            )
+
+        # The verification print-part gate is measured against this: without a
+        # declared floor, "has a positive-volume solid" passes for a sliver.
+        minimum_volume = raw_part.get("minimum_volume_mm3")
+        try:
+            finite_volume = math.isfinite(float(minimum_volume))
+        except (OverflowError, TypeError, ValueError):
+            finite_volume = False
+        if (
+            isinstance(minimum_volume, bool)
+            or not isinstance(minimum_volume, (int, float))
+            or not finite_volume
+            or minimum_volume <= 0
+        ):
+            issues.append(
+                ValidationIssue(
+                    "printable-part-invalid-minimum-volume",
+                    f"{path}.minimum_volume_mm3",
+                    "minimum_volume_mm3 must be a positive number; it is the declared floor the "
+                    "verification print-part gate measures the resolved solid against.",
                 )
             )
 

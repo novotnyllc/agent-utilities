@@ -5,9 +5,14 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
+MANIFEST_SHA256 = '497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+
+
+class DocumentChangedError(RuntimeError):
+    """The active document is no longer ours; the transaction must touch nothing further."""
+
 
 def _emit(report):
     print(REPORT_BEGIN)
@@ -43,7 +48,7 @@ def _pump_events(app, design, target_document):
         or target_document.name != FUSION_DOCUMENT_NAME
         or active_design != design
     ):
-        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+        raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
 
 
 def _pump_events_periodically(app, design, target_document, index):
@@ -154,8 +159,31 @@ def _body_summary(occurrence):
     }
 
 
+def _occurrence_state(occurrence):
+    """Participation state for a root-context occurrence.
+
+    A suppressed occurrence is still returned by allOccurrences and still owns
+    its component's bodies, but contributes no geometry to interference or
+    measurement -- so 'no interference' and 'not in the model' look identical
+    unless this state is recorded.
+    """
+    state = {}
+    for key, attribute in (
+        ("is_suppressed", "isSuppressed"),
+        ("is_light_bulb_on", "isLightBulbOn"),
+        ("is_visible", "isVisible"),
+    ):
+        try:
+            value = getattr(occurrence, attribute)
+        except Exception:
+            value = None
+        state[key] = None if value is None else bool(value)
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
+    suppressed = []
     informational = []
     healthy_state = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
     warning_state = adsk.fusion.FeatureHealthStates.WarningFeatureHealthState
@@ -178,7 +206,11 @@ def _timeline_health(design):
 
         if state in (warning_state, error_state, rolled_back_state):
             unhealthy.append(row)
-        elif state in (suppressed_state, unknown_state):
+        elif state == suppressed_state:
+            # Suppression silently changes the shape away from recorded intent,
+            # so it is reported separately instead of buried in informational.
+            suppressed.append(row)
+        elif state == unknown_state:
             informational.append(row)
         elif state != healthy_state:
             unhealthy.append(row)
@@ -186,6 +218,7 @@ def _timeline_health(design):
     return {
         "count": design.timeline.count,
         "unhealthy": unhealthy,
+        "suppressed": suppressed,
         "informational": informational,
     }
 

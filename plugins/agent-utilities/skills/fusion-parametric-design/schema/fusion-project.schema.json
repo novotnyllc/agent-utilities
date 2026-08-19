@@ -357,6 +357,7 @@
       "required": [
         "id",
         "path",
+        "minimum_volume_mm3",
         "print_as",
         "orientation",
         "support_policy",
@@ -376,6 +377,10 @@
         "body_name": {
           "type": "string",
           "minLength": 1
+        },
+        "minimum_volume_mm3": {
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "quantity": {
           "type": "integer",

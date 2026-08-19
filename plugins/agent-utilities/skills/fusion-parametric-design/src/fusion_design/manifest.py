@@ -773,13 +773,15 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         isinstance(minimum, bool)
                         or not isinstance(minimum, (int, float))
                         or not finite_minimum
-                        or minimum < 0
+                        or minimum <= 0
                     ):
                         issues.append(
                             ValidationIssue(
                                 "invalid-clearance-minimum",
                                 f"{path}.minimum_mm",
-                                "minimum_mm must be a non-negative number.",
+                                "minimum_mm must be a positive number; a zero minimum can never fail "
+                                "(measureMinimumDistance returns 0 for touching and for interpenetrating "
+                                "solids alike). Express 'must not collide' as an interference check.",
                             )
                         )
                 elif not isinstance(raw_check.get("allow_interference"), bool):

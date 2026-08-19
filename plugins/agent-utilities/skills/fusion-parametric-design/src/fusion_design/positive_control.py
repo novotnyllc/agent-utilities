@@ -81,6 +81,25 @@ def _validate_contract(manifest: Manifest, specs: tuple[dict, ...]) -> None:
         if path not in by_path:
             raise ValueError(f"Positive-control geometry is missing expected print part {path!r}.")
 
+    # Positive-control boxes stand in for the real print parts, so they must
+    # satisfy the same declared print-part expectations verification asserts.
+    for part in manifest.printable_parts:
+        spec = by_path.get(str(part.get("path", "")).strip())
+        if not spec:
+            continue
+        volume = spec["size_mm"][0] * spec["size_mm"][1] * spec["size_mm"][2]
+        try:
+            minimum = float(part.get("minimum_volume_mm3"))
+        except (OverflowError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"Printable part {spec['path']!r} has no usable minimum_volume_mm3."
+            ) from error
+        if volume < minimum:
+            raise ValueError(
+                f"Positive-control box for {spec['path']!r} is {volume} mm3, "
+                f"below the declared minimum_volume_mm3 {minimum}."
+            )
+
     for check in verification.get("clearance_checks", []):
         one = by_path.get(check["one"])
         two = by_path.get(check["two"])
@@ -319,14 +338,18 @@ def _create_body(occurrence, spec):
 
 
 def _cleanup_created(resources):
+    deleted = []
     errors = []
-    for body, base_feature in reversed(resources):
-        errors.extend(_cleanup_pair(body, base_feature))
-    return errors
+    for path, body, base_feature in reversed(resources):
+        pair_errors = _cleanup_pair(body, base_feature)
+        if pair_errors:
+            errors.extend(path + ": " + detail for detail in pair_errors)
+        else:
+            deleted.append(path)
+    return sorted(deleted), errors
 
 
 def run(context):
-    report_attempted = False
     created_resources = []
     try:
         app, design = _active_design()
@@ -363,7 +386,7 @@ def run(context):
                 reused.append(spec["path"])
             else:
                 body, base_feature = _create_body(occurrence, spec)
-                created_resources.append((body, base_feature))
+                created_resources.append((spec["path"], body, base_feature))
                 _validate_geometry(occurrence, spec)
                 created.append(spec["path"])
             _pump_events_periodically(app, design, target_document, index)
@@ -371,10 +394,25 @@ def run(context):
         _pump_events(app, design, target_document)
         compute_invoked = design.computeAll()
         _pump_events(app, design, target_document)
+        # Re-derive the verdict from a post-pump read.  Every yield above can
+        # carry a user edit that makes the tree ambiguous or revokes scaffold
+        # identity, so the pre-pump map is evidence of nothing by this point.
+        _, verified_map, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
+        box_paths = [spec["path"] for spec in BOX_SPECS]
+        ambiguous_component_paths = sorted(set(duplicate_semantic_paths).intersection(box_paths))
+        components_missing = sorted(path for path in box_paths if path not in verified_map)
+        scaffold_identity_failures = []
         body_reports = []
-        for spec in BOX_SPECS:
-            body_report, _ = _validate_geometry(occurrence_map[spec["path"]], spec)
-            body_reports.append(body_report)
+        if not ambiguous_component_paths and not components_missing:
+            for spec in BOX_SPECS:
+                occurrence = verified_map[spec["path"]]
+                try:
+                    _require_scaffold_identity(occurrence, spec["path"])
+                except Exception as identity_error:
+                    scaffold_identity_failures.append(str(identity_error))
+                    continue
+                body_report, _ = _validate_geometry(occurrence, spec)
+                body_reports.append(body_report)
         timeline = _timeline_health(design)
         report = {
             "kind": "positive-control",
@@ -385,32 +423,58 @@ def run(context):
             "reused": sorted(reused),
             "bodies": body_reports,
             "compute_invoked": bool(compute_invoked),
+            "duplicate_semantic_paths": duplicate_semantic_paths,
+            "ambiguous_component_paths": ambiguous_component_paths,
+            "components_missing": components_missing,
+            "scaffold_identity_failures": scaffold_identity_failures,
             "timeline": timeline,
-            "ok": bool(compute_invoked) and not timeline["unhealthy"],
+            "ok": (
+                bool(compute_invoked)
+                and not timeline["unhealthy"]
+                and not ambiguous_component_paths
+                and not components_missing
+                and not scaffold_identity_failures
+                and len(body_reports) == len(BOX_SPECS)
+            ),
         }
-        report_attempted = True
         _emit(report)
         if not report["ok"]:
             raise RuntimeError("Positive-control geometry did not satisfy its report contract.")
     except Exception as error:
-        cleanup_errors = _cleanup_created(created_resources)
-        if cleanup_errors:
-            cleanup_failure = RuntimeError(
-                "Positive-control transaction failed and cleanup left partial artifacts: "
-                + "; ".join(cleanup_errors)
-            )
-        else:
+        created_paths = sorted(path for path, _, _ in created_resources)
+        if isinstance(error, DocumentChangedError):
+            # The guard fired precisely because this document is no longer ours.
+            # Deleting from it would be the largest mutation in the transaction,
+            # against a document the user switched to.  Disclose and stop.
+            cleanup = {
+                "performed": False,
+                "reason": "active-document-changed",
+                "left_behind": created_paths,
+            }
             cleanup_failure = None
-        if not report_attempted:
-            report_attempted = True
-            _emit({
-                "kind": "positive-control",
-                "project": PROJECT_NAME,
-                "manifest_sha256": MANIFEST_SHA256,
-                "ok": False,
-                "error": str(cleanup_failure or error),
-                "traceback": traceback.format_exc(),
-            })
+        else:
+            deleted, cleanup_errors = _cleanup_created(created_resources)
+            cleanup = {"performed": True, "deleted": deleted, "errors": cleanup_errors}
+            cleanup_failure = None
+            if cleanup_errors:
+                cleanup_failure = RuntimeError(
+                    "Positive-control transaction failed and cleanup left partial artifacts: "
+                    + "; ".join(cleanup_errors)
+                )
+        # Always emitted, including when a report was already emitted: a reader
+        # reconciling the report against the document must be able to tell
+        # created-and-rolled-back from created-and-orphaned.  The last emitted
+        # block is the transaction's final word.
+        _emit({
+            "kind": "positive-control",
+            "project": PROJECT_NAME,
+            "manifest_sha256": MANIFEST_SHA256,
+            "ok": False,
+            "error": str(cleanup_failure or error),
+            "created": created_paths,
+            "cleanup": cleanup,
+            "traceback": traceback.format_exc(),
+        })
         if cleanup_failure:
             raise cleanup_failure from error
         raise

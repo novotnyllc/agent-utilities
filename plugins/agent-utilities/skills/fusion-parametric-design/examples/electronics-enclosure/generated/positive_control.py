@@ -5,9 +5,14 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
+MANIFEST_SHA256 = '497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+
+
+class DocumentChangedError(RuntimeError):
+    """The active document is no longer ours; the transaction must touch nothing further."""
+
 
 def _emit(report):
     print(REPORT_BEGIN)
@@ -43,7 +48,7 @@ def _pump_events(app, design, target_document):
         or target_document.name != FUSION_DOCUMENT_NAME
         or active_design != design
     ):
-        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+        raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
 
 
 def _pump_events_periodically(app, design, target_document, index):
@@ -154,8 +159,31 @@ def _body_summary(occurrence):
     }
 
 
+def _occurrence_state(occurrence):
+    """Participation state for a root-context occurrence.
+
+    A suppressed occurrence is still returned by allOccurrences and still owns
+    its component's bodies, but contributes no geometry to interference or
+    measurement -- so 'no interference' and 'not in the model' look identical
+    unless this state is recorded.
+    """
+    state = {}
+    for key, attribute in (
+        ("is_suppressed", "isSuppressed"),
+        ("is_light_bulb_on", "isLightBulbOn"),
+        ("is_visible", "isVisible"),
+    ):
+        try:
+            value = getattr(occurrence, attribute)
+        except Exception:
+            value = None
+        state[key] = None if value is None else bool(value)
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
+    suppressed = []
     informational = []
     healthy_state = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
     warning_state = adsk.fusion.FeatureHealthStates.WarningFeatureHealthState
@@ -178,7 +206,11 @@ def _timeline_health(design):
 
         if state in (warning_state, error_state, rolled_back_state):
             unhealthy.append(row)
-        elif state in (suppressed_state, unknown_state):
+        elif state == suppressed_state:
+            # Suppression silently changes the shape away from recorded intent,
+            # so it is reported separately instead of buried in informational.
+            suppressed.append(row)
+        elif state == unknown_state:
             informational.append(row)
         elif state != healthy_state:
             unhealthy.append(row)
@@ -186,6 +218,7 @@ def _timeline_health(design):
     return {
         "count": design.timeline.count,
         "unhealthy": unhealthy,
+        "suppressed": suppressed,
         "informational": informational,
     }
 
@@ -368,14 +401,18 @@ def _create_body(occurrence, spec):
 
 
 def _cleanup_created(resources):
+    deleted = []
     errors = []
-    for body, base_feature in reversed(resources):
-        errors.extend(_cleanup_pair(body, base_feature))
-    return errors
+    for path, body, base_feature in reversed(resources):
+        pair_errors = _cleanup_pair(body, base_feature)
+        if pair_errors:
+            errors.extend(path + ": " + detail for detail in pair_errors)
+        else:
+            deleted.append(path)
+    return sorted(deleted), errors
 
 
 def run(context):
-    report_attempted = False
     created_resources = []
     try:
         app, design = _active_design()
@@ -412,7 +449,7 @@ def run(context):
                 reused.append(spec["path"])
             else:
                 body, base_feature = _create_body(occurrence, spec)
-                created_resources.append((body, base_feature))
+                created_resources.append((spec["path"], body, base_feature))
                 _validate_geometry(occurrence, spec)
                 created.append(spec["path"])
             _pump_events_periodically(app, design, target_document, index)
@@ -420,10 +457,25 @@ def run(context):
         _pump_events(app, design, target_document)
         compute_invoked = design.computeAll()
         _pump_events(app, design, target_document)
+        # Re-derive the verdict from a post-pump read.  Every yield above can
+        # carry a user edit that makes the tree ambiguous or revokes scaffold
+        # identity, so the pre-pump map is evidence of nothing by this point.
+        _, verified_map, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
+        box_paths = [spec["path"] for spec in BOX_SPECS]
+        ambiguous_component_paths = sorted(set(duplicate_semantic_paths).intersection(box_paths))
+        components_missing = sorted(path for path in box_paths if path not in verified_map)
+        scaffold_identity_failures = []
         body_reports = []
-        for spec in BOX_SPECS:
-            body_report, _ = _validate_geometry(occurrence_map[spec["path"]], spec)
-            body_reports.append(body_report)
+        if not ambiguous_component_paths and not components_missing:
+            for spec in BOX_SPECS:
+                occurrence = verified_map[spec["path"]]
+                try:
+                    _require_scaffold_identity(occurrence, spec["path"])
+                except Exception as identity_error:
+                    scaffold_identity_failures.append(str(identity_error))
+                    continue
+                body_report, _ = _validate_geometry(occurrence, spec)
+                body_reports.append(body_report)
         timeline = _timeline_health(design)
         report = {
             "kind": "positive-control",
@@ -434,32 +486,58 @@ def run(context):
             "reused": sorted(reused),
             "bodies": body_reports,
             "compute_invoked": bool(compute_invoked),
+            "duplicate_semantic_paths": duplicate_semantic_paths,
+            "ambiguous_component_paths": ambiguous_component_paths,
+            "components_missing": components_missing,
+            "scaffold_identity_failures": scaffold_identity_failures,
             "timeline": timeline,
-            "ok": bool(compute_invoked) and not timeline["unhealthy"],
+            "ok": (
+                bool(compute_invoked)
+                and not timeline["unhealthy"]
+                and not ambiguous_component_paths
+                and not components_missing
+                and not scaffold_identity_failures
+                and len(body_reports) == len(BOX_SPECS)
+            ),
         }
-        report_attempted = True
         _emit(report)
         if not report["ok"]:
             raise RuntimeError("Positive-control geometry did not satisfy its report contract.")
     except Exception as error:
-        cleanup_errors = _cleanup_created(created_resources)
-        if cleanup_errors:
-            cleanup_failure = RuntimeError(
-                "Positive-control transaction failed and cleanup left partial artifacts: "
-                + "; ".join(cleanup_errors)
-            )
-        else:
+        created_paths = sorted(path for path, _, _ in created_resources)
+        if isinstance(error, DocumentChangedError):
+            # The guard fired precisely because this document is no longer ours.
+            # Deleting from it would be the largest mutation in the transaction,
+            # against a document the user switched to.  Disclose and stop.
+            cleanup = {
+                "performed": False,
+                "reason": "active-document-changed",
+                "left_behind": created_paths,
+            }
             cleanup_failure = None
-        if not report_attempted:
-            report_attempted = True
-            _emit({
-                "kind": "positive-control",
-                "project": PROJECT_NAME,
-                "manifest_sha256": MANIFEST_SHA256,
-                "ok": False,
-                "error": str(cleanup_failure or error),
-                "traceback": traceback.format_exc(),
-            })
+        else:
+            deleted, cleanup_errors = _cleanup_created(created_resources)
+            cleanup = {"performed": True, "deleted": deleted, "errors": cleanup_errors}
+            cleanup_failure = None
+            if cleanup_errors:
+                cleanup_failure = RuntimeError(
+                    "Positive-control transaction failed and cleanup left partial artifacts: "
+                    + "; ".join(cleanup_errors)
+                )
+        # Always emitted, including when a report was already emitted: a reader
+        # reconciling the report against the document must be able to tell
+        # created-and-rolled-back from created-and-orphaned.  The last emitted
+        # block is the transaction's final word.
+        _emit({
+            "kind": "positive-control",
+            "project": PROJECT_NAME,
+            "manifest_sha256": MANIFEST_SHA256,
+            "ok": False,
+            "error": str(cleanup_failure or error),
+            "created": created_paths,
+            "cleanup": cleanup,
+            "traceback": traceback.format_exc(),
+        })
         if cleanup_failure:
             raise cleanup_failure from error
         raise

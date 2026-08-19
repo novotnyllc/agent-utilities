@@ -5,9 +5,14 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
+MANIFEST_SHA256 = '497dc556381e94e3c843576560626dcadee7beaddefb66afcc93bb7960ae388c'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+
+
+class DocumentChangedError(RuntimeError):
+    """The active document is no longer ours; the transaction must touch nothing further."""
+
 
 def _emit(report):
     print(REPORT_BEGIN)
@@ -43,7 +48,7 @@ def _pump_events(app, design, target_document):
         or target_document.name != FUSION_DOCUMENT_NAME
         or active_design != design
     ):
-        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+        raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
 
 
 def _pump_events_periodically(app, design, target_document, index):
@@ -154,8 +159,31 @@ def _body_summary(occurrence):
     }
 
 
+def _occurrence_state(occurrence):
+    """Participation state for a root-context occurrence.
+
+    A suppressed occurrence is still returned by allOccurrences and still owns
+    its component's bodies, but contributes no geometry to interference or
+    measurement -- so 'no interference' and 'not in the model' look identical
+    unless this state is recorded.
+    """
+    state = {}
+    for key, attribute in (
+        ("is_suppressed", "isSuppressed"),
+        ("is_light_bulb_on", "isLightBulbOn"),
+        ("is_visible", "isVisible"),
+    ):
+        try:
+            value = getattr(occurrence, attribute)
+        except Exception:
+            value = None
+        state[key] = None if value is None else bool(value)
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
+    suppressed = []
     informational = []
     healthy_state = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
     warning_state = adsk.fusion.FeatureHealthStates.WarningFeatureHealthState
@@ -178,7 +206,11 @@ def _timeline_health(design):
 
         if state in (warning_state, error_state, rolled_back_state):
             unhealthy.append(row)
-        elif state in (suppressed_state, unknown_state):
+        elif state == suppressed_state:
+            # Suppression silently changes the shape away from recorded intent,
+            # so it is reported separately instead of buried in informational.
+            suppressed.append(row)
+        elif state == unknown_state:
             informational.append(row)
         elif state != healthy_state:
             unhealthy.append(row)
@@ -186,12 +218,14 @@ def _timeline_health(design):
     return {
         "count": design.timeline.count,
         "unhealthy": unhealthy,
+        "suppressed": suppressed,
         "informational": informational,
     }
 
 VERIFICATION = json.loads('{"clearance_checks":[{"id":"pd-to-lid-clearance","minimum_mm":1.0,"one":"00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","two":"10_PRODUCT/PROD__LID"}],"expected_print_parts":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","90_VALIDATION/VAL__PD_FIT_COUPON"],"interference_checks":[{"allow_interference":false,"id":"usb-c-insertion-zone","one":"00_REFERENCES/KEEP__USB_C_INSERTION","two":"10_PRODUCT/PROD__BASE"},{"allow_interference":false,"id":"ekylin-wire-bend-zone","one":"00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","two":"10_PRODUCT/PROD__LID"}],"required_components":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"]}')
 PARAMETER_SPECS = json.loads('[{"expression":"35 mm","name":"src_pd_board_length","units":"mm"},{"expression":"13 mm","name":"src_pd_board_width","units":"mm"},{"expression":"5 mm","name":"src_pd_board_height","units":"mm"},{"expression":"62 mm","name":"src_ekylin_length","units":"mm"},{"expression":"31 mm","name":"src_ekylin_width","units":"mm"},{"expression":"27 mm","name":"src_ekylin_height","units":"mm"},{"expression":"0.5 mm","name":"clr_rigid_xy","units":"mm"},{"expression":"1 mm","name":"clr_rigid_z","units":"mm"},{"expression":"2 mm","name":"fab_wall_thickness","units":"mm"},{"expression":"0.35 mm","name":"fab_fit_clearance","units":"mm"},{"expression":"5 mm","name":"des_corner_radius","units":"mm"},{"expression":"20 mm","name":"pack_usb_c_straight_departure","units":"mm"}]')
 VERIFICATION_NONCE = json.loads('""')
+PRINT_PART_EXPECTATIONS = json.loads('{"10_PRODUCT/PROD__BASE":{"minimum_volume_mm3":1000.0,"solid_body_count":1},"10_PRODUCT/PROD__LID":{"minimum_volume_mm3":500.0,"solid_body_count":1},"90_VALIDATION/VAL__PD_FIT_COUPON":{"minimum_volume_mm3":100.0,"solid_body_count":1}}')
 
 
 def _entity_label(entity):
@@ -286,12 +320,14 @@ def run(context):
         brep_bounding_boxes = {}
         geometry = {}
         occurrence_transforms = {}
+        occurrence_states = {}
         for path in sorted(relevant_paths):
             occurrence = occurrence_map.get(path)
             if not occurrence:
                 continue
             geometry[path] = _body_summary(occurrence)
             occurrence_transforms[path] = _occurrence_transform(occurrence)
+            occurrence_states[path] = _occurrence_state(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
             except Exception as error:
@@ -378,10 +414,56 @@ def run(context):
             interference_results.append(result)
 
         expected_print_parts_missing = sorted(path for path in expected_print_paths if path not in component_set)
-        expected_print_parts_without_positive_solid = sorted(
-            path
-            for path in expected_print_paths
-            if path in component_set and not geometry.get(path, {}).get("has_positive_solid", False)
+        # The print-part gate is measured against declared expectations, never
+        # against a bare "some body has more than 1e-9 mm3" threshold: that
+        # threshold passed a sliver and then became its own export baseline.
+        print_part_failures = []
+        for path in sorted(expected_print_paths):
+            if path not in component_set:
+                continue
+            expectation = PRINT_PART_EXPECTATIONS.get(path)
+            if not expectation:
+                print_part_failures.append({
+                    "path": path,
+                    "reason": "no-declared-expectation",
+                    "detail": "Declare this path in printable_parts; verification will not assert a print part it has no expectation for.",
+                })
+                continue
+            solid_rows = [
+                row
+                for row in geometry.get(path, {}).get("bodies", [])
+                if row["is_solid"] and row["volume_mm3"] > 1e-9
+            ]
+            if len(solid_rows) != expectation["solid_body_count"]:
+                print_part_failures.append({
+                    "path": path,
+                    "reason": "solid-body-count",
+                    "expected": expectation["solid_body_count"],
+                    "actual": len(solid_rows),
+                    "detail": sorted(row["name"] for row in solid_rows),
+                })
+                continue
+            body_row = solid_rows[0]
+            expected_body_name = expectation.get("body_name")
+            if expected_body_name and body_row["name"] != expected_body_name:
+                print_part_failures.append({
+                    "path": path,
+                    "reason": "body-name-mismatch",
+                    "expected": expected_body_name,
+                    "actual": body_row["name"],
+                })
+                continue
+            minimum_volume_mm3 = float(expectation["minimum_volume_mm3"])
+            if not body_row["volume_mm3"] >= minimum_volume_mm3:
+                print_part_failures.append({
+                    "path": path,
+                    "reason": "below-declared-minimum-volume",
+                    "expected_minimum_mm3": minimum_volume_mm3,
+                    "actual_volume_mm3": body_row["volume_mm3"],
+                })
+
+        suppressed_occurrences = sorted(
+            path for path, state in occurrence_states.items() if state["is_suppressed"]
         )
 
         failures = []
@@ -397,21 +479,26 @@ def run(context):
             failures.append("required-components")
         if timeline["unhealthy"]:
             failures.append("timeline-health")
+        if timeline["suppressed"]:
+            failures.append("timeline-suppressed")
+        if suppressed_occurrences:
+            failures.append("suppressed-occurrence")
         if any(not result.get("ok", False) for result in clearance_results):
             failures.append("clearance")
         if any(not result.get("ok", False) for result in interference_results):
             failures.append("interference")
-        if expected_print_parts_missing or expected_print_parts_without_positive_solid:
+        if expected_print_parts_missing or print_part_failures:
             failures.append("print-parts")
 
         # `checked` names only the gates this run actually performed, so `ok`
         # can never assert a gate the manifest never declared.  A declared-but-
         # unrunnable gate produces a failing result above, not an omission here.
-        checked = ["compute-all", "design-type", "timeline-health"]
+        checked = ["compute-all", "design-type", "timeline-health", "timeline-suppressed"]
         not_declared = []
         for token, ran in (
             ("parameters", bool(PARAMETER_SPECS)),
             ("ambiguous-components", bool(relevant_paths)),
+            ("suppressed-occurrence", bool(occurrence_states)),
             ("required-components", bool(required_paths)),
             ("clearance", bool(clearance_results)),
             ("interference", bool(interference_results)),
@@ -439,11 +526,14 @@ def run(context):
             "required_components_missing": required_missing,
             "parameter_mismatches": parameter_mismatches,
             "expected_print_parts_missing": expected_print_parts_missing,
-            "expected_print_parts_without_positive_solid": expected_print_parts_without_positive_solid,
+            "print_part_expectations": PRINT_PART_EXPECTATIONS,
+            "print_part_failures": print_part_failures,
+            "suppressed_occurrences": suppressed_occurrences,
             "timeline": timeline,
             "bounding_boxes_mm": bounding_boxes,
             "brep_bounding_boxes_mm": brep_bounding_boxes,
             "occurrence_transforms": occurrence_transforms,
+            "occurrence_states": occurrence_states,
             "geometry": geometry,
             "clearance_results": clearance_results,
             "interference_results": interference_results,
