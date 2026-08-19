@@ -1,0 +1,12 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/configuration/auto-review
+#
+# Why this file exists: CodeRabbit auto-reviews only PRs targeting the default
+# branch. Every layer of a stacked PR above the bottom targets another feature
+# branch, so those layers would ship unreviewed while still satisfying the
+# branch ruleset (which only guards `main`). The patterns below extend review
+# coverage to those bases; the default branch is always reviewed regardless.
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - ".*"
