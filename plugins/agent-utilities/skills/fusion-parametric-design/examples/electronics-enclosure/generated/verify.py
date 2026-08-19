@@ -5,7 +5,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '8e28010a7d270c9d49e9218c571de1c5fa3c8fa9ab28e885567e3b12b4cc5c5b'
+MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 
@@ -191,6 +191,7 @@ def _timeline_health(design):
 
 VERIFICATION = json.loads('{"clearance_checks":[{"id":"pd-to-lid-clearance","minimum_mm":1.0,"one":"00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","two":"10_PRODUCT/PROD__LID"}],"expected_print_parts":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","90_VALIDATION/VAL__PD_FIT_COUPON"],"interference_checks":[{"allow_interference":false,"id":"usb-c-insertion-zone","one":"00_REFERENCES/KEEP__USB_C_INSERTION","two":"10_PRODUCT/PROD__BASE"},{"allow_interference":false,"id":"ekylin-wire-bend-zone","one":"00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","two":"10_PRODUCT/PROD__LID"}],"required_components":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"]}')
 PARAMETER_SPECS = json.loads('[{"expression":"35 mm","name":"src_pd_board_length","units":"mm"},{"expression":"13 mm","name":"src_pd_board_width","units":"mm"},{"expression":"5 mm","name":"src_pd_board_height","units":"mm"},{"expression":"62 mm","name":"src_ekylin_length","units":"mm"},{"expression":"31 mm","name":"src_ekylin_width","units":"mm"},{"expression":"27 mm","name":"src_ekylin_height","units":"mm"},{"expression":"0.5 mm","name":"clr_rigid_xy","units":"mm"},{"expression":"1 mm","name":"clr_rigid_z","units":"mm"},{"expression":"2 mm","name":"fab_wall_thickness","units":"mm"},{"expression":"0.35 mm","name":"fab_fit_clearance","units":"mm"},{"expression":"5 mm","name":"des_corner_radius","units":"mm"},{"expression":"20 mm","name":"pack_usb_c_straight_departure","units":"mm"}]')
+VERIFICATION_NONCE = json.loads('""')
 
 
 def _entity_label(entity):
@@ -403,13 +404,35 @@ def run(context):
         if expected_print_parts_missing or expected_print_parts_without_positive_solid:
             failures.append("print-parts")
 
+        # `checked` names only the gates this run actually performed, so `ok`
+        # can never assert a gate the manifest never declared.  A declared-but-
+        # unrunnable gate produces a failing result above, not an omission here.
+        checked = ["compute-all", "design-type", "timeline-health"]
+        not_declared = []
+        for token, ran in (
+            ("parameters", bool(PARAMETER_SPECS)),
+            ("ambiguous-components", bool(relevant_paths)),
+            ("required-components", bool(required_paths)),
+            ("clearance", bool(clearance_results)),
+            ("interference", bool(interference_results)),
+            ("print-parts", bool(expected_print_paths)),
+        ):
+            (checked if ran else not_declared).append(token)
+
         report = {
             "kind": "verification",
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
+            "verification_nonce": VERIFICATION_NONCE,
             "compute_invoked": compute_invoked,
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "ok": not failures,
+            # `ok` covers the gates in `checked` only.  `not_declared` gates were
+            # never defined for this manifest and `unchecked` ones need external
+            # analysis or a printed part; neither is evidence of anything.
+            "checked": sorted(checked),
+            "not_declared": sorted(not_declared),
+            "unchecked": ["printability", "structural", "thermal", "physical"],
             "failures": failures,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "ambiguous_component_paths": ambiguous_component_paths,

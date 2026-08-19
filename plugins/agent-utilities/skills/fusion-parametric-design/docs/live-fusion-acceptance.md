@@ -32,10 +32,16 @@ Record:
    such as `FUSION_STDOUT_PROBE_<random>`. Record the complete raw MCP response.
    If the exact sentinel is absent, stop the acceptance with the raw response;
    an empty success response is not proof that a transaction ran.
-4. Create a new parametric Design document whose document name exactly matches
-   `project.fusion_document` in the manifest. Do not run this smoke against an
+4. Create a new parametric Design document and set its name programmatically, in
+   the same script that creates it, to exactly `project.fusion_document` from the
+   manifest — assigning `document.name` takes effect immediately on an unsaved
+   document, so the document does not have to be saved to satisfy the name gate
+   that every emitted transaction enforces. Do not run this smoke against an
    existing user document. Do not save or version the document unless the user
-   expressly instructed that action.
+   expressly instructed that action. If the name cannot be set, stop and report
+   that: never edit `project.fusion_document` to match whatever Fusion called the
+   document, because that changes the manifest hash and invalidates every report
+   binding and the export gate.
 5. Capture the initial document inventory and viewport, or record the exact
    unavailable capability.
 
@@ -52,7 +58,7 @@ From the package root:
 "$SKILL_DIR/scripts/fusion-design" emit-inventory examples/electronics-enclosure/fusion-project.json -o build/inventory.py
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync examples/electronics-enclosure/fusion-project.json -o build/sync-parameters.py
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold examples/electronics-enclosure/fusion-project.json -o build/scaffold.py
-"$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
+"$SKILL_DIR/scripts/fusion-design" emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py  # record the nonce it prints on stderr; step 10 needs it
 ```
 
 Run each emitted script directly through the discovered Fusion Python tool and
@@ -187,13 +193,19 @@ Retain passing inventory as `before.json`; change one user parameter or product 
 
 **Pass:** the diff identifies the changed parameter expression, component additions/removals, changed geometry summary, and newly unhealthy timeline records without claiming a full B-Rep/topology diff.
 
+Then move one product component without changing its geometry and diff again. **Pass:** `bounds_changed` names that component, so a rigid move is not reported as "no change".
+
+Then diff the two saved verification reports from step 7 (a passing one against a deliberately failing one, for example with a clearance minimum raised above what the design achieves). **Pass:** `ok_before`/`ok_after`, `failures_added`, and the affected `clearance_changed`/`interference_changed` entry all show the regression.
+
+Finally, diff an inventory report against a verification report. **Pass:** the command exits 2 with a refusal naming both kinds, instead of printing invented component removals and parameter deletions.
+
 ## 10. Export and handoff
 
 Run the deterministic export transaction against the verified document:
 
-1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it:
-   `scripts/fusion-design emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --export-dir <fusion-host dir> -o build/export.py`
-   (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report).
+1. Save the passing verification report from step 7 to a file (the JSON between the report delimiters), then emit the export script bound to it, passing the nonce `emit-verification` printed on stderr in step 2:
+   `"$SKILL_DIR/scripts/fusion-design" emit-export examples/electronics-enclosure/fusion-project.json --verification-report verify-report.json --verification-nonce <nonce from step 2> --export-dir <fusion-host dir> -o build/export.py`
+   (the checked-in `generated/export.py` uses the placeholder `FUSION_EXPORT_DIR` directory and the committed sample report; live runs always re-emit with a real directory and the real report). Negative test: re-run with any other nonce value. **Pass:** exit 2, no script emitted.
 2. Execute `build/export.py` through the MCP. **Pass:** the report is `kind: export-handoff`, `ok: true`; the enclosure base, lid, and fit coupon each produce the requested STEP/3MF files; `export-index__*.json` sits beside them; recomputing `shasum -a 256` on the Fusion host matches every `sha256` in the index; byte sizes match.
 3. Append the report's `design_state_rows` to `DESIGN-STATE.md` `## Exports`.
 4. Re-run the same script unchanged. **Pass:** it fails closed with `output-exists` and no file's bytes change.
@@ -224,7 +236,7 @@ Generate the project from the export index produced in step 10:
   --print "<installed print preset>"
 ```
 
-**Pass (project generation):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, `plate`, and justified `overrides`; and `slice` is `{"supported": true, "attempted": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
+**Pass (project generation):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, its assigned `plate`, and justified `overrides` (`plate` is not a manifest field: the adapter derives it from `print_as`, so `assembled` parts share plate 1 and each `separate` part gets its own); and `slice` is `{"supported": true, "attempted": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
 
 **Optional headless slice.** Re-run the same command with `--slice` appended (and a fresh `--output`, since neither the project nor its G-code is ever overwritten). All three presets must be named: PrusaSlicer exits 139 (SIGSEGV) with no output when given a partial set, so the adapter refuses to invoke it unless printer, print, and filament are all resolved.
 

@@ -568,7 +568,14 @@ def run(context):
 '''
 
 
-def emit_verification_script(manifest: Manifest) -> str:
+def emit_verification_script(manifest: Manifest, nonce: str = "") -> str:
+    """Emit the verification transaction.
+
+    `nonce` is echoed into the report and is what binds an export to a report
+    this CLI emitted: `emit-export` refuses a report whose nonce does not match
+    the one printed when the script was emitted. The default empty nonce keeps
+    the checked-in example byte-stable and can never satisfy that gate.
+    """
     verification = manifest.verification
     parameter_specs = [
         {"name": spec["name"], "expression": spec["expression"], "units": spec["units"]}
@@ -576,6 +583,7 @@ def emit_verification_script(manifest: Manifest) -> str:
     ]
     return _script_prelude(manifest) + f'''VERIFICATION = json.loads({_json_literal(verification)})
 PARAMETER_SPECS = json.loads({_json_literal(parameter_specs)})
+VERIFICATION_NONCE = json.loads({_json_literal(str(nonce))})
 
 
 def _entity_label(entity):
@@ -788,13 +796,35 @@ def run(context):
         if expected_print_parts_missing or expected_print_parts_without_positive_solid:
             failures.append("print-parts")
 
+        # `checked` names only the gates this run actually performed, so `ok`
+        # can never assert a gate the manifest never declared.  A declared-but-
+        # unrunnable gate produces a failing result above, not an omission here.
+        checked = ["compute-all", "design-type", "timeline-health"]
+        not_declared = []
+        for token, ran in (
+            ("parameters", bool(PARAMETER_SPECS)),
+            ("ambiguous-components", bool(relevant_paths)),
+            ("required-components", bool(required_paths)),
+            ("clearance", bool(clearance_results)),
+            ("interference", bool(interference_results)),
+            ("print-parts", bool(expected_print_paths)),
+        ):
+            (checked if ran else not_declared).append(token)
+
         report = {{
             "kind": "verification",
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
+            "verification_nonce": VERIFICATION_NONCE,
             "compute_invoked": compute_invoked,
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "ok": not failures,
+            # `ok` covers the gates in `checked` only.  `not_declared` gates were
+            # never defined for this manifest and `unchecked` ones need external
+            # analysis or a printed part; neither is evidence of anything.
+            "checked": sorted(checked),
+            "not_declared": sorted(not_declared),
+            "unchecked": ["printability", "structural", "thermal", "physical"],
             "failures": failures,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "ambiguous_component_paths": ambiguous_component_paths,

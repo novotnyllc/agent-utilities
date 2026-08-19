@@ -590,6 +590,70 @@ class ScriptEmissionTests(unittest.TestCase):
             unitless_mismatches,
         )
 
+    def _run_verification(self, manifest, occurrences: dict, nonce: str = "") -> dict:
+        namespace = load_generated_script(emit_verification_script(manifest, nonce))
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=SimpleNamespace(),
+            computeAll=lambda: True,
+            userParameters=SimpleNamespace(itemByName=lambda name: None),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=manifest.fusion_document))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_pump_events"] = lambda app, design, target_document: None
+        namespace["_root_context_occurrence_map"] = lambda root: (sorted(occurrences), dict(occurrences), [])
+        namespace["_timeline_health"] = lambda design: {"unhealthy": [], "informational": []}
+        namespace["_body_summary"] = lambda occurrence: {"has_positive_solid": True}
+        namespace["_all_geometry_bbox_mm"] = lambda occurrence: {}
+        namespace["_bbox_mm"] = lambda occurrence: {}
+        namespace["_has_positive_solid_brep"] = lambda occurrence: False
+        output = StringIO()
+        with redirect_stdout(output):
+            try:
+                namespace["run"](None)
+            except RuntimeError:
+                pass  # A failing verification emits its report before raising.
+        return next(json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{"))
+
+    def test_checked_names_only_the_gates_the_run_performed(self) -> None:
+        # A manifest declaring no clearance, interference or print-part checks
+        # must not report those gates as checked: claiming a gate that was never
+        # defined turns an honest gap into a positive false assurance.
+        data = self.manifest.to_dict()
+        data["verification"] = {
+            "required_components": [],
+            "clearance_checks": [],
+            "interference_checks": [],
+            "expected_print_parts": [],
+        }
+        data.pop("printable_parts", None)
+        data["parameters"] = []
+        report = self._run_verification(Manifest.from_data(data, validate=False), {})
+
+        # Nothing was declared, so nothing but the unconditional gates ran --
+        # and `ok` is true, which is precisely why `checked` must not lie.
+        self.assertTrue(report["ok"])
+        self.assertEqual(["compute-all", "design-type", "timeline-health"], report["checked"])
+        for token in ("clearance", "interference", "print-parts", "required-components", "parameters"):
+            self.assertNotIn(token, report["checked"], token)
+            self.assertIn(token, report["not_declared"], token)
+
+    def test_checked_includes_every_gate_the_example_declares(self) -> None:
+        occurrences = {
+            path: SimpleNamespace(transform2=None) for path in self.manifest.data["component_tree"]
+        }
+        report = self._run_verification(self.manifest, occurrences)
+        for token in ("clearance", "interference", "print-parts", "required-components"):
+            self.assertIn(token, report["checked"], token)
+        self.assertEqual([], report["not_declared"])
+
+    def test_verification_report_echoes_the_emitted_nonce(self) -> None:
+        # The nonce is what binds an export to a report this CLI emitted; a
+        # report that cannot echo it cannot justify an export.
+        self.assertEqual("", self._run_verification(self.manifest, {})["verification_nonce"])
+        report = self._run_verification(self.manifest, {}, nonce="cafe" * 8)
+        self.assertEqual("cafe" * 8, report["verification_nonce"])
+
     def test_verification_run_reports_occurrence_transforms(self) -> None:
         namespace = load_generated_script(emit_verification_script(self.manifest))
         identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]

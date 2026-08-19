@@ -31,6 +31,14 @@
       "revision": "2026-08-19",
       "confidence": "provisional",
       "notes": "Requirements the material must satisfy: indoor use, handled and occasionally dropped, no sunlight, no sustained load, a lid snap fit that must recover at every opening. Family selected from those requirements; no specific product is chosen, so generic PETG behavior is the conservative assumption and no numeric property is claimed."
+    },
+    {
+      "id": "provisional_starting_assumptions",
+      "kind": "conservative_proxy",
+      "locator": "design-brief://provisional-starting-assumptions",
+      "revision": "2026-08-17 unvalidated starting point",
+      "confidence": "provisional",
+      "notes": "Unvalidated conservative starting values for wall thickness, clearance, printed fit, and cable departure on this printer/material pair. Nothing here is measured evidence, so every parameter pointing at this source stays provisional; printing 90_VALIDATION/VAL__PD_FIT_COUPON and measuring it, or measuring the actual cable, is what replaces it."
     }
   ],
   "material_decision": {
@@ -112,36 +120,40 @@
       "expression": "0.5 mm",
       "units": "mm",
       "role": "clearance",
+      "source_id": "provisional_starting_assumptions",
       "critical": true,
-      "provisional": false,
-      "description": "Per-side clearance around rigid electronic bodies."
+      "provisional": true,
+      "description": "Per-side clearance around rigid electronic bodies; a starting value, not yet confirmed against a printed part."
     },
     {
       "name": "clr_rigid_z",
       "expression": "1 mm",
       "units": "mm",
       "role": "clearance",
+      "source_id": "provisional_starting_assumptions",
       "critical": true,
-      "provisional": false,
-      "description": "Vertical clearance above rigid electronic bodies."
+      "provisional": true,
+      "description": "Vertical clearance above rigid electronic bodies; a starting value, not yet confirmed against a printed part."
     },
     {
       "name": "fab_wall_thickness",
       "expression": "2 mm",
       "units": "mm",
       "role": "fabrication",
+      "source_id": "provisional_starting_assumptions",
       "critical": true,
-      "provisional": false,
-      "description": "Nominal PETG enclosure wall thickness."
+      "provisional": true,
+      "description": "Nominal PETG enclosure wall thickness. A bare '2 mm wall' is folklore until it is reconciled with the nozzle width and the actual load; confirm both before settling it."
     },
     {
       "name": "fab_fit_clearance",
       "expression": "0.35 mm",
       "units": "mm",
       "role": "fabrication",
+      "source_id": "provisional_starting_assumptions",
       "critical": true,
-      "provisional": false,
-      "description": "Per-side printed sliding-fit clearance."
+      "provisional": true,
+      "description": "Per-side printed sliding-fit clearance. Printer- and material-specific; settle it by printing and measuring VAL__PD_FIT_COUPON, never by reusing this number."
     },
     {
       "name": "des_corner_radius",
@@ -157,6 +169,7 @@
       "expression": "20 mm",
       "units": "mm",
       "role": "packing",
+      "source_id": "provisional_starting_assumptions",
       "critical": true,
       "provisional": true,
       "description": "Conservative initial straight cable-departure keep-out; confirm with the actual cable."

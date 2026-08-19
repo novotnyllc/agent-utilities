@@ -199,7 +199,7 @@ Create or preserve this hierarchy unless the existing document already has a coh
   VAL__<fit-coupon-or-test-article>
 ```
 
-The hierarchy is semantic, not decorative. An agent must be able to inventory the document and know which components are evidence, product, fixtures, or tests without relying on browser order.
+The hierarchy is semantic, not decorative: when the document follows this convention, an agent can inventory it and know which components are evidence, product, fixtures, or tests without relying on browser order. Nothing in the tooling enforces the prefixes — the manifest's `references` and `verification` blocks are the authoritative classification, so keep the tree and the manifest in step yourself.
 
 Tag managed entities with Fusion attributes. Locate them by stable component path, managed id, and attributes. Do not rely on a timeline index. Do not compare entity-token strings as identity; resolve tokens back through the design when tokens are necessary.
 
@@ -281,6 +281,8 @@ Run the host-generated inventory before and after a change when scope matters:
 "$SKILL_DIR/scripts/fusion-design" diff-reports build/before.json build/after.json
 ```
 
+Both reports must be the same kind, from the same project, and from the same manifest hash; the command refuses anything else instead of inventing a regression. Inventory-to-inventory diffs surface parameter, component, geometry-summary, B-Rep bounds, and timeline-health changes. Verification-to-verification diffs also surface `ok`, added and removed failure tokens, and per-check clearance and interference changes. It stays a report diff, not a B-Rep or feature-history diff.
+
 Inside Fusion, verify:
 
 - active design is parametric;
@@ -336,13 +338,16 @@ Do not claim a load rating from visual inspection. Use an appropriate simulation
 Use the deterministic export transaction instead of manual export selection:
 
 ```bash
-scripts/fusion-design emit-export fusion-project.json \
+"$SKILL_DIR/scripts/fusion-design" emit-export fusion-project.json \
   --verification-report verify-report.json \
+  --verification-nonce <nonce printed by emit-verification> \
   --export-dir /path/on/the/fusion/host/exports \
   -o build/export.py
 ```
 
-The CLI refuses to emit unless the saved verification report is `kind: verification`, `ok: true`, and hash-matches the manifest; the generated transaction then re-checks live bounds against that report, resolves each expected print part to exactly one solid body, refuses ambiguous or missing bodies, never overwrites existing outputs, and records byte size and SHA-256 for every file plus a machine-readable `export-index__*.json` beside the exports. Append the emitted `design_state_rows` to the `## Exports` table in `DESIGN-STATE.md`.
+`emit-verification` mints a single-use nonce, embeds it in the script it emits, and prints it to stderr; the report that script writes echoes it back. `emit-export` requires it via `--verification-nonce` and refuses any report that does not carry it, so an export can only be bound to a report produced by running that emitted script — a report synthesized from the manifest cannot satisfy it. Re-emitting the verification script mints a new nonce and invalidates the old one, so save the report before re-emitting. The CLI also refuses unless the report is `kind: verification`, `ok: true`, and hash-matches the manifest, and it checks the report for internal consistency (`compute_invoked: true`, an empty `failures` list, non-empty `timeline` and `geometry`); those consistency checks catch a truncated or hand-edited report, but the nonce is what makes the binding unforgeable. The generated transaction then re-checks live bounds against that report, resolves each expected print part to exactly one solid body, refuses ambiguous or missing bodies, never overwrites existing outputs, and records byte size and SHA-256 for every file plus a machine-readable `export-index__*.json` beside the exports. STEP is written from the print part's component, so keep those components free of surface bodies and child occurrences; 3MF and STL are written from the resolved body, and every artifact records its own `export_scope`. Keep `3mf` in `--format` if the PrusaSlicer adapter will consume the index; it reads no other format. Append the emitted `design_state_rows` to the `## Exports` table in `DESIGN-STATE.md`.
+
+A verification report's `ok: true` is scoped to the gates it lists in `checked`, and that list is derived from what the run performed — a gate the manifest never declared is in `not_declared`, not in `checked`. It is not a printability, structural, thermal, or physical-fit result either; those stay in `unchecked` and in `DESIGN-STATE.md` as `not run` until external analysis or a printed part settles them. Report the export as "exported from a design that passed the gates it declared", never as "verified". If `not_declared` is long, say so: the honest summary of a manifest with no clearance checks is that clearance was never checked.
 
 Fusion export is not the slicer. Print time, filament mass, supports, and machine-specific behavior require a configured slicer or another external manufacturing tool. If no supported slicer is available, export the files and state that cost/time estimates are unavailable rather than inventing them.
 
@@ -405,10 +410,10 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
-"$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
-"$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json>
-"$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module>
+"$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]
+"$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 "$SKILL_DIR/scripts/fusion-design" emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
 
@@ -416,8 +421,10 @@ When a Fusion transaction needs reusable custom code, use
 `prepare-module-bundle` on a pure-Python package and execute the output of
 `emit-module-bootstrap`. The content-addressed cache is persistent and outside
 project repositories; `FUSION_MCP_MODULE_CACHE` may override its platform
-user-cache location with an absolute path. It requires POSIX owner/permission
-semantics and fails closed on native Windows. Emission and the generated
+user-cache location with an absolute path. Use `--cache-root` only for a
+disposable cache, such as the acceptance smoke in
+`docs/live-fusion-acceptance.md`; normal work uses the persistent default. It
+requires POSIX owner/permission semantics and fails closed on native Windows. Emission and the generated
 bootstrap verify the cached bundle before import. Do not bypass it, edit cache contents, call
 `importlib.invalidate_caches()`, or place data/native modules in the bundle.
 See `references/mcp-adapter.md` for the exact contract.

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import re
 import subprocess
 import unittest
+
+from fusion_design.cli import build_parser
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +14,37 @@ SKILL_DIR = ROOT
 SKILL = SKILL_DIR / "SKILL.md"
 
 
+def _documented_commands(path: Path, anchor: str) -> set[str]:
+    """Command tokens in the fenced block that follows `anchor` in `path`."""
+    text = path.read_text(encoding="utf-8")
+    block = re.search(re.escape(anchor) + r".*?```[a-z]*\n(?P<body>.*?)```", text, re.DOTALL)
+    if block is None:
+        raise AssertionError(f"{path.name} has no fenced command block after {anchor!r}")
+    return set(re.findall(r"fusion-design\"? (\S+)", block.group("body")))
+
+
+def _cli_commands() -> set[str]:
+    actions = [
+        action
+        for action in build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    ]
+    return set(actions[0].choices)
+
+
 class SkillContractTests(unittest.TestCase):
+    def test_documented_command_lists_match_the_cli_exactly(self) -> None:
+        # This omission has shipped three times. Both lists are now pinned to
+        # build_parser() in both directions, so a new subcommand cannot land
+        # undocumented and a removed one cannot linger in the docs.
+        commands = _cli_commands()
+        self.assertIn("emit-export", commands)
+        for path, anchor in (
+            (SKILL, "emits narrow Fusion Python transactions, and compares reports:"),
+            (SKILL_DIR / "README.md", "Available commands:"),
+        ):
+            self.assertEqual(commands, _documented_commands(path, anchor), path.name)
+
     def test_frontmatter_is_discoverable_and_trigger_only(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         match = re.match(r"\A---\n(?P<frontmatter>.*?)\n---\n", text, re.DOTALL)
