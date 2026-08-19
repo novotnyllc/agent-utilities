@@ -124,6 +124,31 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIn("invalid-clearance-minimum", codes)
         self.assertIn("expected-print-part-not-in-tree", codes)
 
+    def test_zero_clearance_minimum_is_rejected(self) -> None:
+        # measureMinimumDistance returns 0 for touching and for interpenetrating
+        # solids alike, so a zero minimum is a check that can never fail.
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"][0]["minimum_mm"] = 0
+        issues = validate_manifest_data(data)
+        self.assertIn("invalid-clearance-minimum", {issue.code for issue in issues})
+        self.assertIn(
+            "interference check",
+            next(issue.message for issue in issues if issue.code == "invalid-clearance-minimum"),
+        )
+
+    def test_printable_part_requires_a_positive_minimum_volume(self) -> None:
+        for minimum_volume in (None, 0, -1, "big", float("nan")):
+            with self.subTest(minimum_volume=minimum_volume):
+                data = copy.deepcopy(self.data)
+                if minimum_volume is None:
+                    data["printable_parts"][0].pop("minimum_volume_mm3")
+                else:
+                    data["printable_parts"][0]["minimum_volume_mm3"] = minimum_volume
+                self.assertIn(
+                    "printable-part-invalid-minimum-volume",
+                    {issue.code for issue in validate_manifest_data(data)},
+                )
+
     def test_clearance_minimum_must_be_finite(self) -> None:
         for minimum in (float("nan"), 10**400):
             with self.subTest(minimum=minimum):
@@ -907,6 +932,7 @@ class ManifestValidationTests(unittest.TestCase):
             NOZZLE_MATERIALS,
             PRINT_AS_VALUES,
             PRINTABLE_PART_FIELDS,
+            PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
             SOURCE_CONFIDENCES,
             SUPPORT_POLICIES,
@@ -917,7 +943,11 @@ class ManifestValidationTests(unittest.TestCase):
         part = schema["$defs"]["printable_part"]
         self.assertIn("printable_parts", schema["properties"])
         self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
+        self.assertEqual(PRINTABLE_PART_REQUIRED_FIELDS, set(part["required"]))
         self.assertEqual(PRINT_AS_VALUES, set(part["properties"]["print_as"]["enum"]))
+        verification = schema["$defs"]["verification"]
+        self.assertIn("allowed_suppressed_paths", verification["properties"])
+        self.assertIn("allow_suppressed_timeline_features", verification["properties"])
         self.assertEqual(CONTACT_FACES, set(schema["$defs"]["contact_face"]["enum"]))
         self.assertEqual(SUPPORT_POLICIES, set(part["properties"]["support_policy"]["enum"]))
         self.assertEqual(

@@ -33,6 +33,11 @@ MANIFEST_SHA256 = {manifest_sha256(manifest)!r}
 REPORT_BEGIN = {REPORT_BEGIN!r}
 REPORT_END = {REPORT_END!r}
 
+
+class DocumentChangedError(RuntimeError):
+    """The active document is no longer ours; the transaction must touch nothing further."""
+
+
 def _emit(report):
     print(REPORT_BEGIN)
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
@@ -67,7 +72,7 @@ def _pump_events(app, design, target_document):
         or target_document.name != FUSION_DOCUMENT_NAME
         or active_design != design
     ):
-        raise RuntimeError("Active Fusion document changed while the transaction was running; stopping before further work.")
+        raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
 
 
 def _pump_events_periodically(app, design, target_document, index):
@@ -178,8 +183,31 @@ def _body_summary(occurrence):
     }}
 
 
+def _occurrence_state(occurrence):
+    """Participation state for a root-context occurrence.
+
+    A suppressed occurrence is still returned by allOccurrences and still owns
+    its component's bodies, but contributes no geometry to interference or
+    measurement -- so 'no interference' and 'not in the model' look identical
+    unless this state is recorded.
+    """
+    state = {{}}
+    for key, attribute in (
+        ("is_suppressed", "isSuppressed"),
+        ("is_light_bulb_on", "isLightBulbOn"),
+        ("is_visible", "isVisible"),
+    ):
+        try:
+            value = getattr(occurrence, attribute)
+        except Exception:
+            value = None
+        state[key] = None if value is None else bool(value)
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
+    suppressed = []
     informational = []
     healthy_state = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
     warning_state = adsk.fusion.FeatureHealthStates.WarningFeatureHealthState
@@ -202,7 +230,11 @@ def _timeline_health(design):
 
         if state in (warning_state, error_state, rolled_back_state):
             unhealthy.append(row)
-        elif state in (suppressed_state, unknown_state):
+        elif state == suppressed_state:
+            # Suppression silently changes the shape away from recorded intent,
+            # so it is reported separately instead of buried in informational.
+            suppressed.append(row)
+        elif state == unknown_state:
             informational.append(row)
         elif state != healthy_state:
             unhealthy.append(row)
@@ -210,6 +242,7 @@ def _timeline_health(design):
     return {{
         "count": design.timeline.count,
         "unhealthy": unhealthy,
+        "suppressed": suppressed,
         "informational": informational,
     }}
 
@@ -258,9 +291,10 @@ def run(context):
             except Exception as error:
                 brep_bounding_boxes[path] = {{"error": str(error)}}
 
+        # Inventory is a survey, not a gate: it deliberately carries no "ok".
+        # A descriptive snapshot that always said ok:true read as a verdict.
         report = {{
             "kind": "inventory",
-            "ok": True,
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
             "document_name": app.activeDocument.name if app.activeDocument else None,
@@ -504,6 +538,10 @@ def _ensure_component_path(root_component, path):
 
 def run(context):
     report_attempted = False
+    # Scaffolding creates persistent components and has no rollback by design,
+    # so the failure report must still name what this run created.
+    created = []
+    attribute_updates = []
     try:
         app, design = _active_design()
         target_document = _require_target_document(app)
@@ -522,8 +560,6 @@ def run(context):
                 "ok": False,
             }})
             raise RuntimeError("Semantic component paths are already ambiguous; refusing to scaffold into an ambiguous tree.")
-        created = []
-        attribute_updates = []
         for index, path in enumerate(sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item))):
             path_created, path_attribute_updates = _ensure_component_path(design.rootComponent, path)
             created.extend(path_created)
@@ -563,9 +599,55 @@ def run(context):
     except Exception as error:
         if not report_attempted:
             report_attempted = True
-            _emit({{"kind": "component-scaffold", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
+            _emit({{
+                "kind": "component-scaffold",
+                "project": PROJECT_NAME,
+                "manifest_sha256": MANIFEST_SHA256,
+                "ok": False,
+                "error": str(error),
+                "created": sorted(set(created)),
+                "attribute_updates": attribute_updates,
+                "left_behind": sorted(set(created)),
+                "traceback": traceback.format_exc(),
+            }})
         raise
 '''
+
+
+# Skill-wide print-part rules: not manifest-declared, and reported separately
+# from PRINT_PART_EXPECTATIONS so a reader can tell the two apart.  One solid is
+# what the export transaction already resolves; the bounding-box fraction is a
+# plausibility floor on the author's own declared minimum volume.
+# ponytail: one global fraction, per-part override when a real part legitimately
+# occupies under 0.1% of its bounding box.
+PRINT_PART_RULES: dict[str, Any] = {
+    "solid_body_count": 1,
+    "minimum_volume_bounding_box_fraction": 1e-3,
+}
+
+
+def _print_part_expectations(manifest: Manifest) -> dict[str, dict[str, Any]]:
+    """Per-print-part expectations declared by the manifest.
+
+    Only manifest-declared values live here -- the declared minimum volume and
+    the declared ``body_name`` when the author gave one.  Without a declaration
+    there is nothing falsifiable to check, so a print part with no
+    ``printable_parts`` entry fails the gate rather than passing a threshold
+    that only proves some body exists.
+    """
+    expectations: dict[str, dict[str, Any]] = {}
+    for part in manifest.printable_parts:
+        path = str(part.get("path", "")).strip()
+        minimum_volume = part.get("minimum_volume_mm3")
+        # Fail closed rather than emit an expectation the gate cannot measure:
+        # an undeclared path is reported as `no-declared-expectation`.
+        if not path or not isinstance(minimum_volume, (int, float)) or isinstance(minimum_volume, bool):
+            continue
+        expectation: dict[str, Any] = {"minimum_volume_mm3": float(minimum_volume)}
+        if part.get("body_name"):
+            expectation["body_name"] = str(part["body_name"]).strip()
+        expectations[path] = expectation
+    return expectations
 
 
 def emit_verification_script(manifest: Manifest, nonce: str = "") -> str:
@@ -584,6 +666,8 @@ def emit_verification_script(manifest: Manifest, nonce: str = "") -> str:
     return _script_prelude(manifest) + f'''VERIFICATION = json.loads({_json_literal(verification)})
 PARAMETER_SPECS = json.loads({_json_literal(parameter_specs)})
 VERIFICATION_NONCE = json.loads({_json_literal(str(nonce))})
+PRINT_PART_EXPECTATIONS = json.loads({_json_literal(_print_part_expectations(manifest))})
+PRINT_PART_RULES = json.loads({_json_literal(PRINT_PART_RULES)})
 
 
 def _entity_label(entity):
@@ -678,12 +762,14 @@ def run(context):
         brep_bounding_boxes = {{}}
         geometry = {{}}
         occurrence_transforms = {{}}
+        occurrence_states = {{}}
         for path in sorted(relevant_paths):
             occurrence = occurrence_map.get(path)
             if not occurrence:
                 continue
             geometry[path] = _body_summary(occurrence)
             occurrence_transforms[path] = _occurrence_transform(occurrence)
+            occurrence_states[path] = _occurrence_state(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
             except Exception as error:
@@ -770,11 +856,87 @@ def run(context):
             interference_results.append(result)
 
         expected_print_parts_missing = sorted(path for path in expected_print_paths if path not in component_set)
-        expected_print_parts_without_positive_solid = sorted(
-            path
-            for path in expected_print_paths
-            if path in component_set and not geometry.get(path, {{}}).get("has_positive_solid", False)
+        # The print-part gate is measured against declared expectations, never
+        # against a bare "some body has more than 1e-9 mm3" threshold: that
+        # threshold passed a sliver and then became its own export baseline.
+        print_part_failures = []
+        for path in sorted(expected_print_paths):
+            if path not in component_set:
+                continue
+            expectation = PRINT_PART_EXPECTATIONS.get(path)
+            if not expectation:
+                print_part_failures.append({{
+                    "path": path,
+                    "reason": "no-declared-expectation",
+                    "detail": "Declare this path in printable_parts; verification will not assert a print part it has no expectation for.",
+                }})
+                continue
+            solid_rows = [
+                row
+                for row in geometry.get(path, {{}}).get("bodies", [])
+                if row["is_solid"] and row["volume_mm3"] > 1e-9
+            ]
+            if len(solid_rows) != PRINT_PART_RULES["solid_body_count"]:
+                print_part_failures.append({{
+                    "path": path,
+                    "reason": "solid-body-count",
+                    "expected": PRINT_PART_RULES["solid_body_count"],
+                    "actual": len(solid_rows),
+                    "detail": sorted(row["name"] for row in solid_rows),
+                }})
+                continue
+            body_row = solid_rows[0]
+            expected_body_name = expectation.get("body_name")
+            if expected_body_name and body_row["name"] != expected_body_name:
+                print_part_failures.append({{
+                    "path": path,
+                    "reason": "body-name-mismatch",
+                    "expected": expected_body_name,
+                    "actual": body_row["name"],
+                }})
+                continue
+            minimum_volume_mm3 = float(expectation["minimum_volume_mm3"])
+            if not body_row["volume_mm3"] >= minimum_volume_mm3:
+                print_part_failures.append({{
+                    "path": path,
+                    "reason": "below-declared-minimum-volume",
+                    "expected_minimum_mm3": minimum_volume_mm3,
+                    "actual_volume_mm3": body_row["volume_mm3"],
+                }})
+                continue
+            # The floor is author-chosen, so cross-check it against something the
+            # author did not choose: a solid cannot be a vanishing fraction of its
+            # own bounding box and still be the part.  Without this, a forged
+            # 1e-12 floor reopens the sliver hole through the supported path.
+            box = brep_bounding_boxes.get(path)
+            if isinstance(box, dict) and "min" in box and "max" in box:
+                box_volume_mm3 = 1.0
+                for index in range(3):
+                    box_volume_mm3 *= abs(float(box["max"][index]) - float(box["min"][index]))
+                if not minimum_volume_mm3 >= box_volume_mm3 * PRINT_PART_RULES["minimum_volume_bounding_box_fraction"]:
+                    print_part_failures.append({{
+                        "path": path,
+                        "reason": "implausible-declared-minimum",
+                        "declared_minimum_mm3": minimum_volume_mm3,
+                        "bounding_box_volume_mm3": box_volume_mm3,
+                        "required_fraction": PRINT_PART_RULES["minimum_volume_bounding_box_fraction"],
+                    }})
+
+        # An unreadable participation state is exactly as indistinguishable from
+        # "not in the model" as a suppressed one, so it fails closed too.
+        suppressed_occurrences = sorted(
+            path for path, state in occurrence_states.items() if state["is_suppressed"] is True
         )
+        unreadable_occurrence_states = sorted(
+            path for path, state in occurrence_states.items() if state["is_suppressed"] is None
+        )
+        # Suppression is how Fusion models configurations and open/closed/service
+        # states, so it is declarable: undeclared suppression fails, declared
+        # suppression is recorded and passes.
+        undeclared_suppressed_occurrences = sorted(
+            set(suppressed_occurrences) - set(VERIFICATION.get("allowed_suppressed_paths", []))
+        )
+        suppressed_timeline_allowed = bool(VERIFICATION.get("allow_suppressed_timeline_features", False))
 
         failures = []
         if not compute_invoked:
@@ -789,21 +951,29 @@ def run(context):
             failures.append("required-components")
         if timeline["unhealthy"]:
             failures.append("timeline-health")
+        if timeline["suppressed"] and not suppressed_timeline_allowed:
+            failures.append("timeline-suppressed")
+        if undeclared_suppressed_occurrences:
+            failures.append("suppressed-occurrence")
+        if unreadable_occurrence_states:
+            failures.append("unreadable-occurrence-state")
         if any(not result.get("ok", False) for result in clearance_results):
             failures.append("clearance")
         if any(not result.get("ok", False) for result in interference_results):
             failures.append("interference")
-        if expected_print_parts_missing or expected_print_parts_without_positive_solid:
+        if expected_print_parts_missing or print_part_failures:
             failures.append("print-parts")
 
         # `checked` names only the gates this run actually performed, so `ok`
         # can never assert a gate the manifest never declared.  A declared-but-
         # unrunnable gate produces a failing result above, not an omission here.
-        checked = ["compute-all", "design-type", "timeline-health"]
+        checked = ["compute-all", "design-type", "timeline-health", "timeline-suppressed"]
         not_declared = []
         for token, ran in (
             ("parameters", bool(PARAMETER_SPECS)),
             ("ambiguous-components", bool(relevant_paths)),
+            ("suppressed-occurrence", bool(occurrence_states)),
+            ("unreadable-occurrence-state", bool(occurrence_states)),
             ("required-components", bool(required_paths)),
             ("clearance", bool(clearance_results)),
             ("interference", bool(interference_results)),
@@ -831,11 +1001,17 @@ def run(context):
             "required_components_missing": required_missing,
             "parameter_mismatches": parameter_mismatches,
             "expected_print_parts_missing": expected_print_parts_missing,
-            "expected_print_parts_without_positive_solid": expected_print_parts_without_positive_solid,
+            "print_part_expectations": PRINT_PART_EXPECTATIONS,
+            "print_part_rules": PRINT_PART_RULES,
+            "print_part_failures": print_part_failures,
+            "suppressed_occurrences": suppressed_occurrences,
+            "undeclared_suppressed_occurrences": undeclared_suppressed_occurrences,
+            "unreadable_occurrence_states": unreadable_occurrence_states,
             "timeline": timeline,
             "bounding_boxes_mm": bounding_boxes,
             "brep_bounding_boxes_mm": brep_bounding_boxes,
             "occurrence_transforms": occurrence_transforms,
+            "occurrence_states": occurrence_states,
             "geometry": geometry,
             "clearance_results": clearance_results,
             "interference_results": interference_results,

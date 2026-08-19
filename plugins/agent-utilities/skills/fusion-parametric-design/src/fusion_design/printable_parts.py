@@ -30,6 +30,7 @@ PRINTABLE_PART_FIELDS = {
     "id",
     "path",
     "body_name",
+    "minimum_volume_mm3",
     "quantity",
     "print_as",
     "orientation",
@@ -39,6 +40,13 @@ PRINTABLE_PART_FIELDS = {
     "protected_features",
     "material",
 }
+
+# The optional fields; everything else in PRINTABLE_PART_FIELDS is required and
+# is pinned against the schema's `$defs.printable_part.required` array by
+# test_schema_json_stays_in_lockstep_with_validator_constants.
+PRINTABLE_PART_OPTIONAL_FIELDS = {"body_name", "quantity", "support_regions"}
+
+PRINTABLE_PART_REQUIRED_FIELDS = PRINTABLE_PART_FIELDS - PRINTABLE_PART_OPTIONAL_FIELDS
 
 
 def _in_closed_set(value: Any, allowed: set[str]) -> bool:
@@ -106,6 +114,14 @@ def _validate_printable_parts(
             )
             continue
         _reject_unknown_fields(issues, raw_part, PRINTABLE_PART_FIELDS, path)
+        for field in sorted(PRINTABLE_PART_REQUIRED_FIELDS - set(raw_part)):
+            issues.append(
+                ValidationIssue(
+                    "printable-part-field-required",
+                    f"{path}.{field}",
+                    f"Printable-part field {field!r} is required.",
+                )
+            )
 
         part_id = require_string(raw_part, "id", path)
         if part_id and not valid_name.fullmatch(part_id):
@@ -138,6 +154,28 @@ def _validate_printable_parts(
                     "printable-part-invalid-body-name",
                     f"{path}.body_name",
                     "body_name, when present, must be a non-empty string.",
+                )
+            )
+
+        # The verification print-part gate is measured against this: without a
+        # declared floor, "has a positive-volume solid" passes for a sliver.
+        minimum_volume = raw_part.get("minimum_volume_mm3")
+        try:
+            finite_volume = math.isfinite(float(minimum_volume))
+        except (OverflowError, TypeError, ValueError):
+            finite_volume = False
+        if (
+            isinstance(minimum_volume, bool)
+            or not isinstance(minimum_volume, (int, float))
+            or not finite_volume
+            or minimum_volume <= 0
+        ):
+            issues.append(
+                ValidationIssue(
+                    "printable-part-invalid-minimum-volume",
+                    f"{path}.minimum_volume_mm3",
+                    "minimum_volume_mm3 must be a positive number; it is the declared floor the "
+                    "verification print-part gate measures the resolved solid against.",
                 )
             )
 
