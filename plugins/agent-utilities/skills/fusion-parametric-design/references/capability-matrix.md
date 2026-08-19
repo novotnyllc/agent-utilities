@@ -24,7 +24,7 @@ This is a conceptual translation, not a claim that Fusion exposes same-named com
 | `nurb stress` | Fusion simulation where appropriate, conservative FDM assumptions, coupons, and proof testing | Not equivalent in core tooling |
 | `nurb verify` | Run inventory and verification transactions, preserve machine-readable reports, collect required screenshots/sections, and complete the handoff ledger | Partial; print-specific and physical gates remain external/manual |
 | `nurb render` | Capture the live Fusion viewport through MCP screenshot capability; use section analysis and component visibility for diagnostic views | Partial and capability-dependent; no bundled headless renderer |
-| `nurb export` | Fusion ExportManager or the connected MCP export capability for STEP/3MF/STL, followed by hashes and report linkage | Supported by Fusion when exposed; this host CLI does not impersonate Fusion export |
+| `nurb export` | `fusion-design emit-export` generates the deterministic Fusion ExportManager transaction for STEP/3MF/STL with in-script hashing, no-overwrite outputs, and an evidence-bound handoff index | Supported by Fusion when exposed; this host CLI emits the transaction but does not impersonate Fusion export |
 | `nurb extract` | Refactor demonstrated repetition into shared user parameters, derived/reference components, configurations, or reusable feature patterns | Manual; automatic duplicate-construction extraction is unsupported |
 | `nurb launcher` | Start Fusion normally, enable its MCP server, and connect the agent to the local endpoint | No separate equivalent; Fusion itself is the long-lived interactive host |
 
