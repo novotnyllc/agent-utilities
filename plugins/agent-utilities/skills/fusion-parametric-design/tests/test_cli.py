@@ -28,6 +28,55 @@ EXAMPLE_LID = "10_PRODUCT/PROD__LID"
 EXAMPLE_COUPON = "90_VALIDATION/VAL__PD_FIT_COUPON"
 
 
+class PlanReconstructionCliTests(unittest.TestCase):
+    def _run(self, record, spec):
+        import fixtures_fit_record as fx  # noqa: F401  (fixture module lives in tests/)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fit_path = Path(temporary) / "fit-record.json"
+            spec_path = Path(temporary) / "program-spec.json"
+            fit_path.write_text(json.dumps(record), encoding="utf-8")
+            spec_path.write_text(json.dumps(spec), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "plan-reconstruction",
+                        str(EXAMPLE),
+                        "--fit-record",
+                        str(fit_path),
+                        "--program-spec",
+                        str(spec_path),
+                    ]
+                )
+            return code, json.loads(output.getvalue())
+
+    def test_a_plannable_fit_record_produces_a_bound_program(self) -> None:
+        import fixtures_fit_record as fx
+
+        code, program = self._run(fx.box_record(), fx.spec())
+        self.assertEqual(0, code)
+        self.assertEqual(program["manifest_sha256"], manifest_sha256(load_manifest(str(EXAMPLE))))
+        self.assertEqual(program["dump_sha256"], fx.DUMP_SHA256)
+        self.assertEqual(program["program_version"], 1)
+
+    def test_a_refusal_prints_its_named_reason_and_alternative_and_exits_two(self) -> None:
+        import fixtures_fit_record as fx
+
+        record = fx.record(
+            [
+                fx.cylinder("a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                fx.cylinder("b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        code, refusal = self._run(record, fx.spec())
+        self.assertEqual(2, code)
+        self.assertEqual(refusal["refusal"], "frame-ambiguous")
+        self.assertTrue(refusal["alternative"].strip())
+        self.assertIn("winner", refusal["detail"])
+
+
 class CliTests(unittest.TestCase):
     def test_validate_prints_json_for_valid_manifest(self) -> None:
         output = io.StringIO()

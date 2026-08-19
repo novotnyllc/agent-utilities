@@ -54,7 +54,15 @@ _SIMPLER_KINDS = {
 
 ENTITY_KINDS = {"line", "arc", "circle"}
 
-INTENT_KINDS = {"coaxial", "parallel", "perpendicular", "symmetric", "nominal"}
+INTENT_KINDS = {
+    "coaxial",
+    "parallel",
+    "perpendicular",
+    "symmetric",
+    "tangent",
+    "equal_radius",
+    "nominal",
+}
 
 # Default gates.  They are module defaults, not laws: every entry point takes
 # them as keyword arguments so a caller can state its own.
@@ -2007,12 +2015,20 @@ def propose_design_intent(
     angle_tolerance_deg: float = 2.0,
     offset_tolerance: float | None = None,
     nominal_tolerance: float | None = None,
+    tangent_tolerance: float | None = None,
+    equal_radius_tolerance: float | None = None,
 ) -> tuple[IntentProposal, ...]:
     """Surface near-relationships between fitted primitives as proposals.
 
     Covers near-coaxial, near-perpendicular, near-parallel and near-symmetric
-    pairs, plus near-nominal diameters when ``nominal_tolerance`` is given.  Each
-    carries its measured deviation; none is applied, and no fit is modified.
+    pairs, plus near-nominal diameters when ``nominal_tolerance`` is given,
+    near-tangency when ``tangent_tolerance`` is given, and near-equal radii when
+    ``equal_radius_tolerance`` is given.  Each carries its measured deviation;
+    none is applied, and no fit is modified.
+
+    The three optional tolerances default to ``None`` meaning *not judged*, not
+    "judged with a default": a tangency nobody declared a tolerance for is left
+    unproposed rather than proposed against a number this module invented.
 
     ``offset_tolerance`` defaults to 2% of the largest fitted extent, because a
     coaxiality judgement needs a length scale and inventing an absolute
@@ -2036,6 +2052,14 @@ def propose_design_intent(
             raise ValueError("offset_tolerance could not be derived; state it explicitly.")
     else:
         offset_tol = _as_tolerance(offset_tolerance, "offset_tolerance")
+    tangent_tol = (
+        None if tangent_tolerance is None else _as_tolerance(tangent_tolerance, "tangent_tolerance")
+    )
+    equal_radius_tol = (
+        None
+        if equal_radius_tolerance is None
+        else _as_tolerance(equal_radius_tolerance, "equal_radius_tolerance")
+    )
 
     names = sorted(features)
     proposals: list[IntentProposal] = []
@@ -2043,11 +2067,21 @@ def propose_design_intent(
     for index, first in enumerate(names):
         for second in names[index + 1 :]:
             a, b = features[first], features[second]
+            subjects = (first, second)
+            if equal_radius_tol is not None:
+                equal_radius = _equal_radius_proposal(subjects, a, b, equal_radius_tol)
+                if equal_radius is not None:
+                    proposals.append(equal_radius)
+            if tangent_tol is not None:
+                tangent = _tangent_proposal(
+                    subjects, a, b, angle_tol=angle_tol, tangent_tol=tangent_tol
+                )
+                if tangent is not None:
+                    proposals.append(tangent)
             da, db = _fit_direction(a), _fit_direction(b)
             if da is None or db is None:
                 continue
             angle = _angle_deg(da, db)
-            subjects = (first, second)
             axes = (_fit_axis_line(a), _fit_axis_line(b))
             coaxial = False
             if angle <= angle_tol and axes[0] is not None and axes[1] is not None:
@@ -2112,17 +2146,142 @@ def propose_design_intent(
     return tuple(proposals)
 
 
+def _equal_radius_proposal(
+    subjects: tuple[str, str], a: PrimitiveFit, b: PrimitiveFit, tolerance: float
+) -> IntentProposal | None:
+    """Two radii close enough to be one driven parameter — measured, not assumed.
+
+    Only fits that carry an actual ``radius`` qualify, which is cylinders and
+    spheres.  A cone's ``reference_radius`` is its radius *at the axis point the
+    search happened to land on*, not a diameter of the part, so equating two of
+    them would compare two arbitrary stations and call it a design decision.
+    """
+    first, second = subjects
+    ra, rb = a.parameters.get("radius"), b.parameters.get("radius")
+    if not isinstance(ra, float) or not isinstance(rb, float):
+        return None
+    delta = abs(ra - rb)
+    if delta > tolerance:
+        return None
+    mean = (ra + rb) / 2.0
+    return IntentProposal(
+        kind="equal_radius",
+        subjects=subjects,
+        statement=(
+            f"{first} and {second} have radii {ra:.6g} and {rb:.6g}, differing by {delta:.4g}. "
+            "Propose one shared radius parameter; values are unchanged until adopted."
+        ),
+        deviation=delta,
+        deviation_unit="length",
+        proposed_value=mean,
+        detail={"radius_a": ra, "radius_b": rb, "radius_delta": delta, "mean_radius": mean},
+    )
+
+
+def _tangent_proposal(
+    subjects: tuple[str, str],
+    a: PrimitiveFit,
+    b: PrimitiveFit,
+    *,
+    angle_tol: float,
+    tangent_tol: float,
+) -> IntentProposal | None:
+    """Plane-to-cylinder and cylinder-to-cylinder tangency, from the measurement.
+
+    A cylinder whose axis is not parallel to the plane *crosses* it; the distance
+    from axis to plane is then not a clearance at all, so that pair is left
+    unproposed rather than measured with a formula that does not apply to it.
+    """
+    first, second = subjects
+    for plane, cylinder, plane_first in ((a, b, True), (b, a, False)):
+        if plane.kind != "plane" or cylinder.kind != "cylinder":
+            continue
+        axis = _fit_axis_line(cylinder)
+        radius = cylinder.parameters.get("radius")
+        if axis is None or not isinstance(radius, float):
+            return None
+        if abs(_angle_deg(plane.parameters["normal"], axis[1]) - 90.0) > angle_tol:
+            return None
+        distance = abs(_dot(plane.parameters["normal"], axis[0]) - plane.parameters["offset"])
+        deviation = abs(distance - radius)
+        if deviation > tangent_tol:
+            return None
+        plane_name, cylinder_name = (first, second) if plane_first else (second, first)
+        return IntentProposal(
+            kind="tangent",
+            subjects=subjects,
+            statement=(
+                f"{cylinder_name} has its axis {distance:.6g} from plane {plane_name} and radius "
+                f"{radius:.6g}, which is {deviation:.4g} from tangent. Propose a tangent constraint."
+            ),
+            deviation=deviation,
+            deviation_unit="length",
+            detail={
+                "axis_to_plane_distance": distance,
+                "radius": radius,
+                "tangent_deviation": deviation,
+            },
+        )
+
+    if a.kind == "cylinder" and b.kind == "cylinder":
+        axis_a, axis_b = _fit_axis_line(a), _fit_axis_line(b)
+        ra, rb = a.parameters.get("radius"), b.parameters.get("radius")
+        if axis_a is None or axis_b is None:
+            return None
+        if not isinstance(ra, float) or not isinstance(rb, float):
+            return None
+        if _angle_deg(axis_a[1], axis_b[1]) > angle_tol:
+            return None
+        separation = _length(_axis_offset(axis_a, axis_b))
+        if separation <= 0.0:
+            # Coincident axes are coaxial, and the internal-tangency formula
+            # would report equal radii as a tangency. That is coaxial's case.
+            return None
+        external = abs(separation - (ra + rb))
+        internal = abs(separation - abs(ra - rb))
+        contact, deviation = (
+            ("external", external) if external <= internal else ("internal", internal)
+        )
+        if deviation > tangent_tol:
+            return None
+        return IntentProposal(
+            kind="tangent",
+            subjects=subjects,
+            statement=(
+                f"{first} and {second} have parallel axes {separation:.6g} apart with radii "
+                f"{ra:.6g} and {rb:.6g}, which is {deviation:.4g} from {contact} tangency. "
+                "Propose a tangent constraint."
+            ),
+            deviation=deviation,
+            deviation_unit="length",
+            proposed_value=contact,
+            detail={
+                "axis_separation": separation,
+                "radius_a": ra,
+                "radius_b": rb,
+                "tangent_deviation": deviation,
+            },
+        )
+    return None
+
+
 def _symmetry_proposal(
     subjects: tuple[str, str], a: PrimitiveFit, b: PrimitiveFit, angle: float
 ) -> IntentProposal | None:
-    """Mirror-plane proposals for the two cases a rebuild actually meets.
+    """Mirror-plane proposals for the same-kind pairs the evidence supports.
 
-    Two parallel planes (a part's outer faces) and two parallel-axis cylinders
-    (a pair of mounting holes).  Anything richer than that is judgement we do not
-    have the evidence for, so it is left unproposed rather than approximated.
+    Two parallel planes (a part's outer faces), two parallel-axis cylinders (a
+    pair of mounting holes), and two parallel-axis cones (a pair of countersinks
+    or chamfers).  Mixed kinds are left unproposed: a cylinder and a cone with
+    parallel axes are not each other's mirror image, and saying so would be an
+    invention.  Two spheres are deliberately excluded too — *any* two spheres are
+    mirror-symmetric about the bisector of their centres, so the proposal would
+    carry no evidence and would fire on every sphere pair in the part.
     """
     first, second = subjects
-    if a.kind == "plane" and b.kind == "plane":
+    if a.kind != b.kind:
+        return None
+    if a.kind == "plane":
         normal = a.parameters["normal"]
         # Both normals are canonicalised, but canonicalisation keys on the
         # dominant component, which two near-parallel normals can disagree
@@ -2145,7 +2304,7 @@ def _symmetry_proposal(
             proposed_value={"normal": list(normal), "offset": mid},
             detail={"separation": separation, "normal_angle_deg": angle},
         )
-    if a.kind == "cylinder" and b.kind == "cylinder":
+    if a.kind in ("cylinder", "cone"):
         axis_a, axis_b = _fit_axis_line(a), _fit_axis_line(b)
         if axis_a is None or axis_b is None:
             return None
@@ -2155,20 +2314,25 @@ def _symmetry_proposal(
         if normal is None or separation <= 0.0:
             return None
         midpoint = _add(axis_a[0], _scale(offset_vector, 0.5))
-        radius_delta = abs(a.parameters["radius"] - b.parameters["radius"])
+        # A pair of bores is judged on radius; a pair of countersinks on taper,
+        # because a cone carries no single radius to compare (see
+        # _equal_radius_proposal for the same reason stated the other way).
+        measured = "radius" if a.kind == "cylinder" else "half_angle_deg"
+        unit = "length" if a.kind == "cylinder" else "deg"
+        delta = abs(a.parameters[measured] - b.parameters[measured])
         return IntentProposal(
             kind="symmetric",
             subjects=subjects,
             statement=(
-                f"{first} and {second} have parallel axes {separation:.4g} apart and radii "
-                f"differing by {radius_delta:.4g}. Propose a mirror plane midway between them."
+                f"{first} and {second} are {a.kind}s with parallel axes {separation:.4g} apart, "
+                f"differing in {measured} by {delta:.4g}. Propose a mirror plane midway between them."
             ),
-            deviation=radius_delta,
-            deviation_unit="length",
+            deviation=delta,
+            deviation_unit=unit,
             proposed_value={"normal": list(normal), "offset": _dot(normal, midpoint)},
             detail={
                 "axis_separation": separation,
-                "radius_delta": radius_delta,
+                f"{measured}_delta": delta,
                 "axis_angle_deg": angle,
             },
         )
