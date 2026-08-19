@@ -297,6 +297,97 @@ class ManifestValidationTests(unittest.TestCase):
         data["printable_parts"] = {"not": "a list"}
         self.assertIn("printable-parts-must-be-list", self._codes(data))
 
+    def test_printable_part_nested_objects_are_closed_worlds(self) -> None:
+        def with_regions(part):
+            part["support_policy"] = "explicit-regions"
+            part["support_regions"] = [{"kind": "blocker", "description": "Keep the rim clear."}]
+            return part["support_regions"][0]
+
+        for label, mutate in (
+            ("orientation", lambda part: part["orientation"].__setitem__("surprise", True)),
+            ("strength", lambda part: part["strength"].__setitem__("surprise", True)),
+            (
+                "strength.infill_percent",
+                lambda part: part["strength"]["infill_percent"].__setitem__("surprise", True),
+            ),
+            ("material", lambda part: part["material"].__setitem__("surprise", True)),
+            ("support_regions[0]", lambda part: with_regions(part).__setitem__("surprise", True)),
+            (
+                "protected_features[0]",
+                lambda part: part["protected_features"][0].__setitem__("surprise", True),
+            ),
+        ):
+            with self.subTest(nested=label):
+                data = copy.deepcopy(self.data)
+                mutate(data["printable_parts"][0])
+                self.assertIn("unknown-manifest-field", self._codes(data))
+
+    def test_explicit_null_support_regions_is_rejected(self) -> None:
+        data = copy.deepcopy(self.data)
+        self.assertNotEqual("explicit-regions", data["printable_parts"][0]["support_policy"])
+        data["printable_parts"][0]["support_regions"] = None
+        self.assertIn("printable-part-invalid-support-policy", self._codes(data))
+
+    def test_closed_world_enums_reject_unhashable_values_without_crashing(self) -> None:
+        # A dict where an enum string belongs used to raise TypeError out of the
+        # validator, escaping the CLI's ok/issues contract as a traceback.
+        cases = (
+            ("sources[0].kind", lambda d: d["sources"][0].__setitem__("kind", {"a": 1}), "unknown-source-kind"),
+            (
+                "sources[0].confidence",
+                lambda d: d["sources"][0].__setitem__("confidence", {"a": 1}),
+                "unknown-source-confidence",
+            ),
+            (
+                "references[0].representation",
+                lambda d: d["references"][0].__setitem__("representation", {"a": 1}),
+                "unknown-reference-representation",
+            ),
+            (
+                "printable_parts[0].print_as",
+                lambda d: d["printable_parts"][0].__setitem__("print_as", {"a": 1}),
+                "printable-part-field-required",
+            ),
+            (
+                "printable_parts[0].orientation.contact_face",
+                lambda d: d["printable_parts"][0]["orientation"].__setitem__("contact_face", {"a": 1}),
+                "printable-part-invalid-orientation",
+            ),
+            (
+                "printable_parts[0].orientation.allowed_alternatives[0]",
+                lambda d: d["printable_parts"][0]["orientation"].__setitem__("allowed_alternatives", [{"a": 1}]),
+                "printable-part-invalid-orientation",
+            ),
+            (
+                "printable_parts[0].support_policy",
+                lambda d: d["printable_parts"][0].__setitem__("support_policy", {"a": 1}),
+                "printable-part-field-required",
+            ),
+            (
+                "printable_parts[0].support_regions[0].kind",
+                lambda d: d["printable_parts"][0].update(
+                    support_policy="explicit-regions",
+                    support_regions=[{"kind": {"a": 1}, "description": "Keep the rim clear."}],
+                ),
+                "printable-part-invalid-support-policy",
+            ),
+            (
+                "printable_parts[0].protected_features[0].kind",
+                lambda d: d["printable_parts"][0]["protected_features"][0].__setitem__("kind", {"a": 1}),
+                "printable-part-invalid-protected-features",
+            ),
+            (
+                "printable_parts[0].material.status",
+                lambda d: d["printable_parts"][0]["material"].__setitem__("status", {"a": 1}),
+                "printable-part-invalid-material",
+            ),
+        )
+        for label, mutate, expected_code in cases:
+            with self.subTest(field=label):
+                data = copy.deepcopy(self.data)
+                mutate(data)
+                self.assertIn(expected_code, self._codes(data))
+
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
             CONTACT_FACES,

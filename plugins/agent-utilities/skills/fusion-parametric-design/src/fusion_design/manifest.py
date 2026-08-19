@@ -17,6 +17,7 @@ from .printable_parts import (  # noqa: F401
     PROTECTED_FEATURE_KINDS,
     SUPPORT_POLICIES,
     SUPPORT_REGION_KINDS,
+    _in_closed_set,
     _validate_printable_parts,
 )
 
@@ -240,7 +241,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     )
                 )
         kind = raw_source.get("kind")
-        if kind not in SOURCE_KINDS:
+        if not _in_closed_set(kind, SOURCE_KINDS):
             issues.append(
                 ValidationIssue(
                     "unknown-source-kind",
@@ -249,7 +250,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
             )
         confidence = raw_source.get("confidence")
-        if confidence not in SOURCE_CONFIDENCES:
+        if not _in_closed_set(confidence, SOURCE_CONFIDENCES):
             issues.append(
                 ValidationIssue(
                     "unknown-source-confidence",
@@ -498,7 +499,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         authoring = reference_string("authoring_component")
         packing = reference_string("packing_component")
         representation = reference_string("representation")
-        if representation not in REFERENCE_REPRESENTATIONS:
+        if not _in_closed_set(representation, REFERENCE_REPRESENTATIONS):
             issues.append(
                 ValidationIssue(
                     "unknown-reference-representation",

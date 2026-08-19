@@ -45,17 +45,25 @@ FORBIDDEN_CLAIM_KEYS = {
 }
 
 
-def _collect_keys(value, keys):
-    """Collect every key outside manufacturing_intent (declared intent is not a slicer claim)."""
+# manufacturing_intent legitimately declares its own support_policy; everything
+# else inside it is still subject to the forbidden-claim gate.
+INTENT_EXEMPT_KEYS = frozenset({"support_policy"})
+
+
+def _collect_keys(value, keys, exempt=frozenset()):
+    """Collect every key that would read as a slicer claim.
+
+    manufacturing_intent is descended into, exempting only its own declared
+    support_policy, so a planted printer/filament/slicing key still trips.
+    """
     if isinstance(value, dict):
         for key, child in value.items():
-            keys.add(key)
-            if key == "manufacturing_intent":
-                continue
-            _collect_keys(child, keys)
+            if key not in exempt:
+                keys.add(key)
+            _collect_keys(child, keys, INTENT_EXEMPT_KEYS if key == "manufacturing_intent" else frozenset())
     elif isinstance(value, list):
         for child in value:
-            _collect_keys(child, keys)
+            _collect_keys(child, keys, exempt)
 
 
 class FakeBody:
@@ -170,6 +178,51 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         partial_bounds.pop(self.print_parts[0])
         with self.assertRaisesRegex(ValueError, "missing for print parts"):
             emit_export_script(self.manifest, ExportConfig(good.export_dir, good.formats, good.verification_report_sha256, partial_bounds))
+
+    def test_padded_manifest_paths_still_carry_manufacturing_intent(self) -> None:
+        from fusion_design.manifest import Manifest, validate_manifest_data
+
+        # The validator strips printable-part paths before matching them against
+        # verification.expected_print_parts, so the emitter must strip too or the
+        # export index silently drops the intent for a padded part.
+        data = self.manifest.to_dict()
+        part = data["printable_parts"][0]
+        part["path"] = "  " + part["path"] + "  "
+        part["body_name"] = "  " + (part.get("body_name") or "PADDED_BODY") + "  "
+        self.assertEqual([], validate_manifest_data(data))
+
+        padded = Manifest.from_data(data)
+        config = self._config("/tmp/example-exports")
+        specs = load_generated_script(emit_export_script(padded, config))["EXPORT_SPECS"]
+        by_path = {spec["path"]: spec for spec in specs["parts"]}
+        self.assertEqual(set(self.print_parts), set(by_path))
+        for path in self.print_parts:
+            self.assertIn("manufacturing_intent", by_path[path])
+        self.assertEqual(
+            part["body_name"].strip(),
+            by_path[part["path"].strip()]["expected_body_name"],
+        )
+
+    def test_incomplete_manufacturing_intent_coverage_fails_closed(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        data = self.manifest.to_dict()
+        dropped = data["printable_parts"].pop()["path"]
+        # validate=False on purpose: the validator rejects this manifest, and the
+        # guard exists for exactly the un-validated construction path.
+        partial = Manifest.from_data(data, validate=False)
+        with self.assertRaises(ValueError) as ctx:
+            emit_export_script(partial, self._config("/tmp/example-exports"))
+        self.assertIn("Manufacturing intent is missing for print parts", str(ctx.exception))
+        self.assertIn(dropped, str(ctx.exception))
+
+    def test_forbidden_claim_gate_inspects_inside_manufacturing_intent(self) -> None:
+        planted: set = set()
+        _collect_keys(
+            {"artifacts": [{"manufacturing_intent": {"printer": "some-printer", "support_policy": "none"}}]},
+            planted,
+        )
+        self.assertEqual({"printer"}, planted & FORBIDDEN_CLAIM_KEYS)
 
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")

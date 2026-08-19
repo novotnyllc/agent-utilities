@@ -41,6 +41,19 @@ PRINTABLE_PART_FIELDS = {
 }
 
 
+def _in_closed_set(value: Any, allowed: set[str]) -> bool:
+    """Closed-world membership test that survives unhashable JSON values.
+
+    A bare ``value in allowed`` raises TypeError when the manifest supplies a
+    dict or list where an enum string belongs, and that escapes the validator
+    as a crash instead of a validation issue.
+    """
+    try:
+        return value in allowed
+    except TypeError:
+        return False
+
+
 def _validate_printable_parts(
     issues: list[ValidationIssue],
     printable_parts: Any,
@@ -139,7 +152,7 @@ def _validate_printable_parts(
             )
 
         print_as = require_string(raw_part, "print_as", path)
-        if print_as and print_as not in PRINT_AS_VALUES:
+        if print_as and not _in_closed_set(print_as, PRINT_AS_VALUES):
             issues.append(
                 ValidationIssue(
                     "printable-part-invalid-print-as",
@@ -165,7 +178,7 @@ def _validate_printable_parts(
                 f"{path}.orientation",
             )
             contact_face = orientation.get("contact_face")
-            if contact_face not in CONTACT_FACES:
+            if not _in_closed_set(contact_face, CONTACT_FACES):
                 issues.append(
                     ValidationIssue(
                         "printable-part-invalid-orientation",
@@ -193,7 +206,7 @@ def _validate_printable_parts(
                 )
             else:
                 for alt_index, alternative in enumerate(alternatives):
-                    if alternative not in CONTACT_FACES:
+                    if not _in_closed_set(alternative, CONTACT_FACES):
                         issues.append(
                             ValidationIssue(
                                 "printable-part-invalid-orientation",
@@ -219,7 +232,7 @@ def _validate_printable_parts(
                     )
 
         support_policy = require_string(raw_part, "support_policy", path)
-        if support_policy and support_policy not in SUPPORT_POLICIES:
+        if support_policy and not _in_closed_set(support_policy, SUPPORT_POLICIES):
             issues.append(
                 ValidationIssue(
                     "printable-part-invalid-support-policy",
@@ -250,7 +263,7 @@ def _validate_printable_parts(
                     )
                     continue
                 _reject_unknown_fields(issues, raw_region, {"kind", "description"}, region_path)
-                if raw_region.get("kind") not in SUPPORT_REGION_KINDS:
+                if not _in_closed_set(raw_region.get("kind"), SUPPORT_REGION_KINDS):
                     issues.append(
                         ValidationIssue(
                             "printable-part-invalid-support-policy",
@@ -267,7 +280,7 @@ def _validate_printable_parts(
                             "Support regions need a plain-language description.",
                         )
                     )
-        elif support_regions is not None:
+        elif "support_regions" in raw_part:
             issues.append(
                 ValidationIssue(
                     "printable-part-invalid-support-policy",
@@ -373,7 +386,7 @@ def _validate_printable_parts(
                     )
                     continue
                 _reject_unknown_fields(issues, raw_feature, {"kind", "description"}, feature_path)
-                if raw_feature.get("kind") not in PROTECTED_FEATURE_KINDS:
+                if not _in_closed_set(raw_feature.get("kind"), PROTECTED_FEATURE_KINDS):
                     issues.append(
                         ValidationIssue(
                             "printable-part-invalid-protected-features",
@@ -411,7 +424,7 @@ def _validate_printable_parts(
                         "material.assumption must be a non-empty string.",
                     )
                 )
-            if material.get("status") not in MATERIAL_STATUSES:
+            if not _in_closed_set(material.get("status"), MATERIAL_STATUSES):
                 issues.append(
                     ValidationIssue(
                         "printable-part-invalid-material",

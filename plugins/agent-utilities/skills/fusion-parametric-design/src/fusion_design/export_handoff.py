@@ -108,8 +108,10 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
 
     expected_parts = _validate_config(manifest, config)
     digest = manifest_sha256(manifest)
+    # Keys are stripped to match the validator, which normalizes printable-part
+    # paths before comparing them against verification.expected_print_parts.
     intent_by_path = {
-        str(part.get("path", "")): {
+        str(part.get("path", "")).strip(): {
             "id": part.get("id"),
             "quantity": part.get("quantity", 1),
             "print_as": part.get("print_as"),
@@ -123,7 +125,7 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
         for part in manifest.printable_parts
     }
     body_name_by_path = {
-        str(part.get("path", "")): part["body_name"]
+        str(part.get("path", "")).strip(): str(part["body_name"]).strip()
         for part in manifest.printable_parts
         if part.get("body_name")
     }
@@ -142,6 +144,12 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
         if path in body_name_by_path:
             part_spec["expected_body_name"] = body_name_by_path[path]
         parts.append(part_spec)
+    if manifest.printable_parts:
+        uncovered = sorted(path for path in expected_parts if path not in intent_by_path)
+        if uncovered:
+            raise ValueError(
+                f"Manufacturing intent is missing for print parts: {', '.join(uncovered)}."
+            )
     filename_owners: dict[str, str] = {f"export-index__{digest[:8]}.json": "<index>"}
     for part in parts:
         for filename in part["filenames"].values():
