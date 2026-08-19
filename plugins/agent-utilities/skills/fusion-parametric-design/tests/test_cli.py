@@ -77,7 +77,15 @@ class EmitExportCliTests(unittest.TestCase):
     def _write_report(self, directory: Path, mutate=None, keep_sample_marker=False) -> Path:
         report = example_verification_report(load_manifest(EXAMPLE))
         if not keep_sample_marker:
+            # Stand in for a live verification report: dropping the sample marker
+            # alone is not enough, and must not be.
             report.pop("sample", None)
+            report.update(
+                compute_invoked=True,
+                failures=[],
+                timeline={"unhealthy": []},
+                geometry={EXAMPLE_BASE: {"solid_body_count": 1, "has_positive_solid": True}},
+            )
         if mutate:
             mutate(report)
         path = directory / "verification-report.json"
@@ -189,6 +197,33 @@ class EmitExportCliTests(unittest.TestCase):
             )
             self.assertEqual(2, code)
             self.assertIn("sample verification report", errors)
+
+    def test_emit_export_rejects_a_sample_report_with_the_marker_stripped(self) -> None:
+        # The improvisation the guard actually has to survive: delete "sample"
+        # and the fabricated acceptance-box report becomes an export binding.
+        with tempfile.TemporaryDirectory() as temporary:
+            report = example_verification_report(load_manifest(EXAMPLE))
+            report.pop("sample")
+            path = Path(temporary) / "verification-report.json"
+            path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            code, _, errors = self._run(
+                ["emit-export", str(EXAMPLE), "--verification-report", str(path), "--export-dir", "/exports"]
+            )
+            self.assertEqual(2, code)
+            self.assertIn("live-transaction evidence", errors)
+            for token in ("compute_invoked", "failures", "timeline", "geometry"):
+                self.assertIn(token, errors)
+
+    def test_emit_export_rejects_a_report_whose_failures_are_not_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = self._write_report(
+                Path(temporary), mutate=lambda report: report.update(failures=["clearance"])
+            )
+            code, _, errors = self._run(
+                ["emit-export", str(EXAMPLE), "--verification-report", str(report_path), "--export-dir", "/exports"]
+            )
+            self.assertEqual(2, code)
+            self.assertIn("live-transaction evidence", errors)
 
     def test_emit_export_rejects_unknown_format(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -421,6 +456,70 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
     def test_cli_module_contains_no_process_execution_api(self) -> None:
         source = Path(cli_module.__file__).read_text(encoding="utf-8")
         self.assertEqual([], process_execution_offenses(source))
+
+
+class DiffReportsCliTests(unittest.TestCase):
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        output = io.StringIO()
+        errors = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def _report(self, directory: Path, name: str, **overrides) -> Path:
+        report = {
+            "kind": "inventory",
+            "ok": True,
+            "project": "wearable-controller-pod",
+            "manifest_sha256": "a" * 64,
+            "component_paths": [EXAMPLE_BASE],
+        }
+        report.update(overrides)
+        path = directory / name
+        path.write_text(json.dumps(report), encoding="utf-8")
+        return path
+
+    def test_diff_reports_refuses_mismatched_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._report(root, "before.json")
+            after = self._report(root, "after.json", kind="verification", component_paths=[])
+            code, output, errors = self._run(["diff-reports", str(before), str(after)])
+            self.assertEqual(2, code)
+            self.assertIn("'inventory'", errors)
+            self.assertIn("'verification'", errors)
+            # The fabricated removal must never be printed.
+            self.assertNotIn("components_removed", output)
+
+    def test_diff_reports_refuses_a_different_project_or_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._report(root, "before.json")
+
+            other_project = self._report(root, "other-project.json", project="something-else")
+            code, _, errors = self._run(["diff-reports", str(before), str(other_project)])
+            self.assertEqual(2, code)
+            self.assertIn("different projects", errors)
+
+            other_manifest = self._report(root, "other-manifest.json", manifest_sha256="b" * 64)
+            code, _, errors = self._run(["diff-reports", str(before), str(other_manifest)])
+            self.assertEqual(2, code)
+            self.assertIn("--allow-manifest-change", errors)
+
+            code, output, errors = self._run(
+                ["diff-reports", str(before), str(other_manifest), "--allow-manifest-change"]
+            )
+            self.assertEqual(0, code, errors)
+            self.assertIn("components_removed", output)
+
+    def test_diff_reports_refuses_an_undiffable_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._report(root, "before.json", kind="export-handoff")
+            after = self._report(root, "after.json", kind="export-handoff")
+            code, _, errors = self._run(["diff-reports", str(before), str(after)])
+            self.assertEqual(2, code)
+            self.assertIn("cannot be diffed", errors)
 
 
 if __name__ == "__main__":

@@ -795,6 +795,22 @@ def run(context):
             "compute_invoked": compute_invoked,
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "ok": not failures,
+            # `ok` covers the digital gates listed in `checked` only. It is not a
+            # statement about printability, structure, thermals, or physical fit;
+            # those need external analysis or a printed part and stay `not run`.
+            "ok_scope": "digital-gates-only",
+            "checked": [
+                "compute-all",
+                "design-type",
+                "parameters",
+                "ambiguous-components",
+                "required-components",
+                "timeline-health",
+                "clearance",
+                "interference",
+                "print-parts",
+            ],
+            "unchecked": ["printability", "structural", "thermal", "physical"],
             "failures": failures,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "ambiguous_component_paths": ambiguous_component_paths,

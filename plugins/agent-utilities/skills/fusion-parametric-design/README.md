@@ -67,8 +67,10 @@ scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
-scripts/fusion-design diff-reports <before.json> <after.json>
-scripts/fusion-design prepare-module-bundle <package-dir> <entry-module>
+scripts/fusion-design emit-export <manifest> --verification-report <report.json> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
+scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]
+scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
 

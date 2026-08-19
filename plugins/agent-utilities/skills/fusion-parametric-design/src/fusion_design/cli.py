@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from typing import Callable
+from typing import Any, Callable
 
 from .export_handoff import (
     ALLOWED_FORMATS,
@@ -77,6 +77,37 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return 2 if plan.blocked else 0
 
 
+def _require_live_verification_report(report_data: Any) -> None:
+    """Refuse anything but the report a live verification transaction actually wrote.
+
+    A self-declared `sample` marker is one deletion away from a valid binding, so
+    the real gate is the evidence only the live transaction produces: it invokes
+    Compute All, records an explicit empty failure list, and reports timeline and
+    geometry maps. A hand-assembled or sample report carries none of them.
+    """
+    if not isinstance(report_data, dict):
+        raise ValueError("Verification report must be a JSON object.")
+    if report_data.get("sample"):
+        raise ValueError(
+            "refusing to bind a sample verification report; run the live verification transaction and pass its saved report"
+        )
+    missing = []
+    if report_data.get("compute_invoked") is not True:
+        missing.append("compute_invoked: true")
+    if report_data.get("failures") != []:
+        missing.append("failures: []")
+    for key in ("timeline", "geometry"):
+        value = report_data.get(key)
+        if not isinstance(value, dict) or not value:
+            missing.append(f"a non-empty {key} object")
+    if missing:
+        raise ValueError(
+            "verification report lacks live-transaction evidence ("
+            + "; ".join(missing)
+            + "); run the live verification transaction and pass its saved report"
+        )
+
+
 def _cmd_emit_export(args: argparse.Namespace) -> int:
     named_paths = [("manifest", args.manifest), ("verification-report", args.verification_report)]
     if args.output:
@@ -90,10 +121,7 @@ def _cmd_emit_export(args: argparse.Namespace) -> int:
     report_bytes = Path(args.verification_report).read_bytes()
     manifest = load_manifest(args.manifest)
     report_data = json.loads(report_bytes.decode("utf-8"))
-    if isinstance(report_data, dict) and report_data.get("sample"):
-        raise ValueError(
-            "refusing to bind a sample verification report; run the live verification transaction and pass its saved report"
-        )
+    _require_live_verification_report(report_data)
     config = ExportConfig(
         export_dir=args.export_dir,
         formats=formats,
@@ -143,9 +171,44 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
     return 2 if args.slice and not result["slice"].get("ok") else 0
 
 
+# Only these two report kinds have a shape diff_reports understands. Diffing
+# across kinds invents removals, because the shapes are not comparable.
+DIFFABLE_REPORT_KINDS = ("inventory", "verification")
+
+
+def _require_comparable_reports(before: Any, after: Any, allow_manifest_change: bool) -> None:
+    for label, report in (("before", before), ("after", after)):
+        if not isinstance(report, dict):
+            raise ValueError(f"{label} report must be a JSON object.")
+    before_kind = before.get("kind")
+    after_kind = after.get("kind")
+    if before_kind != after_kind:
+        raise ValueError(
+            f"refusing to diff a {before_kind!r} report against a {after_kind!r} report; "
+            "the shapes are not comparable and the result would invent changes"
+        )
+    if before_kind not in DIFFABLE_REPORT_KINDS:
+        raise ValueError(
+            f"report kind {before_kind!r} cannot be diffed; expected one of "
+            f"{', '.join(DIFFABLE_REPORT_KINDS)}"
+        )
+    if before.get("project") != after.get("project"):
+        raise ValueError(
+            f"refusing to diff reports from different projects: {before.get('project')!r} "
+            f"and {after.get('project')!r}"
+        )
+    if not allow_manifest_change and before.get("manifest_sha256") != after.get("manifest_sha256"):
+        raise ValueError(
+            "the two reports were produced from different manifests "
+            f"({before.get('manifest_sha256')!r} and {after.get('manifest_sha256')!r}); "
+            "pass --allow-manifest-change if the manifest was intentionally edited between them"
+        )
+
+
 def _cmd_diff(args: argparse.Namespace) -> int:
     before = json.loads(Path(args.before).read_text(encoding="utf-8"))
     after = json.loads(Path(args.after).read_text(encoding="utf-8"))
+    _require_comparable_reports(before, after, args.allow_manifest_change)
     print(json.dumps(diff_reports(before, after), indent=2, sort_keys=True))
     return 0
 
@@ -208,7 +271,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         choices=list(ALLOWED_FORMATS),
         dest="formats",
-        help="Export format (repeatable). Defaults to step plus 3mf; step is always required.",
+        help=(
+            "Export format (repeatable). Defaults to step plus 3mf; step is always required. "
+            "The prusaslicer-project adapter reads only 3MF artifacts, so an index emitted "
+            "without 3mf cannot feed it."
+        ),
     )
     emit_export.add_argument("-o", "--output")
     emit_export.set_defaults(handler=_cmd_emit_export)
@@ -252,9 +319,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prusaslicer.set_defaults(handler=_cmd_prusaslicer_project)
 
-    diff = subparsers.add_parser("diff-reports", help="Diff two machine-readable Fusion inventory/verification reports.")
+    diff = subparsers.add_parser(
+        "diff-reports",
+        help=(
+            "Diff two machine-readable Fusion reports of the same kind (inventory or verification) "
+            "from the same project."
+        ),
+    )
     diff.add_argument("before")
     diff.add_argument("after")
+    diff.add_argument(
+        "--allow-manifest-change",
+        action="store_true",
+        help="Permit a diff whose two reports were produced from different manifest hashes.",
+    )
     diff.set_defaults(handler=_cmd_diff)
 
     prepare_modules = subparsers.add_parser(

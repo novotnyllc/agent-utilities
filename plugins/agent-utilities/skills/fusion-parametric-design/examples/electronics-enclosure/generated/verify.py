@@ -5,7 +5,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = '8e28010a7d270c9d49e9218c571de1c5fa3c8fa9ab28e885567e3b12b4cc5c5b'
+MANIFEST_SHA256 = '9bff3afba88bdf1ade933f1c1a8ba0ba8a4ba54fdae7292d6cc27adb85316beb'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 
@@ -410,6 +410,22 @@ def run(context):
             "compute_invoked": compute_invoked,
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "ok": not failures,
+            # `ok` covers the digital gates listed in `checked` only. It is not a
+            # statement about printability, structure, thermals, or physical fit;
+            # those need external analysis or a printed part and stay `not run`.
+            "ok_scope": "digital-gates-only",
+            "checked": [
+                "compute-all",
+                "design-type",
+                "parameters",
+                "ambiguous-components",
+                "required-components",
+                "timeline-health",
+                "clearance",
+                "interference",
+                "print-parts",
+            ],
+            "unchecked": ["printability", "structural", "thermal", "physical"],
             "failures": failures,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "ambiguous_component_paths": ambiguous_component_paths,

@@ -18,6 +18,25 @@ GENERATED = EXAMPLE / "generated"
 
 
 class GoldenPathTests(unittest.TestCase):
+    def test_every_critical_example_parameter_carries_provenance(self) -> None:
+        # The example is what an agent imitates, so it must not model the
+        # shortcut the doctrine forbids: a critical value with no source, or an
+        # uncouponed fabrication/clearance value declared settled.
+        manifest = load_manifest(MANIFEST_PATH)
+        source_ids = {str(source["id"]) for source in manifest.data["sources"]}
+        settle_by_measurement = {"clearance", "fabrication", "packing"}
+        for parameter in manifest.parameters:
+            if not parameter.get("critical"):
+                continue
+            name = parameter["name"]
+            source_id = parameter.get("source_id")
+            self.assertIn(source_id, source_ids, f"{name} has no known provenance source")
+            if parameter.get("role") in settle_by_measurement:
+                self.assertTrue(
+                    parameter.get("provisional"),
+                    f"{name} claims a settled {parameter['role']} value; no coupon supports it",
+                )
+
     def test_enclosure_fixture_is_an_executable_golden_path(self) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         self.assertFalse(build_plan(manifest).blocked)

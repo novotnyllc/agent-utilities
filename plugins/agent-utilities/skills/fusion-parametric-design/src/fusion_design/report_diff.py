@@ -16,6 +16,62 @@ def _canonical_rows(value: Any) -> dict[str, Any]:
     }
 
 
+# Reports carry bounds in millimetres already, so this only absorbs the float
+# noise of two independent Fusion measurements of an unchanged body.
+BOUNDS_TOLERANCE_MM = 1e-6
+
+
+def _rows_by_id(value: Any) -> dict[str, Any]:
+    rows = value if isinstance(value, list) else []
+    indexed: dict[str, Any] = {}
+    for index, row in enumerate(rows):
+        identifier = row.get("id") if isinstance(row, dict) else None
+        indexed[str(identifier) if identifier is not None else f"#{index}"] = row
+    return indexed
+
+
+def _changed_by_id(before: Any, after: Any) -> dict[str, dict[str, Any]]:
+    before_rows = _rows_by_id(before)
+    after_rows = _rows_by_id(after)
+    return {
+        identifier: {"before": before_rows.get(identifier), "after": after_rows.get(identifier)}
+        for identifier in sorted(set(before_rows) | set(after_rows))
+        if before_rows.get(identifier) != after_rows.get(identifier)
+    }
+
+
+def _corners_mm(value: Any) -> list[float] | None:
+    """Flatten a {min, max} bounds record to six numbers, or None if it is not one."""
+    if not isinstance(value, dict):
+        return None
+    flattened: list[float] = []
+    for key in ("min", "max"):
+        corner = value.get(key)
+        if not isinstance(corner, list) or len(corner) != 3:
+            return None
+        for element in corner:
+            if isinstance(element, bool) or not isinstance(element, (int, float)):
+                return None
+            flattened.append(float(element))
+    return flattened
+
+
+def _bounds_equal(before: Any, after: Any) -> bool:
+    before_corners = _corners_mm(before)
+    after_corners = _corners_mm(after)
+    if before_corners is None or after_corners is None:
+        # Error records and malformed entries are compared verbatim.
+        return before == after
+    return all(
+        abs(left - right) <= BOUNDS_TOLERANCE_MM
+        for left, right in zip(before_corners, after_corners)
+    )
+
+
+def _token_set(value: Any) -> set[str]:
+    return {str(token) for token in value} if isinstance(value, list) else set()
+
+
 def diff_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     before_parameters = _as_dict(before.get("parameters", {}))
     after_parameters = _as_dict(after.get("parameters", {}))
@@ -44,6 +100,18 @@ def diff_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
     unhealthy_before = _canonical_rows(before_timeline.get("unhealthy", []))
     unhealthy_after = _canonical_rows(after_timeline.get("unhealthy", []))
 
+    # Position is invisible in the geometry summaries (volume and body counts
+    # survive a rigid move), so bounds are diffed separately for both kinds.
+    before_bounds = _as_dict(before.get("brep_bounding_boxes_mm", {}))
+    after_bounds = _as_dict(after.get("brep_bounding_boxes_mm", {}))
+    bounds_changed: dict[str, dict[str, Any]] = {}
+    for path in sorted(set(before_bounds).intersection(after_bounds)):
+        if not _bounds_equal(before_bounds[path], after_bounds[path]):
+            bounds_changed[path] = {"before": before_bounds[path], "after": after_bounds[path]}
+
+    before_failures = _token_set(before.get("failures"))
+    after_failures = _token_set(after.get("failures"))
+
     return {
         "parameters_changed": parameter_changes,
         "components_added": sorted(after_components - before_components),
@@ -58,4 +126,15 @@ def diff_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
         "timeline_unhealthy_removed": [
             unhealthy_before[key] for key in sorted(set(unhealthy_before) - set(unhealthy_after))
         ],
+        "bounds_changed": bounds_changed,
+        "ok_before": before.get("ok"),
+        "ok_after": after.get("ok"),
+        "failures_added": sorted(after_failures - before_failures),
+        "failures_removed": sorted(before_failures - after_failures),
+        "clearance_changed": _changed_by_id(
+            before.get("clearance_results"), after.get("clearance_results")
+        ),
+        "interference_changed": _changed_by_id(
+            before.get("interference_results"), after.get("interference_results")
+        ),
     }
