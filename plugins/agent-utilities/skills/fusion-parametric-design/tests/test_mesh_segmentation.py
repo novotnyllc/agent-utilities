@@ -345,7 +345,7 @@ class WeldTests(unittest.TestCase):
 
     def test_a_tolerance_that_swallows_the_part_collapses_it_and_refuses(self) -> None:
         vertices, triangles, groups = box_mesh(divisions=2)
-        dump = make_dump(vertices, triangles)
+        dump = make_dump(vertices, triangles, face_groups=groups)
         record = seg.fit_regions(dump, spec(weld_tolerance=1000.0))
         self.assertEqual("mesh-degenerate", record["refusal"]["reason"])
 
@@ -725,8 +725,12 @@ class TorusTests(unittest.TestCase):
 class DisproofTests(unittest.TestCase):
     def test_a_twenty_degree_arc_is_refused_for_support_span(self) -> None:
         vertices, triangles, groups = arc_patch_mesh(sweep_deg=20.0)
-        dump = make_dump(vertices, triangles)
+        dump = make_dump(vertices, triangles, face_groups=groups)
         record = seg.fit_regions(dump, spec())
+        # A 20-degree arc of an r=8 cylinder is a plane to within 0.12 mm, so the
+        # residual gate does not catch it and the *structure* gate has to. The
+        # region is refused either way; what matters is that nothing is accepted.
+        self.assertEqual([], [r for r in record["regions"] if r["accepted"]])
         for region in record["regions"]:
             if region["fit"]["kind"] == "cylinder":
                 self.assertFalse(region["accepted"], region["fit"].get("rejection"))
@@ -741,7 +745,7 @@ class DisproofTests(unittest.TestCase):
 
     def test_a_shallow_cone_fitted_as_a_cylinder_is_caught_by_residual_structure(self) -> None:
         vertices, triangles, groups = shallow_cone_mesh()
-        dump = make_dump(vertices, triangles)
+        dump = make_dump(vertices, triangles, face_groups=groups)
         # Force the cylinder hypothesis onto cone data and check the structure
         # test sees it even though the RMS is flattering.
         fit = fit_primitive(vertices, "cylinder", max_relative_residual=0.05)
@@ -892,15 +896,18 @@ class RecordContractTests(unittest.TestCase):
     def test_a_bore_and_a_boss_are_distinguishable_on_a_closed_mesh(self) -> None:
         """The winding evidence a hole archetype needs, and its refusal to guess."""
         vertices, triangles, groups = cylinder_mesh(radius=8.0, height=30.0, sides=64, stacks=20)
-        outward = seg.fit_regions(make_dump(vertices, triangles), spec())
-        for region in outward["regions"]:
-            if region["accepted"] and region["fit"]["kind"] == "cylinder":
-                # The tube fixture is open, so no side may be claimed.
-                self.assertIsNone(region["orientation"]["material_side"])
-                self.assertFalse(region["orientation"]["mesh_closed"])
-                self.assertIsNotNone(region["orientation"]["unavailable_reason"])
-                return
-        self.skipTest("no cylinder region on this fixture")
+        outward = seg.fit_regions(make_dump(vertices, triangles, face_groups=groups), spec())
+        cylinders = [
+            r for r in outward["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"
+        ]
+        # Asserted, not skipped past: a test that quietly stops testing when the
+        # fixture changes shape is the failure mode this suite exists to catch.
+        self.assertTrue(cylinders, [r["fit"]["kind"] for r in outward["regions"]])
+        for region in cylinders:
+            # The tube fixture is open, so no side may be claimed.
+            self.assertIsNone(region["orientation"]["material_side"])
+            self.assertFalse(region["orientation"]["mesh_closed"])
+            self.assertIsNotNone(region["orientation"]["unavailable_reason"])
 
     def test_unclaimed_area_is_reported_with_its_curvature_signature(self) -> None:
         unclaimed = self.record["unclaimed"]
@@ -911,8 +918,9 @@ class RecordContractTests(unittest.TestCase):
 
     def test_a_rejected_fit_is_kept_with_the_gate_that_killed_it(self) -> None:
         vertices, triangles, groups = arc_patch_mesh(sweep_deg=20.0)
-        record = seg.fit_regions(make_dump(vertices, triangles), spec())
+        record = seg.fit_regions(make_dump(vertices, triangles, face_groups=groups), spec())
         rejected = record["unfitted_regions"]
+        self.assertTrue(rejected)
         if rejected:
             for entry in rejected:
                 self.assertTrue(entry["failed_gate"])
@@ -1091,7 +1099,7 @@ class NoiseCeilingTests(unittest.TestCase):
     def test_benchmark_reports_runtime(self) -> None:  # pragma: no cover - measurement
         for sides, stacks in ((64, 40), (140, 90), (260, 190)):
             vertices, triangles, groups = cylinder_mesh(sides=sides, stacks=stacks, noise=0.02)
-            dump = make_dump(vertices, triangles)
+            dump = make_dump(vertices, triangles, face_groups=groups)
             started = time.monotonic()
             record = seg.fit_regions(dump, spec(min_feature_size=5.0))
             print(
