@@ -178,12 +178,30 @@ class SkillContractTests(unittest.TestCase):
         # so guard the unit and property tokens that would have to accompany one.
         self.assertNotRegex(body.lower(), r"°|\b(degrees?|mpa|psi|gpa|percent|mm)\b")
 
-    def test_all_declared_reference_files_exist(self) -> None:
+    def test_declared_reference_files_and_shipped_ones_are_the_same_set(self) -> None:
+        # Both directions: a declared file that is missing breaks the skill, and
+        # a shipped file nothing declares is doctrine no agent will ever read.
         text = SKILL.read_text(encoding="utf-8")
-        referenced = re.findall(r"`references/([^`]+\.md)`", text)
+        referenced = set(re.findall(r"`references/([^`]+\.md)`", text))
         self.assertTrue(referenced)
-        for relative in referenced:
-            self.assertTrue((SKILL_DIR / "references" / relative).is_file(), relative)
+        shipped = {path.name for path in (SKILL_DIR / "references").glob("*.md")}
+        self.assertEqual(shipped, referenced)
+
+    def test_mesh_reconstruction_doctrine_states_the_gate_and_the_api_boundary(self) -> None:
+        doctrine = (SKILL_DIR / "references" / "mesh-reconstruction.md").read_text(encoding="utf-8")
+        skill = SKILL.read_text(encoding="utf-8")
+        capability = (SKILL_DIR / "references" / "capability-matrix.md").read_text(encoding="utf-8")
+        unsupported = (SKILL_DIR / "references" / "unsupported.md").read_text(encoding="utf-8")
+        for requirement in ("mesh-edit", "faceted-brep", "parametric-rebuild"):
+            self.assertIn(requirement, doctrine, requirement)
+        self.assertIn("Classify the edit before converting", skill)
+        self.assertIn("references/mesh-reconstruction.md", skill)
+        for document, name in ((capability, "capability-matrix"), (unsupported, "unsupported")):
+            self.assertIn("Mesh Section Sketch", document, name)
+            self.assertIn("Fit Curves", document, name)
+            self.assertIn("UI-only", document, name)
+            self.assertIn("compareWith", document, name)
+            self.assertIn("preview", document, name)
 
 
 if __name__ == "__main__":

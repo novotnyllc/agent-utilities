@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import copy
+from io import StringIO
+import json
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
-from fusion_design.manifest import ManifestValidationError
+from fusion_design.manifest import Manifest, ManifestValidationError
+from fusion_design.mesh_convert import emit_mesh_convert_script, validate_convert_spec
+from fusion_design.mesh_deviation import emit_mesh_deviation_script, validate_deviation_spec
 from fusion_design.mesh_reconstruction import (
     Classification,
     classification_from_record,
@@ -12,6 +19,11 @@ from fusion_design.mesh_reconstruction import (
 )
 
 from test_mesh_source import BREP_SOURCE, mesh_source
+from test_scripts import load_generated_script
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 
 
 def request(**overrides) -> dict:
@@ -65,6 +77,8 @@ class ClassificationPathTests(unittest.TestCase):
                 "facet_count": 4200,
                 "facet_budget": 9000,
                 "brep_source_available": True,
+                "source_id": "scan_bracket",
+                "source_sha256": "a" * 64,
             },
             classification.inputs,
         )
@@ -185,18 +199,594 @@ class ClassificationRecordTests(unittest.TestCase):
         )
 
 
+    def test_a_record_whose_path_contradicts_its_inputs_is_refused(self) -> None:
+        # The inputs describe a watertight, in-budget boolean-mechanical edit,
+        # which is faceted-brep. A record claiming parametric-rebuild for those
+        # same inputs is a faceted result reported as a parametric one.
+        faceted = classify(
+            request(edit_kind="boolean-mechanical", facet_count=100, facet_budget=5000),
+            mesh_source(provenance="designed_export"),
+        )
+        self.assertEqual("faceted-brep", faceted.path)
+        forged = dict(faceted.to_dict(), path="parametric-rebuild", rationale="rebuilt parametrically")
+        self.assertIn(
+            "classification-path-contradicts-inputs",
+            codes(lambda: classification_from_record(forged)),
+        )
+
+    def test_recorded_input_values_are_checked_on_the_way_out(self) -> None:
+        for field, value in (
+            ("edit_kind", "vibes"),
+            ("provenance", "unicorn"),
+            ("watertight", "yes"),
+            ("facet_count", -5),
+            ("brep_source_available", "maybe"),
+            ("source_id", "2bad"),
+            ("source_sha256", "nope"),
+        ):
+            with self.subTest(field=field):
+                record = copy.deepcopy(self.record)
+                record["inputs"][field] = value
+                self.assertIn(
+                    "classification-invalid-inputs",
+                    codes(lambda record=record: classification_from_record(record)),
+                )
+
+    def test_the_number_that_decides_the_faceted_path_cannot_be_omitted(self) -> None:
+        record = classify(
+            request(edit_kind="boolean-mechanical", facet_count=100, facet_budget=5000),
+            mesh_source(),
+        ).to_dict()
+        record["inputs"].pop("facet_budget")
+        self.assertIn(
+            "classification-invalid-inputs",
+            codes(lambda: classification_from_record(record)),
+        )
+
+
 class ClassificationGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = mesh_source()
+        self.record = classify(request(), self.source).to_dict()
+
     def test_an_unclassified_geometry_operation_refuses_to_run(self) -> None:
         self.assertIn(
             "classification-required",
-            codes(lambda: require_classification(None, "mesh-convert")),
+            codes(
+                lambda: require_classification(
+                    None, "mesh-convert", {"faceted-brep"}, self.source
+                )
+            ),
         )
 
     def test_a_recorded_classification_opens_the_gate(self) -> None:
-        record = classify(request(), mesh_source()).to_dict()
-        gated = require_classification(record, "mesh-convert")
+        gated = require_classification(
+            self.record, "mesh-rebuild", {"parametric-rebuild"}, self.source
+        )
         self.assertIsInstance(gated, Classification)
         self.assertEqual("parametric-rebuild", gated.path)
+
+    def test_a_path_that_does_not_permit_the_operation_is_refused(self) -> None:
+        # Proving a decision exists is not proving it permits this operation.
+        mesh_edit = classify(request(edit_kind="cosmetic-local"), self.source).to_dict()
+        self.assertIn(
+            "classification-path-forbids-operation",
+            codes(
+                lambda: require_classification(
+                    mesh_edit, "mesh-convert-to-brep", {"faceted-brep"}, self.source
+                )
+            ),
+        )
+        self.assertIn(
+            "classification-path-forbids-operation",
+            codes(
+                lambda: require_classification(
+                    self.record, "mesh-convert-to-brep", {"faceted-brep"}, self.source
+                )
+            ),
+        )
+
+    def test_a_classification_decided_for_another_source_does_not_transfer(self) -> None:
+        other = mesh_source(id="scan_lid", sha256="b" * 64)
+        self.assertIn(
+            "classification-source-mismatch",
+            codes(
+                lambda: require_classification(
+                    self.record, "mesh-rebuild", {"parametric-rebuild"}, other
+                )
+            ),
+        )
+
+    def test_an_entry_point_must_declare_the_paths_it_implements(self) -> None:
+        for allowed in (set(), {"auto-surface"}):
+            with self.subTest(allowed=allowed):
+                with self.assertRaises(ValueError):
+                    require_classification(self.record, "mesh-rebuild", allowed, self.source)
+
+
+def _manifest(source: dict) -> Manifest:
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["mesh_sources"] = [source]
+    return Manifest.from_data(data)
+
+
+class _Bodies:
+    def __init__(self, items=()):
+        self._items = list(items)
+
+    @property
+    def count(self):
+        return len(self._items)
+
+    def item(self, index):
+        return self._items[index]
+
+    def append(self, body):
+        self._items.append(body)
+
+    def discard(self, body):
+        if body in self._items:
+            self._items.remove(body)
+
+
+class _ObjectCollection:
+    def __init__(self):
+        self.items = []
+
+    def add(self, item):
+        self.items.append(item)
+
+
+class _Feature:
+    def __init__(self, bodies, created, complaint, health):
+        self._bodies = bodies
+        self._created = created
+        self.errorOrWarningMessage = complaint
+        self.healthState = health
+
+    def deleteMe(self):
+        for body in self._created:
+            self._bodies.discard(body)
+        return True
+
+
+class _MeshConvertFeatures:
+    """The live half of the ladder: what Fusion says, and what it produced."""
+
+    def __init__(self, bodies, *, faces=8, complaint=None, health="healthy", returns_feature=True, creates=True):
+        self.bodies = bodies
+        self.faces = faces
+        self.complaint = complaint
+        self.health = health
+        self.returns_feature = returns_feature
+        self.creates = creates
+
+    def createInput(self, collection, method):
+        return SimpleNamespace(collection=collection, method=method)
+
+    def add(self, convert_input):
+        created = []
+        if self.creates:
+            body = SimpleNamespace(name="bracket_scan (Converted)", faces=SimpleNamespace(count=self.faces))
+            self.bodies.append(body)
+            created.append(body)
+        if not self.returns_feature:
+            # Documented: add() returns null for a non-parametric operation.
+            return None
+        return _Feature(self.bodies, created, self.complaint, self.health)
+
+
+def _source_mesh_body(**overrides):
+    body = {
+        "name": "bracket_scan",
+        "isClosed": True,
+        "volume": 2.5,
+        "isValid": True,
+        "mesh": SimpleNamespace(triangleCount=800, triangleFaceGroupTempIds=[1, 1, 2, 2, 3, 3]),
+    }
+    body.update(overrides)
+    return SimpleNamespace(**body)
+
+
+CONVERT_SPEC = {"component_path": "", "body_name": "bracket_scan", "max_faces_per_face_group": 4.0}
+
+
+def _faceted_record(source: dict) -> dict:
+    return classify(
+        request(edit_kind="boolean-mechanical", facet_count=800, facet_budget=10000), source
+    ).to_dict()
+
+
+class FacetedConversionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = mesh_source(provenance="designed_export")
+        self.manifest = _manifest(self.source)
+        self.record = _faceted_record(self.source)
+
+    def _namespace(self, mesh_body, *, spec=None, **feature_kwargs):
+        script = emit_mesh_convert_script(
+            self.manifest, self.record, self.source, spec or CONVERT_SPEC
+        )
+        compile(script, "<generated-fusion-script>", "exec")
+        namespace = load_generated_script(script)
+        brep = _Bodies()
+        component = SimpleNamespace(
+            meshBodies=_Bodies([mesh_body] if mesh_body is not None else []),
+            bRepBodies=brep,
+            features=SimpleNamespace(meshConvertFeatures=_MeshConvertFeatures(brep, **feature_kwargs)),
+        )
+        design = SimpleNamespace(rootComponent=component)
+        app = SimpleNamespace(
+            version="2.0.20000",
+            activeDocument=SimpleNamespace(name=self.manifest.fusion_document),
+        )
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        namespace["adsk"].core.ObjectCollection = SimpleNamespace(create=_ObjectCollection)
+        namespace["adsk"].fusion.MeshConvertMethodTypes = SimpleNamespace(
+            FacetedMeshConvertMethodType="faceted"
+        )
+        namespace["_component"] = component
+        return namespace
+
+    def _run(self, namespace, failure=None):
+        output = StringIO()
+        if failure is None:
+            with redirect_stdout(output):
+                namespace["run"](None)
+        else:
+            with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, failure):
+                namespace["run"](None)
+        return [json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{")]
+
+    def test_a_low_facet_prismatic_mesh_converts_and_is_labeled_faceted(self) -> None:
+        namespace = self._namespace(_source_mesh_body(), faces=8)
+        report = self._run(namespace)[0]
+        self.assertTrue(report["ok"])
+        self.assertEqual("faceted", report["label"])
+        self.assertFalse(report["parametric"])
+        self.assertNotIn("parametric-rebuild", report["classification"]["path"])
+        self.assertEqual(3, report["editability"]["face_groups"])
+        self.assertEqual(8, report["editability"]["faces"])
+        self.assertIn("faceted, never parametric", report["note"])
+        self.assertEqual(1, namespace["_component"].bRepBodies.count)
+
+    def test_each_refusal_names_its_reason_and_creates_no_geometry(self) -> None:
+        cases = (
+            (None, "not-convertible-source"),
+            (_source_mesh_body(isClosed=False), "not-watertight"),
+            (_source_mesh_body(volume=0.0), "non-positive-volume"),
+            (_source_mesh_body(mesh=None), "mesh-evidence-unavailable"),
+        )
+        for mesh_body, expected in cases:
+            with self.subTest(reason=expected):
+                namespace = self._namespace(mesh_body)
+                report = self._run(namespace, failure=expected)[0]
+                self.assertFalse(report["ok"])
+                self.assertIn(expected, report["failures"])
+                self.assertIsNone(report["label"])
+                self.assertEqual(0, report["bodies_created"])
+                self.assertEqual(0, namespace["_component"].bRepBodies.count)
+                reasons = {refusal["reason"] for refusal in report["refusals"]}
+                self.assertIn(expected, reasons)
+                for refusal in report["refusals"]:
+                    self.assertTrue(refusal["alternative"].strip())
+
+    def test_fusions_own_complaint_is_quoted_rather_than_a_hardcoded_ceiling(self) -> None:
+        namespace = self._namespace(
+            _source_mesh_body(mesh=SimpleNamespace(triangleCount=480000, triangleFaceGroupTempIds=[1] * 6)),
+            complaint="The mesh body is too dense to convert.",
+        )
+        report = self._run(namespace, failure="fusion-refused-conversion")[0]
+        refusal = next(r for r in report["refusals"] if r["reason"] == "fusion-refused-conversion")
+        self.assertEqual("The mesh body is too dense to convert.", refusal["detail"]["errorOrWarningMessage"])
+        self.assertEqual(0, namespace["_component"].bRepBodies.count)
+        self.assertIn("no facet ceiling is hardcoded", refusal["alternative"])
+
+    def test_an_unhealthy_convert_feature_is_refused_and_rolled_back(self) -> None:
+        namespace = self._namespace(_source_mesh_body(), health="error")
+        report = self._run(namespace, failure="fusion-refused-conversion")[0]
+        self.assertEqual("error", next(
+            r for r in report["refusals"] if r["reason"] == "fusion-refused-conversion"
+        )["detail"]["healthState"])
+        self.assertEqual(0, namespace["_component"].bRepBodies.count)
+
+    def test_unselectable_facets_are_a_poor_outcome_not_a_success(self) -> None:
+        namespace = self._namespace(_source_mesh_body(), faces=9000)
+        report = self._run(namespace, failure="not-editable")[0]
+        self.assertFalse(report["ok"])
+        self.assertIsNone(report["label"])
+        self.assertEqual(3000.0, report["editability"]["faces_per_face_group"])
+        self.assertEqual(4.0, report["editability"]["declared_max_faces_per_face_group"])
+        self.assertEqual(0, namespace["_component"].bRepBodies.count)
+
+    def test_a_null_feature_return_is_handled_rather_than_assumed(self) -> None:
+        report = self._run(self._namespace(_source_mesh_body(), returns_feature=False))[0]
+        self.assertTrue(report["ok"])
+        self.assertFalse(report["feature_object_returned"])
+
+    def test_a_conversion_that_produced_nothing_is_not_a_success(self) -> None:
+        report = self._run(
+            self._namespace(_source_mesh_body(), returns_feature=False, creates=False),
+            failure="conversion-produced-nothing",
+        )[0]
+        self.assertIn("conversion-produced-nothing", report["failures"])
+
+    def test_a_missing_preview_feature_class_fails_closed(self) -> None:
+        namespace = self._namespace(_source_mesh_body())
+        namespace["adsk"].fusion.MeshConvertMethodTypes = None
+        report = self._run(namespace, failure="mesh-convert capability is unavailable")[0]
+        self.assertEqual(["mesh-convert-capability"], report["failures"])
+        self.assertIn(
+            "adsk.fusion.MeshConvertMethodTypes.FacetedMeshConvertMethodType",
+            report["missing_capabilities"],
+        )
+
+    def test_the_gate_refuses_a_conversion_the_classification_did_not_choose(self) -> None:
+        rebuild = classify(request(edit_kind="dimensional"), self.source).to_dict()
+        self.assertIn(
+            "classification-path-forbids-operation",
+            codes(lambda: emit_mesh_convert_script(self.manifest, rebuild, self.source, CONVERT_SPEC)),
+        )
+        self.assertIn(
+            "classification-required",
+            codes(lambda: emit_mesh_convert_script(self.manifest, None, self.source, CONVERT_SPEC)),
+        )
+
+    def test_the_editability_ceiling_is_declared_never_defaulted(self) -> None:
+        for value in (None, 0, -1.0, "four", float("inf")):
+            with self.subTest(value=value):
+                spec = dict(CONVERT_SPEC, max_faces_per_face_group=value)
+                self.assertIn(
+                    "convert-spec-invalid-editability",
+                    {issue.code for issue in validate_convert_spec(spec)},
+                )
+        self.assertIn(
+            "convert-spec-invalid-binding",
+            {issue.code for issue in validate_convert_spec(dict(CONVERT_SPEC, body_name="  "))},
+        )
+        self.assertIn(
+            "unknown-manifest-field",
+            {issue.code for issue in validate_convert_spec(dict(CONVERT_SPEC, hopes=1))},
+        )
+
+
+def _point(x, y, z):
+    return SimpleNamespace(x=x, y=y, z=z)
+
+
+class _PolygonMesh:
+    """A PolygonMesh whose compareWith answers for one direction only.
+
+    ``comparable=False`` omits the attribute entirely, which is what a Fusion
+    without the preview API looks like.
+    """
+
+    def __init__(self, nodes_mm, distances_mm=None, *, comparable=True):
+        self.nodeCoordinates = [_point(x / 10.0, y / 10.0, z / 10.0) for x, y, z in nodes_mm]
+        if comparable:
+            self.compareWith = _compare_with(distances_mm)
+
+
+def _compare_with(distances_mm):
+    def compare(other, transform, transform_other):
+        if distances_mm is None:
+            raise RuntimeError("compareWith rejected these meshes")
+        return [value / 10.0 for value in distances_mm]
+
+    return compare
+
+
+DEVIATION_SPEC = {
+    "source": {"component_path": "", "body_name": "bracket_scan"},
+    "reconstruction": {"component_path": "", "body_name": "bracket_rebuild"},
+    "thresholds_mm": {
+        "invented_material": 0.05,
+        "omitted_detail": 0.25,
+        "percentile_sample_limit": 20000,
+    },
+    "rationale": "Printed fit is held to 0.05 mm; scanned fillets below 0.25 mm are not modelled.",
+}
+
+
+class DeviationVerdictTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = mesh_source()
+        self.manifest = _manifest(self.source)
+        self.record = classify(request(edit_kind="dimensional"), self.source).to_dict()
+
+    def _namespace(self, *, recon_distances, source_distances, compare=True, containment=None):
+        script = emit_mesh_deviation_script(
+            self.manifest, self.record, self.source, DEVIATION_SPEC
+        )
+        compile(script, "<generated-fusion-script>", "exec")
+        namespace = load_generated_script(script)
+        source_mesh = _PolygonMesh(
+            [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0)], source_distances, comparable=compare
+        )
+        recon_mesh = _PolygonMesh(
+            [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (5.0, 5.0, 9.0)], recon_distances, comparable=compare
+        )
+        source_body = SimpleNamespace(name="bracket_scan", mesh=source_mesh)
+        recon_body = SimpleNamespace(
+            name="bracket_rebuild",
+            meshManager=SimpleNamespace(displayMeshes=SimpleNamespace(bestMesh=recon_mesh)),
+        )
+        if containment is not None:
+            recon_body.pointContainment = containment
+        component = SimpleNamespace(
+            meshBodies=_Bodies([source_body]), bRepBodies=_Bodies([recon_body])
+        )
+        design = SimpleNamespace(rootComponent=component)
+        app = SimpleNamespace(
+            version="2.0.20000",
+            activeDocument=SimpleNamespace(name=self.manifest.fusion_document),
+        )
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        namespace["adsk"].fusion.PointContainment = SimpleNamespace(
+            PointOutsidePointContainment="outside"
+        )
+        return namespace
+
+    def _run(self, namespace, failure=None):
+        output = StringIO()
+        if failure is None:
+            with redirect_stdout(output):
+                namespace["run"](None)
+        else:
+            with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, failure):
+                namespace["run"](None)
+        return [json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{")]
+
+    def test_material_outside_the_source_fails_and_names_the_location(self) -> None:
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.01, 0.9],
+                source_distances=[0.0, -0.01, -0.02],
+            ),
+            failure="invented material",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["invented-material"], report["failures"])
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("failure", verdict["severity"])
+        self.assertEqual(1, verdict["count"])
+        self.assertAlmostEqual(0.9, verdict["max_mm"])
+        self.assertEqual([5.0, 5.0, 9.0], verdict["worst_points"][0]["point_mm"])
+
+    def test_a_rebuild_missing_a_boss_is_advisory_not_a_failure(self) -> None:
+        # The scan carries a boss the rebuild did not model: source points sit
+        # far from the reconstruction, while every rebuilt point sits on the
+        # scan, so the wall beneath the dropped boss is not invented material.
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002],
+                source_distances=[0.0, -0.002, -3.4],
+            )
+        )[0]
+        self.assertTrue(report["ok"])
+        self.assertEqual([], report["failures"])
+        self.assertEqual("pass", report["verdict"]["invented_material"]["severity"])
+        omitted = report["verdict"]["omitted_detail"]
+        self.assertEqual("advisory", omitted["severity"])
+        self.assertEqual(1, omitted["count"])
+        self.assertEqual([10.0, 10.0, 0.0], omitted["worst_points"][0]["point_mm"])
+
+    def test_the_two_directions_are_reported_distinctly_and_never_collapsed(self) -> None:
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002],
+                source_distances=[0.0, -0.002, -3.4],
+            )
+        )[0]
+        forward = report["reconstruction_to_source"]
+        backward = report["source_to_reconstruction"]
+        self.assertNotEqual(forward["question"], backward["question"])
+        self.assertNotEqual(forward["max_abs_mm"], backward["max_abs_mm"])
+        self.assertIn("stayed on the scan", forward["question"])
+        self.assertIn("captured what was scanned", backward["question"])
+        self.assertIn("neither certifies the other", report["verdict_note"])
+        self.assertNotIn("deviation_mm", report)
+
+    def test_the_declared_thresholds_and_their_rationale_are_recorded(self) -> None:
+        report = self._run(
+            self._namespace(recon_distances=[0.0, -0.004, -0.002], source_distances=[0.0, 0.0, 0.0])
+        )[0]
+        self.assertEqual(DEVIATION_SPEC["thresholds_mm"], report["declared_thresholds_mm"])
+        self.assertEqual(DEVIATION_SPEC["rationale"], report["threshold_rationale"])
+        self.assertEqual(0.05, report["verdict"]["invented_material"]["threshold_mm"])
+        self.assertEqual(0.25, report["verdict"]["omitted_detail"]["threshold_mm"])
+
+    def test_native_containment_answers_the_omitted_direction_when_available(self) -> None:
+        report = self._run(
+            self._namespace(
+                recon_distances=[0.0, -0.004, -0.002],
+                source_distances=[0.0, -0.002, -3.4],
+                containment=lambda point: "outside" if point.z > 0.0 or point.y > 0.5 else "inside",
+            )
+        )[0]
+        backward = report["source_to_reconstruction"]
+        self.assertEqual("BRepBody.pointContainment", backward["containment_query"])
+        self.assertEqual(1, backward["nodes_outside_reconstruction_solid"])
+
+    def test_a_missing_compare_with_fails_closed_naming_the_api_and_version(self) -> None:
+        report = self._run(
+            self._namespace(recon_distances=[0.0], source_distances=[0.0], compare=False),
+            failure="Deviation verdict unsupported",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["deviation-capability"], report["failures"])
+        self.assertIn("PolygonMesh.compareWith", report["unsupported"])
+        self.assertIn("2.0.20000", report["unsupported"])
+        self.assertIn("UI-only", report["unsupported"])
+        self.assertNotIn("verdict", report)
+
+    def test_an_unsigned_comparison_cannot_establish_invented_material(self) -> None:
+        report = self._run(
+            self._namespace(recon_distances=[0.0, 0.004, 0.002], source_distances=[0.0, 0.0, 3.4]),
+            failure="deviation-unsigned-comparison",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["deviation-unsigned-comparison"], report["failures"])
+        self.assertEqual("not-established", report["verdict"]["invented_material"]["severity"])
+        self.assertIn("NOT established", report["verdict"]["invented_material"]["meaning"])
+        # The other direction is still measured and still reported.
+        self.assertEqual("advisory", report["verdict"]["omitted_detail"]["severity"])
+
+    def test_percentiles_may_be_sampled_but_the_threshold_comparison_is_not(self) -> None:
+        spec = copy.deepcopy(DEVIATION_SPEC)
+        spec["thresholds_mm"]["percentile_sample_limit"] = 2
+        script = emit_mesh_deviation_script(self.manifest, self.record, self.source, spec)
+        namespace = load_generated_script(script)
+        distances = [-0.001] * 40 + [0.9]
+        source_mesh = _PolygonMesh([(0.0, 0.0, 0.0)] * 41, [-0.001] * 41)
+        recon_mesh = _PolygonMesh([(float(index), 0.0, 0.0) for index in range(41)], distances)
+        component = SimpleNamespace(
+            meshBodies=_Bodies([SimpleNamespace(name="bracket_scan", mesh=source_mesh)]),
+            bRepBodies=_Bodies(
+                [
+                    SimpleNamespace(
+                        name="bracket_rebuild",
+                        meshManager=SimpleNamespace(displayMeshes=SimpleNamespace(bestMesh=recon_mesh)),
+                    )
+                ]
+            ),
+        )
+        app = SimpleNamespace(
+            version="2.0.20000", activeDocument=SimpleNamespace(name=self.manifest.fusion_document)
+        )
+        namespace["_active_design"] = lambda: (app, SimpleNamespace(rootComponent=component))
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        namespace["adsk"].fusion.PointContainment = SimpleNamespace(PointOutsidePointContainment="outside")
+        report = self._run(namespace, failure="invented material")[0]
+        self.assertTrue(report["reconstruction_to_source"]["percentiles_sampled"])
+        # The single point beyond the threshold is caught by the exact scan even
+        # though the sampled percentiles never see it.
+        self.assertEqual(1, report["verdict"]["invented_material"]["count"])
+
+    def test_the_gate_refuses_a_verdict_for_a_mesh_edit(self) -> None:
+        mesh_edit = classify(request(edit_kind="clearance-only"), self.source).to_dict()
+        self.assertIn(
+            "classification-path-forbids-operation",
+            codes(lambda: emit_mesh_deviation_script(self.manifest, mesh_edit, self.source, DEVIATION_SPEC)),
+        )
+
+    def test_thresholds_are_declared_per_reconstruction_never_defaulted(self) -> None:
+        codes_for = lambda spec: {issue.code for issue in validate_deviation_spec(spec)}
+        missing = copy.deepcopy(DEVIATION_SPEC)
+        missing["thresholds_mm"].pop("invented_material")
+        self.assertIn("deviation-spec-invalid-thresholds", codes_for(missing))
+        blank = copy.deepcopy(DEVIATION_SPEC)
+        blank["rationale"] = "  "
+        self.assertIn("deviation-spec-invalid-rationale", codes_for(blank))
+        bad_limit = copy.deepcopy(DEVIATION_SPEC)
+        bad_limit["thresholds_mm"]["percentile_sample_limit"] = 0
+        self.assertIn("deviation-spec-invalid-thresholds", codes_for(bad_limit))
+        no_binding = copy.deepcopy(DEVIATION_SPEC)
+        no_binding.pop("reconstruction")
+        self.assertIn("deviation-spec-invalid-binding", codes_for(no_binding))
+        self.assertIn("unknown-manifest-field", codes_for(dict(DEVIATION_SPEC, hopes=1)))
 
 
 if __name__ == "__main__":

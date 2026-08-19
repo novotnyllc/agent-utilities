@@ -28,6 +28,21 @@ A release passes only the checks applicable to its intended use. “Generated su
 - Intended contacts are documented and excluded from “forbidden” checks.
 - Closed, open, and service states are checked. **Manual gate:** nothing in the generated transactions poses the assembly or switches configurations. Drive each state in Fusion yourself and re-run verification per state, declaring the occurrences and timeline features each state suppresses (`verification.allowed_suppressed_paths`, `verification.allow_suppressed_timeline_features`) so the state under test passes while undeclared suppression still fails.
 
+## Mesh reconstruction deviation
+
+When a body was rebuilt from or converted out of a mesh, grade it against the immutable source with `fusion-design emit-mesh-deviation`. The verdict is **asymmetric and two-directional**; record both numbers with the question each answers, and never collapse them into one:
+
+- **Invented material** — rebuilt surface lying outside the source solid, beyond the declared `invented_material` threshold. **Hard failure**, naming coordinates.
+- **Omitted detail** — scanned detail absent from the rebuild, beyond the declared `omitted_detail` threshold. **Advisory**: a rebuild models only the geometry the edit requires.
+
+Rules that make the numbers mean something:
+
+- Thresholds are declared per reconstruction with a rationale and recorded with the verdict; they are never module constants.
+- Percentiles may use a strided sample; **any distance compared against a threshold is measured exactly**.
+- `PolygonMesh.compareWith` is preview and API-only. When it is absent, or when the connected Fusion returns only unsigned magnitudes, the run fails closed and the invented-material verdict is reported `not-established` — never a pass, never a fabricated number.
+- Containment uses a native B-Rep query (`BRepBody.pointContainment`), not a mesh-only occurrence, so this stays consistent with the clearance/interference rule above.
+- A small deviation in either direction is not a fitness claim. A fit coupon is still required before any claim of physical mating.
+
 ## Parametric robustness
 
 Exercise representative parameter changes:

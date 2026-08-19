@@ -803,5 +803,188 @@ class PlanVariantsCliTests(unittest.TestCase):
         self.assertFalse(record["ok"])
 
 
+class MeshCliTests(unittest.TestCase):
+    """The mesh commands anchor on the recorded digest and the recorded path."""
+
+    def setUp(self) -> None:
+        from fusion_design.mesh_source import file_sha256
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "sources").mkdir()
+        self.stl = self.root / "sources" / "bracket.stl"
+        self.stl.write_bytes(b"solid bracket\nendsolid bracket\n")
+        data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        data["mesh_sources"] = [
+            {
+                "id": "scan_bracket",
+                "path": "sources/bracket.stl",
+                "sha256": file_sha256(self.stl),
+                "units": "mm",
+                "unit_source": "declared",
+                "provenance": "designed_export",
+                "alignment_transform": [
+                    1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0,
+                ],
+            }
+        ]
+        self.manifest = self.root / "fusion-project.json"
+        self.manifest.write_text(json.dumps(data), encoding="utf-8")
+
+    def _classification(self, name: str, **request) -> Path:
+        from fusion_design.mesh_reconstruction import classify
+
+        payload = {"edit_kind": "dimensional", "watertight": True, "facet_count": 800}
+        payload.update(request)
+        source = load_manifest(self.manifest).mesh_sources[0]
+        path = self.root / name
+        path.write_text(json.dumps(classify(payload, source).to_dict()), encoding="utf-8")
+        return path
+
+    def _run(self, argv):
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_emit_mesh_capture_refuses_a_source_that_changed_since_capture(self) -> None:
+        script = self.root / "capture.py"
+        code, _, errors = self._run(["emit-mesh-capture", str(self.manifest), "-o", str(script)])
+        self.assertEqual(0, code, errors)
+        self.assertIn("mesh-capture", script.read_text(encoding="utf-8"))
+
+        self.stl.write_bytes(b"solid bracket\nfacet\nendsolid bracket\n")
+        code, _, errors = self._run(["emit-mesh-capture", str(self.manifest), "-o", str(self.root / "b.py")])
+        self.assertEqual(2, code)
+        self.assertIn("mesh-source-hash-mismatch", errors)
+
+    def test_emit_mesh_convert_requires_a_faceted_brep_classification(self) -> None:
+        spec = self.root / "convert.json"
+        spec.write_text(
+            json.dumps(
+                {"component_path": "", "body_name": "bracket_scan", "max_faces_per_face_group": 4.0}
+            ),
+            encoding="utf-8",
+        )
+        rebuild = self._classification("rebuild.json")
+        code, _, errors = self._run(
+            [
+                "emit-mesh-convert",
+                str(self.manifest),
+                "--classification",
+                str(rebuild),
+                "--convert-spec",
+                str(spec),
+                "-o",
+                str(self.root / "convert.py"),
+            ]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("classification-path-forbids-operation", errors)
+
+        faceted = self._classification(
+            "faceted.json", edit_kind="boolean-mechanical", facet_budget=10000
+        )
+        script = self.root / "convert.py"
+        code, _, errors = self._run(
+            [
+                "emit-mesh-convert",
+                str(self.manifest),
+                "--classification",
+                str(faceted),
+                "--convert-spec",
+                str(spec),
+                "-o",
+                str(script),
+            ]
+        )
+        self.assertEqual(0, code, errors)
+        self.assertIn("mesh-convert", script.read_text(encoding="utf-8"))
+
+    def test_emit_mesh_deviation_binds_to_the_declared_source(self) -> None:
+        spec = self.root / "deviation.json"
+        spec.write_text(
+            json.dumps(
+                {
+                    "source": {"component_path": "", "body_name": "bracket_scan"},
+                    "reconstruction": {"component_path": "", "body_name": "bracket_rebuild"},
+                    "thresholds_mm": {
+                        "invented_material": 0.05,
+                        "omitted_detail": 0.25,
+                        "percentile_sample_limit": 20000,
+                    },
+                    "rationale": "Printed fit is held to 0.05 mm.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        script = self.root / "deviation.py"
+        code, _, errors = self._run(
+            [
+                "emit-mesh-deviation",
+                str(self.manifest),
+                "--classification",
+                str(self._classification("rebuild.json")),
+                "--deviation-spec",
+                str(spec),
+                "-o",
+                str(script),
+            ]
+        )
+        self.assertEqual(0, code, errors)
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("PolygonMesh.compareWith", source)
+        self.assertIn("neither certifies the other", source)
+
+    def test_a_classification_naming_an_undeclared_source_exits_two(self) -> None:
+        from fusion_design.mesh_reconstruction import classify
+
+        source = load_manifest(self.manifest).mesh_sources[0]
+        record = classify(
+            {"edit_kind": "dimensional", "watertight": True, "facet_count": 8}, source
+        ).to_dict()
+        record["inputs"]["source_id"] = "scan_absent"
+        path = self.root / "stray.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        spec = self.root / "deviation.json"
+        spec.write_text(json.dumps({"source": {}, "reconstruction": {}}), encoding="utf-8")
+        code, _, errors = self._run(
+            [
+                "emit-mesh-deviation",
+                str(self.manifest),
+                "--classification",
+                str(path),
+                "--deviation-spec",
+                str(spec),
+            ]
+        )
+        self.assertEqual(2, code)
+        self.assertIn("mesh-source-unknown-id", errors)
+
+
+class CliDocumentationTests(unittest.TestCase):
+    def test_documented_command_lists_match_the_parser_exactly(self) -> None:
+        import argparse
+        import re
+
+        from fusion_design.cli import build_parser
+
+        parser = build_parser()
+        subparsers = next(
+            action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+        )
+        commands = set(subparsers.choices)
+        for document in (ROOT / "SKILL.md", ROOT / "README.md"):
+            text = document.read_text(encoding="utf-8")
+            documented = set(
+                re.findall(r'(?m)^(?:"\$SKILL_DIR/)?scripts/fusion-design"? ([a-z][a-z-]*)', text)
+            )
+            self.assertEqual(commands, documented, document.name)
+
+
 if __name__ == "__main__":
     unittest.main()

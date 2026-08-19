@@ -29,6 +29,23 @@ Use one copy per Fusion design. Replace the instructional text with project fact
 
 Unresolved critical dimensions: None recorded.
 
+## Mesh sources and reconstruction
+
+| Mesh source id | File sha256 | Units (source) | Provenance | B-Rep source preferred? | Recorded path | Rationale |
+|---|---|---|---|---|---|---|
+| None recorded | — | — | — | — | — | — |
+
+Bound Fusion bodies (component path / body name, from the capture report): None recorded.
+
+Deviation verdict — record both directions and the question each answers; never one combined number:
+
+| Direction | Question it answers | Declared threshold (mm) | Result | Severity |
+|---|---|---:|---|---|
+| Reconstruction → source | Did the rebuild stay on the scan? | — | Not run | — |
+| Source → reconstruction | Did the rebuild capture what was scanned? | — | Not run | — |
+
+Threshold rationale: Not recorded. Fusion version and preview APIs used: Not recorded.
+
 ## Packing and component ledger
 
 | Item | Installed transform/orientation | `REF__` authoring model | `PACK__` checking model | `KEEP__` volumes | Support/retention | Insertion/removal sequence | Confidence |

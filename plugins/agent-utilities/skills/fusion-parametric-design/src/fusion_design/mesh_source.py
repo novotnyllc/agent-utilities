@@ -31,6 +31,20 @@ MESH_SOURCE_FIELDS = {
     "alignment_transform",
 }
 
+# The fields _validate_mesh_source refuses to do without, iterated by the schema
+# parity test so the published `required` list cannot drift from the validator.
+MESH_SOURCE_REQUIRED_FIELDS = {
+    "id",
+    "path",
+    "sha256",
+    "units",
+    "unit_source",
+    "provenance",
+    "alignment_transform",
+}
+
+BREP_SOURCE_REQUIRED_FIELDS = {"path", "sha256", "trusted", "rationale"}
+
 UNIT_GUESS_FIELDS = {"heuristic", "threshold"}
 
 BREP_SOURCE_FIELDS = {"path", "sha256", "trusted", "rationale"}
@@ -43,7 +57,9 @@ def _validate_sha256(
 ) -> None:
     from .manifest import ValidationIssue
 
-    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value.strip()):
+    # Matched unstripped: the published schema pattern rejects padding, and a
+    # validator that accepts what the schema refuses is drift, not tolerance.
+    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
         issues.append(
             ValidationIssue(
                 code,
@@ -63,7 +79,7 @@ def _validate_mesh_source(issues: list[ValidationIssue], raw: Any, path: str) ->
         return ""
     _reject_unknown_fields(issues, raw, MESH_SOURCE_FIELDS, path)
 
-    def require_string(field: str) -> str:
+    def require_string(field: str, *, strip: bool = True) -> str:
         value = raw.get(field)
         if not isinstance(value, str) or not value.strip():
             issues.append(
@@ -74,9 +90,11 @@ def _validate_mesh_source(issues: list[ValidationIssue], raw: Any, path: str) ->
                 )
             )
             return ""
-        return value.strip()
+        return value.strip() if strip else value
 
-    source_id = require_string("id")
+    # The id is kept unstripped for the same reason as the digest: the schema
+    # pattern pins it, so padding must fail here too rather than only there.
+    source_id = require_string("id", strip=False)
     if source_id and not _VALID_NAME_RE.fullmatch(source_id):
         issues.append(
             ValidationIssue(
@@ -266,6 +284,13 @@ def unit_source_reason(record: dict[str, Any]) -> str:
         return f"Units {units} were read from a source file format that carries a unit."
     guess = record.get("unit_guess") or {}
     heuristic = str(guess.get("heuristic", "")).strip()
+    threshold = guess.get("threshold")
+    # A reason that cannot state its heuristic is not a reason; refuse rather
+    # than print "guessed by heuristic '' at threshold None" into the report.
+    if not heuristic or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        raise ValueError(
+            "A guessed unit must record the heuristic and the numeric threshold that produced it."
+        )
     return (
         f"Units {units} were guessed by heuristic {heuristic!r} at threshold {guess.get('threshold')}; "
         "a mesh carries no unit, so a 1000x scale error still validates clean."
@@ -320,6 +345,45 @@ def verify_mesh_source_file(record: dict[str, Any], file_path: str | Path | None
     return digest
 
 
+def verify_manifest_mesh_sources(
+    manifest: Manifest, manifest_path: str | Path
+) -> dict[str, str]:
+    """Re-hash every declared mesh source before any mesh transaction is emitted.
+
+    This is what makes the recorded digest load-bearing rather than decorative:
+    without it the hash is written once and never checked again, and a swapped
+    file produces a confident transaction carrying a stale digest.  Relative
+    ``path`` values are anchored to the manifest's own directory.
+    """
+    root = Path(manifest_path).resolve().parent
+    verified: dict[str, str] = {}
+    for record in manifest.mesh_sources:
+        verified[str(record.get("id", ""))] = verify_mesh_source_file(
+            record, root / str(record.get("path", "")).strip()
+        )
+    return verified
+
+
+def mesh_source_record(manifest: Manifest, source_id: str) -> dict[str, Any]:
+    """Look one declared mesh source up by id, refusing an unknown id."""
+    from .manifest import ManifestValidationError, ValidationIssue
+
+    for record in manifest.mesh_sources:
+        if record.get("id") == source_id:
+            return dict(record)
+    raise ManifestValidationError(
+        [
+            ValidationIssue(
+                "mesh-source-unknown-id",
+                "mesh_sources",
+                f"No mesh source is declared with id {source_id!r}; declared ids are "
+                + (", ".join(sorted(str(record.get("id")) for record in manifest.mesh_sources)) or "(none)")
+                + ".",
+            )
+        ]
+    )
+
+
 def mesh_capture_specs(manifest: Manifest) -> list[dict[str, Any]]:
     """Declared side of the capture report: what the manifest claims, with its unit reason."""
     specs: list[dict[str, Any]] = []
@@ -327,11 +391,12 @@ def mesh_capture_specs(manifest: Manifest) -> list[dict[str, Any]]:
         brep_source = record.get("brep_source")
         specs.append(
             {
-                "id": str(record.get("id", "")).strip(),
+                "id": str(record.get("id", "")),
                 "path": str(record.get("path", "")).strip(),
-                "sha256": str(record.get("sha256", "")).strip(),
-                # Enum values are emitted exactly as the closed-set tests accepted
-                # them; id and path are stripped because that is how they validate.
+                "sha256": str(record.get("sha256", "")),
+                # Enum values, the id, and the digest are emitted exactly as the
+                # validator accepted them; only path is stripped, because that is
+                # the one field whose validation strips.
                 "units": record.get("units"),
                 "unit_source": record.get("unit_source"),
                 "unit_source_reason": unit_source_reason(record),
@@ -393,9 +458,13 @@ def _mesh_body_row(mesh_body, component_path):
         except Exception:
             unavailable.append("mesh.triangleCount")
     volume = _read(mesh_body, "volume", unavailable)
+    if triangle_count is None:
+        unavailable.append("mesh.triangleCount")
     row = {
         "component_path": component_path,
-        "name": getattr(mesh_body, "name", None),
+        # name is half of the binding evidence, so an unnamed body is listed
+        # absent rather than reported as a null nobody notices.
+        "name": _read(mesh_body, "name", unavailable),
         "triangle_count": triangle_count,
         "is_closed": _read(mesh_body, "isClosed", unavailable),
         "is_oriented": _read(mesh_body, "isOriented", unavailable),
@@ -458,6 +527,27 @@ def run(context):
         failures = []
         if not rows:
             failures.append("no-mesh-bodies")
+        # The classification gate demands watertightness and facet count be read
+        # from this report, never assumed.  A report that says ok while those two
+        # are unreadable leaves assuming them as the only way forward, so the
+        # capture refuses instead.  isOriented, volume and the bounding box stay
+        # optional: they are reported evidence, not gate inputs.
+        unreadable = [
+            {
+                "component_path": row["component_path"],
+                "name": row["name"],
+                "unavailable": row["unavailable"],
+            }
+            for row in rows
+            if row["triangle_count"] is None or row["is_closed"] is None
+        ]
+        if unreadable:
+            failures.append("mesh-evidence-unavailable")
+        if duplicate_semantic_paths:
+            # Only the first occurrence per semantic path is enumerated, so the
+            # body list is a subset while the binding note tells the reader to
+            # bind by name and path.  Refuse, as the scaffold transaction does.
+            failures.append("ambiguous-component-paths")
 
         report = {
             "kind": "mesh-capture",
@@ -470,10 +560,12 @@ def run(context):
             "unit_source_reasons": [spec["unit_source_reason"] for spec in MESH_CAPTURE_SPECS],
             "mesh_bodies": rows,
             "duplicate_semantic_paths": duplicate_semantic_paths,
+            "unreadable_mesh_bodies": unreadable,
             "failures": failures,
             "binding_note": (
                 "This capture is read-only and claims no binding between declared mesh_sources and the "
-                "mesh bodies it found; bind them from the reported names and paths."
+                "mesh bodies it found; bind them from the reported names and paths. That binding is only "
+                "usable while duplicate_semantic_paths is empty."
             ),
         }
         report_attempted = True

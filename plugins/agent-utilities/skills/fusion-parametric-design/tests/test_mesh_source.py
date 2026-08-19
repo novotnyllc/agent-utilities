@@ -116,6 +116,12 @@ class MeshSourceValidationTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn("mesh-source-invalid-sha256", codes(mesh_source(sha256=value)))
 
+    def test_padding_the_schema_pattern_rejects_is_rejected_here_too(self) -> None:
+        # A manifest the CLI accepts must not fail validation against the
+        # published schema; the validator and the pattern accept the same set.
+        self.assertIn("mesh-source-invalid-sha256", codes(mesh_source(sha256="  " + "a" * 64 + "\n")))
+        self.assertIn("invalid-mesh-source-id", codes(mesh_source(id="  scan_bracket  ")))
+
     def test_alignment_transform_must_be_sixteen_finite_numbers(self) -> None:
         for value in ([1.0] * 15, "identity", [1.0] * 15 + [float("nan")], [True] * 16):
             with self.subTest(value=value):
@@ -174,6 +180,10 @@ class MeshSourceManifestTests(unittest.TestCase):
             UNIT_GUESS_FIELDS,
             UNIT_SOURCES,
         )
+        from fusion_design.mesh_source import (
+            BREP_SOURCE_REQUIRED_FIELDS,
+            MESH_SOURCE_REQUIRED_FIELDS,
+        )
 
         schema = json.loads((ROOT / "schema" / "fusion-project.schema.json").read_text(encoding="utf-8"))
         definition = schema["$defs"]["mesh_source"]
@@ -184,6 +194,28 @@ class MeshSourceManifestTests(unittest.TestCase):
         self.assertEqual(MESH_PROVENANCES, set(definition["properties"]["provenance"]["enum"]))
         self.assertEqual(UNIT_GUESS_FIELDS, set(definition["properties"]["unit_guess"]["properties"]))
         self.assertEqual(BREP_SOURCE_FIELDS, set(definition["properties"]["brep_source"]["properties"]))
+        # The required list is pinned too: property names alone let it drift.
+        self.assertEqual(MESH_SOURCE_REQUIRED_FIELDS, set(definition["required"]))
+        self.assertEqual(
+            BREP_SOURCE_REQUIRED_FIELDS, set(definition["properties"]["brep_source"]["required"])
+        )
+        # The unit_guess conditional is the whole point of unit_source, so the
+        # published schema must express it, not only the Python validator.
+        conditional = definition["allOf"][0]
+        self.assertEqual("guess", conditional["if"]["properties"]["unit_source"]["const"])
+        self.assertEqual(["unit_guess"], conditional["then"]["required"])
+        self.assertEqual(["unit_guess"], conditional["else"]["not"]["required"])
+
+    def test_every_required_field_is_actually_refused_when_missing(self) -> None:
+        from fusion_design.mesh_source import MESH_SOURCE_REQUIRED_FIELDS
+
+        for field in MESH_SOURCE_REQUIRED_FIELDS:
+            with self.subTest(field=field):
+                record = mesh_source()
+                record.pop(field)
+                if field == "unit_source":
+                    record.pop("unit_guess")
+                self.assertNotEqual([], validate_mesh_source_record(record))
 
 
 class MeshSourceHashTests(unittest.TestCase):
@@ -229,6 +261,16 @@ class UnitSourceReasonTests(unittest.TestCase):
     def test_an_unknown_unit_source_has_no_reason_to_report(self) -> None:
         with self.assertRaises(ValueError):
             unit_source_reason(mesh_source(unit_source={"nested": 1}))
+
+    def test_a_guess_with_no_heuristic_has_no_reason_to_report(self) -> None:
+        # Reachable through Manifest.from_data on unvalidated data; the reason
+        # must not reach a capture report as "heuristic '' at threshold None".
+        blank = mesh_source()
+        blank.pop("unit_guess")
+        for record in (blank, mesh_source(unit_guess={"heuristic": "  ", "threshold": 1.0})):
+            with self.subTest(record=record.get("unit_guess")):
+                with self.assertRaises(ValueError):
+                    unit_source_reason(record)
 
 
 def _declared() -> dict:
@@ -320,7 +362,7 @@ class MeshCaptureRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = _manifest_with_mesh_sources()
 
-    def _namespace(self, mesh_bodies, version="2.0.20000"):
+    def _namespace(self, mesh_bodies, version="2.0.20000", duplicates=None):
         namespace = load_generated_script(emit_mesh_capture_script(self.manifest))
         root_component = SimpleNamespace(meshBodies=_Collection(mesh_bodies))
         design = SimpleNamespace(rootComponent=root_component)
@@ -328,7 +370,7 @@ class MeshCaptureRuntimeTests(unittest.TestCase):
         if version is not None:
             app.version = version
         namespace["_active_design"] = lambda: (app, design)
-        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, {})
+        namespace["_root_context_occurrence_map"] = lambda root: ([], {}, dict(duplicates or {}))
         return namespace
 
     def _run(self, namespace, failure=None):
@@ -350,7 +392,9 @@ class MeshCaptureRuntimeTests(unittest.TestCase):
             volume=2.5,
             orientedMinimumBoundingBox=_oriented_box(),
         )
-        partial = SimpleNamespace(name="lid_scan", mesh=SimpleNamespace(triangleCount=12))
+        # isOriented, volume and the bounding box are reported evidence rather
+        # than gate inputs, so a body missing them is still a usable capture.
+        partial = SimpleNamespace(name="lid_scan", mesh=SimpleNamespace(triangleCount=12), isClosed=True)
         report = self._run(self._namespace([complete, partial]))[0]
 
         self.assertTrue(report["ok"])
@@ -367,7 +411,7 @@ class MeshCaptureRuntimeTests(unittest.TestCase):
         self.assertIsNone(second["volume_mm3"])
         self.assertIsNone(second["oriented_minimum_bounding_box_mm"])
         self.assertEqual(
-            ["isClosed", "isOriented", "orientedMinimumBoundingBox", "volume"],
+            ["isOriented", "orientedMinimumBoundingBox", "volume"],
             second["unavailable"],
         )
         self.assertIn(
@@ -385,6 +429,37 @@ class MeshCaptureRuntimeTests(unittest.TestCase):
         reports = self._run(self._namespace([]), failure="no-mesh-bodies")
         self.assertFalse(reports[0]["ok"])
         self.assertEqual(["no-mesh-bodies"], reports[0]["failures"])
+
+    def test_unreadable_gate_inputs_fail_closed_rather_than_reporting_success(self) -> None:
+        # watertight and facet_count must be read from this report, never
+        # assumed; a report that says ok while they are absent leaves assuming
+        # them as the only way to fill the classification request.
+        for body in (
+            SimpleNamespace(name="bracket_scan"),
+            SimpleNamespace(name="bracket_scan", isClosed=True),
+            SimpleNamespace(name="bracket_scan", mesh=SimpleNamespace(triangleCount=12)),
+        ):
+            with self.subTest(body=sorted(vars(body))):
+                reports = self._run(self._namespace([body]), failure="mesh-evidence-unavailable")
+                self.assertFalse(reports[0]["ok"])
+                self.assertIn("mesh-evidence-unavailable", reports[0]["failures"])
+                self.assertEqual("bracket_scan", reports[0]["unreadable_mesh_bodies"][0]["name"])
+
+    def test_an_unnamed_body_is_listed_absent_rather_than_silently_none(self) -> None:
+        body = SimpleNamespace(mesh=SimpleNamespace(triangleCount=12), isClosed=True)
+        report = self._run(self._namespace([body]))[0]
+        self.assertIn("name", report["mesh_bodies"][0]["unavailable"])
+
+    def test_ambiguous_component_paths_refuse_rather_than_dropping_bodies(self) -> None:
+        # Only the first occurrence per semantic path is enumerated, so the body
+        # list would be a subset while the binding note says to bind by path.
+        body = SimpleNamespace(name="bracket_scan", mesh=SimpleNamespace(triangleCount=12), isClosed=True)
+        reports = self._run(
+            self._namespace([body], duplicates={"asm/bracket": ["Root:1+bracket:1", "Root:1+bracket:2"]}),
+            failure="ambiguous-component-paths",
+        )
+        self.assertFalse(reports[0]["ok"])
+        self.assertIn("ambiguous-component-paths", reports[0]["failures"])
 
 
 if __name__ == "__main__":

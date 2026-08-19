@@ -67,6 +67,9 @@ scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
+scripts/fusion-design emit-mesh-capture <manifest> [-o file.py]
+scripts/fusion-design emit-mesh-convert <manifest> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
+scripts/fusion-design emit-mesh-deviation <manifest> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
@@ -74,6 +77,12 @@ scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
+
+The three mesh commands implement the reconstruction gate in
+`references/mesh-reconstruction.md`: capture is read-only and re-verifies every
+declared source hash before emitting, and both `emit-mesh-convert` and
+`emit-mesh-deviation` refuse unless a recorded classification chose a path they
+implement, for that exact mesh source.
 
 For reusable pure-Python helpers, prepare a content-addressed module bundle and
 send the verified emitted bootstrap through Fusion's Python-execution

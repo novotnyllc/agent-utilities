@@ -30,6 +30,7 @@ Read the reference files beside this skill before substantial work:
 - `references/mcp-adapter.md`
 - `references/enclosure-workflow.md` for electronics or packed assemblies
 - `references/verification-contract.md`
+- `references/mesh-reconstruction.md` before any work on a scanned or downloaded mesh
 - `references/capability-matrix.md` when translating a Nurb-style request
 - `references/unsupported.md` before promising a capability
 
@@ -268,7 +269,17 @@ A photo can identify shape and interfaces but normally cannot establish millimet
 
 When a downloaded mesh arrives, do not pretend it is an editable parametric model. Import it into a `PACK__` or reference component, inspect its units and bounds, and rebuild only the dimensions and datums the product needs. Preserve the mesh as exact-shape evidence and add a conservative native B-Rep envelope when the model participates in automated clearance or interference checks. Prefer a manufacturer STEP/B-rep when available.
 
-Do not convert a dense mesh to B-rep merely to claim parametric editability. Conversion can create thousands of fragile faces and does not recover design intent. Use Fusion's mesh tools or the external fallback described in `references/unsupported.md`; keep the original mesh immutable.
+Do not convert a dense mesh to B-rep merely to claim parametric editability. Conversion can create thousands of fragile faces and does not recover design intent. Keep the original mesh immutable.
+
+**Classify the edit before converting anything, and record the choice.** Follow `references/mesh-reconstruction.md`: capture the source immutably with its SHA-256, units and stated unit source, and declared provenance; then record exactly one path — `mesh-edit`, `faceted-brep`, or `parametric-rebuild` — with its rationale and the inputs that drove it. The gate is enforced in code: every mesh geometry entry point re-derives the path from the recorded inputs, refuses a path it does not implement, and refuses a classification decided for a different mesh source. A faceted result is labeled `faceted` and is never reported as parametric.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-capture fusion-project.json -o build/mesh-capture.py
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert fusion-project.json \
+  --classification build/classification.json --convert-spec build/convert.json -o build/mesh-convert.py
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation fusion-project.json \
+  --classification build/classification.json --deviation-spec build/deviation.json -o build/mesh-deviation.py
+```
 
 When fit depends on an irregular scan, create a small `VAL__` coupon containing only the critical mating profile before committing to the full print.
 
@@ -410,6 +421,9 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert <manifest> --classification <classification.json> --convert-spec <convert.json> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation <manifest> --classification <classification.json> --deviation-spec <deviation.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]

@@ -434,6 +434,32 @@
         "provenance",
         "alignment_transform"
       ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unit_source": {
+                "const": "guess"
+              }
+            },
+            "required": [
+              "unit_source"
+            ]
+          },
+          "then": {
+            "required": [
+              "unit_guess"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "unit_guess"
+              ]
+            }
+          }
+        }
+      ],
       "properties": {
         "id": {
           "type": "string",
