@@ -2400,7 +2400,14 @@ def replan_without(
     """
     from .reconstruction_program import program_sha256
 
-    detail = refusal_report.get("refusal_detail") or {}
+    # Two refusal shapes reach this command and both are ours. The in-Fusion
+    # transaction report carries `refusal_detail` and `failures`; the
+    # *emission-time* refusal `emit-mesh-rebuild` prints is a
+    # `ReconstructionRefused.to_dict()`, which carries `detail` and `refusal`.
+    # `entity-resolution-ambiguous` is raised on both sides, so reading only the
+    # transaction shape left the documented recovery loop dead for every refusal
+    # that happened before the transaction ever ran.
+    detail = refusal_report.get("refusal_detail") or refusal_report.get("detail") or {}
     named = detail.get("archetype_id")
     identifiers = [str(named)] if named else sorted(str(i) for i in detail.get("archetype_ids") or ())
     if not identifiers:
@@ -2418,6 +2425,9 @@ def replan_without(
             "component beside the wreckage of the first."
         )
     failures = refusal_report.get("failures") or []
+    if not failures and refusal_report.get("refusal"):
+        # The emission-time shape names its one token under `refusal`.
+        failures = [refusal_report["refusal"]]
     if not failures:
         raise ValueError(
             "The refusal report names no failure, so there is no recorded reason to write into "
@@ -2478,8 +2488,7 @@ def replan_without(
         or any(str(a) not in identifiers for a in row["driving_archetypes"])
     ]
     # Coverage shrinks with the drop and is never carried forward: a coverage
-    # fraction that outlived the features it counted would be a lie. It is an
-    # estimate and says so -- see _dropped_coverage.
+    # fraction that outlived the features it counted would be a lie.
     replanned["covered_area_fraction"] = max(
         0.0, float(program["covered_area_fraction"]) - _dropped_coverage(program, identifiers)
     )
@@ -2488,9 +2497,9 @@ def replan_without(
         "refusal": token,
         "dropped_archetypes": identifiers,
         "covered_area_fraction_basis": (
-            "Region-count estimate. The program records area fractions only for regions it did not "
-            "build, so the exact area share of a dropped archetype is not recoverable from the "
-            "program alone. Re-plan from the fit record for an exact fraction."
+            "The dropped archetypes' own declared area fractions, summed and subtracted. Exact, "
+            "except that a region shared by two archetypes is subtracted once per archetype, which "
+            "understates the remaining coverage rather than overstating it."
         ),
     }
     replanned.pop("program_sha256", None)
@@ -2499,26 +2508,34 @@ def replan_without(
 
 
 def _dropped_coverage(program: Mapping[str, Any], identifiers: Sequence[str]) -> float:
-    """The coverage the dropped archetypes contributed, from the region areas.
+    """The coverage the dropped archetypes contributed, from their own fractions.
 
-    The program records area fractions only for regions it did *not* build, so
-    the dropped archetypes' own fractions are not directly available. What is
-    available is the total: coverage minus everything still covered. Rather than
-    guess, this returns the share of built regions the drop removes, and the
-    caller records it as an estimate in the replan record.
+    Every archetype the planner emits carries ``area_fraction``: the share of the
+    scan's surface its regions account for. This used to prorate by *region
+    count* instead, which on a real program said 0.4661 where the archetype's own
+    number said 0.7731 -- an estimate standing next to the exact answer.
+
+    Absent is refused rather than estimated: a program whose archetypes carry no
+    area fraction was not planned by this version, and a coverage number derived
+    from a guess would outlive the guess.
     """
-    built = [
-        region for group in program["archetypes"] for region in group["regions"]
-    ]
-    if not built:
-        return 0.0
-    dropped = [
-        region
-        for group in program["archetypes"]
-        if str(group["id"]) in set(identifiers)
-        for region in group["regions"]
-    ]
-    return float(program["covered_area_fraction"]) * (len(set(dropped)) / len(set(built)))
+    dropped = set(identifiers)
+    total = 0.0
+    for group in program["archetypes"]:
+        if str(group["id"]) not in dropped:
+            continue
+        fraction = group.get("area_fraction")
+        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+            raise ValueError(
+                f"Archetype {group['id']!r} carries no area_fraction, so the coverage it "
+                "contributed cannot be subtracted. Re-plan the program with plan-reconstruction "
+                "from this version of the skill."
+            )
+        total += float(fraction)
+    # Two archetypes may share a region, in which case this subtracts that
+    # region's share twice. That direction is the safe one: coverage is never
+    # rounded up.
+    return total
 
 
 def load_program(path: str | Path) -> dict[str, Any]:

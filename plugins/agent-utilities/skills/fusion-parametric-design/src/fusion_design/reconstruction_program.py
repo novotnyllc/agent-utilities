@@ -1047,8 +1047,20 @@ def plan_archetypes(
                 )
         elif sides and datum_plane is not None:
             axis = _plane_axis(frame, datum_plane)
-            low_station = _frame_station(frame, axis, low.anchor())
-            high_station = _frame_station(frame, axis, high.anchor())
+            # `low` and `high` were ordered along the caps' own fit normal, which
+            # is only *parallel* to the datum axis -- it can be anti-parallel. The
+            # sketch plane must name the cap the body extrudes away from in the
+            # +axis direction, so the station order is re-established here, in the
+            # datum frame the offset is expressed in. Handing over the far cap
+            # made U4 refuse `cap-order-inverted` on a plain rectangular box: the
+            # emitter had documented this exact inversion as U3's to fix.
+            stations = sorted(
+                (
+                    _frame_station(frame, axis, low.anchor()),
+                    _frame_station(frame, axis, high.anchor()),
+                )
+            )
+            low_station, high_station = stations
             members = sorted(region.region_hash for region in (low, high, *sides))
             claimed.update(members)
             groups.append(

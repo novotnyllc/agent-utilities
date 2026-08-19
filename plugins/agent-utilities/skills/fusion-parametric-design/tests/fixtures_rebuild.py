@@ -120,6 +120,13 @@ def program(
 ) -> dict[str, Any]:
     archetypes = archetypes if archetypes is not None else [extrude_archetype()]
     parameters = parameters if parameters is not None else default_parameters(archetypes)
+    # The planner gives every archetype the share of the scan it accounts for, so
+    # a fixture without one is a shape the producer never emits -- and the last
+    # time a fixture and a producer disagreed like this the whole pipeline was
+    # unrunnable. Split the declared coverage evenly unless the caller says.
+    covered = float(overrides.get("covered_area_fraction", 1.0))
+    for group in archetypes:
+        group.setdefault("area_fraction", covered / len(archetypes) if archetypes else 0.0)
     body = {
         "program_version": 1,
         "dump_sha256": dump_sha256,

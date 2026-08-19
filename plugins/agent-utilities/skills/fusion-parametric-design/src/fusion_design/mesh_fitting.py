@@ -1868,6 +1868,51 @@ def parameter_uncertainty(
     # actually needs and combining two tilts by quadrature is what it would do.
     if "tilt_u" in out and "tilt_v" in out:
         out["axis_tilt_deg"] = math.hypot(out["tilt_u"], out["tilt_v"])
+    out.update(_downstream_sigmas(fit.kind, out))
+    return out
+
+
+#: The local parameterization above is chosen for conditioning, not for the
+#: consumer.  U3 licenses relationships against *scalar magnitudes* per fit kind
+#: -- ``FIT_UNCERTAINTY_KEYS`` in ``mesh_datum`` and ``LICENSE_SIGMAS`` in
+#: ``reconstruction_program`` -- and those names are the contract.  Each entry
+#: maps one contract name to the local components it combines in quadrature.
+#: Emitted alongside the local names, never instead of them.
+#:
+#: Without this the two vocabularies overlapped on exactly one name per kind and
+#: every real fit record was refused with `fit-record-missing-uncertainty`; only
+#: a torus, whose single sigma happens to be named the same on both sides, ever
+#: crossed the seam.
+_DOWNSTREAM_SIGMAS: dict[str, dict[str, tuple[str, ...]]] = {
+    "plane": {"normal_deg": ("tilt_u", "tilt_v"), "offset": ("offset",)},
+    "cylinder": {
+        "axis_direction_deg": ("tilt_u", "tilt_v"),
+        "axis_point": ("axis_point_u", "axis_point_v"),
+        "radius": ("radius",),
+    },
+    "cone": {
+        "axis_direction_deg": ("tilt_u", "tilt_v"),
+        "apex": ("apex_u", "apex_v", "apex_axial"),
+        "half_angle_deg": ("half_angle",),
+    },
+    "sphere": {"center": ("center_x", "center_y", "center_z"), "radius": ("radius",)},
+    "torus": {"minor_radius": ("minor_radius",)},
+}
+
+
+def _downstream_sigmas(kind: str, local: Mapping[str, float]) -> dict[str, float]:
+    """The contract-named sigmas, in quadrature over their local components.
+
+    A name whose components are not all present is omitted rather than computed
+    from the ones that are: a partial quadrature would understate the very
+    uncertainty a tolerance is sized from. Empty means unknown, never zero, and
+    the consumer refuses on absence.
+    """
+    out: dict[str, float] = {}
+    for name, components in _DOWNSTREAM_SIGMAS.get(kind, {}).items():
+        if any(component not in local for component in components):
+            continue
+        out[name] = math.sqrt(sum(local[component] ** 2 for component in components))
     return out
 
 

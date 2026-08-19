@@ -253,9 +253,12 @@ def compose_coverage(
         entry["area_fraction"] or 0.0 for entry in build["not_delivered"]
     )
     delivered = None if planned_fraction is None else max(0.0, planned_fraction - lost)
-    if build["ran"] and not build["ok"]:
-        # A refused rebuild rolls everything back and produces no geometry, so
-        # the delivered fraction is zero however much was planned.
+    if build["ok"] is not True:
+        # Zero, and not "planned minus what we can name": a refused rebuild rolls
+        # everything back, and a rebuild that never ran built nothing at all. The
+        # guard used to read `ran and not ok`, so a run with no rebuild report
+        # labelled itself `reconstruction-refused` and reported a third of the
+        # surface delivered as editable features in the same breath.
         delivered = 0.0
 
     if not build["ran"]:

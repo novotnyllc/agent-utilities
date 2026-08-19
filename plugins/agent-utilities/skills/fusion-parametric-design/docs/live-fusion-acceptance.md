@@ -536,7 +536,12 @@ does, and only for the release it ran against.
     emission and must be cleaned up by hand before anything else is run in it.
 
 11. **The `replan-without` loop.** When step 10 refuses naming one archetype, the
-    answer is not to hand-edit the program:
+    answer is not to hand-edit the program. Both refusal shapes feed the loop:
+    the *emission-time* refusal `emit-mesh-rebuild` prints on stdout before any
+    script is written (`refusal` and `detail`), and the *transaction* refusal
+    report the run in Fusion emits (`failures` and `refusal_detail`). Several
+    tokens — `entity-resolution-ambiguous`, `parameter-name-collision`,
+    `profile-not-found` — occur on both sides. Save whichever one you got:
 
     ```bash
     "$SKILL_DIR/scripts/fusion-design" replan-without build/program.json \

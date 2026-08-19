@@ -2129,10 +2129,16 @@ def _stage_topology(state: dict[str, Any]) -> dict[str, Any] | None:
         "interior_edges": topo.interior_edges,
         "boundary_edges": topo.boundary_edges,
         "non_manifold_edges": topo.non_manifold_edges,
-        "total_area": topo.total_area,
         "extent": topo.extent,
         "median_edge_length": topo.median_edge,
     }
+    # Top level, beside `covered_area_fraction` and the regions' `area_fraction`,
+    # because it is the denominator of every fraction in this record and U3 reads
+    # it as `fit_record.total_area`. It lived inside the `topology` diagnostic
+    # block once and the whole pipeline was unrunnable for it: U3 refused every
+    # real record with `fit-record-malformed`, and the only thing that ever
+    # reached U3 was a fixture hand-built to U3's expectation.
+    state["record"]["total_area"] = topo.total_area
     if len(topo.valid) < _MIN_REGION_TRIANGLES or topo.total_area <= 0.0 or topo.extent <= 0.0:
         return _refusal(
             "mesh-degenerate",
@@ -2901,6 +2907,10 @@ def fit_regions(dump: MeshDump, spec: DetectionSpec) -> dict[str, Any]:
         "manifest_sha256": dump.metadata.get("manifest_sha256"),
         "mesh_source_sha256": dump.metadata.get("mesh_source_sha256"),
         "thresholds": spec.to_dict(),
+        # Filled by the topology stage. Zero until then, so a record that refused
+        # before topology carries the key with a value U3 rejects rather than an
+        # absent key U3 has to guess about.
+        "total_area": 0.0,
         "regions": [],
         "unfitted_regions": [],
         "unclaimed": {"triangle_count": 0, "area_fraction": 0.0, "components": []},
