@@ -389,10 +389,17 @@ the named gate rather than producing an approximate feature:
    (`hole-axis-oblique`) or that reaches outside the body it would cut
    (`hole-not-contained`).
 5. **A fillet whose two neighbours were not both rebuilt**
-   (`fillet-neighbour-unreconstructed`), or whose neighbours are surfaces of the
-   same archetype (`fillet-neighbour-shared`). A fillet rounds the edge between
-   two features; without two features there is no edge. **Or whose own blend
-   surface another archetype already rebuilds**
+   (`fillet-neighbour-unreconstructed`) — without two rebuilt neighbours there is
+   no edge. **Or whose neighbours are surfaces of one archetype whose faces this
+   emitter cannot partition** (`fillet-neighbour-shared`): an edge between two
+   faces of a *single* feature is rounded where that feature is a
+   `sketch-extrude` — its `startFaces`, `endFaces` and `sideFaces` name the edge,
+   and the plan records its caps in station order so the right one is picked —
+   but a `revolve` exposes no such partition and an edge inside one is not
+   nameable. Two blend fragments landing on the same edge are pooled into one
+   fillet, and only when an `equal_radius_tolerance` is declared and they agree
+   inside it (`fillet-radius-undeclared`, `fillet-radius-disagrees`). **Or whose
+   own blend surface another archetype already rebuilds**
    (`fillet-region-already-reconstructed`) — a partial-arc cylinder can be a side
    of an extrude or the wall of a bore, where a torus never could, and a region
    rebuilt twice is counted twice in the coverage account.

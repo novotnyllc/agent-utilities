@@ -90,6 +90,15 @@ UNITS_NOTE = (
 # which is its v, so there is one definition and this is an alias to it.
 SKETCH_AXES = IN_PLANE_AXES
 
+# The face-set pairs of a *single* extrude whose shared edges a fillet may round,
+# mapped to the ExtrudeFeature members that deliver them.  A revolve exposes no
+# such partition, which is why the planner never emits one naming a revolve.
+EDGE_FACE_SETS = {
+    "start-side": ("startFaces", "sideFaces"),
+    "end-side": ("endFaces", "sideFaces"),
+    "side-side": ("sideFaces", "sideFaces"),
+}
+
 REBUILD_SPEC_FIELDS = {"component_name", "dump_path", "thresholds", "rationale"}
 
 REBUILD_THRESHOLD_FIELDS = {
@@ -1284,12 +1293,26 @@ def plan_emission(
                     {"archetype_id": identifier},
                 )
             between = [str(item) for item in group.get("between") or ()]
-            if len(between) != 2 or any(item not in by_id for item in between):
+            edge_faces = group.get("edge_faces")
+            if len(between) not in (1, 2) or any(item not in by_id for item in between):
                 raise _refuse(
                     "program-schema-violation",
-                    f"{identifier} rounds the edge between {between}, which is not exactly two "
+                    f"{identifier} rounds the edge between {between}, which is not one or two "
                     "archetypes this program contains.",
                     {"archetype_id": identifier, "between": between},
+                )
+            # One archetype means the edge runs between two face sets of a single
+            # feature, and which two is not derivable here -- the planner read it
+            # off the cap order it recorded, and an emitter that guessed would be
+            # rounding whichever edge it liked.
+            if (len(between) == 1) != (edge_faces in EDGE_FACE_SETS):
+                raise _refuse(
+                    "program-schema-violation",
+                    f"{identifier} names {len(between)} archetype(s) and edge_faces "
+                    f"{edge_faces!r}; a fillet inside one feature must name one of "
+                    + ", ".join(sorted(EDGE_FACE_SETS))
+                    + ", and one between two features must name none.",
+                    {"archetype_id": identifier, "between": between, "edge_faces": edge_faces},
                 )
             steps.append(
                 {
@@ -1299,6 +1322,14 @@ def plan_emission(
                     "feature_name": f"recon_{identifier.replace('-', '_')}",
                     "radius_parameter": str(radius["parameter"]),
                     "between": between,
+                    "edge_faces": edge_faces if len(between) == 1 else None,
+                    # Resolved to the ExtrudeFeature member names here rather than
+                    # inside the transaction: the mapping is this emitter's
+                    # knowledge of the Fusion API, and the script that runs in
+                    # Fusion should carry the answer, not the lookup table.
+                    "face_sets": (
+                        list(EDGE_FACE_SETS[edge_faces]) if len(between) == 1 else None
+                    ),
                 }
             )
             continue
@@ -1766,11 +1797,40 @@ def _place_hole_point(sketch, step, missing):
     return point, applied
 
 
-def _feature_faces(feature, label, missing):
-    faces = _probe(feature, "faces", missing, label + ".faces")
+def _feature_faces(feature, label, missing, member="faces"):
+    """One of a feature's face collections, or None when this Fusion has none.
+
+    `member` is "faces" for a whole feature and one of an ExtrudeFeature's
+    startFaces / endFaces / sideFaces when the caller is after the edge between
+    two face sets of that single feature.
+    """
+    faces = _probe(feature, member, missing, label + "." + member)
     if faces is None:
         return None
     return [faces.item(index) for index in range(faces.count)]
+
+
+def _internal_edges(faces, missing):
+    """Edges that two faces of this one set share.
+
+    The same question _shared_edges asks, asked of one feature instead of two.
+    Every edge of a closed solid belongs to exactly two faces, so an edge that
+    appears twice inside a face set is interior to that set and an edge that
+    appears once is the set's boundary with something else. A box's top edge is
+    interior to (cap faces + side faces) and that is exactly what gets rounded.
+    """
+    seen = {}
+    for face in faces:
+        edges = _probe(face, "edges", missing, "BRepFace.edges")
+        if edges is None:
+            return None
+        for index in range(edges.count):
+            edge = edges.item(index)
+            temp_id = _probe(edge, "tempId", missing, "BRepEdge.tempId")
+            if temp_id is None:
+                return None
+            seen.setdefault(temp_id, [edge, 0])[1] += 1
+    return [seen[key][0] for key in sorted(seen) if seen[key][1] > 1]
 
 
 def _shared_edges(first, second, missing):
@@ -1849,15 +1909,28 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
 
     Skipping is never silent. Each skip names the archetype, the two features,
     and what was missing, and the coverage account subtracts the region.
+
+    Two features or one. A round on a box's own edge lies between two faces of a
+    single extrude, and Fusion rounds it exactly as readily; what changes is only
+    where the edge comes from. With two features it is the edges their face sets
+    share; with one it is the edges shared by the two face sets the plan named --
+    startFaces, endFaces or sideFaces -- and when those two sets are the same set
+    it is that set's own interior edges. Nothing here decides which sets: the
+    planner read that off the cap order it recorded, and an emitter that chose
+    for itself would be rounding whichever edge it liked.
     """
-    first_id, second_id = step["between"]
-    first, second = built.get(first_id), built.get(second_id)
-    if first is None or second is None:
+    parents = [built.get(identifier) for identifier in step["between"]]
+    if any(parent is None for parent in parents):
+        first_missing = next(
+            identifier
+            for identifier, parent in zip(step["between"], parents)
+            if parent is None
+        )
         skipped.append(
             {
                 "archetype_id": step["archetype_id"],
                 "reason": "parent-feature-missing",
-                "detail": "this run built no feature for " + (first_id if first is None else second_id),
+                "detail": "this run built no feature for " + first_missing,
             }
         )
         return
@@ -1871,9 +1944,18 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
             }
         )
         return
-    first_faces = _feature_faces(first, first_id, missing)
-    second_faces = _feature_faces(second, second_id, missing)
-    if first_faces is None or second_faces is None:
+    one_feature = len(parents) == 1
+    if one_feature:
+        members = list(step["face_sets"])
+        sources = [(parents[0], step["between"][0], member) for member in members]
+    else:
+        members = ["faces", "faces"]
+        sources = list(zip(parents, step["between"], members))
+    face_sets = [
+        _feature_faces(parent, identifier, missing, member)
+        for parent, identifier, member in sources
+    ]
+    if any(faces is None for faces in face_sets):
         skipped.append(
             {
                 "archetype_id": step["archetype_id"],
@@ -1882,7 +1964,13 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
             }
         )
         return
-    edges = _shared_edges(first_faces, second_faces, missing)
+    if one_feature and members[0] == members[1]:
+        # side-to-side: one face set against itself, whose shared edges are its
+        # own interior ones. Intersecting the set with itself would return every
+        # edge it touches, boundary edges included.
+        edges = _internal_edges(face_sets[0], missing)
+    else:
+        edges = _shared_edges(face_sets[0], face_sets[1], missing)
     if edges is None:
         skipped.append(
             {
@@ -1893,16 +1981,16 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
         )
         return
     if not edges:
-        # Zero shared edges means the two features do not meet where the fit
-        # said they do. Choosing some other edge to round would be inventing the
-        # geometry the measurement failed to find.
+        # Zero shared edges means the faces do not meet where the fit said they
+        # do. Choosing some other edge to round would be inventing the geometry
+        # the measurement failed to find.
         skipped.append(
             {
                 "archetype_id": step["archetype_id"],
                 "reason": "entity-resolution-ambiguous",
                 "detail": (
-                    "the two features this blend rounds share no edge, so there is no edge to "
-                    "round. The blend fit says they meet; the built solid says they do not."
+                    "the faces this blend rounds share no edge, so there is no edge to round. "
+                    "The blend fit says they meet; the built solid says they do not."
                 ),
             }
         )
@@ -1937,7 +2025,8 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
             "feature_name": feature.name,
             "operation": step["operation"],
             "edge_count": len(edges),
-            "between": [first_id, second_id],
+            "between": list(step["between"]),
+            "edge_faces": step["edge_faces"],
             "token": _token(feature),
         }
     )

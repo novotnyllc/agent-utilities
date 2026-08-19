@@ -764,6 +764,95 @@ class FilletSeamTests(unittest.TestCase):
         self.assertEqual([], report["fillets_skipped"], report)
 
 
+class SameFeatureFilletSeamTests(unittest.TestCase):
+    """A round on one extrude's own edge, from the mesh to a built fillet.
+
+    The planner refused every one of these: it read `fillet` as "an operation on
+    the edge between two *features*", so a blend whose two neighbours were both
+    surfaces of one archetype was gated `fillet-neighbour-shared`. Across the 11
+    benchmark parts that gate held 42 of the 114 fillet candidates, and Fusion's
+    own `filletFeatures` rounds such an edge without complaint -- a box's top
+    edge runs between two faces of one extrude.
+
+    The plinth here is the same plinth, with its post sunk into the body as a
+    bore instead of standing on it. That one change removes the revolve, so the
+    top face joins the extrude that already owns the front face, and the round
+    that used to sit between two features now sits between a cap face and a side
+    face of one. Nothing about the round itself changed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        vertices, triangles, groups = ts.rounded_plinth_mesh(post_inward=True)
+        cls.dump = ts.make_dump(vertices, triangles, face_groups=groups)
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def fillet(self):
+        fillets = [g for g in self.program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), self.program["unreconstructed"])
+        return fillets[0]
+
+    def test_the_bore_leaves_one_extrude_that_owns_both_of_the_blends_neighbours(self) -> None:
+        # If a revolve ever comes back here the fillet stops being a same-feature
+        # one and this class would pass for the old reason.
+        marked = [r for r in self.record["regions"] if r.get("fillet_candidate")]
+        self.assertEqual(1, len(marked))
+        owner = {h: g for g in self.program["archetypes"] for h in g["regions"]}
+        neighbours = marked[0]["fillet"]["between"]
+        self.assertEqual(1, len({owner[h]["id"] for h in neighbours}), owner)
+        self.assertEqual("sketch-extrude", owner[neighbours[0]]["kind"])
+
+    def test_the_planner_names_one_archetype_and_which_of_its_face_sets(self) -> None:
+        fillet = self.fillet()
+        self.assertEqual(1, len(fillet["between"]))
+        # A cap face and a side face: the plan recorded its caps in station
+        # order, so the emitter can tell startFaces from endFaces.
+        self.assertEqual("start-side", fillet["edge_faces"])
+        self.assertAlmostEqual(4.0, fillet["radius"]["value"], places=6)
+        self.assertEqual(fillet["between"], fillet["dependencies"])
+        self.assertEqual(self.program["order"][-1], fillet["id"])
+
+    def test_the_radius_is_still_bound_to_a_user_parameter(self) -> None:
+        name = self.fillet()["radius"]["parameter"]
+        row = [p for p in self.program["user_parameters"] if p["name"] == name]
+        self.assertEqual(1, len(row), self.program["user_parameters"])
+        self.assertAlmostEqual(4.0, row[0]["nominal"], places=6)
+
+    def test_the_blend_area_is_counted_once_and_only_once(self) -> None:
+        self.assertAlmostEqual(
+            self.program["covered_area_fraction"],
+            sum(g["area_fraction"] for g in self.program["archetypes"]),
+            places=9,
+        )
+
+    def test_the_fillet_reaches_an_emitted_script_and_the_transaction_builds_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        report, error = run_transaction(source, fakes.make_design(), self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        built = [entry for entry in report["created"] if entry["kind"] == "fillet"]
+        self.assertEqual(1, len(built), report)
+        self.assertEqual(self.fillet()["id"], built[0]["archetype_id"])
+        self.assertEqual(self.fillet()["between"], built[0]["between"])
+        self.assertEqual("start-side", built[0]["edge_faces"])
+        # The edges the start cap shares with the side faces, and no others: the
+        # feature's own interior edges are not all of them.
+        self.assertGreater(built[0]["edge_count"], 0)
+        self.assertEqual([], report["fillets_skipped"], report)
+
+
 class RefusalToReplanSeamTests(unittest.TestCase):
     """The refusal `emit-mesh-rebuild` prints, read by `replan-without`.
 

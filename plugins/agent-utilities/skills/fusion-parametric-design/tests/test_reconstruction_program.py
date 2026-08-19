@@ -291,8 +291,16 @@ class ArchetypeTests(unittest.TestCase):
 
     def test_a_rejected_fit_is_listed_with_the_gate_it_failed(self) -> None:
         record = fx.box_record()
-        record["regions"][0]["fit"]["accepted"] = False
-        record["regions"][0]["fit"]["rejection"] = "relative residual 0.4 exceeds the gate 0.02."
+        # The rejected wall is a *y* wall, not an *x* one, and that is not
+        # incidental. The box is 10 x 20 x 5, so its two x walls carry 100 each
+        # and its two y walls 50 each; the datum's X axis is now chosen by the
+        # total area facing a direction rather than by one face's area, and
+        # dropping an x wall would leave 100 against 100 -- a real tie, which
+        # the frame refuses. Dropping a y wall leaves 200 against 50 and the
+        # frame is as determined as it was with all six.
+        rejected = next(r for r in record["regions"] if r["region_hash"] == fx.region_hash("y-lo"))
+        rejected["fit"]["accepted"] = False
+        rejected["fit"]["rejection"] = "relative residual 0.4 exceeds the gate 0.02."
         program = build(record, fx.spec())
         gates = [entry["gate"] for entry in program["unreconstructed"]]
         self.assertIn("relative residual 0.4 exceeds the gate 0.02.", gates)
@@ -300,13 +308,19 @@ class ArchetypeTests(unittest.TestCase):
     def test_an_oblique_cap_plane_is_unmappable_rather_than_emitted(self) -> None:
         # Caps at 30 degrees to every datum axis: setByPlane is direct-edit-only,
         # so this plane cannot be asked for at all.
+        #
+        # `x-flat` carries more area than the *pair* of oblique faces together,
+        # which is what keeps the datum's X axis on +x. The frame now scores a
+        # direction by the total area facing it, so two 60 mm2 oblique faces
+        # would otherwise outweigh one 100 mm2 flat and the datum would rotate
+        # to meet them -- leaving nothing oblique for this gate to catch.
         sqrt2 = 2.0**0.5
         oblique = (1.0 / sqrt2, 1.0 / sqrt2, 0.0)
         record = fx.record(
             [
                 fx.plane("z-lo", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 200.0),
                 fx.plane("z-hi", (0.0, 0.0, 1.0), (0.0, 0.0, 5.0), 200.0),
-                fx.plane("x-flat", (1.0, 0.0, 0.0), (5.0, 0.0, 2.5), 100.0),
+                fx.plane("x-flat", (1.0, 0.0, 0.0), (5.0, 0.0, 2.5), 150.0),
                 fx.plane("cut-lo", oblique, (0.0, 0.0, 2.5), 60.0),
                 fx.plane("cut-hi", oblique, (7.0, 7.0, 2.5), 60.0),
             ]
@@ -453,6 +467,100 @@ class HoleAndFilletTests(unittest.TestCase):
             program["covered_area_fraction"],
             sum(g["area_fraction"] for g in program["archetypes"]),
         )
+
+    def _blend(self, label, between, radius=1.0, area=40.0, y=4.0, axis=(1.0, 0.0, 0.0)):
+        # The axis must not be parallel to the extrude's cap normal or the round
+        # is claimed as one of its sides and never reaches the fillet gate at all.
+        return fx.oriented(
+            fx.blend_cylinder(label, axis, (6.0, y, 2.0), radius, area, between=between),
+            None,
+        )
+
+    def test_a_blend_between_two_sides_of_one_extrude_is_a_fillet_on_that_edge(self) -> None:
+        # 42 of the benchmark's 114 candidates died on this: a box's own edge
+        # runs between two faces of one feature, and Fusion rounds it.
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["x-lo", "y-lo"])]),
+            fx.spec(),
+        )
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual(1, len(fillets[0]["between"]))
+        self.assertEqual("side-side", fillets[0]["edge_faces"])
+        self.assertEqual(fillets[0]["between"], fillets[0]["dependencies"])
+
+    def test_a_blend_on_a_cap_names_which_cap_so_the_emitter_can_pick_the_face_set(self) -> None:
+        # z-hi is the far cap in station order, which is the feature's endFaces.
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["z-hi", "x-lo"])]),
+            fx.spec(),
+        )
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual("end-side", fillets[0]["edge_faces"])
+
+    def test_a_blend_between_two_caps_of_one_extrude_has_no_edge_to_round(self) -> None:
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["z-lo", "z-hi"])]),
+            fx.spec(),
+        )
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-neighbour-shared", gates)
+        self.assertIn("face away from each other", gates)
+
+    def test_a_blend_inside_a_revolve_still_refuses_and_says_why(self) -> None:
+        # A revolve's faces come as one collection with no partition, so an edge
+        # inside it cannot be named. The refusal is the honest answer, and it is
+        # where 61 of the benchmark's candidates still sit.
+        # With the bore's side unknown the revolve forms and takes both z planes,
+        # which moves the extrude's caps onto x -- so this blend's axis runs along
+        # y to stay out of the extrude's side set.
+        blend = self._blend("blend", ["z-lo", "z-hi"], axis=(0.0, 1.0, 0.0))
+        program = build(fx.bored_post_record(None, extras=[blend]), fx.spec())
+        owner = {h: g for g in program["archetypes"] for h in g["regions"]}
+        self.assertEqual("revolve", owner[fx.region_hash("z-lo")]["kind"])
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("cannot partition into named sets", gates)
+
+    def test_two_fragments_of_one_round_become_one_fillet_over_both_regions(self) -> None:
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual(
+            sorted([fx.region_hash("left"), fx.region_hash("right")]), fillets[0]["regions"]
+        )
+        # The larger fragment's own measured radius, not a mean of the two: a
+        # mean is a number no fit ever produced.
+        self.assertAlmostEqual(1.0, fillets[0]["radius"]["value"])
+
+    def test_fragments_whose_radii_disagree_refuse_rather_than_pick_one(self) -> None:
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
+            self._blend("right", ["x-lo", "y-lo"], radius=3.0, area=20.0, y=6.0),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-radius-disagrees", gates)
+
+    def test_pooling_fragments_needs_a_declared_equal_radius_tolerance(self) -> None:
+        # No tolerance declared is *not judged*, never "judged with a default".
+        spec = fx.spec()
+        spec["thresholds"].pop("equal_radius_tolerance")
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), spec)
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-radius-undeclared", gates)
 
     def test_a_blend_whose_neighbours_were_not_both_rebuilt_is_not_a_fillet(self) -> None:
         # A fillet rounds the edge between two features. Nothing here rebuilt

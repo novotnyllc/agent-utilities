@@ -20,7 +20,7 @@ becomes an absolute-threshold judgement wearing the same label.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
@@ -569,7 +569,55 @@ def _first_rival(
     return None
 
 
-def _primary_candidates(regions: Sequence[RegionFit]) -> tuple[list[AxisCandidate], str]:
+def _merge_parallel(
+    candidates: Sequence[AxisCandidate], angle_tolerance_deg: float
+) -> list[AxisCandidate]:
+    """Sum the areas of candidates that already agree on a direction.
+
+    ``_first_rival`` states half of this rule already: a candidate parallel to
+    the winner is not a rival, it *agrees*.  Agreement that only ever silenced a
+    rival never counted for anything, so the ranking compared one face's area
+    against one other face's area.  On a rectangular lid that is a coin toss --
+    POD-A1-LID's two rival walls measured 95.40 mm2 and 94.80 mm2, a margin of
+    0.0063 -- while the *stacks* they belong to measured 1008.4 mm2 facing one
+    way against 189.6 mm2 facing the other.  The part is not ambiguous; the
+    ranking was reading one face out of each stack.  Evidence that agrees adds.
+
+    Only a score that *is* an amount of evidence may be summed, which is why
+    this is applied to the area-scored candidate sets and to neither of the
+    others: two coaxial cylinders do not make one with a longer axial span, and
+    two bolt holes 100 mm off the axis do not make one 200 mm off it.
+
+    The representative -- region hash, anchor, direction -- stays the group's
+    largest single member, so the origin still lands on a face that exists.
+    Greedy over the sorted list rather than the caller's, because greedy over an
+    arbitrary order picks an arbitrary representative: the sort is what makes
+    both the grouping and the representative total.
+    """
+    groups: list[list[Any]] = []
+    for candidate in sorted(candidates, key=AxisCandidate.sort_key):
+        for group in groups:
+            if _angle_deg(candidate.direction, group[0].direction) <= angle_tolerance_deg:
+                group[1] += candidate.area
+                group[2] += 1
+                break
+        else:
+            groups.append([candidate, candidate.area, 1])
+    merged = [
+        replace(
+            head,
+            score=total,
+            area=total,
+            basis=head.basis if count == 1 else f"{head.basis}, summed over {count} parallel fits",
+        )
+        for head, total, count in groups
+    ]
+    return sorted(merged, key=AxisCandidate.sort_key)
+
+
+def _primary_candidates(
+    regions: Sequence[RegionFit], angle_tolerance_deg: float
+) -> tuple[list[AxisCandidate], str]:
     """Cylinders ranked by radius x axial span; planes by area when none fits.
 
     Cones are deliberately not candidates: a cone's axis is well defined but its
@@ -625,7 +673,7 @@ def _primary_candidates(regions: Sequence[RegionFit]) -> tuple[list[AxisCandidat
                 basis="supporting area",
             )
         )
-    return sorted(planes, key=AxisCandidate.sort_key), "plane"
+    return _merge_parallel(planes, angle_tolerance_deg), "plane"
 
 
 def _origin_on_axis(
@@ -702,7 +750,7 @@ def _secondary_candidates(
                 basis="normal of a plane parallel to the primary axis, orthogonalised",
             )
         )
-    return sorted(out, key=AxisCandidate.sort_key)
+    return _merge_parallel(out, angle_tolerance_deg)
 
 
 def _secondary_from_second_axis(
@@ -778,7 +826,7 @@ def derive_datum_frame(
             {"region_count": len(list(regions))},
         )
 
-    candidates, source = _primary_candidates(accepted)
+    candidates, source = _primary_candidates(accepted, angle_tolerance_deg)
     if not candidates:
         raise _refuse(
             "frame-no-accepted-fits",

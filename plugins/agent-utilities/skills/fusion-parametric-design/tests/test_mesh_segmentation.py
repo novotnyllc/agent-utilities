@@ -196,7 +196,7 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
 
 def rounded_plinth_mesh(
     width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
-    post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6,
+    post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6, post_inward=False,
 ):
     """A closed plinth whose top-front edge is rounded, under a coaxial post.
 
@@ -216,9 +216,17 @@ def rounded_plinth_mesh(
       a *different* archetype from the front face -- and a fillet needs an edge
       between two archetypes.
 
+    ``post_inward`` sinks the post into the body as a blind bore instead. Nothing
+    else about the shape changes and the round is still the same round, but the
+    part stops being a revolve: a bore is not an outward turned surface, so the
+    top face joins the *extrude* that already owns the front face, and the round
+    then sits between two faces of one feature -- a side and a cap. That is the
+    same-feature edge, on a real mesh rather than a fixture of one.
+
     Closed and outward-wound, because the rebuild sections the dump for its
     profiles and an open surface has no section to give.
     """
+    post_sign = -1.0 if post_inward else 1.0
     vertices: list[tuple[float, float, float]] = []
     index: dict[tuple, int] = {}
 
@@ -274,7 +282,7 @@ def rounded_plinth_mesh(
             (
                 width / 2.0 + post_radius * math.cos(angle),
                 (radius + depth) / 2.0 + post_radius * math.sin(angle),
-                height + post_height * level / post_stacks,
+                height + post_sign * post_height * level / post_stacks,
             ),
         )
 
@@ -333,10 +341,15 @@ def rounded_plinth_mesh(
             j += 1
         groups.append(1)
 
+    # One winding serves both cases, and that is not an oversight: sinking the
+    # post mirrors it in z, and mirroring a surface reverses the normal its
+    # unchanged winding implies. A boss's wall faces away from its axis and a
+    # bore's faces toward it, so the same triangles describe both -- which is
+    # what lets the fit read the sunk one's material_side as `inside`.
     for k in range(post_stacks):
         for s in range(post_sides):
             quad(rim(k, s), rim(k, s + 1), rim(k + 1, s + 1), rim(k + 1, s), 9)
-    cap = node(("pc",), (width / 2.0, (radius + depth) / 2.0, height + post_height))
+    cap = node(("pc",), (width / 2.0, (radius + depth) / 2.0, height + post_sign * post_height))
     for s in range(post_sides):
         triangles.append((cap, rim(post_stacks, s), rim(post_stacks, s + 1)))
         groups.append(10)

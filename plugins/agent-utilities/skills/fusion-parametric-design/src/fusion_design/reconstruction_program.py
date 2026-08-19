@@ -861,8 +861,49 @@ def _plan_holes(
     return holes, gates
 
 
+def _same_feature_edge(
+    group: Mapping[str, Any], first: str, second: str
+) -> tuple[str | None, str | None]:
+    """Which pair of one archetype's own face sets a blend sits between.
+
+    Fusion rounds an edge between two faces of a single feature as readily as one
+    between two features, so a blend whose neighbours share an owner is not
+    automatically unroundable -- but the *edge* still has to be nameable, and the
+    only archetype whose faces come partitioned is the extrude:
+    ``ExtrudeFeature`` hands back ``startFaces``, ``endFaces`` and ``sideFaces``,
+    and this program already recorded which of its regions were caps and in which
+    station order.  A revolve's faces carry no such partition, so a blend inside
+    one names no edge and keeps its refusal.
+
+    Returns ``(selector, None)`` or ``(None, reason)``; the selector is the pair
+    of face sets ``_build_fillet`` intersects.
+    """
+    if group.get("kind") != "sketch-extrude":
+        return None, (
+            f"both of this blend's neighbours are surfaces of {group['id']}, a "
+            f"{group['kind']}, whose faces this emitter cannot partition into named sets. "
+            "An edge inside it is not nameable, so no fillet is claimed here."
+        )
+    caps = list(group.get("cap_regions") or ())
+    roles = tuple(
+        "start" if h == caps[0] else "end" if h == caps[-1] else "side" for h in (first, second)
+    )
+    if roles == ("side", "side"):
+        return "side-side", None
+    if "side" not in roles:
+        return None, (
+            f"both of this blend's neighbours are cap planes of {group['id']}, which face away "
+            "from each other and share no edge."
+        )
+    cap = roles[0] if roles[0] != "side" else roles[1]
+    return f"{cap}-side", None
+
+
 def _plan_fillets(
-    regions: Sequence[RegionFit], groups: Sequence[Mapping[str, Any]]
+    regions: Sequence[RegionFit],
+    groups: Sequence[Mapping[str, Any]],
+    *,
+    equal_radius_tolerance: float | None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Turn U2's two-neighbour blend proposals into fillet features, or gate them.
 
@@ -877,17 +918,31 @@ def _plan_fillets(
     span and a planner that guessed it would be inventing the measurement.
 
     What U2 cannot know is whether those two neighbours were themselves rebuilt:
-    a fillet is an operation on the edge *between two features*, so a blend whose
-    neighbours did not both become features has no edge to sit on and is not
-    emitted.  Nor can it know whether the blend surface was itself claimed by
-    another archetype -- a partial-arc cylinder can be, where a torus never was --
-    and a region rebuilt twice is counted twice in the coverage account.
+    a fillet needs an edge to sit on, so a blend whose neighbours did not both
+    become features is not emitted.  Nor can it know whether the blend surface
+    was itself claimed by another archetype -- a partial-arc cylinder can be,
+    where a torus never was -- and a region rebuilt twice is counted twice in the
+    coverage account.
+
+    Two neighbours *sharing* an owner is not by itself a reason to refuse.  A
+    box's own top edge runs between two faces of one extrude and Fusion rounds it
+    without complaint; what this stage has to establish is that the edge is
+    **nameable**, which for an extrude it is -- ``_same_feature_edge`` picks the
+    pair of face sets -- and for a revolve it is not.  Blends landing on the same
+    face-set pair of the same feature are one fillet, not several: they are
+    fragments of one round, and emitting one archetype each would ask Fusion to
+    round an already-rounded edge.  They may only be pooled when the caller has
+    declared an ``equal_radius_tolerance`` and every fragment's measured radius
+    lies inside it -- otherwise the fragments disagree about the round and
+    choosing between them here would be inventing the measurement.
     """
     gates: dict[str, str] = {}
     owner: dict[str, str] = {}
+    by_id = {str(group["id"]): group for group in groups}
     for group in groups:
         for region_hash in group["regions"]:
             owner[str(region_hash)] = str(group["id"])
+    same_feature: dict[tuple[str, str], list[RegionFit]] = {}
 
     fillets: list[dict[str, Any]] = []
     for region in regions:
@@ -922,38 +977,79 @@ def _plan_fillets(
             )
             continue
         if len(owners) != 2:
-            gates[region.region_hash] = (
-                "fillet-neighbour-shared: both of this blend's neighbours are surfaces of the same "
-                f"archetype ({owners[0]}), so the blend lies inside one feature rather than on an "
-                "edge between two."
-            )
+            selector, refusal = _same_feature_edge(by_id[owners[0]], first, second)
+            if selector is None:
+                gates[region.region_hash] = "fillet-neighbour-shared: " + str(refusal)
+            else:
+                same_feature.setdefault((owners[0], selector), []).append(region)
             continue
-        fillets.append(
-            {
-                "id": _archetype_id("fillet", [region.region_hash]),
-                "kind": "fillet",
-                # Neither new-body, join nor cut: a fillet on a convex edge
-                # removes material and one on a concave edge adds it, and the
-                # program does not measure which. Naming it a cut would assert
-                # the half it did not establish.
-                "operation": "finish",
-                "regions": [region.region_hash],
-                "plane": None,
-                "radius": {"parameter": None, "value": region.fillet["radius"]},
-                "between": [str(item) for item in owners],
-                "profile": None,
-                "profile_source": None,
-                "constraints": [],
-                "dependencies": list(owners),
-                "reason": (
-                    f"an accepted {region.fit.kind} blend adjacent to exactly two non-blend "
-                    f"primaries, both of which this program rebuilds ({owners[0]}, {owners[1]}). "
-                    "Emitted as a fillet radius on their shared edge -- parametric and editable -- "
-                    "rather than as blend surface geometry, which Fusion has no editable home for."
-                ),
-            }
-        )
+        fillets.append(_fillet_archetype([region], owners, None))
+
+    for (owner_id, selector), members in sorted(same_feature.items()):
+        # Largest fragment first: its measured radius is the one emitted, so the
+        # program carries a radius something actually measured rather than a mean
+        # of several, which no fit ever produced.
+        members.sort(key=lambda r: (-r.area, r.region_hash))
+        radius = members[0].fillet["radius"]
+        spread = max(abs(r.fillet["radius"] - radius) for r in members)
+        if len(members) > 1 and equal_radius_tolerance is None:
+            for region in members:
+                gates[region.region_hash] = (
+                    f"fillet-radius-undeclared: {len(members)} blend fragments land on the same edge "
+                    f"of {owner_id}, and whether they measured one round or several turns on an "
+                    "equal_radius_tolerance this caller did not declare."
+                )
+            continue
+        if len(members) > 1 and spread > equal_radius_tolerance:
+            for region in members:
+                gates[region.region_hash] = (
+                    f"fillet-radius-disagrees: {len(members)} blend fragments land on the same edge "
+                    f"of {owner_id} carrying radii that spread by {spread:.4g}, beyond the declared "
+                    f"equal_radius_tolerance {equal_radius_tolerance:g}. They do not describe one "
+                    "round, and this stage does not choose between them."
+                )
+            continue
+        fillets.append(_fillet_archetype(members, [owner_id], selector))
     return fillets, gates
+
+
+def _fillet_archetype(
+    members: Sequence[RegionFit], owners: Sequence[str], edge_faces: str | None
+) -> dict[str, Any]:
+    hashes = sorted(region.region_hash for region in members)
+    if edge_faces is None:
+        reason = (
+            f"an accepted {members[0].fit.kind} blend adjacent to exactly two non-blend "
+            f"primaries, both of which this program rebuilds ({owners[0]}, {owners[1]}). "
+            "Emitted as a fillet radius on their shared edge -- parametric and editable -- "
+            "rather than as blend surface geometry, which Fusion has no editable home for."
+        )
+    else:
+        reason = (
+            f"{len(members)} accepted blend fragment(s) adjacent to two non-blend primaries that "
+            f"are both surfaces of {owners[0]}, one a {edge_faces.split('-')[0]} face and one a "
+            "side face. Emitted as a fillet radius on the edge those two face sets share -- "
+            "parametric and editable -- rather than as blend surface geometry."
+        )
+    return {
+        "id": _archetype_id("fillet", hashes),
+        "kind": "fillet",
+        # Neither new-body, join nor cut: a fillet on a convex edge
+        # removes material and one on a concave edge adds it, and the
+        # program does not measure which. Naming it a cut would assert
+        # the half it did not establish.
+        "operation": "finish",
+        "regions": hashes,
+        "plane": None,
+        "radius": {"parameter": None, "value": members[0].fillet["radius"]},
+        "between": [str(item) for item in owners],
+        "edge_faces": edge_faces,
+        "profile": None,
+        "profile_source": None,
+        "constraints": [],
+        "dependencies": [str(item) for item in owners],
+        "reason": reason,
+    }
 
 
 def plan_archetypes(
@@ -962,6 +1058,7 @@ def plan_archetypes(
     *,
     angle_tolerance_deg: float,
     offset_tolerance: float,
+    equal_radius_tolerance: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Assign regions to the archetypes U4 emits; declare everything else.
 
@@ -1088,13 +1185,11 @@ def plan_archetypes(
             # datum frame the offset is expressed in. Handing over the far cap
             # made U4 refuse `cap-order-inverted` on a plain rectangular box: the
             # emitter had documented this exact inversion as U3's to fix.
-            stations = sorted(
-                (
-                    _frame_station(frame, axis, low.anchor()),
-                    _frame_station(frame, axis, high.anchor()),
-                )
+            ordered = sorted(
+                ((_frame_station(frame, axis, cap.anchor()), cap) for cap in (low, high)),
+                key=lambda pair: pair[0],
             )
-            low_station, high_station = stations
+            (low_station, low), (high_station, high) = ordered
             members = sorted(region.region_hash for region in (low, high, *sides))
             claimed.update(members)
             groups.append(
@@ -1108,7 +1203,10 @@ def plan_archetypes(
                         "offset": low_station,
                         "rotation": None,
                     },
-                    "cap_regions": sorted([low.region_hash, high.region_hash]),
+                    # Station order, not hash order: the low cap is the one the
+                    # sketch sits on, which is the feature's `startFaces`, and a
+                    # fillet on a cap-to-side edge has to name which cap.
+                    "cap_regions": [low.region_hash, high.region_hash],
                     "profile": None,
                     "profile_source": "mesh-section",
                     "extent": {
@@ -1135,7 +1233,9 @@ def plan_archetypes(
 
     # Fillets last: they depend on the features they round, so they can only be
     # judged once every base, cut and hole has claimed its regions.
-    fillets, fillet_gates = _plan_fillets(regions, groups)
+    fillets, fillet_gates = _plan_fillets(
+        regions, groups, equal_radius_tolerance=equal_radius_tolerance
+    )
     for group in fillets:
         claimed.update(group["regions"])
     groups.extend(fillets)
@@ -1350,7 +1450,11 @@ def _user_parameters(
                     "rationale": (
                         f"the blend radius U2 measured on {group['id']}'s surface -- a torus's "
                         "minor radius, or a partial-arc cylinder's radius -- rounding the edge "
-                        f"between {group['between'][0]} and {group['between'][1]}."
+                        + (
+                            f"between {group['between'][0]} and {group['between'][1]}."
+                            if len(group["between"]) == 2
+                            else f"between the {group['edge_faces']} faces of {group['between'][0]}."
+                        )
                     ),
                     "driving_archetypes": [group["id"]],
                 }
@@ -1710,6 +1814,7 @@ def build_reconstruction_program(
         frame,
         angle_tolerance_deg=_threshold(thresholds, "angle_tolerance_deg"),
         offset_tolerance=_threshold(thresholds, "offset_tolerance"),
+        equal_radius_tolerance=_threshold(thresholds, "equal_radius_tolerance"),
     )
     _attach_constraints(groups, adoptions)
     parameters = _user_parameters(groups, adoptions, fit_record.units)
@@ -1827,8 +1932,12 @@ _ARCHETYPE_FIELDS = {
     "area_fraction",
     # hole only: the diameter and the in-plane position of its placement point.
     "hole",
-    # fillet only: the two archetype ids whose shared edge it rounds.
+    # fillet only: the archetype ids whose shared edge it rounds -- two of them,
+    # or one when the edge runs between two face sets of a single feature.
     "between",
+    # fillet only: which pair of that single feature's face sets, when `between`
+    # names one archetype; null when it names two.
+    "edge_faces",
 }
 
 OPERATIONS = {"new-body", "join", "cut", "finish"}

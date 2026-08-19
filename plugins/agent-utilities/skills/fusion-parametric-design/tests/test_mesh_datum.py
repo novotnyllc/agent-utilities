@@ -204,6 +204,62 @@ class DatumFrameTests(unittest.TestCase):
         self.assertIn("winner", caught.exception.detail)
         self.assertIn("runner_up", caught.exception.detail)
 
+    def _walled_lid(self, x_walls, y_walls):
+        """A lid: one boss on +z, plus wall planes facing +x and +y.
+
+        Shaped after POD-A1-LID, whose primary axis was never in doubt and whose
+        X axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a
+        margin of 0.0063 -- while the stacks those two walls belong to measured
+        1008.4 mm2 against 189.6 mm2.
+        """
+        regions = [
+            fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+            fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
+        ]
+        for index, area in enumerate(x_walls):
+            regions.append(
+                fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area)
+            )
+        for index, area in enumerate(y_walls):
+            regions.append(
+                fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area)
+            )
+        return fx.record(regions)
+
+    def test_parallel_walls_pool_their_area_so_the_bigger_stack_sets_x(self) -> None:
+        # Face for face the contest is a coin toss: 95.4 against 94.8. Stack for
+        # stack it is not close, and the stack is the quantity that survives a
+        # re-tessellation, which is what the margin is protecting.
+        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
+        self.assertAlmostEqual(381.6, frame.evidence["secondary"]["score"], places=6)
+        self.assertIn("summed over 4 parallel fits", frame.evidence["secondary"]["basis"])
+        # (381.6 - 189.6) / 381.6, against a face-for-face margin of 0.0063.
+        self.assertAlmostEqual(0.50314465, frame.evidence["secondary_margin"], places=6)
+
+    def test_a_lid_whose_wall_stacks_really_do_tie_still_refuses(self) -> None:
+        # The refusal is a feature. Pooling parallel evidence must not turn a
+        # square box into a decided one.
+        record = self._walled_lid([95.4, 95.4], [95.4, 95.4])
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+        self.assertEqual(caught.exception.detail["margin"], 0.0)
+
+    def test_pooling_leaves_the_frame_identical_under_shuffled_region_order(self) -> None:
+        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
+        rng = random.Random(20260819)
+        for _ in range(12):
+            shuffled = copy.deepcopy(record)
+            rng.shuffle(shuffled["regions"])
+            self.assertEqual(
+                derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
+            )
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [

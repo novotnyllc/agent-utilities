@@ -247,18 +247,54 @@ class FakeFeature:
         self.entityToken = f"token-{kind}-{id(self)}"
         self.errorOrWarningMessage = ""
         self.healthy = True
-        # Each feature owns two faces. The edge ids overlap between consecutive
-        # features by default, which is what gives a fillet an edge to find.
+        # The edge ids overlap between consecutive features by default, which is
+        # what gives a fillet between *two* features an edge to find.
         edge_ids = design.behaviour.get("feature_edge_ids", {}).get(kind)
         if edge_ids is None:
             edge_ids = [1, 2, 3]
-        self._faces = [FakeFace(edge_ids), FakeFace(edge_ids)]
+        # An extrude's faces come partitioned, and the partition is a box's: each
+        # side face meets the start cap along one edge, the end cap along
+        # another, and its two neighbours along the two edges that are interior
+        # to the side set. A fillet inside one feature asks for exactly those,
+        # so the double has to have them rather than one undifferentiated pile.
+        # Its own block of edge ids, because an edge interior to one feature is
+        # not an edge some other feature also owns -- only the ids seeded above
+        # are deliberately shared, and those are what a two-feature fillet finds.
+        sides = design.behaviour.get("extrude_side_count", 4)
+        base = getattr(design, "_face_edge_base", 0) + 1000
+        design._face_edge_base = base
+        self._start_faces = [FakeFace(edge_ids + [base + i for i in range(sides)])]
+        self._end_faces = [FakeFace(edge_ids + [base + 100 + i for i in range(sides)])]
+        self._side_faces = [
+            FakeFace([base + i, base + 100 + i, base + 200 + i, base + 200 + (i - 1) % sides])
+            for i in range(sides)
+        ]
+        self._faces = [*self._start_faces, *self._side_faces, *self._end_faces]
+
+    def _face_set(self, name, faces):
+        if self.design.behaviour.get("no_feature_faces"):
+            raise AttributeError(name)
+        # Only an ExtrudeFeature partitions its faces. A revolve does not, which
+        # is why the planner never asks one to round an edge inside itself.
+        if name != "faces" and self.kind != "extrude":
+            raise AttributeError(name)
+        return FakeList(faces)
 
     @property
     def faces(self):
-        if self.design.behaviour.get("no_feature_faces"):
-            raise AttributeError("faces")
-        return FakeList(self._faces)
+        return self._face_set("faces", self._faces)
+
+    @property
+    def startFaces(self):
+        return self._face_set("startFaces", self._start_faces)
+
+    @property
+    def endFaces(self):
+        return self._face_set("endFaces", self._end_faces)
+
+    @property
+    def sideFaces(self):
+        return self._face_set("sideFaces", self._side_faces)
 
     def deleteMe(self):
         self.isValid = False
