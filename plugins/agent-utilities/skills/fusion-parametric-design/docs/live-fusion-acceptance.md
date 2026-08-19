@@ -304,34 +304,93 @@ bracket or mount with at least one dimension to change), copied into the project
 beside the manifest. **Record the Fusion version with every report in this
 section: every mesh API used here is preview.**
 
+The rebuild is no longer authored by hand. It is a pipeline of ten commands, run
+in this order:
+
+```
+emit-capability-probe → emit-mesh-capture → emit-mesh-extract → fit-regions →
+plan-reconstruction → emit-mesh-rebuild → emit-mesh-editability →
+check-editability → emit-mesh-deviation → reconstruction-coverage
+```
+
+Each `emit-*` command writes a Fusion Python transaction that a person executes
+inside Fusion through the discovered MCP capability; its report comes back on
+stdout between the report delimiters and is saved to a file the next stage reads.
+The five others — `fit-regions`, `plan-reconstruction`, `check-editability`,
+`reconstruction-coverage`, and the `replan-without` recovery loop — are host-side
+arithmetic and never touch Fusion. Every stage binds to the one before it by a
+hash or a nonce, so **save each report to a file as it comes back**; a stage
+whose input was retyped from a screen cannot be run.
+
+This section is the procedure that *would* establish that the pipeline builds an
+editable model from a marketplace mesh on one recorded Fusion release. Writing it
+down establishes nothing. Only a completed live run with every report retained
+does, and only for the release it ran against.
+
 1. Add a `mesh_sources` record for the file — `sha256` of the bytes, `units` with
    its `unit_source` (a marketplace STL is almost always `declared` or `guess`,
    never `file`), `provenance: designed_export` for a modelled download or
    `capture` for a scan, and the identity `alignment_transform`. Then:
-   `scripts/fusion-design emit-mesh-capture fusion-project.json -o build/mesh-capture.py`
+   `"$SKILL_DIR/scripts/fusion-design" emit-mesh-capture fusion-project.json -o build/mesh-capture.py`
    **Pass:** emission succeeds. Now change one byte of the STL and re-emit.
    **Pass:** the CLI exits 2 with `mesh-source-hash-mismatch` and writes nothing.
-   Restore the file.
-2. Insert the mesh into the document and execute `build/mesh-capture.py`.
+   Restore the file. A failure here means the manifest's digest and the file on
+   disk have parted company; fix the file or record a new source, never edit the
+   digest to match what is on disk.
+
+2. Probe the runtime before spending a transaction on it:
+   `"$SKILL_DIR/scripts/fusion-design" emit-capability-probe fusion-project.json --probe-spec build/probe.json -o build/probe.py`
+   and execute it. The probe creates nothing (`creates_geometry: false`).
+   **Pass:** `kind: capability-probe`, and `interpreter`, `packaging_tags`,
+   `writable_sys_path`, `modules`, `apis`, `missing_apis`, `face_groups` and
+   `dump_write_roundtrip` are all present and read. Record `fusion_version` and
+   the whole of `missing_apis` verbatim: that list is the version-specific fact
+   this section exists to capture, and it predicts exactly which later stage will
+   fail closed. Read `ok_means` before quoting `ok: true` at anyone — `ok` here
+   means the probe ran, not that anything is present. Without `--probe-spec`,
+   `face_groups` and `dump_write_roundtrip` report `status: not-requested`; that
+   is not a pass, and a run that skipped the spec has not shown that Fusion can
+   write the dump the next step depends on.
+
+3. Insert the mesh into the document and execute `build/mesh-capture.py`.
    **Pass:** `kind: mesh-capture`, `ok: true`, the Fusion version is recorded, and
    every body reports a triangle count and `isClosed`. Note the body's component
    path and name — this is the binding no manifest field supplies.
    **Negative control:** insert the same mesh a second time under a duplicated
    component path and re-run. **Pass:** the capture fails closed with
-   `ambiguous-component-paths` rather than reporting a partial body list.
-3. Record the classification from the capture's own numbers (`watertight` from
+   `ambiguous-component-paths` rather than reporting a partial body list. A
+   capture that cannot read the triangle count or `isClosed` fails with
+   `mesh-evidence-unavailable`; the classification inputs are then unfillable
+   except by assumption, so stop.
+
+   **Watertightness is load-bearing, and this is the last step where it can be
+   fixed.** A cylinder becomes a `hole` in the rebuild only when its fitted
+   region carries `orientation.material_side: "inside"`, and that field is
+   derived from the mesh's own winding — it is `null` on any mesh that is not
+   closed and consistently wound. A region whose `material_side` is `null` stays
+   unreconstructed behind the `material-side-unavailable` gate: the bore-or-boss
+   question is left open rather than closed by eye, and **no hole is ever emitted
+   from a mesh that is not watertight**, at any later stage, however good the
+   fit. If `isClosed` is false here, repair or re-export the mesh, record it as a
+   new `mesh_sources` entry with its own digest, and start this section again.
+   Carrying an open mesh forward buys a rebuild with no holes in it and a
+   coverage account that says so at the very end, after every expensive step.
+
+4. Record the classification from the capture's own numbers (`watertight` from
    `isClosed`, `facet_count` from the triangle count) for a `dimensional` edit.
    **Pass:** the recorded path is `parametric-rebuild`, written before any
    geometry operation runs.
-4. **Negative control on the gate.** Emit a faceted conversion against that
+
+5. **Negative control on the gate.** Emit a faceted conversion against that
    record:
-   `scripts/fusion-design emit-mesh-convert fusion-project.json --mesh-source-id <id> --classification build/classification.json --convert-spec build/convert.json`
+   `"$SKILL_DIR/scripts/fusion-design" emit-mesh-convert fusion-project.json --mesh-source-id <id> --classification build/classification.json --convert-spec build/convert.json`
    **Pass:** exit 2 with `classification-path-forbids-operation`; nothing is
    emitted. Then hand-edit the record's `path` to `faceted-brep` without touching
    its inputs. **Pass:** exit 2 with `classification-path-contradicts-inputs`.
    Finally point a valid record at a different `mesh_sources` entry. **Pass:**
    exit 2 with `classification-source-mismatch`.
-5. **The faceted ladder, on purpose.** Classify a `boolean-mechanical` edit with a
+
+6. **The faceted ladder, on purpose.** Classify a `boolean-mechanical` edit with a
    declared `facet_budget` above the mesh's facet count, emit the conversion, and
    execute it. **Pass:** either `ok: true` with `"label": "faceted"` and
    `"parametric": false`, or a refusal naming its reason *and* its alternative
@@ -339,43 +398,304 @@ section: every mesh API used here is preview.**
    `errorOrWarningMessage` must appear verbatim in the report — confirm no facet
    ceiling number originates from this package. Confirm the source mesh body is
    still present and unmodified.
-6. Rebuild the dimension the edit requires as native Fusion sketches and
-   features, working from the immutable mesh. Fusion's Mesh Section Sketch and
-   Fit Curves are UI-only and have no API, so any sectioning done through this
-   package is host-side arithmetic; sketch emission from a fit is **not built**,
-   so this step is authored in Fusion.
-7. Grade the rebuild:
-   `scripts/fusion-design emit-mesh-deviation fusion-project.json --mesh-source-id <id> --classification build/classification.json --deviation-spec build/deviation.json`
-   with thresholds declared for *this* part and a stated rationale. Execute it.
-   **Pass, in one of three honest forms:**
-   - `ok: true` with **both** directions reported separately, each carrying the
-     question it answers, the declared thresholds echoed, and the omitted-detail
-     finding advisory rather than fatal;
-   - `ok: false` with `invented-material` and the coordinates of the offending
-     points;
-   - `ok: false` with `deviation-capability` (naming `PolygonMesh.compareWith`,
-     `BRepBody.pointContainment` or a `PointContainment` member, plus the Fusion
-     version), `deviation-unsigned-comparison`, or
-     `sign-convention-unestablished` — each with the invented-material verdict
-     reported `not-established` and carrying no `count` or `max_mm`.
 
-   When the verdict passes, record the `sign_convention` it observed and its
-   `sign_probe` tally. **This is the reading to sanity-check by hand once per
-   Fusion version:** the polarity is measured against `BRepBody.pointContainment`
-   rather than assumed, so confirm it matches a case you can see.
+7. Extract a hash-bound mesh dump from the immutable source body:
 
-   **Fail** if any report states a single combined deviation number, if a missing
-   `compareWith` or `PointContainment` is silently skipped, if an unsigned
-   comparison is reported as a pass, or if `severity: "pass"` appears alongside
-   an unestablished sign convention.
-8. Confirm `DESIGN-STATE.md` records the mesh source, its hash, the recorded
-   path with its rationale, the bound Fusion body, and both deviation directions
-   with the question each answers.
+   ```bash
+   "$SKILL_DIR/scripts/fusion-design" emit-mesh-extract fusion-project.json \
+     --mesh-source-id <id> \
+     --classification build/classification.json \
+     --extract-spec build/extract.json \
+     -o build/mesh-extract.py
+   ```
+
+   The extract spec declares `component_path`, `body_name`, `dump_dir`, and both
+   `max_triangles` and `fallback_max_bytes` with their rationales. Execute the
+   script. **Pass:** `kind: mesh-extract`, `ok: true`, `transport: "file"` with a
+   `dump_path` and a `dump_sha256`, `checked` containing
+   `dump-written-and-reread`, `source_mesh_body_present: true`, and
+   `dihedral_statistics`/`connectivity_statistics` present. **Record
+   `dump_sha256`: the entire rest of the pipeline hangs off it**, and it is
+   supplied to the next stage as an argument precisely so it comes from the
+   report rather than from the file's own bytes.
+
+   A failure names which: `source-not-found` (the binding from step 3 is wrong),
+   `mesh-evidence-unavailable` or `mesh-arrays-unreadable` (a preview API this
+   Fusion does not expose — cross-check `missing_apis` from step 2),
+   `mesh-arrays-inconsistent` (the mesh Fusion holds is malformed),
+   `triangle-budget-exceeded` (decimate and re-capture as a *new* source with its
+   own digest; never raise the budget to make it fit), or `dump-write-unavailable`
+   followed by `dump-too-large-for-fallback` (Fusion could not write the file and
+   the base64 fallback is over the declared ceiling — make `dump_dir` writable
+   from Fusion). `source-mesh-consumed` is the serious one: the immutable source
+   did not survive a read-only transaction, and the run stops there.
+
+8. Fit primitives to the dump. Host-side; no Fusion:
+
+   ```bash
+   "$SKILL_DIR/scripts/fusion-design" fit-regions build/<dump file> \
+     --dump-sha256 <dump_sha256 from step 7> \
+     --spec build/detection.json \
+     -o build/fit.json
+   ```
+
+   **Pass:** exit 0 and `refusal: null`. Read, in this order:
+   `covered_area_fraction` (how much of the surface earned an accepted fit at
+   all); `regions[].orientation.material_side` for every accepted cylinder —
+   `"inside"` is a bore and the only thing that will become a hole, `"outside"` a
+   boss, `null` an open question with `orientation.unavailable_reason` and
+   `orientation.mesh_closed`/`mesh_winding` saying why (this is step 3 coming
+   back); `unfitted_regions[].failed_gate`; `unclaimed.components` with their
+   `dominant_curvature`; and `flags`, where `noise-model-inconsistent`,
+   `normals-unoriented` or `angular-resolution-degraded` qualify every verdict
+   downstream without stopping the run.
+
+   A refusal exits 2 with `refusal.reason` one of `triangle-budget-exceeded`,
+   `mesh-degenerate`, `mesh-not-welded`, `feature-scale-below-noise`,
+   `segmentation-coverage-insufficient`, or `fit-record-stage-failed`, each with
+   its `alternative`. `segmentation-coverage-insufficient` is a statement about
+   the shape, not the thresholds — a saddle-dominated remainder means no
+   supported primitive fits it, and loosening the spec to get past it is
+   fabrication. `fit-record-stage-failed` is a defect in this package, not a
+   property of the mesh; report it with the stage it names.
+
+9. Plan the reconstruction program. Host-side; no Fusion:
+
+   ```bash
+   "$SKILL_DIR/scripts/fusion-design" plan-reconstruction fusion-project.json \
+     --fit-record build/fit.json \
+     --program-spec build/program-spec.json \
+     -o build/program.json
+   ```
+
+   The program spec carries `thresholds` (each a value with its rationale) and
+   the `adopted` relationships. **Pass:** exit 0; `archetypes[]` carries `kind`
+   values from `sketch-extrude`, `revolve`, `hole` and `fillet`;
+   `covered_area_fraction` is the share those archetypes cover; `unreconstructed[]`
+   names a `gate` for every region they do not; and `program_sha256`, `dump_sha256`
+   and `manifest_sha256` are all present. Record `program_sha256`.
+
+   Read every `unreconstructed[].gate` and confirm it is a sentence you agree
+   with. The gate names are `material-side-unavailable` (the open mesh case from
+   step 3), `plane-unmappable`, `hole-base-ambiguous`, `hole-base-not-extruded`,
+   `hole-axis-oblique`, `hole-not-contained`, `fillet-fit-unaccepted`,
+   `fillet-neighbour-unreconstructed`, and `fillet-neighbour-shared`. **A gate is
+   a result, not an error.** A refusal, by contrast, exits 2 printing a JSON
+   record whose `reason` is one of `fit-record-malformed`,
+   `fit-record-missing-axial-span`, `fit-record-missing-uncertainty`,
+   `frame-no-accepted-fits`, `frame-ambiguous`, `frame-x-underdetermined`,
+   `adoption-unmeasured`, `adoption-unlicensed`, `adoption-unsupported-target`,
+   `adoption-conflict`, or `adoption-shift-exceeds-license`. Keep that record: it
+   is the evidence, and each carries its own alternative.
+
+10. Emit the rebuild transaction and run it:
+
+    ```bash
+    "$SKILL_DIR/scripts/fusion-design" emit-mesh-rebuild fusion-project.json \
+      --mesh-source-id <id> \
+      --classification build/classification.json \
+      --program build/program.json \
+      --rebuild-spec build/rebuild-spec.json \
+      -o build/mesh-rebuild.py   # record the rebuild nonce it prints on stderr
+    ```
+
+    The rebuild spec names `component_name` (never the root: the source mesh
+    stays where it is and the rebuild overlays it), `dump_path` for the same dump
+    step 7 wrote, and the emission `thresholds` with their `rationale`. Emission
+    refuses, exit 2 with no script written, on `program-schema-violation`,
+    `program-order-invalid`, `program-order-cyclic`, `plane-unmappable`,
+    `profile-not-closed`, `profile-not-found`, `profile-ambiguous`,
+    `units-unsupported`, `cap-order-inverted`, `archetype-kind-unsupported`,
+    `entity-resolution-ambiguous`, `parameter-name-collision`, or
+    `program-parameter-unbound`.
+
+    Execute the script. **Pass:** `kind: mesh-rebuild`, `ok: true`, `failures: []`,
+    and `rebuild_nonce`, `dump_sha256`, `program_sha256` and `manifest_sha256`
+    echoed back. Then look at what it actually built: `created` lists the
+    component, every feature and its archetype id; `user_parameters` echoes each
+    created parameter with the `expected_observable` it is supposed to drive;
+    `sketches[]` carries `fully_constrained`, `rejected_constraints`,
+    `rejection_budget` and `profile_displacement_mm` per sketch; `timeline`
+    reports health; and `unreconstructed` is carried through from the program.
+
+    **`fillets_skipped` is the one to read closely.** Fillets are individually
+    optional: a fillet whose edge set does not resolve is recorded there with a
+    `reason` of `parent-feature-missing`, `fillet-capability`,
+    `entity-resolution-ambiguous` or `feature-failed`, and **the run still
+    succeeds**. That is deliberate — nothing depends on a fillet — but each skip
+    is an archetype that was planned and not delivered, and the coverage account
+    in step 13 subtracts its area. A run with `ok: true` and a non-empty
+    `fillets_skipped` has not built the model the program describes.
+
+    A transaction-level failure rolls everything back and names itself:
+    `rebuild-capability`, `dump-hash-mismatch`, `parameter-name-collision`,
+    `entity-resolution-ambiguous`, `constraint-rejected-budget-exceeded`,
+    `feature-failed`, `solver-unhealthy`, `profile-not-found`,
+    `document-changed`, or `rollback-incomplete`. Save the refusal report;
+    `rollback-incomplete` means the document still holds part of the failed
+    emission and must be cleaned up by hand before anything else is run in it.
+
+11. **The `replan-without` loop.** When step 10 refuses naming one archetype, the
+    answer is not to hand-edit the program:
+
+    ```bash
+    "$SKILL_DIR/scripts/fusion-design" replan-without build/program.json \
+      --refusal build/rebuild-refusal.json \
+      -o build/program-2.json
+    ```
+
+    This moves the named archetype's regions into `unreconstructed`, writing the
+    refusal token into each gate, and re-hashes the program. **Pass:** exit 0 and
+    a `program_sha256` different from the original. Re-run step 10 against
+    `build/program-2.json`; it mints a **new** rebuild nonce and invalidates the
+    old one.
+
+    It refuses, correctly, in three cases, and each means something specific:
+    the refusal names no archetype (a capability, hash or document refusal is
+    about the binding, not about one feature — there is nothing to replan);
+    `document_state` is `dirty` (clean up the wreckage of the failed emission
+    first, or the replan emits a second component beside it); or another
+    archetype depends on the one being dropped (re-plan from the fit record at
+    step 9 instead). Loop at most as many times as you can still explain: each
+    pass buys a smaller model, and the coverage account will price it.
+
+12. Prove the parameters actually drive the model:
+
+    ```bash
+    "$SKILL_DIR/scripts/fusion-design" emit-mesh-editability fusion-project.json \
+      --rebuild-record build/rebuild-report.json \
+      --editability-spec build/editability-spec.json \
+      -o build/mesh-editability.py   # record the editability nonce from stderr
+    ```
+
+    The spec declares, per parameter, its `perturbation`, `expected_observable`
+    (`volume`, `centroid` or `bbox`), `min_observable_change`,
+    `expected_direction` and `rationale`, plus `observable_restore_epsilon`.
+    Execute the script, save its report, then run the gate:
+
+    ```bash
+    "$SKILL_DIR/scripts/fusion-design" check-editability \
+      --rebuild-record build/rebuild-report.json \
+      --editability-report build/editability-report.json \
+      --editability-nonce <nonce from emit-mesh-editability>
+    ```
+
+    **Pass:** exit 0 with `ok: true`, an empty `problems`, `checked` listing the
+    parameters proven, and `not_exercised` listing the rest by name. Read
+    `proves`: each checked parameter was perturbed, the model recomputed, its
+    declared observable moved by at least the declared minimum, the parameter was
+    restored and all three observables returned within epsilon. Nothing else is
+    proven — parameters were perturbed one at a time, so `interactions_exercised`
+    is `false` and must be.
+
+    Failures come from a closed set: `editability-capability`,
+    `rebuild-record-mismatch`, `parameter-inert`, `parameter-effect-reversed`,
+    `parameter-broke-rebuild`, `parameter-not-restorable`, `body-count-changed`,
+    `base-feature-detected`, `document-changed`. `parameter-inert` means the
+    rebuild produced a parameter that drives nothing, which is the failure mode
+    this whole section exists to catch. `base-feature-detected` means the body
+    is imported geometry wearing a timeline — a faceted import being passed off
+    as a rebuild. **Negative control:** hand-write a six-line editability report
+    claiming `ok: true` and pass it to `check-editability`. **Pass:** exit 2 with
+    problems naming the nonce and the hash chain; the gate cannot be satisfied by
+    a file nobody ran.
+
+13. Grade the rebuild against the immutable source:
+    `"$SKILL_DIR/scripts/fusion-design" emit-mesh-deviation fusion-project.json --mesh-source-id <id> --classification build/classification.json --deviation-spec build/deviation.json`
+    with thresholds declared for *this* part and a stated rationale. Execute it.
+    **Pass, in one of three honest forms:**
+    - `ok: true` with **both** directions reported separately, each carrying the
+      question it answers, the declared thresholds echoed, and the omitted-detail
+      finding advisory rather than fatal;
+    - `ok: false` with `invented-material` and the coordinates of the offending
+      points;
+    - `ok: false` with `deviation-capability` (naming `PolygonMesh.compareWith`,
+      `BRepBody.pointContainment` or a `PointContainment` member, plus the Fusion
+      version), `deviation-unsigned-comparison`, or
+      `sign-convention-unestablished` — each with the invented-material verdict
+      reported `not-established` and carrying no `count` or `max_mm`.
+
+    When the verdict passes, record the `sign_convention` it observed and its
+    `sign_probe` tally. **This is the reading to sanity-check by hand once per
+    Fusion version:** the polarity is measured against `BRepBody.pointContainment`
+    rather than assumed, so confirm it matches a case you can see.
+
+    **Fail** if any report states a single combined deviation number, if a missing
+    `compareWith` or `PointContainment` is silently skipped, if an unsigned
+    comparison is reported as a pass, or if `severity: "pass"` appears alongside
+    an unestablished sign convention.
+
+14. Compose the one account a person reads at the end. Host-side; no Fusion:
+
+    ```bash
+    "$SKILL_DIR/scripts/fusion-design" reconstruction-coverage build/program.json \
+      --fit-record build/fit.json \
+      --rebuild-report build/rebuild-report.json \
+      --editability-verdict build/editability-verdict.json \
+      -o build/coverage.json
+    ```
+
+    The JSON goes to the output; the prose summary goes to stderr on every run.
+    **Pass:** exit 0 and `label` is `parametric-full` or `parametric-partial`.
+    Read `delivered_area_fraction` — the program's coverage minus every archetype
+    the build did not deliver, including every skipped fillet — then `stages`,
+    which carries the fit, plan, build and editability stages separately, then
+    `unreconstructed`, which lists each region with the gate that stopped it, and
+    finally `claims_not_made`.
+
+    **`parametric-partial` is a success and is reported under its own name.** It
+    means part of the scan is now editable Fusion features and part is not, with
+    every unreconstructed region named and gated — and the source mesh remains in
+    the document as reference geometry over the rebuild. Do not treat it as a
+    failed `parametric-full`, do not go back and loosen thresholds to promote it,
+    and do not report it as "mostly reconstructed" without the fraction and the
+    gate list beside it.
+
+    `reconstruction-refused` exits 2 and means one of two things: the rebuild
+    report is absent (a plan is not a model), or the rebuild refused and rolled
+    back, in which case `delivered_area_fraction` is `0.0` however much was
+    planned. **Negative control:** re-run omitting `--rebuild-report`. **Pass:**
+    label `reconstruction-refused`, exit 2, and the fit and plan stages still
+    reported — an absent stage is reported absent, never read as complete.
+
+    Read `claims_not_made` aloud before quoting any of this. The account states
+    what was rebuilt, not that it is dimensionally correct (step 13's question),
+    not that the recovered feature tree is the original designer's — it is *a*
+    parameterization consistent with the measured surface, never *the* original —
+    and not that any parameter drives a rebuild unless step 12 exercised it.
+
+15. Confirm `DESIGN-STATE.md` records the mesh source, its hash, the recorded
+    path with its rationale, the bound Fusion body, the coverage label with its
+    delivered fraction and its unreconstructed gates, and both deviation
+    directions with the question each answers.
+
+### The record this section owes
+
+Beyond the acceptance record at the top of this document, retain:
+
+- the connected **Fusion version**, copied from every report that carries one
+  (`capability-probe`, `mesh-capture`, `mesh-extract`, `mesh-rebuild`), and the
+  statement that **every mesh API used in this section is preview** — the probe's
+  `missing_apis` and the extract report's `preview_apis` are the version-specific
+  evidence, and neither is portable to another release;
+- both **nonces**, each with the command that minted it and the report that
+  echoed it back: the rebuild nonce from `emit-mesh-rebuild` and the editability
+  nonce from `emit-mesh-editability`. A re-emission mints a new one and
+  invalidates the old, so record which emission each report belongs to;
+- **every hash in the chain**: the mesh source `sha256` from the manifest, the
+  `manifest_sha256`, the `dump_sha256` from the extract report (and again from
+  the fit record, the program and the rebuild report), the `program_sha256`
+  before and after any `replan-without`, and a `shasum -a 256` of each saved
+  report file;
+- the exit code of every host-side command, since a refusal is a result here and
+  exit 2 is how each of these commands reports one.
 
 **Pass:** the source file is byte-identical to its recorded hash at the end of
-the run, the source mesh body is unmodified, no faceted result is described as
-parametric anywhere, and a fit coupon is still outstanding before any mating
-claim.
+the run, the source mesh body is unmodified and still present in the document, no
+faceted result is described as parametric anywhere, no hole was emitted from a
+mesh whose winding did not license one, the coverage label and its delivered
+fraction are recorded together with every gate, and a fit coupon is still
+outstanding before any mating claim.
 
 ## 14. Restore the Fusion session
 

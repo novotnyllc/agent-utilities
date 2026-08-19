@@ -661,6 +661,17 @@ def _plane_axis(frame: DatumFrame, datum_plane: str) -> Vec3:
     return {"XY": frame.z_axis, "YZ": frame.x_axis, "XZ": frame.y_axis}[datum_plane]
 
 
+# The two datum axes that lie *in* each origin plane, in the order a sketch on
+# that plane uses them. Defined here because the archetype planner is the first
+# stage that needs them; the emitter imports this rather than restating it, so
+# the sketch's u/v axes and the program's cannot drift apart.
+IN_PLANE_AXES = {"XY": ("X", "Y"), "XZ": ("X", "Z"), "YZ": ("Y", "Z")}
+
+
+def _named_axis(frame: DatumFrame, name: str) -> Vec3:
+    return {"X": frame.x_axis, "Y": frame.y_axis, "Z": frame.z_axis}[name]
+
+
 def _cap_station(region: RegionFit, normal: Vec3) -> float:
     anchor = region.anchor()
     assert anchor is not None
@@ -711,6 +722,208 @@ def _archetype_id(kind: str, regions: Sequence[str]) -> str:
     return f"{kind}-{sorted(regions)[0][:12]}"
 
 
+def _station_range(frame: DatumFrame, axis: Vec3, box: tuple[Vec3, Vec3]) -> tuple[float, float]:
+    """How far a region reaches along a datum axis, from its bounding box.
+
+    All eight corners are projected rather than the two given points, because the
+    box is axis-aligned in *mesh* coordinates and the datum axis need not be.  For
+    the case this is used on — a bore whose axis has just been shown parallel to
+    this very axis — the projection is exact.
+    """
+    lo, hi = box
+    stations = [
+        _frame_station(frame, axis, (x, y, z))
+        for x in (lo[0], hi[0])
+        for y in (lo[1], hi[1])
+        for z in (lo[2], hi[2])
+    ]
+    return min(stations), max(stations)
+
+
+def _plan_holes(
+    bores: Sequence[RegionFit],
+    groups: Sequence[Mapping[str, Any]],
+    frame: DatumFrame,
+    angle_tolerance_deg: float,
+    offset_tolerance: float,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Turn inward cylinders into hole features, or gate each one by name.
+
+    The discriminator is ``material_side == "inside"``, which the caller has
+    already applied; what is decided here is whether a bore has somewhere to be a
+    hole *in*.  A hole is a cut, and a cut needs a body, an axis this design can
+    express, and containment — and a bore that fails any of the three is left
+    unreconstructed naming which, never widened into a hole on the strength of
+    the two it passed.
+    """
+    gates: dict[str, str] = {}
+    bases = [group for group in groups if group["kind"] in ("sketch-extrude", "revolve")]
+    if len(bases) != 1:
+        reason = (
+            "this program builds no body for a hole to cut."
+            if not bases
+            else (
+                f"this program builds {len(bases)} bodies and nothing in the fit record says which "
+                "one this bore is a hole in; choosing would be a guess with a 1-in-"
+                f"{len(bases)} chance of cutting the wrong body."
+            )
+        )
+        for bore in bores:
+            gates[bore.region_hash] = f"hole-base-ambiguous: {reason}"
+        return [], gates
+    base = bases[0]
+    if base["kind"] != "sketch-extrude":
+        for bore in bores:
+            gates[bore.region_hash] = (
+                "hole-base-not-extruded: the only body this program builds is a revolve, whose "
+                "half-profile already rebuilds every surface coaxial with its axis. A bore that is "
+                "not coaxial with it is a real feature and this unit does not place one against a "
+                "revolved body."
+            )
+        return [], gates
+
+    datum_plane = str(base["plane"]["datum_plane"])
+    axis = _plane_axis(frame, datum_plane)
+    u_name, v_name = IN_PLANE_AXES[datum_plane]
+    u_axis, v_axis = _named_axis(frame, u_name), _named_axis(frame, v_name)
+    base_lo = float(base["plane"]["offset"])
+    base_hi = base_lo + float(base["extent"]["value"])
+
+    holes: list[dict[str, Any]] = []
+    for bore in bores:
+        direction = bore.direction()
+        assert direction is not None and bore.fit is not None
+        if _datum_plane_for_normal(frame, direction, angle_tolerance_deg) != datum_plane:
+            gates[bore.region_hash] = (
+                "hole-axis-oblique: the bore's axis is not parallel to the extrusion direction of "
+                f"the body it would cut (datum {datum_plane}). A hole is placed on the body's own "
+                "sketch plane, so an axis oblique to it has no placement this unit can express."
+            )
+            continue
+        low, high = _station_range(frame, axis, bore.bounding_box)
+        if low < base_lo - offset_tolerance or high > base_hi + offset_tolerance:
+            gates[bore.region_hash] = (
+                f"hole-not-contained: the bore spans {low:.6g} to {high:.6g} along datum "
+                f"{datum_plane}'s normal and the body it would cut spans {base_lo:.6g} to "
+                f"{base_hi:.6g}. A cut that starts or ends outside the body it cuts is not a hole "
+                "in it."
+            )
+            continue
+        anchor = bore.anchor()
+        assert anchor is not None
+        radius = bore.fit.parameters.get("radius")
+        if not isinstance(radius, float) or radius <= 0.0:
+            gates[bore.region_hash] = (
+                "hole-radius-absent: the accepted cylinder fit carries no positive radius, so no "
+                "diameter can be written for the hole."
+            )
+            continue
+        identifier = _archetype_id("hole", [bore.region_hash])
+        holes.append(
+            {
+                "id": identifier,
+                "kind": "hole",
+                "operation": "cut",
+                "regions": [bore.region_hash],
+                # The hole's own sketch plane, at the station where the bore
+                # starts -- not the body's, so a blind hole is placed where the
+                # bore actually is rather than where the body happens to begin.
+                "plane": {"datum_plane": datum_plane, "offset": low, "rotation": None},
+                "hole": {
+                    "diameter": {"parameter": None, "value": 2.0 * radius},
+                    "position": {
+                        "u_axis": u_name,
+                        "v_axis": v_name,
+                        "u": {"parameter": None, "value": _frame_station(frame, u_axis, anchor)},
+                        "v": {"parameter": None, "value": _frame_station(frame, v_axis, anchor)},
+                    },
+                },
+                "profile": None,
+                "profile_source": "fit-primitive",
+                "extent": {"kind": "distance", "parameter": None, "value": high - low},
+                "constraints": [],
+                "dependencies": [str(base["id"])],
+                "reason": (
+                    f"an accepted cylinder fit whose material_side is 'inside' -- the mesh's own "
+                    f"winding puts solid on the far side of this surface -- lying wholly within "
+                    f"{base['id']} with its axis along datum {datum_plane}'s normal. That is a bore, "
+                    "and a bore is a hole."
+                ),
+            }
+        )
+    return holes, gates
+
+
+def _plan_fillets(
+    regions: Sequence[RegionFit], groups: Sequence[Mapping[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Turn U2's two-neighbour torus proposals into fillet features, or gate them.
+
+    U2 marks a torus adjacent to exactly two non-torus primaries.  What it cannot
+    know is whether those two neighbours were themselves rebuilt: a fillet is an
+    operation on the edge *between two features*, so a blend whose neighbours did
+    not both become features has no edge to sit on and is not emitted.
+    """
+    gates: dict[str, str] = {}
+    owner: dict[str, str] = {}
+    for group in groups:
+        for region_hash in group["regions"]:
+            owner[str(region_hash)] = str(group["id"])
+
+    fillets: list[dict[str, Any]] = []
+    for region in regions:
+        if region.fillet is None:
+            continue
+        if not region.accepted or region.fit is None or region.fit.kind != "torus":
+            gates[region.region_hash] = (
+                "fillet-fit-unaccepted: the record proposes a fillet here and the region carries no "
+                "accepted torus fit, so there is no measured blend surface behind the proposal."
+            )
+            continue
+        first, second = region.fillet["between"]
+        owners = sorted({owner.get(first), owner.get(second)} - {None})
+        if owner.get(first) is None or owner.get(second) is None:
+            gates[region.region_hash] = (
+                "fillet-neighbour-unreconstructed: a fillet rounds the edge between two features, "
+                "and this blend's neighbours did not both become features. There is no edge to "
+                "round."
+            )
+            continue
+        if len(owners) != 2:
+            gates[region.region_hash] = (
+                "fillet-neighbour-shared: both of this blend's neighbours are surfaces of the same "
+                f"archetype ({owners[0]}), so the blend lies inside one feature rather than on an "
+                "edge between two."
+            )
+            continue
+        fillets.append(
+            {
+                "id": _archetype_id("fillet", [region.region_hash]),
+                "kind": "fillet",
+                # Neither new-body, join nor cut: a fillet on a convex edge
+                # removes material and one on a concave edge adds it, and the
+                # program does not measure which. Naming it a cut would assert
+                # the half it did not establish.
+                "operation": "finish",
+                "regions": [region.region_hash],
+                "plane": None,
+                "radius": {"parameter": None, "value": region.fillet["radius"]},
+                "between": [str(item) for item in owners],
+                "profile": None,
+                "profile_source": None,
+                "constraints": [],
+                "dependencies": list(owners),
+                "reason": (
+                    "an accepted torus adjacent to exactly two non-torus primaries, both of which "
+                    f"this program rebuilds ({owners[0]}, {owners[1]}). Emitted as a fillet radius "
+                    "on their shared edge -- parametric and editable -- rather than as torus "
+                    "surface geometry, which Fusion has no editable home for."
+                ),
+            }
+        )
+    return fillets, gates
+
+
 def plan_archetypes(
     regions: Sequence[RegionFit],
     frame: DatumFrame,
@@ -726,11 +939,20 @@ def plan_archetypes(
     rather than whichever test happened to run first.  Revolve wins because it
     rebuilds the whole coaxial stack as one feature.
 
-    ``hole`` and ``fillet`` are in the vocabulary and are not assigned here:
-    hole classification needs triangle winding to tell inward from outward, and
-    that evidence is not in the fit record (KTD8, U6).  A cylinder that is
-    really a bore therefore lands in a revolve group or is declared
-    unreconstructed — never guessed into a hole.
+    ``hole`` and ``fillet`` are assigned from evidence U2 measures and this stage
+    reads, never from shape alone.  A cylinder becomes a **hole** only when its
+    ``material_side`` is ``"inside"`` — the mesh's own winding putting solid on
+    the far side of the surface, which is what makes a bore a bore and not a
+    boss.  ``material_side`` is ``None`` on an open or inconsistently wound mesh
+    and on every plane; when it is ``None`` the region stays unreconstructed
+    carrying U2's own reason for the absence.  A **fillet** is assigned only
+    where U2 marked an accepted torus adjacent to exactly two non-torus
+    primaries *and* both neighbours became features here.
+
+    Bores are classified **before** the extrude group chooses its sides, because
+    an inward cylinder piercing a plate is a hole through it, not a wall of it —
+    and because leaving it in the side set puts a second closed loop in the
+    extrude's section, which the profile builder refuses outright.
 
     Everything geometry is stated **in the datum frame**: plane offsets are
     stations along a datum axis measured from the datum origin, and axes are
@@ -749,12 +971,19 @@ def plan_archetypes(
         if _is_coaxial_with(region, origin, z, angle_tolerance_deg, offset_tolerance)
     ]
     turned = [r for r in revolve if r.fit is not None and r.fit.kind in ("cylinder", "cone")]
-    if turned and len(revolve) >= 2:
+    # A solid of revolution needs an outer surface of revolution. When every
+    # turned surface on the axis is *known* to be a bore, the part is not turned
+    # -- it is a body with a hole down it, and revolving the bore's own profile
+    # would build a disc where a plate belongs. The test is on positive evidence
+    # only: a cylinder whose side the record does not state still licenses the
+    # revolve exactly as it did before, because "unknown" is not "inward".
+    outward_turned = [r for r in turned if r.material_side != "inside"]
+    if outward_turned and len(revolve) >= 2:
         members = sorted(region.region_hash for region in revolve)
         claimed.update(members)
         radius = max(
             float(r.fit.parameters["radius"])
-            for r in turned
+            for r in outward_turned
             if r.fit is not None and isinstance(r.fit.parameters.get("radius"), float)
         )
         stations = [_frame_station(frame, z, r.anchor()) for r in revolve if r.anchor() is not None]
@@ -787,6 +1016,18 @@ def plan_archetypes(
         )
 
     remaining = [region for region in accepted if region.region_hash not in claimed]
+    # An inward cylinder is a bore. Held out of the extrude's side set here, so
+    # the walls of a hole are never mistaken for the walls of the part.
+    bores = [
+        region
+        for region in remaining
+        if region.fit is not None
+        and region.fit.kind == "cylinder"
+        and region.material_side == "inside"
+    ]
+    bore_hashes = {region.region_hash for region in bores}
+    remaining = [region for region in remaining if region.region_hash not in bore_hashes]
+
     caps = _extrude_caps(remaining, angle_tolerance_deg)
     if caps is not None:
         low, high, normal = caps
@@ -838,12 +1079,43 @@ def plan_archetypes(
                 }
             )
 
+    holes, hole_gates = _plan_holes(
+        bores, groups, frame, angle_tolerance_deg, offset_tolerance
+    )
+    for group in holes:
+        claimed.update(group["regions"])
+    groups.extend(holes)
+    unmappable.update(hole_gates)
+
+    # Fillets last: they depend on the features they round, so they can only be
+    # judged once every base, cut and hole has claimed its regions.
+    fillets, fillet_gates = _plan_fillets(regions, groups)
+    for group in fillets:
+        claimed.update(group["regions"])
+    groups.extend(fillets)
+    unmappable.update(fillet_gates)
+
     unreconstructed = []
     for region in regions:
         if region.region_hash in claimed:
             continue
         if region.region_hash in unmappable:
             gate = unmappable[region.region_hash]
+        elif (
+            region.fit is not None
+            and region.fit.accepted
+            and region.fit.kind == "cylinder"
+            and region.material_side is None
+        ):
+            # The one gate that must never round down to "no archetype fits". A
+            # cylinder of unknown side is the *bore-or-boss* question left open,
+            # and saying so is what stops the next reader from closing it by eye.
+            gate = (
+                "material-side-unavailable: this is an accepted cylinder, and whether it is a bore "
+                "or a boss turns on which side of it the material lies. The fit record does not "
+                "say, so no hole is claimed here. "
+                + (region.orientation_gate or "No reason was recorded for the absence.")
+            )
         elif region.fit is None:
             gate = "no fit was attempted for this region."
         elif not region.fit.accepted:
@@ -872,7 +1144,12 @@ def plan_archetypes(
 # Which observable U5 should watch when a parameter of each quantity changes.
 # A size-like parameter moves volume; a position-like one moves the centroid and
 # may leave volume untouched, which is why the proof cannot be volume-only.
-OBSERVABLE_FOR_QUANTITY = {"depth": "volume", "radius": "volume", "position": "centroid"}
+OBSERVABLE_FOR_QUANTITY = {
+    "depth": "volume",
+    "radius": "volume",
+    "diameter": "volume",
+    "position": "centroid",
+}
 
 OBSERVABLES = {"volume", "centroid", "bbox"}
 
@@ -956,6 +1233,82 @@ def _user_parameters(
                     if entry["name"] == parameter and group["id"] not in entry["driving_archetypes"]:
                         entry["driving_archetypes"].append(group["id"])
             group["radius"]["parameter"] = parameter
+        elif group["kind"] == "hole":
+            counters["hole"] = counters.get("hole", 0) + 1
+            stem = f"recon_hole_{counters['hole']}"
+            position = group["hole"]["position"]
+            for slot, quantity, target, why in (
+                (
+                    group["hole"]["diameter"],
+                    "diameter",
+                    f"{stem}_dia",
+                    "The bore's diameter sets how much material the cut removes, so a change must "
+                    "move the solid's volume.",
+                ),
+                (
+                    group["extent"],
+                    "depth",
+                    f"{stem}_depth",
+                    "The hole's depth sets how far the cut reaches, so a change must move the "
+                    "solid's volume.",
+                ),
+                (
+                    position["u"],
+                    "position",
+                    f"{stem}_{position['u_axis'].lower()}",
+                    "Sliding the hole across the face moves material from one side of it to the "
+                    "other without changing how much is removed. The centroid moves; the volume "
+                    "need not, and a volume-only proof would call this correct parameter dead.",
+                ),
+                (
+                    position["v"],
+                    "position",
+                    f"{stem}_{position['v_axis'].lower()}",
+                    "Sliding the hole across the face moves material from one side of it to the "
+                    "other without changing how much is removed. The centroid moves; the volume "
+                    "need not, and a volume-only proof would call this correct parameter dead.",
+                ),
+            ):
+                parameters.append(
+                    {
+                        "name": target,
+                        "quantity": quantity,
+                        "unit": units,
+                        "nominal": slot["value"],
+                        "expected_observable": OBSERVABLE_FOR_QUANTITY[quantity],
+                        "observable_rationale": why,
+                        "rationale": (
+                            f"{quantity} of {group['id']}, measured from the accepted cylinder fit "
+                            "whose material_side is 'inside'."
+                        ),
+                        "driving_archetypes": [group["id"]],
+                    }
+                )
+                slot["parameter"] = target
+        elif group["kind"] == "fillet":
+            counters["fillet"] = counters.get("fillet", 0) + 1
+            target = f"recon_fillet_{counters['fillet']}_radius"
+            parameters.append(
+                {
+                    "name": target,
+                    "quantity": "radius",
+                    "unit": units,
+                    "nominal": group["radius"]["value"],
+                    "expected_observable": OBSERVABLE_FOR_QUANTITY["radius"],
+                    "observable_rationale": (
+                        "A fillet radius sets how much material the blend adds or removes at the "
+                        "edge, so a change must move the solid's volume. Which direction it moves "
+                        "is not declared, because this program does not measure whether the edge "
+                        "is convex or concave."
+                    ),
+                    "rationale": (
+                        f"minor radius of the torus fitted to {group['id']}'s blend surface, "
+                        f"rounding the edge between {group['between'][0]} and {group['between'][1]}."
+                    ),
+                    "driving_archetypes": [group["id"]],
+                }
+            )
+            group["radius"]["parameter"] = target
 
     for adoption in adoptions:
         if adoption["target"] != "parameter" or adoption["kind"] not in ("equal_radius", "nominal"):
@@ -1022,7 +1375,7 @@ def _attach_constraints(
 
 def _emission_order(groups: Sequence[Mapping[str, Any]]) -> list[str]:
     """Bases before cuts before finishing, and deterministic within each class."""
-    rank = {"new-body": 0, "join": 1, "cut": 2}
+    rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
     return [
         group["id"]
         for group in sorted(groups, key=lambda g: (rank[g["operation"]], g["id"]))
@@ -1313,6 +1666,15 @@ def build_reconstruction_program(
     )
     _attach_constraints(groups, adoptions)
     parameters = _user_parameters(groups, adoptions, fit_record.units)
+    # Each archetype carries the share of the scan it accounts for. Without it
+    # the coverage account could only subtract regions the *program* left out,
+    # never one the *build* failed to deliver -- and a fillet that was planned
+    # and then skipped would silently keep counting as reconstructed.
+    by_hash = {region.region_hash: region for region in all_regions}
+    for group in groups:
+        group["area_fraction"] = sum(
+            by_hash[h].area for h in group["regions"] if h in by_hash
+        ) / fit_record.total_area
     covered = sum(
         region.area
         for region in all_regions
@@ -1413,9 +1775,23 @@ _ARCHETYPE_FIELDS = {
     "constraints",
     "dependencies",
     "reason",
+    # every kind: the share of the scan's area this archetype accounts for, so a
+    # planned-but-undelivered archetype can be subtracted from coverage by name.
+    "area_fraction",
+    # hole only: the diameter and the in-plane position of its placement point.
+    "hole",
+    # fillet only: the two archetype ids whose shared edge it rounds.
+    "between",
 }
 
-OPERATIONS = {"new-body", "join", "cut"}
+OPERATIONS = {"new-body", "join", "cut", "finish"}
+"""``finish`` is the fillet's operation.
+
+A fillet on a convex edge removes material and one on a concave edge adds it,
+and this program measures which only for the blend surface, not for the edge.
+Calling every fillet a ``cut`` would assert the half it never established, so
+the vocabulary carries a fourth word instead of overloading a third.
+"""
 
 DATUM_PLANES = {"XY", "YZ", "XZ"}
 

@@ -47,6 +47,7 @@ from .mesh_fitting import (
 )
 from .mesh_reconstruction import _source_evidence, require_classification
 from .reconstruction_program import (
+    IN_PLANE_AXES,
     OBSERVABLES,
     _declared_number,
     check_reconstruction_program,
@@ -58,13 +59,16 @@ if TYPE_CHECKING:
 
 PLAN_VERSION = 1
 
-# The archetype kinds this emitter builds.  `hole` and `fillet` are in the
-# program's vocabulary and are *not* built here: U3's planner cannot produce
-# either (its own docstring records that hole classification needs triangle
-# winding the fit record does not carry), so an emitter for them would be code
-# with no producer and no way to test it.  A program that carries one refuses by
-# name rather than being partially built.
-EMITTED_KINDS = {"sketch-extrude", "revolve"}
+# The archetype kinds this emitter builds — the program's whole vocabulary.
+# `hole` and `fillet` joined the other two once U3 gained a producer for them:
+# U2 measures each region's `material_side`, which is the bore-versus-boss
+# evidence hole classification was previously missing, and marks the torus
+# adjacency a fillet needs.
+EMITTED_KINDS = {"sketch-extrude", "revolve", "hole", "fillet"}
+
+# The kinds that own a sketch.  A fillet does not: it names a radius and two
+# features whose shared edge it rounds, and has no profile of its own.
+SKETCHED_KINDS = {"sketch-extrude", "revolve", "hole"}
 
 # Fusion's geometry layer is centimetres; the dump and the program are
 # millimetres.  Every raw coordinate in the plan is converted once, here, and
@@ -80,7 +84,9 @@ UNITS_NOTE = (
 # Which sketch axes each datum plane's local u/v correspond to.  Stated as data
 # rather than left as an implied convention, because a reader of the plan has to
 # be able to check the projection without knowing Fusion's plane orientations.
-SKETCH_AXES = {"XY": ("X", "Y"), "XZ": ("X", "Z"), "YZ": ("Y", "Z")}
+# The planner and the emitter must agree on which datum axis is a sketch's u and
+# which is its v, so there is one definition and this is an alias to it.
+SKETCH_AXES = IN_PLANE_AXES
 
 REBUILD_SPEC_FIELDS = {"component_name", "dump_path", "thresholds", "rationale"}
 
@@ -149,13 +155,17 @@ REBUILD_REFUSAL_ALTERNATIVES = {
         "datum axis. Re-plan the program; do not flip the sign by hand."
     ),
     "profile-ambiguous": (
-        "The section closed more than one loop, so the part has an internal void or a second "
-        "solid at this station. This emitter builds a single-loop profile; declare the extra "
-        "region unreconstructed, or wait for the unit that emits pockets and bores."
+        "The section closed more than one loop, so the part has an internal void or a second solid "
+        "at this station. A bore is the common cause and it has a home: it emits as a hole "
+        "archetype, held out of the extrude's profile. That needs the fit record to say the "
+        "cylinder is inward, which needs a closed, consistently wound mesh -- so check "
+        "orientation.material_side on the region first. Otherwise declare the extra region "
+        "unreconstructed."
     ),
     "archetype-kind-unsupported": (
-        "This emitter builds sketch-extrude and revolve. Re-plan without the unsupported archetype, "
-        "or wait for the unit that emits it."
+        "This emitter builds every kind the program's vocabulary carries -- sketch-extrude, "
+        "revolve, hole and fillet -- so a kind it does not recognise came from a program this "
+        "version of the skill did not plan. Re-plan it with plan-reconstruction."
     ),
     "entity-resolution-ambiguous": (
         "The program's declared value matched no section entity, or matched several. Tighten "
@@ -167,8 +177,8 @@ REBUILD_REFUSAL_ALTERNATIVES = {
         "parameter, or re-plan so the reconstruction's names do not collide."
     ),
     "program-parameter-unbound": (
-        "An archetype's extent or radius names no user parameter, so its dimension would be a magic "
-        "number in the timeline. Re-plan the program."
+        "An archetype's extent, radius, hole diameter or hole position names no user parameter, so "
+        "its dimension would be a magic number in the timeline. Re-plan the program."
     ),
 }
 
@@ -1094,6 +1104,58 @@ def _datum_transform_cm(datum: Mapping[str, Any], dump: MeshDump) -> dict[str, A
     }
 
 
+def _hole_placement(
+    group: Mapping[str, Any], identifier: str, datum_plane: str
+) -> dict[str, Any]:
+    """The hole's placement point and the two dimensions that drive it.
+
+    The point is dimensioned to the *sketch origin*, which is datum geometry and
+    therefore exists independently of any face this build creates.  That is the
+    whole reason hole position survives a rebuild: nothing in the placement
+    references a B-Rep entity whose identity could shuffle (D5).
+    """
+    body = group.get("hole")
+    if not isinstance(body, dict):
+        raise _refuse(
+            "program-schema-violation",
+            f"{identifier} is a hole and carries no hole block, so it names neither a diameter nor "
+            "a position.",
+            {"archetype_id": identifier},
+        )
+    diameter = body.get("diameter") or {}
+    position = body.get("position") or {}
+    u, v = position.get("u") or {}, position.get("v") or {}
+    for label, slot in (("diameter", diameter), ("position.u", u), ("position.v", v)):
+        if not slot.get("parameter"):
+            raise _refuse(
+                "program-parameter-unbound",
+                f"{identifier}'s {label} names no user parameter, so it would be a magic number in "
+                "the timeline.",
+                {"archetype_id": identifier, "field": label},
+            )
+    expected = SKETCH_AXES[datum_plane]
+    declared = (position.get("u_axis"), position.get("v_axis"))
+    if declared != expected:
+        # The point's u/v are stations along named datum axes. Sketching them on
+        # a plane whose in-plane axes are a different pair would place the hole
+        # somewhere else entirely, and no downstream check measures placement.
+        raise _refuse(
+            "program-schema-violation",
+            f"{identifier} positions its hole against datum axes {declared} while sketching on "
+            f"datum {datum_plane}, whose in-plane axes are {expected}.",
+            {"archetype_id": identifier, "declared": list(declared), "expected": list(expected)},
+        )
+    return {
+        "u_cm": float(u["value"]) * MM_TO_CM,
+        "v_cm": float(v["value"]) * MM_TO_CM,
+        "u_parameter": str(u["parameter"]),
+        "v_parameter": str(v["parameter"]),
+        "u_axis": expected[0],
+        "v_axis": expected[1],
+        "diameter_parameter": str(diameter["parameter"]),
+    }
+
+
 def plan_emission(
     program: Mapping[str, Any],
     dump: MeshDump,
@@ -1210,6 +1272,35 @@ def plan_emission(
     steps: list[dict[str, Any]] = []
     for identifier in derived:
         group = by_id[identifier]
+        if group["kind"] == "fillet":
+            radius = group.get("radius") or {}
+            if not radius.get("parameter"):
+                raise _refuse(
+                    "program-parameter-unbound",
+                    f"{identifier} is a fillet whose radius names no user parameter, so its radius "
+                    "would be a magic number in the timeline.",
+                    {"archetype_id": identifier},
+                )
+            between = [str(item) for item in group.get("between") or ()]
+            if len(between) != 2 or any(item not in by_id for item in between):
+                raise _refuse(
+                    "program-schema-violation",
+                    f"{identifier} rounds the edge between {between}, which is not exactly two "
+                    "archetypes this program contains.",
+                    {"archetype_id": identifier, "between": between},
+                )
+            steps.append(
+                {
+                    "archetype_id": identifier,
+                    "kind": "fillet",
+                    "operation": group["operation"],
+                    "feature_name": f"recon_{identifier.replace('-', '_')}",
+                    "radius_parameter": str(radius["parameter"]),
+                    "between": between,
+                }
+            )
+            continue
+
         plane = group["plane"]
         if plane.get("rotation") is not None:
             # Rotated planes are constructible (setByAngle from a datum axis) but
@@ -1243,6 +1334,19 @@ def plan_emission(
                     },
                 )
             entities, evidence = _revolve_profile(group, dump, program["datum"], thresholds)
+        elif group["kind"] == "hole":
+            # A hole's geometry comes from the fitted cylinder, not from a mesh
+            # section: the bore's radius and axis *are* the measurement, and
+            # sectioning to rediscover them would add a second, noisier estimate
+            # of a number the fit already carries with its uncertainty.
+            entities, evidence = [], {
+                "source": "fit-primitive",
+                "note": (
+                    "Diameter and position come from the accepted cylinder fit that made this "
+                    "region a bore, not from a section of the dump. The sketch holds one point and "
+                    "no curves; the hole feature carries the diameter."
+                ),
+            }
         else:
             entities, evidence = _extrude_profile(group, dump, program["datum"], thresholds)
         dimensions, dimension_parameters = _dimension_set(
@@ -1330,11 +1434,13 @@ def plan_emission(
             if not parameter:
                 raise _refuse(
                     "program-parameter-unbound",
-                    f"{identifier} is a sketch-extrude whose distance extent names no user "
+                    f"{identifier} is a {group['kind']} whose distance extent names no user "
                     "parameter, so its depth would be a magic number in the timeline.",
                     {"archetype_id": identifier},
                 )
             step["extent"] = {"kind": "distance", "parameter": parameter}
+        if group["kind"] == "hole":
+            step["placement"] = _hole_placement(group, identifier, plane["datum_plane"])
         steps.append(step)
 
     collisions = sorted(set(manifest_parameter_names) & {row["name"] for row in parameters})
@@ -1597,7 +1703,10 @@ def _profile(sketch, step):
             "to extrude. The plan's entities chained closed host-side; the solver disagreed.",
             {"archetype_id": step["archetype_id"]},
         )
-    best = profiles.item(0)
+    # Seeded from nothing rather than from the first profile: the largest-area
+    # scan below picks the winner outright, and a constant subscript here would
+    # be the one place in this transaction that named geometry by position.
+    best = None
     best_area = None
     for index in range(profiles.count):
         candidate = profiles.item(index)
@@ -1617,6 +1726,82 @@ def _operation(name, missing):
         "cut": "CutFeatureOperation",
     }[name]
     return _probe(enumeration, attribute, missing, "adsk.fusion.FeatureOperations." + attribute)
+
+
+def _place_hole_point(sketch, step, missing):
+    """One sketch point, dimensioned to the sketch origin on both axes.
+
+    Returns the point, or None when an API member is missing. The dimensions are
+    bound to the hole's position parameters, so moving the hole is editing a
+    number rather than dragging geometry.
+    """
+    points = _probe(sketch, "sketchPoints", missing, "Sketch.sketchPoints")
+    dimensions = _probe(sketch, "sketchDimensions", missing, "Sketch.sketchDimensions")
+    origin = _probe(sketch, "originPoint", missing, "Sketch.originPoint")
+    orientations = _probe(
+        adsk.fusion, "DimensionOrientations", missing, "adsk.fusion.DimensionOrientations"
+    )
+    if points is None or dimensions is None or origin is None or orientations is None:
+        return None, []
+    placement = step["placement"]
+    point = points.add(_point(placement["u_cm"], placement["v_cm"]))
+    applied = []
+    for attribute, parameter in (
+        ("HorizontalDimensionOrientation", placement["u_parameter"]),
+        ("VerticalDimensionOrientation", placement["v_parameter"]),
+    ):
+        orientation = _probe(
+            orientations, attribute, missing, "adsk.fusion.DimensionOrientations." + attribute
+        )
+        if orientation is None:
+            return None, []
+        dimension = dimensions.addDistanceDimension(
+            origin, point, orientation, _point(1.0, 1.0)
+        )
+        if not _bind(dimension, parameter, missing):
+            return None, []
+        applied.append({"kind": "hole-position", "parameter": parameter})
+    return point, applied
+
+
+def _feature_faces(feature, label, missing):
+    faces = _probe(feature, "faces", missing, label + ".faces")
+    if faces is None:
+        return None
+    return [faces.item(index) for index in range(faces.count)]
+
+
+def _shared_edges(first, second, missing):
+    """Edges belonging to a face of both features, keyed by temp id.
+
+    Temp ids are the right identity here and nowhere else: the question is which
+    edges two just-created features share *inside this one transaction*, and a
+    temp id is exactly a within-session handle. Nothing about this survives the
+    script and nothing is asked to.
+
+    Both members go through _probe rather than _recorded, because the result is
+    branched on. An absent one means this Fusion cannot answer the question, and
+    the caller turns that into a named skip -- it must never quietly become an
+    empty edge set, which reads identically to "these two features do not touch".
+    """
+    def by_temp_id(faces):
+        out = {}
+        for face in faces:
+            edges = _probe(face, "edges", missing, "BRepFace.edges")
+            if edges is None:
+                return None
+            for index in range(edges.count):
+                edge = edges.item(index)
+                temp_id = _probe(edge, "tempId", missing, "BRepEdge.tempId")
+                if temp_id is None:
+                    return None
+                out[temp_id] = edge
+        return out
+
+    left, right = by_temp_id(first), by_temp_id(second)
+    if left is None or right is None:
+        return None
+    return [left[key] for key in sorted(set(left) & set(right))]
 
 
 def _origin_plane(component, datum_plane, missing):
@@ -1649,6 +1834,111 @@ def _token(entity):
     """An entityToken if this build exposes one. Evidence, never a premise."""
     value = _recorded(entity, "entityToken")
     return None if value is None else str(value)
+
+
+def _build_fillet(component, step, built, created, undo, report, skipped, missing):
+    """Round the edge two built features share, or record why this one was not.
+
+    Fillets are the one archetype that is *individually optional*, and the
+    reason is structural rather than lenient: a fillet is ordered last and
+    nothing depends on it, so a fillet that cannot be placed costs exactly its
+    own region and nothing downstream. Every other archetype carries dependents,
+    which is why every other failure rolls the whole build back.
+
+    Skipping is never silent. Each skip names the archetype, the two features,
+    and what was missing, and the coverage account subtracts the region.
+    """
+    first_id, second_id = step["between"]
+    first, second = built.get(first_id), built.get(second_id)
+    if first is None or second is None:
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "parent-feature-missing",
+                "detail": "this run built no feature for " + (first_id if first is None else second_id),
+            }
+        )
+        return
+    fillets = _probe(component.features, "filletFeatures", missing, "Features.filletFeatures")
+    if fillets is None:
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "fillet-capability",
+                "detail": "this Fusion does not expose " + ", ".join(missing),
+            }
+        )
+        return
+    first_faces = _feature_faces(first, first_id, missing)
+    second_faces = _feature_faces(second, second_id, missing)
+    if first_faces is None or second_faces is None:
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "fillet-capability",
+                "detail": "a parent feature exposes no faces collection: " + ", ".join(missing),
+            }
+        )
+        return
+    edges = _shared_edges(first_faces, second_faces, missing)
+    if edges is None:
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "fillet-capability",
+                "detail": "this Fusion does not expose " + ", ".join(missing),
+            }
+        )
+        return
+    if not edges:
+        # Zero shared edges means the two features do not meet where the fit
+        # said they do. Choosing some other edge to round would be inventing the
+        # geometry the measurement failed to find.
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "entity-resolution-ambiguous",
+                "detail": (
+                    "the two features this blend rounds share no edge, so there is no edge to "
+                    "round. The torus fit says they meet; the built solid says they do not."
+                ),
+            }
+        )
+        return
+    collection = adsk.core.ObjectCollection.create()
+    for edge in edges:
+        collection.add(edge)
+    try:
+        fillet_input = fillets.createInput()
+        fillet_input.addConstantRadiusEdgeSet(
+            collection,
+            adsk.core.ValueInput.createByString(step["radius_parameter"]),
+            True,
+        )
+        feature = fillets.add(fillet_input)
+    except Exception as error:
+        skipped.append(
+            {
+                "archetype_id": step["archetype_id"],
+                "reason": "feature-failed",
+                "detail": str(error),
+            }
+        )
+        return
+    undo.append(("feature", feature))
+    feature.name = step["feature_name"]
+    built[step["archetype_id"]] = feature
+    created.append(
+        {
+            "kind": "fillet",
+            "archetype_id": step["archetype_id"],
+            "feature_name": feature.name,
+            "operation": step["operation"],
+            "edge_count": len(edges),
+            "between": [first_id, second_id],
+            "token": _token(feature),
+        }
+    )
 
 
 def run(context):
@@ -1750,8 +2040,20 @@ def run(context):
             PLAN["thresholds"]["constraint_displacement_tolerance_mm"]["value"]
         )
 
+        # Every feature this run builds, by archetype id. A fillet needs the two
+        # features it rounds, and reads them from here rather than from the
+        # timeline: what the fillet must round is what *this* transaction built.
+        built = {}
+        fillets_skipped = []
+
         for step in PLAN["steps"]:
             missing = []
+            if step["kind"] == "fillet":
+                _build_fillet(
+                    component, step, built, created, undo, report, fillets_skipped, missing
+                )
+                _pump_events(app, design, target_document)
+                continue
             plane_entity = _origin_plane(component, step["plane"]["datum_plane"], missing)
             if plane_entity is None:
                 raise Refused(
@@ -1788,13 +2090,27 @@ def run(context):
             sketch = component.sketches.add(plane_entity)
             undo.append(("sketch", sketch))
             sketch.name = step["sketch_name"]
-            curves = _build_entities(sketch, step, missing)
-            if curves is None:
-                raise Refused(
-                    "rebuild-capability",
-                    "missing sketch geometry API: " + ", ".join(missing),
-                    {"missing": missing},
-                )
+            hole_point = None
+            hole_dimensions = []
+            if step["kind"] == "hole":
+                # A hole's sketch holds one point and no curves: its size is the
+                # fitted diameter carried on the feature, not a profile.
+                hole_point, hole_dimensions = _place_hole_point(sketch, step, missing)
+                curves = []
+                if hole_point is None:
+                    raise Refused(
+                        "rebuild-capability",
+                        "missing sketch placement API: " + ", ".join(missing),
+                        {"missing": missing},
+                    )
+            else:
+                curves = _build_entities(sketch, step, missing)
+                if curves is None:
+                    raise Refused(
+                        "rebuild-capability",
+                        "missing sketch geometry API: " + ", ".join(missing),
+                        {"missing": missing},
+                    )
 
             # The profile as the section measured it, before any snap touched it.
             # Deleting a rejected constraint removes the constraint; whether
@@ -1887,7 +2203,7 @@ def run(context):
                 "entity_count": len(curves),
                 "applied_constraints": applied,
                 "rejected_constraints": rejected,
-                "applied_dimensions": dimensions_applied,
+                "applied_dimensions": dimensions_applied + hole_dimensions,
                 "rejection_budget": budget,
                 "profile_displacement_mm": _worst_displacement(
                     as_sectioned, _sketch_point_positions(sketch)
@@ -1901,17 +2217,40 @@ def run(context):
             }
             report["sketches"].append(sketch_record)
 
-            profile = _profile(sketch, step)
-            operation = _operation(step["operation"], missing)
-            if operation is None:
-                raise Refused(
-                    "rebuild-capability",
-                    "missing feature operation enum: " + ", ".join(missing),
-                    {"missing": missing},
-                )
+            # A hole is positioned by its sketch point and sized by its declared
+            # diameter, so it needs no profile and no operation enum -- a hole
+            # feature is a cut by construction.
+            profile = None if step["kind"] == "hole" else _profile(sketch, step)
+            operation = None
+            if step["kind"] != "hole":
+                operation = _operation(step["operation"], missing)
+                if operation is None:
+                    raise Refused(
+                        "rebuild-capability",
+                        "missing feature operation enum: " + ", ".join(missing),
+                        {"missing": missing},
+                    )
             features = component.features
             try:
-                if step["kind"] == "revolve":
+                if step["kind"] == "hole":
+                    holes = _probe(features, "holeFeatures", missing, "Features.holeFeatures")
+                    if holes is None:
+                        raise Refused(
+                            "rebuild-capability",
+                            "missing hole API: " + ", ".join(missing),
+                            {"missing": missing},
+                        )
+                    feature_input = holes.createSimpleInput(
+                        adsk.core.ValueInput.createByString(
+                            step["placement"]["diameter_parameter"]
+                        )
+                    )
+                    feature_input.setPositionBySketchPoint(hole_point)
+                    feature_input.setDistanceExtent(
+                        adsk.core.ValueInput.createByString(step["extent"]["parameter"])
+                    )
+                    feature = holes.add(feature_input)
+                elif step["kind"] == "revolve":
                     axis = _origin_axis(component, step["axis"]["datum_axis"], missing)
                     if axis is None:
                         raise Refused(
@@ -1942,6 +2281,7 @@ def run(context):
                 )
             undo.append(("feature", feature))
             feature.name = step["feature_name"]
+            built[step["archetype_id"]] = feature
             created.append(
                 {
                     "kind": step["kind"],
@@ -1953,6 +2293,19 @@ def run(context):
                 }
             )
             _pump_events(app, design, target_document)
+
+        report["fillets_skipped"] = fillets_skipped
+        if fillets_skipped:
+            # Loud, and counted against coverage downstream. A fillet the build
+            # could not place is a region that was planned and not delivered,
+            # and a report that stayed quiet about it would let the coverage
+            # fraction claim a feature nobody built.
+            report["fillets_skipped_note"] = (
+                "Fillets are individually optional: one whose edge set could not be resolved is "
+                "skipped and named here rather than failing the whole rebuild. Each skipped fillet "
+                "is an archetype the program declared and this run did not deliver, and the "
+                "coverage account subtracts its region."
+            )
 
         health = _timeline_health(design)
         report["timeline"] = health

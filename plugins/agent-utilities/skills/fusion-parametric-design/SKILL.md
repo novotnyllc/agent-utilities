@@ -296,6 +296,18 @@ Then prove the result. `designType == ParametricDesignType` establishes nothing 
   --editability-report build/editability-report.json --editability-nonce "$NONCE"
 ```
 
+**Capture watertight, or holes are off the table.** A cylinder becomes a `hole` only when the fit record says its `orientation.material_side` is `"inside"` — the mesh's own winding putting solid on the far side of the surface. That measurement needs a closed, consistently wound mesh; on an open one it is `null`, and a cylinder of unknown side is left unreconstructed under `material-side-unavailable` rather than guessed into a bore. Worth knowing at capture time, while it is still fixable, rather than four commands later.
+
+**Finish with the coverage account, and read the label.** `reconstruction-coverage` composes the fit record, the program, the rebuild report and the editability verdict into one statement of what was rebuilt and what was not, labelled `parametric-full`, `parametric-partial` or `reconstruction-refused`. `parametric-partial` is a **success** — part of the scan stands as editable features, the rest is listed with the gate that stopped it, and the source mesh stays in the document as reference geometry over the rebuild. It has its own name precisely so it is never abbreviated to "reconstructed". The delivered fraction subtracts every archetype the build did not deliver, including a fillet that was planned and then skipped, so it can only ever understate.
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" reconstruction-coverage build/program.json \
+  --fit-record build/fit-record.json --rebuild-report build/rebuild-report.json \
+  --editability-verdict build/editability-verdict.json -o build/coverage.json
+```
+
+The end-to-end procedure against a live Fusion — every command, what to look at in each report, and what a failure at each stage means — is `docs/live-fusion-acceptance.md` §13.
+
 When fit depends on an irregular scan, create a small `VAL__` coupon containing only the critical mating profile before committing to the full print.
 
 ## 11. Verify numerically after every meaningful change
@@ -450,6 +462,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" replan-without <program.json> --refusal <refusal-report.json> [-o program-2.json]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-editability <manifest> --rebuild-record <rebuild-report.json> --editability-spec <editability.json> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" check-editability --rebuild-record <rebuild-report.json> --editability-report <report.json> --editability-nonce <nonce>
+"$SKILL_DIR/scripts/fusion-design" reconstruction-coverage <program.json> [--fit-record <fit.json>] [--rebuild-report <rebuild-report.json>] [--editability-verdict <verdict.json>] [-o account.json]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]

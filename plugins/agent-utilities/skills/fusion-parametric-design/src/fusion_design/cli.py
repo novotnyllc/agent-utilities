@@ -18,6 +18,7 @@ from .export_handoff import (
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .mesh_convert import emit_mesh_convert_script
 from .mesh_datum import ReconstructionRefused, parse_fit_record
+from .reconstruction_coverage import compose_coverage, format_coverage
 from .reconstruction_program import build_reconstruction_program
 from .mesh_deviation import emit_mesh_deviation_script
 from .mesh_dump import read_mesh_dump
@@ -329,6 +330,36 @@ def _cmd_check_editability(args: argparse.Namespace) -> int:
     )
     print(json.dumps(verdict, indent=2, sort_keys=True))
     return 0 if verdict["ok"] else 2
+
+
+def _cmd_reconstruction_coverage(args: argparse.Namespace) -> int:
+    named_paths = [("program", args.program)]
+    for name, value in (
+        ("fit-record", args.fit_record),
+        ("rebuild-report", args.rebuild_report),
+        ("editability-verdict", args.editability_verdict),
+        ("output", args.output),
+    ):
+        if value:
+            named_paths.append((name, value))
+    _validate_named_paths(named_paths)
+
+    def read(path: str | None) -> dict | None:
+        return None if not path else json.loads(Path(path).read_text(encoding="utf-8"))
+
+    account = compose_coverage(
+        load_program(args.program),
+        fit_record=read(args.fit_record),
+        rebuild_report=read(args.rebuild_report),
+        editability_verdict=read(args.editability_verdict),
+    )
+    _write_output(json.dumps(account, indent=2, sort_keys=True), args.output)
+    # The prose goes to stderr so the JSON stays pipeable, and it goes out on
+    # every run: a partial reconstruction that is only visible to a reader who
+    # parsed the JSON is a partial reconstruction that gets reported as a
+    # success.
+    print(format_coverage(account), file=sys.stderr)
+    return 0 if account["label"] != "reconstruction-refused" else 2
 
 
 def _cmd_replan_without(args: argparse.Namespace) -> int:
@@ -805,6 +836,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="The nonce emit-mesh-editability printed for the script that produced this report.",
     )
     check_editability.set_defaults(handler=_cmd_check_editability)
+
+    coverage = subparsers.add_parser(
+        "reconstruction-coverage",
+        help=(
+            "Compose the fit record, the program, the rebuild report and the editability verdict "
+            "into one account of what was reconstructed and what was not, with the label "
+            "parametric-full, parametric-partial or reconstruction-refused."
+        ),
+    )
+    coverage.add_argument("program")
+    coverage.add_argument(
+        "--fit-record",
+        help=(
+            "Path to the saved fit record. Optional, and its absence is reported rather than "
+            "read as full coverage."
+        ),
+    )
+    coverage.add_argument(
+        "--rebuild-report",
+        help="Path to the saved rebuild report. Without it nothing has been built and the label says so.",
+    )
+    coverage.add_argument(
+        "--editability-verdict", help="Path to the saved check-editability verdict."
+    )
+    coverage.add_argument("-o", "--output")
+    coverage.set_defaults(handler=_cmd_reconstruction_coverage)
 
     replan = subparsers.add_parser(
         "replan-without",

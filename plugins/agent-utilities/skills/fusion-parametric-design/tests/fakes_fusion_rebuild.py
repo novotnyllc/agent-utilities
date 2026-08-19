@@ -154,6 +154,11 @@ class FakeSketchDimensions:
     def addOffsetDimension(self, curve, other, text):
         return self._add("offset", curve)
 
+    def addDistanceDimension(self, first, second, orientation, text):
+        handle = FakeDimension("distance-" + str(orientation), FakeParameter(""))
+        self.applied.append(handle)
+        return handle
+
     def _add(self, kind, curve):
         self.sketch._on_constraint("dimension:" + kind, (curve,))
         handle = FakeDimension(kind, FakeParameter(""))
@@ -191,7 +196,15 @@ class FakeSketch:
 
     @property
     def sketchPoints(self):
-        return FakeList(self.points)
+        sketch = self
+
+        class Points(FakeList):
+            def add(self, point):
+                created = FakeSketchPoint(point.x, point.y)
+                sketch.points.append(created)
+                return created
+
+        return Points(self.points)
 
     @property
     def profiles(self):
@@ -234,6 +247,18 @@ class FakeFeature:
         self.entityToken = f"token-{kind}-{id(self)}"
         self.errorOrWarningMessage = ""
         self.healthy = True
+        # Each feature owns two faces. The edge ids overlap between consecutive
+        # features by default, which is what gives a fillet an edge to find.
+        edge_ids = design.behaviour.get("feature_edge_ids", {}).get(kind)
+        if edge_ids is None:
+            edge_ids = [1, 2, 3]
+        self._faces = [FakeFace(edge_ids), FakeFace(edge_ids)]
+
+    @property
+    def faces(self):
+        if self.design.behaviour.get("no_feature_faces"):
+            raise AttributeError("faces")
+        return FakeList(self._faces)
 
     def deleteMe(self):
         self.isValid = False
@@ -241,6 +266,45 @@ class FakeFeature:
             item for item in self.design.timeline_items if item.entity is not self
         ]
         return True
+
+
+class FakeEdge:
+    def __init__(self, temp_id):
+        self.tempId = temp_id
+        self.entityToken = f"token-edge-{temp_id}"
+
+
+class FakeFace:
+    def __init__(self, edges):
+        self._edges = [FakeEdge(temp_id) for temp_id in edges]
+        self.entityToken = f"token-face-{id(self)}"
+
+    @property
+    def edges(self):
+        return FakeList(self._edges)
+
+
+class FakeHoleInput:
+    """Hole inputs differ from extrude inputs: setDistanceExtent takes one value."""
+
+    def __init__(self, diameter):
+        self.diameter = diameter
+        self.point = None
+        self.extent = None
+
+    def setPositionBySketchPoint(self, point):
+        self.point = point
+
+    def setDistanceExtent(self, value):
+        self.extent = value
+
+
+class FakeFilletInput:
+    def __init__(self):
+        self.edge_sets = []
+
+    def addConstantRadiusEdgeSet(self, edges, radius, tangent_chain):
+        self.edge_sets.append((edges, radius, tangent_chain))
 
 
 class FakeFeatureInput:
@@ -275,6 +339,16 @@ class FakeFeatureCollection:
             FakeBody(design, f"Body{len(self.component.bodies) + 1}")
         )
         return feature
+
+
+class FakeHoleFeatures(FakeFeatureCollection):
+    def createSimpleInput(self, diameter):
+        return FakeHoleInput(diameter)
+
+
+class FakeFilletFeatures(FakeFeatureCollection):
+    def createInput(self):
+        return FakeFilletInput()
 
 
 class FakeBody:
@@ -339,6 +413,8 @@ class FakeComponent:
         self.features = SimpleNamespace(
             extrudeFeatures=FakeFeatureCollection(self, "extrude", "adsk::fusion::ExtrudeFeature"),
             revolveFeatures=FakeFeatureCollection(self, "revolve", "adsk::fusion::RevolveFeature"),
+            holeFeatures=FakeHoleFeatures(self, "hole", "adsk::fusion::HoleFeature"),
+            filletFeatures=FakeFilletFeatures(self, "fillet", "adsk::fusion::FilletFeature"),
         )
 
     @property
@@ -512,6 +588,12 @@ class FakeDesign:
         return self.root_occurrences
 
 
+class _FakeObjectCollection(list):
+    def add(self, item):
+        self.append(item)
+        return True
+
+
 def _patch_occurrences(design):
     """Make ``design.rootComponent.occurrences`` the design's own collection."""
     component = design.rootComponent
@@ -554,6 +636,11 @@ def load_transaction(source: str, design, document_name: str, on_events=None) ->
     fusion.BoundingBoxEntityTypes = SimpleNamespace(AllEntitiesBoundingBoxEntityType="all")
     core.ValueInput = SimpleNamespace(createByString=lambda expression: expression)
     core.Point3D = SimpleNamespace(create=lambda x, y, z: FakePoint(x, y, z))
+    core.ObjectCollection = SimpleNamespace(create=lambda: _FakeObjectCollection())
+    fusion.DimensionOrientations = SimpleNamespace(
+        HorizontalDimensionOrientation="horizontal",
+        VerticalDimensionOrientation="vertical",
+    )
     core.Matrix3D = SimpleNamespace(
         create=lambda: SimpleNamespace(setWithArray=lambda values: True, asArray=lambda: [])
     )

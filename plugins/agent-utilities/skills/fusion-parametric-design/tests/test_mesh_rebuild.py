@@ -36,6 +36,7 @@ import fixtures_rebuild as fx
 from test_mesh_reconstruction import _manifest, request
 from test_mesh_source import mesh_source
 from fusion_design.mesh_reconstruction import classify
+from fusion_design.reconstruction_program import ARCHETYPE_KINDS
 
 
 NONCE = "0123456789abcdef0123456789abcdef"
@@ -234,7 +235,10 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual("profile-not-found", caught.exception.reason)
 
 
-    def test_an_unsupported_archetype_kind_refuses_by_name(self):
+    def test_a_hole_archetype_missing_its_hole_block_refuses_by_name(self):
+        # This unit builds holes now. What it will not do is read an archetype
+        # labelled `hole` that carries no diameter and no position and guess the
+        # two numbers that would make it one.
         hole = dict(fx.extrude_archetype(identifier="hole-cccccccccccc"), kind="hole")
         program = fx.program(
             self.dump.sha256,
@@ -254,8 +258,9 @@ class PlannerTests(unittest.TestCase):
         )
         with self.assertRaises(ReconstructionRefused) as caught:
             plan_emission(program, self.dump, self.spec)
-        self.assertEqual("archetype-kind-unsupported", caught.exception.reason)
-        self.assertIn("hole-cccccccccccc", caught.exception.detail["archetype_ids"])
+        self.assertEqual("program-schema-violation", caught.exception.reason)
+        self.assertEqual("hole-cccccccccccc", caught.exception.detail["archetype_id"])
+        self.assertIn("no hole block", str(caught.exception))
 
     def test_a_shuffled_declared_order_refuses(self):
         first = fx.extrude_archetype(identifier="sketch-extrude-aaaaaaaaaaaa")
@@ -547,8 +552,24 @@ class EmittedSourceTests(unittest.TestCase):
         self.assertNotIn("designType", self.source)
 
     def test_no_positional_index_into_a_body_face_or_edge_list(self):
-        for banned in ("body.faces[", ".faces.item(", ".edges.item("):
+        # The rule is about *identity*, not about iteration. Selecting a face or
+        # an edge by a fixed position is the classic trap -- indices shuffle on
+        # rebuild and the parameter silently binds to different geometry.
+        # Enumerating a feature-owned collection and matching each member on its
+        # own attributes is the sanctioned pattern (D5) and is how the fillet
+        # finds the edges its two parents share, so the ban is written against
+        # constant subscripts rather than against `item(` as a string.
+        import re
+
+        for banned in ("body.faces[", "body.edges["):
             self.assertNotIn(banned, self.transaction, banned)
+        constant_index = re.findall(r"\.item\(\s*\d+\s*\)", self.transaction)
+        self.assertEqual([], constant_index, constant_index)
+        # And every `item(` that survives is driven by a range over the
+        # collection's own count, never by a remembered number.
+        for line in self.transaction.splitlines():
+            if ".item(" in line:
+                self.assertNotIn("stored_index", line, line)
 
     def test_every_capability_probe_refuses_rather_than_defaulting(self):
         # `getattr(x, name, None)` whose result is later compared turns
@@ -658,8 +679,10 @@ class TransactionBehaviourTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def emit(self, **spec_overrides):
-        program = fx.program(self.dump.sha256, manifest_sha256=_manifest_hash(self.manifest))
+    def emit(self, program=None, **spec_overrides):
+        program = program if program is not None else fx.program(
+            self.dump.sha256, manifest_sha256=_manifest_hash(self.manifest)
+        )
         return emit_mesh_rebuild_script(
             self.manifest,
             classification_record(),
@@ -668,6 +691,118 @@ class TransactionBehaviourTests(unittest.TestCase):
             fx.rebuild_spec(self.dump_path, **spec_overrides),
             NONCE,
         )
+
+    def plate_with_hole(self, extra=()):
+        archetypes = [fx.extrude_archetype(), fx.hole_archetype(), *extra]
+        return fx.program(
+            self.dump.sha256,
+            manifest_sha256=_manifest_hash(self.manifest),
+            archetypes=archetypes,
+        )
+
+    def test_a_hole_builds_a_cut_from_a_placement_point_dimensioned_to_the_origin(self):
+        design = fakes.make_design()
+        report, error = run_transaction(self.emit(self.plate_with_hole()), design, self.document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        kinds = [entry["kind"] for entry in report["created"]]
+        self.assertEqual(
+            ["component", "construction-plane", "sketch-extrude", "construction-plane", "hole"],
+            kinds,
+        )
+        hole_sketch = report["sketches"][1]
+        # No curves: a hole's size is the fitted diameter carried on the
+        # feature, and its sketch holds only the point that positions it.
+        self.assertEqual(0, hole_sketch["entity_count"])
+        self.assertEqual(
+            ["recon_hole_1_x", "recon_hole_1_y"],
+            sorted(
+                entry["parameter"]
+                for entry in hole_sketch["applied_dimensions"]
+                if entry["kind"] == "hole-position"
+            ),
+        )
+        # Every number the hole is built from is a named parameter.
+        names = {row["name"] for row in report["user_parameters"]}
+        self.assertLessEqual(
+            {"recon_hole_1_dia", "recon_hole_1_depth", "recon_hole_1_x", "recon_hole_1_y"}, names
+        )
+
+    def test_a_hole_position_parameter_declares_the_centroid_not_the_volume(self):
+        design = fakes.make_design()
+        report, _ = run_transaction(self.emit(self.plate_with_hole()), design, self.document)
+        by_name = {row["name"]: row for row in report["user_parameters"]}
+        # The D7 generalisation, carried end to end: sliding a hole across a
+        # face need not change the volume at all, so a volume-only proof would
+        # brand this correct parameter inert.
+        self.assertEqual("centroid", by_name["recon_hole_1_x"]["expected_observable"])
+        self.assertEqual("volume", by_name["recon_hole_1_dia"]["expected_observable"])
+
+    def test_a_fillet_rounds_the_edge_its_two_parents_share(self):
+        design = fakes.make_design()
+        program = self.plate_with_hole(extra=[fx.fillet_archetype()])
+        report, error = run_transaction(self.emit(program), design, self.document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        fillet = [entry for entry in report["created"] if entry["kind"] == "fillet"]
+        self.assertEqual(1, len(fillet))
+        self.assertEqual(3, fillet[0]["edge_count"])
+        self.assertEqual(
+            ["hole-cccccccccccc", "sketch-extrude-aaaaaaaaaaaa"], sorted(fillet[0]["between"])
+        )
+        self.assertEqual([], report["fillets_skipped"])
+
+    def test_a_fillet_is_ordered_last_and_never_before_what_it_rounds(self):
+        program = self.plate_with_hole(extra=[fx.fillet_archetype()])
+        self.assertEqual(
+            ["sketch-extrude-aaaaaaaaaaaa", "hole-cccccccccccc", "fillet-eeeeeeeeeeee"],
+            program["order"],
+        )
+
+    def test_a_fillet_whose_parents_share_no_edge_is_skipped_by_name_not_refused(self):
+        # Fillets are individually optional because nothing depends on them.
+        # Skipping is loud: the archetype, the reason, and the coverage
+        # consequence are all recorded.
+        design = fakes.make_design(
+            behaviour={"feature_edge_ids": {"extrude": [1, 2], "hole": [7, 8]}}
+        )
+        program = self.plate_with_hole(extra=[fx.fillet_archetype()])
+        report, error = run_transaction(self.emit(program), design, self.document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual([], [e for e in report["created"] if e["kind"] == "fillet"])
+        skipped = report["fillets_skipped"]
+        self.assertEqual(1, len(skipped))
+        self.assertEqual("fillet-eeeeeeeeeeee", skipped[0]["archetype_id"])
+        self.assertEqual("entity-resolution-ambiguous", skipped[0]["reason"])
+        self.assertIn("share no edge", skipped[0]["detail"])
+        self.assertIn("coverage account subtracts", report["fillets_skipped_note"])
+
+    def test_a_fusion_without_the_fillet_apis_skips_by_name_and_still_builds(self):
+        # An absent API member must never read as "these features share no
+        # edges": one is a capability answer and the other is a geometry
+        # answer, and they call for different fixes.
+        design = fakes.make_design(behaviour={"no_feature_faces": True})
+        program = self.plate_with_hole(extra=[fx.fillet_archetype()])
+        report, error = run_transaction(self.emit(program), design, self.document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual("fillet-capability", report["fillets_skipped"][0]["reason"])
+        # The extrude and the hole still stand: a fillet carries no dependents.
+        self.assertEqual(
+            ["sketch-extrude", "hole"],
+            [e["kind"] for e in report["created"] if e["kind"] in ("sketch-extrude", "hole")],
+        )
+
+    def test_a_hole_that_fails_to_build_rolls_the_whole_run_back(self):
+        # A hole is not optional: something may depend on it, so its failure is
+        # the ordinary refusal-and-rollback rather than a skip.
+        design = fakes.make_design(behaviour={"raise_on_feature": 1})
+        report, error = run_transaction(self.emit(self.plate_with_hole()), design, self.document)
+        self.assertIsNotNone(error)
+        self.assertEqual(["feature-failed"], report["failures"])
+        self.assertEqual([], report["created"])
+        self.assertEqual("rolled-back", report["document_state"])
 
     def test_a_clean_run_builds_the_component_and_reports_what_it_created(self):
         design = fakes.make_design()
@@ -1156,7 +1291,7 @@ class CliTests(unittest.TestCase):
             ]
         )
         self.assertEqual(2, code)
-        self.assertEqual("archetype-kind-unsupported", json.loads(stdout)["refusal"])
+        self.assertEqual("program-schema-violation", json.loads(stdout)["refusal"])
 
     def test_replan_without_writes_a_smaller_program_that_still_plans(self):
         second = fx.extrude_archetype(
@@ -1192,11 +1327,14 @@ class CliTests(unittest.TestCase):
 
 
 class VocabularyTests(unittest.TestCase):
-    def test_this_unit_emits_only_the_kinds_a_program_can_actually_carry(self):
-        # `hole` and `fillet` are in the program vocabulary and U3's planner
-        # never assigns either, so an emitter for them would have no producer to
-        # test against. They refuse by name rather than being half-built.
-        self.assertEqual({"sketch-extrude", "revolve"}, EMITTED_KINDS)
+    def test_this_unit_emits_every_kind_a_program_can_carry(self):
+        # The gap closed in U6: `hole` and `fillet` were unassignable while the
+        # planner had no bore-versus-boss evidence to read. It reads
+        # `orientation.material_side` now, so every kind in the program's
+        # vocabulary has a producer, and this emitter builds all of them. A kind
+        # in one set and not the other would be either a dead archetype or an
+        # untestable emitter.
+        self.assertEqual(ARCHETYPE_KINDS, EMITTED_KINDS)
 
 
 if __name__ == "__main__":

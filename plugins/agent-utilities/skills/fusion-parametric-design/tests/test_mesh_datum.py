@@ -33,6 +33,67 @@ class ParseFitRecordTests(unittest.TestCase):
         self.assertEqual(boss.axial_span, 8.0)
         self.assertEqual(boss.sigma("radius"), 0.005)
 
+    def test_reads_the_material_side_that_tells_a_bore_from_a_boss(self) -> None:
+        record = fx.turned_record()
+        fx.oriented(record["regions"][0], "inside")
+        boss = next(
+            r
+            for r in parse_fit_record(record).regions
+            if r.region_hash == fx.region_hash("boss")
+        )
+        self.assertEqual(boss.material_side, "inside")
+        self.assertIsNone(boss.orientation_gate)
+
+    def test_an_absent_orientation_block_fails_closed_with_a_named_reason(self) -> None:
+        # An older fit record simply has no orientation block. That is not
+        # malformed -- but it must never read as "outside" or as any answer at
+        # all, because the consumer decides bore-versus-boss on this field.
+        boss = next(
+            r
+            for r in parse_fit_record(fx.turned_record()).regions
+            if r.region_hash == fx.region_hash("boss")
+        )
+        self.assertIsNone(boss.material_side)
+        self.assertIn("no orientation block", boss.orientation_gate)
+
+    def test_an_open_mesh_carries_u2s_own_reason_for_the_absence(self) -> None:
+        record = fx.turned_record()
+        fx.oriented(record["regions"][0], None)
+        boss = next(
+            r
+            for r in parse_fit_record(record).regions
+            if r.region_hash == fx.region_hash("boss")
+        )
+        self.assertIsNone(boss.material_side)
+        self.assertIn("not closed and consistently wound", boss.orientation_gate)
+
+    def test_a_material_side_outside_the_vocabulary_refuses(self) -> None:
+        record = fx.turned_record()
+        record["regions"][0]["orientation"] = {"material_side": "left"}
+        with self.assertRaises(ReconstructionRefused) as caught:
+            parse_fit_record(record)
+        self.assertEqual(caught.exception.reason, "fit-record-malformed")
+        self.assertIn("material_side", caught.exception.message)
+
+    def test_a_fillet_flag_with_no_evidence_refuses_rather_than_reading_as_a_fillet(self) -> None:
+        record = fx.turned_record()
+        record["regions"][0]["fillet_candidate"] = True
+        with self.assertRaises(ReconstructionRefused) as caught:
+            parse_fit_record(record)
+        self.assertIn("fillet", caught.exception.message)
+
+    def test_a_fillet_between_other_than_two_regions_refuses(self) -> None:
+        record = fx.record(
+            [
+                fx.plane("z-lo", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 200.0),
+                fx.torus("blend", 5.0, 1.0, 30.0, between=["z-lo"]),
+            ]
+        )
+        record["regions"][1]["fillet"]["between"] = [fx.region_hash("z-lo")]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            parse_fit_record(record)
+        self.assertIn("exactly two region hashes", caught.exception.message)
+
     def test_extra_upstream_keys_are_ignored_not_refused(self) -> None:
         record = fx.box_record()
         record["segmentation"] = {"source": "crease-growing"}

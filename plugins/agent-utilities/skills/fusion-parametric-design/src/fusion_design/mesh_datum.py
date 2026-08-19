@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import re
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .mesh_fitting import (
     PRIMITIVE_KINDS,
@@ -91,6 +91,13 @@ FIT_UNCERTAINTY_KEYS = {
     "cylinder": ("axis_direction_deg", "axis_point", "radius"),
     "cone": ("axis_direction_deg", "apex", "half_angle_deg"),
     "sphere": ("center", "radius"),
+    # A torus is never a licensable subject -- it appears in no entry of
+    # LICENSE_SIGMAS, so no relationship is ever measured against one. The only
+    # number this pipeline reads from a torus is its minor radius, which becomes
+    # a fillet's radius parameter, so that is the only sigma it must carry.
+    # Listed rather than omitted because an omitted kind raised KeyError here,
+    # which is a crash where a named refusal belongs.
+    "torus": ("minor_radius",),
 }
 
 TOLERANCE_BASES = {"uncertainty", "declared-absolute"}
@@ -186,6 +193,18 @@ class RegionFit:
     fit: PrimitiveFit | None
     axial_span: float | None
     uncertainty: dict[str, float] | None
+    # Which side of this surface the solid is on: ``"inside"`` for a bore,
+    # ``"outside"`` for a boss, ``None`` when the mesh's own winding does not
+    # license the claim.  This is the bore-versus-boss discriminator, and it is
+    # carried rather than re-derived because only U2 has the triangles.
+    material_side: str | None = None
+    # Why ``material_side`` is ``None``, in U2's own words.  A gate a caller can
+    # print beats a caller inventing one, and an unreconstructed region that
+    # names "the mesh is not closed" is actionable where "no hole here" is not.
+    orientation_gate: str | None = None
+    # U2's fillet proposal for this region: ``{"radius", "between"}`` when an
+    # accepted torus is adjacent to exactly two non-torus primaries, else None.
+    fillet: dict[str, Any] | None = None
 
     @property
     def accepted(self) -> bool:
@@ -225,6 +244,9 @@ class RegionFit:
             fit=fit,
             axial_span=self.axial_span,
             uncertainty=self.uncertainty,
+            material_side=self.material_side,
+            orientation_gate=self.orientation_gate,
+            fillet=self.fillet,
         )
 
 
@@ -299,6 +321,74 @@ def _parse_uncertainty(raw: Any, path: str) -> dict[str, float] | None:
     return out
 
 
+MATERIAL_SIDES = {"inside", "outside"}
+
+_NO_ORIENTATION = (
+    "the fit record carries no orientation block for this region, so nothing in it says which "
+    "side of this surface the material is on"
+)
+
+
+def _parse_orientation(raw: Any, path: str) -> tuple[str | None, str | None]:
+    """U2's material-side evidence, or the named reason there is none.
+
+    Absent is not malformed: the orientation block is a later addition to the fit
+    record and an older record simply does not carry one.  Absent yields ``None``
+    with a gate naming the absence, which fails closed — a region whose side is
+    unknown can never be classified a hole.  *Present and out of vocabulary* is a
+    different thing and refuses, because an unrecognised value read past would be
+    an answer nobody gave.
+    """
+    if raw is None:
+        return None, _NO_ORIENTATION
+    if not isinstance(raw, dict):
+        raise _malformed(path, "an object when present")
+    side = raw.get("material_side")
+    if side is None:
+        reason = raw.get("unavailable_reason")
+        if reason is not None and not isinstance(reason, str):
+            raise _malformed(f"{path}.unavailable_reason", "a string when present")
+        return None, reason or _NO_ORIENTATION
+    if side not in MATERIAL_SIDES:
+        raise _malformed(
+            f"{path}.material_side", f"one of {', '.join(sorted(MATERIAL_SIDES))}, or null"
+        )
+    return str(side), None
+
+
+def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | None:
+    """U2's fillet proposal, kept only when it arrives complete.
+
+    ``fillet_candidate`` is the flag and ``fillet`` is the evidence.  A flag with
+    no evidence refuses rather than reading as a fillet of unknown radius between
+    unknown neighbours, which is precisely the guess this stage exists not to
+    make.
+    """
+    flag = raw_region.get("fillet_candidate")
+    if flag is None or flag is False:
+        return None
+    if flag is not True:
+        raise _malformed(f"{path}.fillet_candidate", "a boolean when present")
+    body = raw_region.get("fillet")
+    if not isinstance(body, dict):
+        raise _malformed(f"{path}.fillet", "an object whenever fillet_candidate is true")
+    radius = _number(body.get("radius"))
+    if radius is None or radius <= 0.0:
+        raise _malformed(f"{path}.fillet.radius", "a positive number")
+    between = body.get("between")
+    if (
+        not isinstance(between, list)
+        or len(between) != 2
+        or not all(isinstance(item, str) and _HEX64_RE.match(item) for item in between)
+    ):
+        raise _malformed(
+            f"{path}.fillet.between",
+            "exactly two region hashes; a blend that touches one region, or three, is not the "
+            "two-neighbour adjacency a constant-radius fillet edge is",
+        )
+    return {"radius": radius, "between": sorted(str(item) for item in between)}
+
+
 def parse_fit_record(raw: Any) -> FitRecord:
     """Read U2's fit record, refusing rather than defaulting a missing field.
 
@@ -356,6 +446,9 @@ def parse_fit_record(raw: Any) -> FitRecord:
             raw_fit.get("uncertainty") if isinstance(raw_fit, dict) else None,
             f"{path}.fit.uncertainty",
         )
+        material_side, orientation_gate = _parse_orientation(
+            raw_region.get("orientation"), f"{path}.orientation"
+        )
         regions.append(
             RegionFit(
                 region_hash=region_hash,
@@ -364,6 +457,9 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 fit=fit,
                 axial_span=axial_span,
                 uncertainty=uncertainty,
+                material_side=material_side,
+                orientation_gate=orientation_gate,
+                fillet=_parse_fillet(raw_region, f"{path}"),
             )
         )
     return FitRecord(

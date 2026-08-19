@@ -239,6 +239,78 @@ emission: a proof that exercises nothing proves nothing. A hand-written report
 cannot satisfy the gate: the nonce exists only inside the source that emission
 generated.
 
+## Reconstruction coverage
+
+`reconstruction-coverage` composes the fit record, the program, the rebuild
+report and the editability verdict into one account, and returns a label from a
+closed set: `parametric-full`, `parametric-partial`, `reconstruction-refused`.
+
+What the account asserts:
+
+- `delivered_area_fraction` — the program's own coverage, **minus every
+  archetype the build did not deliver**. It is the fraction of the scan's
+  surface area now standing as editable Fusion features, and it is never rounded
+  up. A fillet that was planned and then skipped subtracts its region even
+  though the build succeeded; a refused rebuild delivers zero however much was
+  planned.
+- `unreconstructed[]` — every region the program declined, with its gate, plus
+  every archetype the build did not deliver, with its reason.
+- `stages[]` — the four stages separately, so a reader can see *where* area was
+  lost rather than only that it was.
+
+What the account does **not** assert, stated in the account itself:
+
+- That what was rebuilt is dimensionally correct. That is the deviation
+  verdict's question and it is a separate instrument.
+- That the recovered feature tree is the original designer's. It is *a*
+  parameterization consistent with the measured surface, never *the* original.
+- That any parameter drives a rebuild unless the editability proof exercised it.
+  Coverage and editability are different axes and are carried side by side
+  rather than folded into one number: a fully covered model whose parameters are
+  all inert is not a better outcome than a partial model that edits.
+- Anything at all when an input is absent. A missing fit record is reported
+  missing, never read as full coverage; a missing rebuild report means nothing
+  was built, and a plan is not a model.
+
+The absent-input case is the one worth watching, because it is where an
+optimistic reading is most tempting. Each absent stage carries an
+`unavailable_reason` naming what is not known, and the label falls to
+`reconstruction-refused` when no build ran.
+
+## What the reconstruction pipeline has not established against live Fusion
+
+Everything above is exercised offline against the stubbed-`adsk` harness, which
+proves the decision surface and proves nothing whatever about Fusion's own
+behaviour. `docs/live-fusion-acceptance.md` §13 is the procedure that would
+settle these; until a run is recorded against a named Fusion version each is an
+assumption and is labelled one here.
+
+This list **extends** the emission and editability sections above rather than
+restating them: those already cover the sketch solver, offset construction
+planes, parameter binding, feature-owned face collections, reverse-order
+rollback, `entityToken` stability and the physical-properties noise floor. What
+this unit adds:
+
+| Not established offline | Established by |
+| --- | --- |
+| That `HoleFeatures.createSimpleInput` with `setPositionBySketchPoint` and `setDistanceExtent` places a hole where the fitted bore is | a live run of a program carrying a hole archetype |
+| That a hole's two origin-anchored position dimensions bind to user parameters and move the hole when edited | the editability loop over `recon_hole_*_x` / `_y`, whose declared observable is the centroid |
+| That `FilletFeatures.addConstantRadiusEdgeSet` accepts an edge set gathered from two features' shared faces | a live run of a program carrying a fillet archetype |
+| That `BRepEdge.tempId` identifies the same edge across two features within one transaction | the same run; a mismatch surfaces as `fillets_skipped` with `entity-resolution-ambiguous`, which is the honest failure mode rather than a wrong fillet |
+| That `Feature.faces` is populated on a hole and on a revolve, not only on an extrude | the same run; an absent collection records `fillet-capability` and skips that fillet |
+| That a real closed scan yields `orientation.material_side` values agreeing with the part's actual bores | a live run over a marketplace STL, comparing assigned holes against the model |
+| That the coverage fraction on a real part is high enough to be useful | the same run. The number is the point of recording it, and a low one is a result rather than a failure |
+
+Two further boundaries — offline facts rather than open questions — are recorded
+here because they bound what a live run could show:
+
+- **A fillet is skipped, not refused.** A run reporting `ok: true` with entries
+  in `fillets_skipped` built less than its program declared. The coverage
+  account subtracts them; a reader looking only at `ok` would not see it.
+- **No emitted transaction starts a process.** Inside Fusion `sys.executable` is
+  the Fusion binary. The hole and fillet paths add no exception, and the
+  string-search suite over generated source covers them with everything else.
+
 ## Handoff
 
 - Fusion document version/checkpoint recorded.

@@ -191,31 +191,106 @@ def revolve_archetype(
     }
 
 
+def hole_archetype(
+    identifier: str = "hole-cccccccccccc",
+    *,
+    datum_plane: str = "XY",
+    offset: float = -10.0,
+    depth: float = 20.0,
+    diameter: float = 6.0,
+    position: tuple[float, float] = (2.0, 3.0),
+    dependencies: list[str] | None = None,
+    stem: str = "recon_hole_1",
+) -> dict[str, Any]:
+    u_axis, v_axis = {"XY": ("X", "Y"), "XZ": ("X", "Z"), "YZ": ("Y", "Z")}[datum_plane]
+    return {
+        "id": identifier,
+        "kind": "hole",
+        "operation": "cut",
+        "regions": ["c" * 64],
+        "plane": {"datum_plane": datum_plane, "offset": offset, "rotation": None},
+        "hole": {
+            "diameter": {"parameter": f"{stem}_dia", "value": diameter},
+            "position": {
+                "u_axis": u_axis,
+                "v_axis": v_axis,
+                "u": {"parameter": f"{stem}_{u_axis.lower()}", "value": position[0]},
+                "v": {"parameter": f"{stem}_{v_axis.lower()}", "value": position[1]},
+            },
+        },
+        "profile": None,
+        "profile_source": "fit-primitive",
+        "extent": {"kind": "distance", "parameter": f"{stem}_depth", "value": depth},
+        "constraints": [],
+        "dependencies": dependencies if dependencies is not None else ["sketch-extrude-aaaaaaaaaaaa"],
+        "reason": "fixture: an accepted cylinder whose material_side is inside.",
+    }
+
+
+def fillet_archetype(
+    identifier: str = "fillet-eeeeeeeeeeee",
+    *,
+    radius: float = 1.5,
+    between: list[str] | None = None,
+    parameter: str = "recon_fillet_1_radius",
+) -> dict[str, Any]:
+    between = between if between is not None else [
+        "sketch-extrude-aaaaaaaaaaaa",
+        "hole-cccccccccccc",
+    ]
+    return {
+        "id": identifier,
+        "kind": "fillet",
+        "operation": "finish",
+        "regions": ["e" * 64],
+        "plane": None,
+        "radius": {"parameter": parameter, "value": radius},
+        "between": list(between),
+        "profile": None,
+        "profile_source": None,
+        "constraints": [],
+        "dependencies": list(between),
+        "reason": "fixture: an accepted torus between two rebuilt features.",
+    }
+
+
 def default_parameters(archetypes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for group in archetypes:
-        if group["kind"] == "revolve":
-            name = group["radius"]["parameter"]
-            nominal = group["radius"]["value"]
-            quantity, observable = "radius", "volume"
+        wanted: list[tuple[str | None, Any, str, str]] = []
+        if group["kind"] in ("revolve", "fillet"):
+            wanted.append(
+                (group["radius"]["parameter"], group["radius"]["value"], "radius", "volume")
+            )
         else:
-            name = group["extent"]["parameter"]
-            nominal = group["extent"]["value"]
-            quantity, observable = "depth", "volume"
-        if name is None or any(row["name"] == name for row in rows):
-            continue
-        rows.append(
-            {
-                "name": name,
-                "quantity": quantity,
-                "unit": "mm",
-                "nominal": nominal,
-                "expected_observable": observable,
-                "observable_rationale": "fixture",
-                "rationale": "fixture",
-                "driving_archetypes": [group["id"]],
-            }
-        )
+            wanted.append(
+                (group["extent"]["parameter"], group["extent"]["value"], "depth", "volume")
+            )
+        # `.get` rather than `[...]`: some tests build a deliberately malformed
+        # hole to prove the planner refuses it, and the fixture must be able to
+        # produce that program rather than failing first.
+        if group["kind"] == "hole" and isinstance(group.get("hole"), dict):
+            body = group["hole"]
+            wanted.append(
+                (body["diameter"]["parameter"], body["diameter"]["value"], "diameter", "volume")
+            )
+            for slot in (body["position"]["u"], body["position"]["v"]):
+                wanted.append((slot["parameter"], slot["value"], "position", "centroid"))
+        for name, nominal, quantity, observable in wanted:
+            if name is None or any(row["name"] == name for row in rows):
+                continue
+            rows.append(
+                {
+                    "name": name,
+                    "quantity": quantity,
+                    "unit": "mm",
+                    "nominal": nominal,
+                    "expected_observable": observable,
+                    "observable_rationale": "fixture",
+                    "rationale": "fixture",
+                    "driving_archetypes": [group["id"]],
+                }
+            )
     return rows
 
 

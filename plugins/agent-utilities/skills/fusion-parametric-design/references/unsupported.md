@@ -240,13 +240,62 @@ that would have to be planned, constrained and verified.
 
 ## Hole and fillet emission from a reconstruction program
 
-**Status:** Not yet emitted.
+**Status:** Built — under the named conditions below, outside which they refuse.
 
-`hole` and `fillet` are in the program's archetype vocabulary and the planner
-assigns neither: hole classification needs triangle winding to tell a bore from
-a boss, and that evidence is not in the fit record. `emit-mesh-rebuild`
-therefore builds `sketch-extrude` and `revolve`, and refuses any other kind by
-name (`archetype-kind-unsupported`) rather than half-building it.
+This entry previously read "not yet emitted", on the grounds that hole
+classification needs triangle winding to tell a bore from a boss and that
+evidence was not in the fit record. The evidence *is* in the fit record — the
+fitting stage measures `orientation.material_side` per region — and the planner
+now reads it. Both kinds emit. What remains unsupported is narrower, and worth
+stating precisely, because each of these leaves a region unreconstructed under
+the named gate rather than producing an approximate feature:
+
+1. **A hole in a mesh that is not watertight.** `material_side` is `null` on an
+   open or inconsistently wound mesh, and a cylinder of unknown side is left
+   unreconstructed with `material-side-unavailable`. Fix the scan, not the
+   threshold.
+2. **A hole in a program with more than one base body** —
+   `hole-base-ambiguous`. Nothing in the fit record says which body a bore is a
+   hole in, and choosing would be a guess.
+3. **A hole in a revolved body** — `hole-base-not-extruded`. A bore coaxial with
+   a revolve is already part of its half-profile; a non-coaxial bore against a
+   revolved body is a real feature and is not placed here.
+4. **A hole whose axis is oblique to its body's extrusion direction**
+   (`hole-axis-oblique`) or that reaches outside the body it would cut
+   (`hole-not-contained`).
+5. **A fillet whose two neighbours were not both rebuilt**
+   (`fillet-neighbour-unreconstructed`), or whose neighbours are surfaces of the
+   same archetype (`fillet-neighbour-shared`). A fillet rounds the edge between
+   two features; without two features there is no edge.
+6. **A fillet whose parent features share no edge in the built solid.** Recorded
+   in the rebuild report's `fillets_skipped` and subtracted from coverage. The
+   torus fit said the two surfaces meet and the built solid says they do not;
+   rounding some other nearby edge would invent the geometry the measurement
+   failed to find.
+7. **Variable-radius and elliptical blends.** Fillets are proposed by adjacency
+   and near-constant width, which is enough for a `filletFeatures` radius and
+   not enough to certify anything richer.
+
+Fillets are the one archetype that is *individually optional*: nothing depends
+on a finishing feature, so a fillet that cannot be placed costs its own region
+and nothing downstream. Every other archetype carries dependents, which is why
+every other failure rolls the whole build back.
+
+## Guaranteed full coverage of any part
+
+**Status:** Structurally impossible, and `parametric-partial` exists because of it.
+
+`reconstruction-coverage` returns `parametric-full`, `parametric-partial` or
+`reconstruction-refused`. The middle label is the honest common case and it is a
+**success**: part of the scan stands as editable features, the rest is listed
+with the gate that stopped it, and the source mesh stays in the document as
+reference geometry over the rebuild.
+
+Any promise of full coverage on an arbitrary part would be the claim this whole
+pipeline is a correction to. The coverage arithmetic therefore runs one
+direction only — each stage may lose area and can never gain any — so an
+archetype that was planned and not delivered subtracts its region even when the
+build otherwise succeeded.
 
 ## Adopted 3-D relationships as sketch constraints
 

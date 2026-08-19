@@ -320,6 +320,123 @@ class ArchetypeTests(unittest.TestCase):
         )
 
 
+class HoleAndFilletTests(unittest.TestCase):
+    """The U6 gap: `hole` and `fillet` were in the vocabulary and never assigned."""
+
+    def test_an_inward_cylinder_becomes_a_hole_that_cuts_the_body_it_lies_in(self) -> None:
+        program = build(fx.bored_post_record("inside"), fx.spec())
+        kinds = [g["kind"] for g in program["archetypes"]]
+        self.assertEqual(["sketch-extrude", "hole"], kinds)
+        base, hole = program["archetypes"]
+        self.assertEqual("cut", hole["operation"])
+        self.assertEqual([base["id"]], hole["dependencies"])
+        # Bases before cuts: the hole can only cut a body that exists.
+        self.assertEqual([base["id"], hole["id"]], program["order"])
+        self.assertAlmostEqual(4.0, hole["hole"]["diameter"]["value"])
+        self.assertAlmostEqual(30.0, hole["extent"]["value"])
+        self.assertEqual(1.0, program["covered_area_fraction"])
+        self.assertIn("material_side", hole["reason"])
+
+    def test_a_hole_is_driven_by_a_diameter_a_depth_and_two_positions(self) -> None:
+        program = build(fx.bored_post_record("inside"), fx.spec())
+        by_name = {row["name"]: row for row in program["user_parameters"]}
+        self.assertLessEqual(
+            {"recon_hole_1_dia", "recon_hole_1_depth", "recon_hole_1_x", "recon_hole_1_y"},
+            set(by_name),
+        )
+        # A position parameter can move a hole across a face without changing
+        # the volume at all, so the proof must watch the centroid instead.
+        self.assertEqual("centroid", by_name["recon_hole_1_x"]["expected_observable"])
+        self.assertEqual("volume", by_name["recon_hole_1_dia"]["expected_observable"])
+
+    def test_an_unknown_material_side_is_never_guessed_into_a_hole(self) -> None:
+        program = build(fx.bored_post_record(None), fx.spec())
+        self.assertNotIn("hole", [g["kind"] for g in program["archetypes"]])
+
+    def test_an_outward_cylinder_is_a_boss_and_never_a_hole(self) -> None:
+        program = build(fx.bored_post_record("outside"), fx.spec())
+        self.assertNotIn("hole", [g["kind"] for g in program["archetypes"]])
+
+    def test_an_unclaimed_cylinder_of_unknown_side_names_that_as_its_gate(self) -> None:
+        # The gate that must never round down to "no archetype fits this". The
+        # bore-or-boss question is open, and saying which question is open is
+        # what stops the next reader from closing it by eye.
+        # Axis along Y: neither coaxial with the primary axis nor perpendicular
+        # to the extrude's cap normal, so nothing claims it and the gate is all
+        # the reader gets.
+        regions = list(fx.bored_post_record(None)["regions"])
+        cross = fx.cylinder("cross", (0.0, 1.0, 0.0), (6.0, 4.0, 20.0), 1.5, 90.0, 12.0)
+        cross["bounding_box"] = [[4.5, 0.0, 18.5], [7.5, 10.0, 21.5]]
+        regions.append(fx.oriented(cross, None))
+        program = build(fx.record(regions), fx.spec())
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("material-side-unavailable", gates)
+        self.assertIn("bore", gates)
+        self.assertIn("not closed and consistently wound", gates)
+
+    def test_a_bore_whose_axis_is_oblique_to_its_body_is_gated_by_name(self) -> None:
+        regions = list(fx.bored_post_record("inside")["regions"])
+        cross = fx.cylinder("cross", (1.0, 0.0, 0.0), (6.0, 4.0, 20.0), 1.5, 90.0, 12.0)
+        cross["bounding_box"] = [[0.0, 2.5, 18.5], [12.0, 5.5, 21.5]]
+        regions.append(fx.oriented(cross, "inside"))
+        program = build(fx.record(regions), fx.spec())
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("hole-axis-oblique", gates)
+
+    def test_a_bore_reaching_outside_the_body_it_would_cut_is_gated(self) -> None:
+        record = fx.bored_post_record("inside")
+        bore = next(r for r in record["regions"] if r["region_hash"] == fx.region_hash("bore"))
+        bore["bounding_box"] = [[2.0, 2.0, -40.0], [6.0, 6.0, 30.0]]
+        program = build(record, fx.spec())
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("hole-not-contained", gates)
+
+    def test_a_body_whose_only_turned_surface_is_a_bore_is_not_a_revolve(self) -> None:
+        # Revolving a bore's own profile builds a disc where a plate belongs.
+        # The test is on positive evidence only: an unknown side still licenses
+        # the revolve exactly as it did before this unit.
+        self.assertNotIn("revolve", [g["kind"] for g in build(fx.bored_post_record("inside"), fx.spec())["archetypes"]])
+        self.assertIn("revolve", [g["kind"] for g in build(fx.bored_post_record(None), fx.spec())["archetypes"]])
+
+    def test_a_torus_between_two_rebuilt_features_becomes_a_fillet(self) -> None:
+        blend = fx.torus("blend", 5.0, 1.0, 40.0, between=["bore", "z-lo"])
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets))
+        fillet = fillets[0]
+        self.assertEqual("finish", fillet["operation"])
+        self.assertAlmostEqual(1.0, fillet["radius"]["value"])
+        self.assertEqual(2, len(fillet["between"]))
+        self.assertEqual(sorted(fillet["between"]), sorted(fillet["dependencies"]))
+        # Fillets are finishing features and are ordered after everything they
+        # round, so the edge exists by the time the radius is applied.
+        self.assertEqual(fillet["id"], program["order"][-1])
+        self.assertEqual(
+            "recon_fillet_1_radius", program["archetypes"][-1]["radius"]["parameter"]
+        )
+
+    def test_a_blend_whose_neighbours_were_not_both_rebuilt_is_not_a_fillet(self) -> None:
+        # A fillet rounds the edge between two features. Nothing here rebuilt
+        # the second neighbour, so there is no edge to round.
+        blend = fx.torus("blend", 5.0, 1.0, 40.0, between=["bore", "nowhere"])
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-neighbour-unreconstructed", gates)
+
+    def test_a_blend_inside_one_feature_is_not_an_edge_between_two(self) -> None:
+        blend = fx.torus("blend", 5.0, 1.0, 40.0, between=["z-lo", "z-hi"])
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-neighbour-shared", gates)
+
+    def test_every_archetype_carries_the_share_of_the_scan_it_accounts_for(self) -> None:
+        program = build(fx.bored_post_record("inside"), fx.spec())
+        total = sum(g["area_fraction"] for g in program["archetypes"])
+        self.assertAlmostEqual(program["covered_area_fraction"], total)
+
+
 class UserParameterTests(unittest.TestCase):
     def test_every_parameter_declares_the_observable_that_should_move(self) -> None:
         program = build(fx.box_record(), fx.spec())
