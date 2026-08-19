@@ -30,12 +30,14 @@ class Plan:
     blocked: bool
     blockers: tuple[str, ...]
     phases: tuple[PlanPhase, ...]
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_name": self.project_name,
             "blocked": self.blocked,
             "blockers": list(self.blockers),
+            "warnings": list(self.warnings),
             "phases": [phase.to_dict() for phase in self.phases],
         }
 
@@ -43,6 +45,8 @@ class Plan:
 def build_plan(manifest: Manifest) -> Plan:
     issues = validate_manifest_data(manifest.data)
     blockers = [str(issue) for issue in issues if issue.severity == "error"]
+    # A warning that only `validate` ever printed was a warning nobody read.
+    warnings = [str(issue) for issue in issues if issue.severity != "error"]
     for parameter in manifest.parameters:
         if parameter.get("critical") and not str(parameter.get("expression", "")).strip():
             name = str(parameter.get("name", "<unnamed>"))
@@ -115,4 +119,4 @@ def build_plan(manifest: Manifest) -> Plan:
             ("export hashes", "slicer estimate or explicit unsupported result", "handoff report"),
         ),
     )
-    return Plan(manifest.project_name, bool(blockers), tuple(blockers), phases)
+    return Plan(manifest.project_name, bool(blockers), tuple(blockers), phases, tuple(warnings))

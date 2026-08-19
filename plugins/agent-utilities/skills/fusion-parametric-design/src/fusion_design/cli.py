@@ -91,9 +91,14 @@ def _manifest_command(args: argparse.Namespace, function: Callable) -> int:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    path = Path(args.manifest)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    issues = validate_manifest_data(data)
+    # Load through the same door as every other command. A bare json.loads here
+    # skipped the duplicate-key guard, the root-type check and JSONDecodeError
+    # reporting, so the one command a human runs to sign a manifest off was the
+    # one command that did not see what `plan` and the emitters see.
+    try:
+        issues = validate_manifest_data(load_manifest(args.manifest).data)
+    except ManifestValidationError as error:
+        issues = list(error.issues)
     # Warnings are reported but do not block: they record something the manifest
     # left undeclared rather than something it got wrong.
     blocking = [issue for issue in issues if issue.severity == "error"]

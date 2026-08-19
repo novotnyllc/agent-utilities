@@ -119,6 +119,7 @@ def _validate_material_decision(
         ValidationIssue,
         _reject_unknown_fields,
         _VALID_NAME_RE,
+        _reject_claim_text,
         source_backs_claim,
         source_confidence,
     )
@@ -239,6 +240,7 @@ def _validate_material_decision(
                 "rationale must be a non-empty string saying why this material was chosen.",
             )
         )
+    _reject_claim_text(issues, decision.get("rationale"), "material_decision.rationale")
 
     raw_risks = decision.get("unresolved_risks")
     risks: list[str] = []
@@ -263,6 +265,7 @@ def _validate_material_decision(
                 )
                 continue
             risks.append(risk)
+            _reject_claim_text(issues, raw_risk, f"material_decision.unresolved_risks[{index}]")
 
     raw_requirements = decision.get("printer_requirements")
     if raw_requirements is not None and not _text(raw_requirements):
@@ -273,6 +276,7 @@ def _validate_material_decision(
                 "printer_requirements, when present, must be a non-empty string.",
             )
         )
+    _reject_claim_text(issues, raw_requirements, "material_decision.printer_requirements")
 
     raw_nozzle = decision.get("nozzle")
     nozzle = raw_nozzle if _in_closed_set(raw_nozzle, NOZZLE_MATERIALS) else ""
@@ -355,7 +359,12 @@ def _validate_material_decision(
     # cannot stand in for a measurement that happened.
     source = source_map.get(source_id)
     if isinstance(source, dict) and confidence and not source_backs_claim(source, confidence):
-        bridged = bool(coupon and risks) and confidence != "coupon_verified"
+        # The bridge was free: any coupon path plus any non-empty string. Make it
+        # bind -- a risk that does not name the coupon is not a plan to close
+        # this gap, it is unrelated prose sitting in the same list.
+        coupon_leaf = coupon.rsplit("/", 1)[-1] if coupon else ""
+        bridging_risk = bool(coupon_leaf) and any(_names(risk, coupon_leaf) for risk in risks)
+        bridged = bridging_risk and confidence != "coupon_verified"
         if not bridged:
             issues.append(
                 ValidationIssue(
@@ -367,12 +376,13 @@ def _validate_material_decision(
                     + (
                         ", or cite a coupon_verified source."
                         if confidence == "coupon_verified"
-                        else ", or bind the stronger claim to both a coupon_component and an unresolved risk."
+                        else ", or bind the stronger claim to a coupon_component plus an unresolved risk "
+                        "that names that coupon."
                     ),
                 )
             )
 
-    _validate_part_material_consistency(issues, printable_parts, family, formulation)
+    _validate_part_material_consistency(issues, printable_parts, family, formulation, confidence, source)
 
 
 def _validate_part_material_consistency(
@@ -380,11 +390,35 @@ def _validate_part_material_consistency(
     printable_parts: Any,
     family: str,
     formulation: str,
+    confidence: str,
+    source: Any,
 ) -> None:
     """R6: a part may not silently assume a different material than the project decided."""
-    from .manifest import ValidationIssue
+    from .manifest import ValidationIssue, source_backs_claim
 
-    if not isinstance(printable_parts, list) or (not family and not formulation):
+    if not isinstance(printable_parts, list):
+        return
+    # A part may not out-claim the project decision about the same material.
+    # The part-level rule ranks material.status against the source the *part*
+    # cites and never against the decision, so a part could read
+    # coupon_verified while the decision that governs it is still provisional --
+    # in the shipped manifest, while the decision's own unresolved_risks say the
+    # coupon has not been printed yet.
+    if confidence and not source_backs_claim(source, "coupon_verified"):
+        for index, part in enumerate(printable_parts):
+            if not isinstance(part, dict):
+                continue
+            material = part.get("material")
+            if isinstance(material, dict) and material.get("status") == "coupon_verified":
+                issues.append(
+                    ValidationIssue(
+                        "material-decision-part-outranks-decision",
+                        f"printable_parts[{index}].material.status",
+                        f"Part claims material status 'coupon_verified' while material_decision.confidence is "
+                        f"{confidence!r}; the project decision about this material has not been coupon-verified.",
+                    )
+                )
+    if not family and not formulation:
         return
     # Families the decision itself names, so a formulation like "Fiberon PET-CF17"
     # under the OTHER sentinel does not read as naming a foreign family. OTHER is

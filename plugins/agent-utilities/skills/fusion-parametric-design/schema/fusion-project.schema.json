@@ -825,7 +825,7 @@
         },
         "minimum_mm": {
           "type": "number",
-          "minimum": 0
+          "exclusiveMinimum": 0
         }
       }
     },

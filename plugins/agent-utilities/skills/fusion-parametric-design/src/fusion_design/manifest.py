@@ -183,20 +183,30 @@ def _duplicates(values: Iterable[str]) -> set[str]:
     return duplicates
 
 
+# Some source kinds cannot carry what they declare. A scan is evidence of shape,
+# not of a dimension; a conservative_proxy's entire semantic content is "this is
+# a guess". Both stay provisional until a coupon settles them -- which is the one
+# thing that can, so coupon_verified is never capped.
+KIND_MAX_CONFIDENCE = {
+    "scan": "provisional",
+    "conservative_proxy": "provisional",
+}
+
+
 def source_confidence(source: Any) -> str:
     """The confidence a source actually carries, not the one it claims.
 
-    A scan is treated as provisional whatever its confidence field says: a point
-    cloud is evidence of shape, not of a dimension, until a coupon is printed and
-    measured. Anything that is not a well-formed source carries nothing.
+    Anything that is not a well-formed source carries nothing.
     """
     if not isinstance(source, dict):
         return "provisional"
     confidence = source.get("confidence")
     if not isinstance(confidence, str) or confidence not in CLAIM_CONFIDENCE_RANK:
         return "provisional"
-    if source.get("kind") == "scan" and confidence != "coupon_verified":
-        return "provisional"
+    kind = source.get("kind")
+    cap = KIND_MAX_CONFIDENCE.get(kind) if isinstance(kind, str) else None
+    if cap is not None and confidence != "coupon_verified":
+        return min(confidence, cap, key=lambda value: CLAIM_CONFIDENCE_RANK[value])
     return confidence
 
 
@@ -210,31 +220,33 @@ def source_backs_claim(source: Any, minimum_confidence: str) -> bool:
     return CLAIM_CONFIDENCE_RANK[source_confidence(source)] >= CLAIM_CONFIDENCE_RANK[minimum_confidence]
 
 
-# Free-text claims a manifest may not make. SKILL.md: "Fusion export is not the
-# slicer. Print time, filament mass, supports, and machine-specific behavior
-# require a configured slicer ... rather than inventing them." These values are
-# copied verbatim into the export index as manufacturing_intent, so an invented
-# claim written here is re-served downstream as if it were evidence.
+# A lint over manifest free text, not a gate. SKILL.md: "Fusion export is not
+# the slicer. Print time, filament mass, supports, and machine-specific behavior
+# require a configured slicer ... rather than inventing them." These values ship
+# verbatim into the export index as manufacturing_intent, so an invented claim
+# written here is re-served downstream as if it were evidence.
 #
-# Keyed on the *assertion*, never on the vocabulary: a rationale may discuss
-# supports all it likes ("supports must not touch it"), it may not assert the
-# outcome ("prints without supports"). Narrow on purpose -- a prose gate that
-# fires on legitimate design instructions is worse than the hole it closes.
+# Honest about what it is: a handful of regexes over English prose. The
+# false-negative surface is unbounded -- "prints support-free", past tense,
+# passive voice, a claim split across two sentences, or any other language all
+# walk straight through -- so this can only ever raise suspicion, never settle
+# it. That is exactly why every hit is a *warning*: a hard error that refuses
+# honest authoring gets worked around, and then it protects nothing. Do not add
+# patterns to make it look complete; each one widens the false-positive surface
+# without closing a surface that cannot be closed this way.
 _FORBIDDEN_CLAIM_PATTERNS = (
-    (re.compile(r"\bprints?\s+(?:without|with\s+no)\s+support", re.I), "asserts a support-free print outcome"),
-    (re.compile(r"\bno\s+supports?\s+(?:are\s+)?(?:needed|required)", re.I), "asserts a support-free print outcome"),
-    (re.compile(r"\brequires?\s+no\s+supports?\b", re.I), "asserts a support-free print outcome"),
-    (re.compile(r"\bprint\s+time\b", re.I), "states a print time"),
-    (re.compile(r"\bfilament\s+(?:mass|used|usage|length)\b", re.I), "states filament consumption"),
-    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:g|grams?)\s+of\s+filament\b", re.I), "states filament consumption"),
+    (re.compile(r"\bprints?\s+(?:without|with\s+no)\s+support", re.I), "reads as a support-free print outcome"),
+    (re.compile(r"\bno\s+supports?\s+(?:are\s+)?(?:needed|required)", re.I), "reads as a support-free print outcome"),
+    (re.compile(r"\bfilament\s+(?:mass|used|usage|length)\b", re.I), "reads as a filament-consumption figure"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:g|grams?)\s+of\s+filament\b", re.I), "reads as a filament-consumption figure"),
 )
 
 
 def claim_text_issue(text: Any) -> str | None:
     """Return why ``text`` reads as an unbacked slicer claim, or None.
 
-    Only a real slice or a real physical test can settle these; a manifest that
-    states one is inventing evidence.
+    Only a real slice or a real physical test can settle these. Advisory: see
+    the note on _FORBIDDEN_CLAIM_PATTERNS for why this cannot be complete.
     """
     if not isinstance(text, str):
         return None
@@ -253,7 +265,10 @@ def _reject_claim_text(issues: list[ValidationIssue], text: Any, path: str) -> N
                 "forbidden-claim-text",
                 path,
                 f"Free text {reason}; that outcome comes only from a configured slicer or a physical test, "
-                "not from the manifest. Describe the design choice instead of asserting the result.",
+                "not from the manifest. Prefer describing the design choice over asserting the result. "
+                "Advisory: this check matches a few English phrasings and cannot be relied on to catch all "
+                "of them, nor to be right about every hit.",
+                severity="warning",
             )
         )
 
@@ -359,7 +374,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             path,
         )
         source_id = str(raw_source.get("id", "")).strip()
-        if not source_id or not valid_name.fullmatch(source_id):
+        if not source_id or not valid_name.fullmatch(source_id) or source_id != raw_source.get("id"):
             issues.append(
                 ValidationIssue(
                     "invalid-source-id",
@@ -512,7 +527,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Critical source parameter {name!r} has no provenance source.",
                 )
             )
-        if source_id and not valid_name.fullmatch(source_id):
+        if source_id and (not valid_name.fullmatch(source_id) or source_id != raw_parameter.get("source_id")):
             issues.append(
                 ValidationIssue(
                     "invalid-parameter-source-id",
@@ -674,7 +689,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Representation must be one of {', '.join(sorted(REFERENCE_REPRESENTATIONS))}.",
                 )
             )
-        if not reference_id or not valid_name.fullmatch(reference_id):
+        if not reference_id or not valid_name.fullmatch(reference_id) or reference_id != raw_reference.get("id"):
             issues.append(
                 ValidationIssue(
                     "invalid-reference-id",
@@ -682,7 +697,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     "A reference id must begin with a letter and contain only letters, digits, and underscores.",
                 )
             )
-        if source_id and not valid_name.fullmatch(source_id):
+        if source_id and (not valid_name.fullmatch(source_id) or source_id != raw_reference.get("source_id")):
             issues.append(
                 ValidationIssue(
                     "invalid-reference-source-id",
@@ -1026,6 +1041,13 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         finite_minimum = math.isfinite(float(minimum))
                     except (OverflowError, TypeError, ValueError):
                         finite_minimum = False
+                    # Zero is not a weak constraint, it is no constraint.
+                    # measureMinimumDistance returns 0 both for touching and for
+                    # interpenetrating solids, and positive_control.py clamps the
+                    # gap with max(..., 0.0), so `distance >= 0` is a tautology --
+                    # a 0 mm check reports green while two components fully
+                    # interpenetrate. Forbidding contact is what an interference
+                    # check is for.
                     if (
                         isinstance(minimum, bool)
                         or not isinstance(minimum, (int, float))
@@ -1077,7 +1099,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         f"({', '.join(format(value, 'g') for value in sorted(minima))} mm).",
                     )
                 )
-            if pair in allowed_interference_pairs and max(minima) > 0:
+            if pair in allowed_interference_pairs:
                 issues.append(
                     ValidationIssue(
                         "contradictory-verification-checks",
@@ -1098,6 +1120,12 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     )
                 )
 
+    required_component_names: list[str] = []
+    if isinstance(verification, dict):
+        required_component_names = [
+            value for value in _as_list(verification.get("required_components")) if isinstance(value, str)
+        ]
+
     expected_print_part_paths: list[str] | None = None
     if isinstance(verification, dict):
         raw_expected = verification.get("expected_print_parts")
@@ -1110,6 +1138,21 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         expected_print_part_paths,
         source_map,
     )
+    # Every rule here is conditional on something being declared, so the cheapest
+    # way to satisfy the whole evidence contract is to declare nothing. Emptying
+    # the lists also suppresses printable-parts-not-declared, since that keys on
+    # expected_print_parts being non-empty. Record the floor.
+    if not component_paths and not parameters and not required_component_names:
+        issues.append(
+            ValidationIssue(
+                "manifest-asserts-nothing",
+                "$",
+                "This manifest declares no components, no parameters and no required components, so every "
+                "evidence rule is vacuously satisfied. It asserts nothing about the design.",
+                severity="warning",
+            )
+        )
+
     _validate_material_decision(
         issues,
         data.get("material_decision"),

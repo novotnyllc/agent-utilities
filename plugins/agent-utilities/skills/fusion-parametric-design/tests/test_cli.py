@@ -37,30 +37,66 @@ class CliTests(unittest.TestCase):
         self.assertIn('"ok": true', output.getvalue())
 
     def test_validate_serializes_validation_issues(self) -> None:
-        broken = ROOT / "tests" / "_cli_broken.json"
         data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
         data["parameters"][0].pop("source_id")
-        broken.write_text(json.dumps(data), encoding="utf-8")
         output = io.StringIO()
-        try:
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "cli_broken.json"
+            broken.write_text(json.dumps(data), encoding="utf-8")
             with redirect_stdout(output):
                 code = main(["validate", str(broken)])
             self.assertEqual(2, code)
             self.assertIn("critical-parameter-missing-source", output.getvalue())
-        finally:
-            broken.unlink(missing_ok=True)
+
+    def test_validate_refuses_a_manifest_whose_bytes_and_object_disagree(self) -> None:
+        # `validate` is the command a human runs to sign a manifest off
+        # (SKILL.md). It read the file with a bare json.loads, so a duplicate
+        # key that silently flips provisional true->false reported ok: true
+        # while `plan` refused the same file.
+        text = EXAMPLE.read_text(encoding="utf-8").replace(
+            '"provisional": false,\n      "description": "Measured PD trigger board length."',
+            '"provisional": true,\n      "provisional": false,'
+            '\n      "description": "Measured PD trigger board length."',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "duplicate_key.json"
+            broken.write_text(text, encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["validate", str(broken)])
+            self.assertEqual(2, code)
+            payload = json.loads(output.getvalue())
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                ["manifest-duplicate-key"], [issue["code"] for issue in payload["issues"]]
+            )
+
+    def test_validate_reports_warnings_without_blocking(self) -> None:
+        data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        data.pop("printable_parts")
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "no_printable_parts.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["validate", str(path)])
+            self.assertEqual(0, code)
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(
+                ["printable-parts-not-declared"], [issue["code"] for issue in payload["issues"]]
+            )
 
     def test_validate_rejects_non_object_manifest_root(self) -> None:
-        broken = ROOT / "tests" / "_cli_non_object.json"
-        broken.write_text("[]", encoding="utf-8")
         output = io.StringIO()
-        try:
+        with tempfile.TemporaryDirectory() as scratch:
+            broken = Path(scratch) / "cli_non_object.json"
+            broken.write_text("[]", encoding="utf-8")
             with redirect_stdout(output):
                 code = main(["validate", str(broken)])
             self.assertEqual(2, code)
             self.assertIn("manifest-root-invalid", output.getvalue())
-        finally:
-            broken.unlink(missing_ok=True)
 
     def test_emit_creates_missing_output_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
