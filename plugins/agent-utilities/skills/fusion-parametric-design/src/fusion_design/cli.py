@@ -18,6 +18,8 @@ from .export_handoff import (
 from .manifest import ManifestValidationError, load_manifest, validate_manifest_data
 from .mesh_convert import emit_mesh_convert_script
 from .mesh_deviation import emit_mesh_deviation_script
+from .mesh_extract import emit_mesh_extract_script
+from .mesh_probe import emit_capability_probe_script
 from .mesh_source import (
     emit_mesh_capture_script,
     mesh_source_record,
@@ -173,6 +175,22 @@ def _cmd_emit_mesh_capture(args: argparse.Namespace) -> int:
     # re-measured by the transaction this command emits.
     verify_manifest_mesh_sources(manifest, args.manifest)
     _write_output(emit_mesh_capture_script(manifest), args.output)
+    return 0
+
+
+def _cmd_emit_capability_probe(args: argparse.Namespace) -> int:
+    named_paths = [("manifest", args.manifest)]
+    if args.probe_spec:
+        named_paths.append(("probe-spec", args.probe_spec))
+    if args.output:
+        named_paths.append(("output", args.output))
+    _validate_named_paths(named_paths)
+
+    manifest = load_manifest(args.manifest)
+    spec = None
+    if args.probe_spec:
+        spec = json.loads(Path(args.probe_spec).read_text(encoding="utf-8"))
+    _write_output(emit_capability_probe_script(manifest, spec), args.output)
     return 0
 
 
@@ -430,6 +448,57 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_capture.add_argument("manifest")
     mesh_capture.add_argument("-o", "--output")
     mesh_capture.set_defaults(handler=_cmd_emit_mesh_capture)
+
+    capability_probe = subparsers.add_parser(
+        "emit-capability-probe",
+        help=(
+            "Emit the read-only runtime capability probe: the embedded interpreter's tag triple, its "
+            "writable sys.path entries, which preview mesh and construction APIs exist, and — when a "
+            "probe spec binds a body — the face-group histogram and a dump write round-trip."
+        ),
+    )
+    capability_probe.add_argument("manifest")
+    capability_probe.add_argument(
+        "--probe-spec",
+        help=(
+            "Optional path to a probe spec JSON: component_path, body_name, dump_dir. Without it the "
+            "face-group and write-back probes report 'not-requested' rather than passing."
+        ),
+    )
+    capability_probe.add_argument("-o", "--output")
+    capability_probe.set_defaults(handler=_cmd_emit_capability_probe)
+
+    mesh_extract = subparsers.add_parser(
+        "emit-mesh-extract",
+        help=(
+            "Emit the read-only mesh extraction script: writes a hash-bound indexed mesh dump the host "
+            "reader re-hashes before parsing. Requires a classification of parametric-rebuild for this "
+            "exact mesh source."
+        ),
+    )
+    mesh_extract.add_argument("manifest")
+    mesh_extract.add_argument(
+        "--mesh-source-id",
+        required=True,
+        help="Id of the mesh_sources record being operated on; the classification must agree with it.",
+    )
+    mesh_extract.add_argument(
+        "--classification",
+        required=True,
+        help="Path to the recorded classification JSON; its path must be 'parametric-rebuild'.",
+    )
+    mesh_extract.add_argument(
+        "--extract-spec",
+        required=True,
+        help=(
+            "Path to the extraction spec JSON: body binding, dump_dir, and the declared max_triangles "
+            "and fallback_max_bytes with their rationales."
+        ),
+    )
+    mesh_extract.add_argument("-o", "--output")
+    mesh_extract.set_defaults(
+        handler=lambda args: _mesh_path_command(args, "extract_spec", emit_mesh_extract_script)
+    )
 
     mesh_convert = subparsers.add_parser(
         "emit-mesh-convert",
