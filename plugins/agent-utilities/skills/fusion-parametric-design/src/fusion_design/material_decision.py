@@ -114,7 +114,14 @@ def _validate_material_decision(
 ) -> None:
     # Imported here, not at module scope: manifest.py imports this module to
     # re-export the enums, so a top-level import would be circular.
-    from .manifest import SOURCE_CONFIDENCES, ValidationIssue, _reject_unknown_fields, _VALID_NAME_RE
+    from .manifest import (
+        SOURCE_CONFIDENCES,
+        ValidationIssue,
+        _reject_unknown_fields,
+        _VALID_NAME_RE,
+        source_backs_claim,
+        source_confidence,
+    )
 
     if decision is None:
         return
@@ -340,26 +347,30 @@ def _validate_material_decision(
             )
         )
 
-    # A decision may not claim more than the source it rests on. Mirrors
-    # scan-parameter-not-provisional in manifest.py, which refuses the same move
-    # for a critical parameter cited to a scan.
+    # A decision may not claim more than the source it rests on -- the shared
+    # rule in manifest.py, which also demotes a scan to provisional whatever its
+    # confidence field declares. The gap may be bridged by declaring how it will
+    # be closed (a coupon plus an open risk), except for coupon_verified: that
+    # asserts a coupon was already printed and measured, and a plan to measure
+    # cannot stand in for a measurement that happened.
     source = source_map.get(source_id)
-    if (
-        isinstance(source, dict)
-        and source.get("confidence") == "provisional"
-        and confidence
-        and confidence != "provisional"
-        and not (coupon and risks)
-    ):
-        issues.append(
-            ValidationIssue(
-                "material-decision-outranks-source",
-                "material_decision.confidence",
-                f"confidence {confidence!r} claims more than source {source_id!r}, which is provisional. "
-                "Keep the decision provisional, or bind the stronger claim to both a coupon_component "
-                "and an unresolved risk.",
+    if isinstance(source, dict) and confidence and not source_backs_claim(source, confidence):
+        bridged = bool(coupon and risks) and confidence != "coupon_verified"
+        if not bridged:
+            issues.append(
+                ValidationIssue(
+                    "material-decision-outranks-source",
+                    "material_decision.confidence",
+                    f"confidence {confidence!r} claims more than source {source_id!r} "
+                    f"(kind {source.get('kind')!r}, confidence {source.get('confidence')!r}), which carries "
+                    f"only {source_confidence(source)!r} evidence. Lower the decision confidence"
+                    + (
+                        ", or cite a coupon_verified source."
+                        if confidence == "coupon_verified"
+                        else ", or bind the stronger claim to both a coupon_component and an unresolved risk."
+                    ),
+                )
             )
-        )
 
     _validate_part_material_consistency(issues, printable_parts, family, formulation)
 

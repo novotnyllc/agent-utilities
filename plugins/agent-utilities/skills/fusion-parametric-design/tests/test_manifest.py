@@ -783,17 +783,79 @@ class ManifestValidationTests(unittest.TestCase):
                 )
                 self.assertIn("material-decision-outranks-source", self._codes(data))
 
-        # A stronger claim is allowed only when it is bound by both a coupon and
-        # a recorded risk.
+        # A stronger claim is allowed when it is bound by both a coupon and a
+        # recorded risk -- a declared plan to close the gap.
         bound = self._with_decision(
             source_id="enclosure_material_requirements",
-            confidence="coupon_verified",
+            confidence="measured",
             unresolved_risks=["Snap-rim cycle life is still unproven."],
         )
         self.assertNotIn("material-decision-outranks-source", self._codes(bound))
 
+        # ... but coupon_verified is not bridgeable. It asserts a coupon was
+        # already printed and measured, and a plan to measure cannot stand in
+        # for a measurement that happened. This is the shipped shape: the
+        # example decision already carries a coupon and three risks, so a
+        # bridgeable coupon_verified would leave the claim unbacked.
+        unbridgeable = self._with_decision(
+            source_id="enclosure_material_requirements",
+            confidence="coupon_verified",
+            unresolved_risks=["Snap-rim cycle life is still unproven."],
+        )
+        self.assertIn("material-decision-outranks-source", self._codes(unbridgeable))
+
         # A measured source carries a measured decision without complaint.
         self.assertEqual([], validate_manifest_data(self._with_decision()))
+
+    def test_decision_confidence_is_ranked_not_string_compared(self) -> None:
+        # The inline predicate only ever tested `source.confidence ==
+        # "provisional"`, so every shortfall between two non-provisional
+        # confidences validated clean.
+        self.assertIn(
+            "material-decision-outranks-source",
+            self._codes(
+                self._with_decision(
+                    source_id="pd_trigger_board_measurement",  # confidence: measured
+                    confidence="coupon_verified",
+                    coupon_component=None,
+                    unresolved_risks=[],
+                )
+            ),
+        )
+
+    def test_decision_may_not_rest_on_an_unverified_scan(self) -> None:
+        # source_backs_claim demotes a scan to provisional whatever it declares,
+        # so the scan rule reaches material decisions without being restated.
+        data = self._with_decision(source_id="scan_source", confidence="measured", unresolved_risks=[])
+        data["sources"].append(
+            {
+                "id": "scan_source",
+                "kind": "scan",
+                "locator": "scan://pd-trigger",
+                "revision": "2026-08-18",
+                "confidence": "measured",
+                "notes": "Structured-light scan of the sample.",
+            }
+        )
+        self.assertIn("material-decision-outranks-source", self._codes(data))
+
+        # Coupon-verifying the scan settles it, exactly as for a parameter.
+        data["sources"][-1]["confidence"] = "coupon_verified"
+        self.assertNotIn("material-decision-outranks-source", self._codes(data))
+
+    def test_filled_material_guard_still_fires_alongside_the_confidence_rule(self) -> None:
+        # Regression guard for the adversarially-found chain: PA_CF plus
+        # coupon_verified against a provisional source must not go quiet.
+        data = self._with_decision(
+            family="PA_CF",
+            formulation="Prusament PA11CF",
+            source_id="enclosure_material_requirements",
+            confidence="coupon_verified",
+            unresolved_risks=["Nozzle wear on filled filament is unquantified."],
+        )
+        codes = self._codes(data)
+        self.assertIn("material-decision-filled-material-unguarded", codes)
+        self.assertIn("material-decision-outranks-source", codes)
 
     def test_coupon_component_must_be_a_printable_part(self) -> None:
         for path in ("00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC", "20_FIXTURES", "10_PRODUCT"):
