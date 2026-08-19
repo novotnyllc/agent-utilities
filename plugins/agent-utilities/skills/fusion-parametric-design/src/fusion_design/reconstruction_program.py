@@ -83,6 +83,13 @@ PROGRAM_VERSION = 1
 # never be counted as one that was.
 ARCHETYPE_KINDS = {"sketch-extrude", "revolve", "hole", "fillet"}
 
+# The fit kinds a fillet proposal may sit on.  A torus is the textbook blend; a
+# partial-arc cylinder is what a face-grouped mesh actually delivers an edge
+# round as, and U2 measures the arc that separates one from a bore.  This planner
+# does not re-measure it -- the fit record carries no angular span -- so the list
+# is a vocabulary check on U2's proposal, not a second opinion about the shape.
+BLEND_FIT_KINDS = frozenset({"torus", "cylinder"})
+
 ADOPTION_TARGETS = {"parameter", "constraint"}
 
 # A `parameter` adoption must be made true of the numbers, so only the kinds
@@ -857,12 +864,24 @@ def _plan_holes(
 def _plan_fillets(
     regions: Sequence[RegionFit], groups: Sequence[Mapping[str, Any]]
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Turn U2's two-neighbour torus proposals into fillet features, or gate them.
+    """Turn U2's two-neighbour blend proposals into fillet features, or gate them.
 
-    U2 marks a torus adjacent to exactly two non-torus primaries.  What it cannot
-    know is whether those two neighbours were themselves rebuilt: a fillet is an
-    operation on the edge *between two features*, so a blend whose neighbours did
-    not both become features has no edge to sit on and is not emitted.
+    U2 marks a *blend* adjacent to exactly two non-blend primaries.  Two surfaces
+    qualify as a blend and both arrive here: a torus, whose minor radius is the
+    round, and a **partial-arc cylinder**, which is what Fusion's face grouping
+    actually delivers an edge round as -- the measured segmentation put every one
+    of the benchmark's blends in that bucket and not one torus.  Requiring a torus
+    here was pre-pivot: it refused the only shape the producer emits.  The arc is
+    measured upstream, by U2, against the caller's declared ceiling; nothing is
+    re-derived from shape here, because the fit record does not carry the angular
+    span and a planner that guessed it would be inventing the measurement.
+
+    What U2 cannot know is whether those two neighbours were themselves rebuilt:
+    a fillet is an operation on the edge *between two features*, so a blend whose
+    neighbours did not both become features has no edge to sit on and is not
+    emitted.  Nor can it know whether the blend surface was itself claimed by
+    another archetype -- a partial-arc cylinder can be, where a torus never was --
+    and a region rebuilt twice is counted twice in the coverage account.
     """
     gates: dict[str, str] = {}
     owner: dict[str, str] = {}
@@ -874,10 +893,23 @@ def _plan_fillets(
     for region in regions:
         if region.fillet is None:
             continue
-        if not region.accepted or region.fit is None or region.fit.kind != "torus":
+        if not region.accepted or region.fit is None or region.fit.kind not in BLEND_FIT_KINDS:
             gates[region.region_hash] = (
                 "fillet-fit-unaccepted: the record proposes a fillet here and the region carries no "
-                "accepted torus fit, so there is no measured blend surface behind the proposal."
+                f"accepted {' or '.join(sorted(BLEND_FIT_KINDS))} fit, so there is no measured blend "
+                "surface behind the proposal."
+            )
+            continue
+        claimant = owner.get(region.region_hash)
+        if claimant is not None:
+            # The blend surface is already rebuilt -- as a side of an extrude
+            # whose section runs through the round, or as the wall of a bore.
+            # Rounding it again would put the same area in two archetypes, and
+            # the coverage account would report more than the scan.
+            gates[region.region_hash] = (
+                "fillet-region-already-reconstructed: this blend surface is already part of "
+                f"{claimant}, whose own profile rebuilds it. A fillet here would rebuild the same "
+                "area a second time."
             )
             continue
         first, second = region.fillet["between"]
@@ -914,10 +946,10 @@ def _plan_fillets(
                 "constraints": [],
                 "dependencies": list(owners),
                 "reason": (
-                    "an accepted torus adjacent to exactly two non-torus primaries, both of which "
-                    f"this program rebuilds ({owners[0]}, {owners[1]}). Emitted as a fillet radius "
-                    "on their shared edge -- parametric and editable -- rather than as torus "
-                    "surface geometry, which Fusion has no editable home for."
+                    f"an accepted {region.fit.kind} blend adjacent to exactly two non-blend "
+                    f"primaries, both of which this program rebuilds ({owners[0]}, {owners[1]}). "
+                    "Emitted as a fillet radius on their shared edge -- parametric and editable -- "
+                    "rather than as blend surface geometry, which Fusion has no editable home for."
                 ),
             }
         )
@@ -946,8 +978,10 @@ def plan_archetypes(
     boss.  ``material_side`` is ``None`` on an open or inconsistently wound mesh
     and on every plane; when it is ``None`` the region stays unreconstructed
     carrying U2's own reason for the absence.  A **fillet** is assigned only
-    where U2 marked an accepted torus adjacent to exactly two non-torus
-    primaries *and* both neighbours became features here.
+    where U2 marked an accepted blend -- a torus, or a cylinder whose measured
+    arc is short enough to be an edge round rather than a bore -- adjacent to
+    exactly two non-blend primaries, *and* both neighbours became features here,
+    *and* the blend surface was not already claimed by one of them.
 
     Bores are classified **before** the extrude group chooses its sides, because
     an inward cylinder piercing a plate is a hole through it, not a wall of it —
@@ -1314,8 +1348,9 @@ def _user_parameters(
                         "is convex or concave."
                     ),
                     "rationale": (
-                        f"minor radius of the torus fitted to {group['id']}'s blend surface, "
-                        f"rounding the edge between {group['between'][0]} and {group['between'][1]}."
+                        f"the blend radius U2 measured on {group['id']}'s surface -- a torus's "
+                        "minor radius, or a partial-arc cylinder's radius -- rounding the edge "
+                        f"between {group['between'][0]} and {group['between'][1]}."
                     ),
                     "driving_archetypes": [group["id"]],
                 }

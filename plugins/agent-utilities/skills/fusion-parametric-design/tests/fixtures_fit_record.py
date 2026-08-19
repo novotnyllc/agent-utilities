@@ -64,6 +64,24 @@ def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
     }
 
 
+def blend_cylinder(label, axis, axis_point, radius, area, *, between):
+    """An accepted *partial-arc cylinder* carrying U2's fillet proposal.
+
+    The other shape a blend arrives as, and the only one a face-grouped mesh
+    actually produces.  The arc that separates an edge round from a bore is
+    measured upstream against U2's own declared ceiling; the fit record carries
+    the proposal, not the span, so nothing downstream re-measures it.
+    """
+    region = cylinder(label, axis, axis_point, radius, area, 8.0)
+    region["fillet_candidate"] = True
+    region["fillet"] = {
+        "radius": radius,
+        "between": [region_hash(name) for name in between],
+        "emission": "filletFeatures on the shared edge, radius = the cylinder radius over a partial arc",
+    }
+    return region
+
+
 def oriented(region, side, *, reason=None):
     """Attach U2's orientation block, the bore-versus-boss evidence.
 

@@ -415,6 +415,45 @@ class HoleAndFilletTests(unittest.TestCase):
             "recon_fillet_1_radius", program["archetypes"][-1]["radius"]["parameter"]
         )
 
+    def test_a_partial_arc_cylinder_between_two_features_is_also_a_fillet(self) -> None:
+        # The shape a face-grouped mesh actually delivers an edge round as. This
+        # gate wanted a torus, so across the 11 benchmark parts all 114 of U2's
+        # proposals died here and no fillet was ever emitted.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (1.0, 0.0, 0.0), (6.0, 4.0, 2.0), 1.0, 40.0, between=["bore", "z-lo"]
+            ),
+            None,
+        )
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertAlmostEqual(1.0, fillets[0]["radius"]["value"])
+        self.assertEqual(2, len(set(fillets[0]["between"])))
+        self.assertEqual(fillets[0]["id"], program["order"][-1])
+
+    def test_a_blend_another_archetype_already_rebuilds_is_not_filleted_too(self) -> None:
+        # A partial-arc cylinder can be claimed where a torus never could -- here
+        # as a side of the extrude, whose section profile runs through the round
+        # already. Rounding it a second time would put the same area in two
+        # archetypes and report more of the scan covered than there is.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (0.0, 0.0, 1.0), (11.0, 9.0, 15.0), 1.0, 40.0, between=["bore", "z-lo"]
+            ),
+            None,
+        )
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        claimed = [
+            g["id"] for g in program["archetypes"] if fx.region_hash("blend") in g["regions"]
+        ]
+        self.assertEqual(1, len(claimed), program["archetypes"])
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        self.assertAlmostEqual(
+            program["covered_area_fraction"],
+            sum(g["area_fraction"] for g in program["archetypes"]),
+        )
+
     def test_a_blend_whose_neighbours_were_not_both_rebuilt_is_not_a_fillet(self) -> None:
         # A fillet rounds the edge between two features. Nothing here rebuilt
         # the second neighbour, so there is no edge to round.

@@ -479,7 +479,8 @@ does, and only for the release it ran against.
    with. The gate names are `material-side-unavailable` (the open mesh case from
    step 3), `plane-unmappable`, `hole-base-ambiguous`, `hole-base-not-extruded`,
    `hole-axis-oblique`, `hole-not-contained`, `fillet-fit-unaccepted`,
-   `fillet-neighbour-unreconstructed`, and `fillet-neighbour-shared`. **A gate is
+   `fillet-region-already-reconstructed`, `fillet-neighbour-unreconstructed`, and
+   `fillet-neighbour-shared`. **A gate is
    a result, not an error.** A refusal, by contrast, exits 2 printing a JSON
    record whose `reason` is one of `fit-record-malformed`,
    `fit-record-missing-axial-span`, `fit-record-missing-uncertainty`,

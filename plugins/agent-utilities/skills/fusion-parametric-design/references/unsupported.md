@@ -391,10 +391,14 @@ the named gate rather than producing an approximate feature:
 5. **A fillet whose two neighbours were not both rebuilt**
    (`fillet-neighbour-unreconstructed`), or whose neighbours are surfaces of the
    same archetype (`fillet-neighbour-shared`). A fillet rounds the edge between
-   two features; without two features there is no edge.
+   two features; without two features there is no edge. **Or whose own blend
+   surface another archetype already rebuilds**
+   (`fillet-region-already-reconstructed`) — a partial-arc cylinder can be a side
+   of an extrude or the wall of a bore, where a torus never could, and a region
+   rebuilt twice is counted twice in the coverage account.
 6. **A fillet whose parent features share no edge in the built solid.** Recorded
    in the rebuild report's `fillets_skipped` and subtracted from coverage. The
-   torus fit said the two surfaces meet and the built solid says they do not;
+   blend fit said the two surfaces meet and the built solid says they do not;
    rounding some other nearby edge would invent the geometry the measurement
    failed to find.
 7. **Variable-radius and elliptical blends.** Fillets are proposed by adjacency

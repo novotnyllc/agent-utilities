@@ -194,6 +194,155 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
     return vertices, triangles, [0] * len(triangles)
 
 
+def rounded_plinth_mesh(
+    width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
+    post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6,
+):
+    """A closed plinth whose top-front edge is rounded, under a coaxial post.
+
+    Built for the fillet seam, and every part of it earns its place:
+
+    * the **round** is a partial-arc cylinder -- the shape a face-grouped mesh
+      actually delivers an edge round as -- and it is cut into *three* groups
+      along its length, the way Fusion's grouping cuts a real one. Only the
+      middle fragment touches exactly two faces; the outer two also touch a side
+      plane, so they are chains against three primaries and the producer refuses
+      them. That discipline is reproduced here rather than asserted.
+    * the round's axis runs along **x** while the plinth is deeper than it is
+      wide, so the extrude's caps are the front and back faces and the round is
+      not one of the extrude's sides. A round claimed as a side is already
+      rebuilt by the section profile and must not also be filleted.
+    * the **post** is what licenses a revolve, which is what puts the top face in
+      a *different* archetype from the front face -- and a fillet needs an edge
+      between two archetypes.
+
+    Closed and outward-wound, because the rebuild sections the dump for its
+    profiles and an open surface has no section to give.
+    """
+    vertices: list[tuple[float, float, float]] = []
+    index: dict[tuple, int] = {}
+
+    def node(key, point):
+        if key not in index:
+            index[key] = len(vertices)
+            vertices.append(point)
+        return index[key]
+
+    triangles: list[tuple[int, int, int]] = []
+    groups: list[int] = []
+
+    def quad(a, b, c, d, group):
+        triangles.append((a, b, c))
+        groups.append(group)
+        triangles.append((a, c, d))
+        groups.append(group)
+
+    def span(lo, hi, steps, i):
+        return lo + (hi - lo) * i / steps
+
+    def round_point(a):
+        # The endpoints are written exactly rather than evaluated: cos(pi/2) is
+        # 6e-17 and not 0, and the 4e-16 gap that follows is enough to cost the
+        # round its adjacency to the top face, which is the whole point here.
+        if a == 0:
+            return 0.0, height - radius
+        if a == arc:
+            return radius, height
+        angle = math.pi / 2 * a / arc
+        return radius * (1.0 - math.cos(angle)), height - radius * (1.0 - math.sin(angle))
+
+    def bottom(i, j):
+        return node(("b", i, j), (span(0.0, width, nx, i), span(0.0, depth, ny, j), 0.0))
+
+    def top(i, j):
+        return node(("t", i, j), (span(0.0, width, nx, i), span(radius, depth, ny, j), height))
+
+    def front(i, k):
+        return node(("f", i, k), (span(0.0, width, nx, i), 0.0, span(0.0, height - radius, nz, k)))
+
+    def back(i, k):
+        return node(("k", i, k), (span(0.0, width, nx, i), depth, span(0.0, height, nz, k)))
+
+    def blend(i, a):
+        y, z = round_point(a)
+        return node(("r", i, a), (span(0.0, width, nx, i), y, z))
+
+    def rim(level, s):
+        angle = 2.0 * math.pi * (s % post_sides) / post_sides
+        return node(
+            ("p", level, s % post_sides),
+            (
+                width / 2.0 + post_radius * math.cos(angle),
+                (radius + depth) / 2.0 + post_radius * math.sin(angle),
+                height + post_height * level / post_stacks,
+            ),
+        )
+
+    for i in range(nx):
+        for j in range(ny):
+            quad(bottom(i, j), bottom(i, j + 1), bottom(i + 1, j + 1), bottom(i + 1, j), 0)
+    for i in range(nx):
+        for k in range(nz):
+            quad(front(i, k), front(i + 1, k), front(i + 1, k + 1), front(i, k + 1), 2)
+            quad(back(i, k), back(i, k + 1), back(i + 1, k + 1), back(i + 1, k), 3)
+        for a in range(arc):
+            quad(blend(i, a), blend(i + 1, a), blend(i + 1, a + 1), blend(i, a + 1), 6 + min(2, i // (nx // 3)))
+
+    # The two side faces, fanned from an interior hub over a boundary ring that
+    # reuses its neighbours' own nodes -- so every edge of the ring is an edge
+    # some other face already owns, and the adjacency the fillet is read from is
+    # real rather than nearly real.
+    for column, group in ((0, 4), (nx, 5)):
+        ring = (
+            [bottom(column, j) for j in range(ny)]
+            + [back(column, k) for k in range(nz)]
+            + [top(column, ny - j) for j in range(ny)]
+            + [blend(column, arc - a) for a in range(arc)]
+            + [front(column, nz - k) for k in range(nz)]
+        )
+        hub = node(("c", column), (span(0.0, width, nx, column), depth / 2.0, height / 2.0))
+        for m, first in enumerate(ring):
+            second = ring[(m + 1) % len(ring)]
+            triangles.append((hub, second, first) if column else (hub, first, second))
+            groups.append(group)
+
+    # The top face is a rectangle with the post's footprint cut out of it: two
+    # closed loops, stitched by walking both in step.
+    outer = (
+        [top(i, 0) for i in range(nx)]
+        + [top(nx, j) for j in range(ny)]
+        + [top(nx - i, ny) for i in range(nx)]
+        + [top(0, ny - j) for j in range(ny)]
+    )
+    # Both loops run counter-clockwise seen from +z, and the inner one starts at
+    # the rim point nearest the outer one's start. Without that alignment the
+    # walk below is monotone in each loop's own parameter but not in angle, and
+    # it stitches triangles straight across the hole.
+    start = math.atan2(radius - (radius + depth) / 2.0, -width / 2.0)
+    offset = round(start / (2.0 * math.pi) * post_sides)
+    inner = [rim(0, offset + s) for s in range(post_sides)]
+    i = j = 0
+    while i < len(outer) or j < len(inner):
+        if j >= len(inner) or (
+            i < len(outer) and (i + 1) / len(outer) <= (j + 1) / len(inner)
+        ):
+            triangles.append((outer[i], outer[(i + 1) % len(outer)], inner[j % len(inner)]))
+            i += 1
+        else:
+            triangles.append((outer[i % len(outer)], inner[(j + 1) % len(inner)], inner[j % len(inner)]))
+            j += 1
+        groups.append(1)
+
+    for k in range(post_stacks):
+        for s in range(post_sides):
+            quad(rim(k, s), rim(k, s + 1), rim(k + 1, s + 1), rim(k + 1, s), 9)
+    cap = node(("pc",), (width / 2.0, (radius + depth) / 2.0, height + post_height))
+    for s in range(post_sides):
+        triangles.append((cap, rim(post_stacks, s), rim(post_stacks, s + 1)))
+        groups.append(10)
+    return vertices, triangles, groups
+
+
 def unweld(vertices, triangles, groups=None, jitter=1e-7, seed=9):
     """Explode a welded mesh: every triangle gets its own three nodes.
 

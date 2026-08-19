@@ -62,8 +62,10 @@ PLAN_VERSION = 1
 # The archetype kinds this emitter builds — the program's whole vocabulary.
 # `hole` and `fillet` joined the other two once U3 gained a producer for them:
 # U2 measures each region's `material_side`, which is the bore-versus-boss
-# evidence hole classification was previously missing, and marks the torus
-# adjacency a fillet needs.
+# evidence hole classification was previously missing, and marks the blend
+# adjacency a fillet needs. The emitter reads the archetype, never the fit
+# behind it: a fillet step is a radius parameter and two archetype ids, so a
+# blend measured as a partial-arc cylinder emits exactly as a torus one does.
 EMITTED_KINDS = {"sketch-extrude", "revolve", "hole", "fillet"}
 
 # The kinds that own a sketch.  A fillet does not: it names a radius and two
@@ -1900,7 +1902,7 @@ def _build_fillet(component, step, built, created, undo, report, skipped, missin
                 "reason": "entity-resolution-ambiguous",
                 "detail": (
                     "the two features this blend rounds share no edge, so there is no edge to "
-                    "round. The torus fit says they meet; the built solid says they do not."
+                    "round. The blend fit says they meet; the built solid says they do not."
                 ),
             }
         )

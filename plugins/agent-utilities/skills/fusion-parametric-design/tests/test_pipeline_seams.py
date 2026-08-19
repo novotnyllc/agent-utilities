@@ -647,6 +647,123 @@ class RebuildToEditabilitySeamTests(unittest.TestCase):
         self.assertEqual([driver], account["stages"][3]["checked"])
 
 
+class FilletSeamTests(unittest.TestCase):
+    """A partial-arc cylinder round, from the mesh to an emitted fillet feature.
+
+    The producer changed shape under the consumer and every test passed. U2 stopped
+    proposing fillets as tori -- a face-grouped mesh delivers an edge round as a run
+    of *partial-arc cylinders*, and across the 11 benchmark parts it produced 114
+    such candidates and not one torus -- while U3 still required `fit.kind ==
+    "torus"`. All 114 died at planning with `fillet-fit-unaccepted` and no fillet
+    archetype has ever been emitted. The unit tests on either side were green
+    throughout, because each was written against its own idea of the record.
+
+    So nothing here is a fixture: a mesh with a rounded edge is segmented, fitted,
+    planned, emitted and run against the Fusion doubles, and the assertion is that
+    a fillet feature comes out the far end.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        vertices, triangles, groups = ts.rounded_plinth_mesh()
+        cls.dump = ts.make_dump(vertices, triangles, face_groups=groups)
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def blend(self):
+        """The one region U2 marked, straight out of the real record."""
+        marked = [r for r in self.record["regions"] if r.get("fillet_candidate")]
+        self.assertEqual(1, len(marked), [r["region_hash"] for r in marked])
+        return marked[0]
+
+    def fillets(self):
+        return [g for g in self.program["archetypes"] if g["kind"] == "fillet"]
+
+    def test_the_producer_marks_the_round_as_a_cylinder_and_not_a_torus(self) -> None:
+        # If this ever goes back to a torus the widened gate stops being the
+        # thing under test, and the rest of this class would pass for the wrong
+        # reason.
+        blend = self.blend()
+        self.assertEqual("cylinder", blend["fit"]["kind"])
+        self.assertLess(blend["fit"]["support"]["angular_span_deg"], 180.0)
+        self.assertAlmostEqual(4.0, blend["fillet"]["radius"], places=6)
+
+    def test_the_planner_turns_that_cylinder_into_a_fillet_archetype(self) -> None:
+        fillets = self.fillets()
+        self.assertEqual(1, len(fillets), self.program["unreconstructed"])
+        fillet = fillets[0]
+        self.assertEqual([self.blend()["region_hash"]], fillet["regions"])
+        self.assertAlmostEqual(4.0, fillet["radius"]["value"], places=6)
+        # The evidence a fillet needs: two neighbours, each rebuilt by a
+        # *different* archetype this same program contains.
+        owners = {g["id"]: g["kind"] for g in self.program["archetypes"]}
+        self.assertEqual(2, len(set(fillet["between"])))
+        self.assertEqual({"revolve", "sketch-extrude"}, {owners[i] for i in fillet["between"]})
+        self.assertEqual(fillet["between"], fillet["dependencies"])
+        # Ordered after both, because it rounds what they built.
+        order = self.program["order"]
+        self.assertEqual(order[-1], fillet["id"])
+
+    def test_the_radius_is_bound_to_a_user_parameter_not_a_magic_number(self) -> None:
+        fillet = self.fillets()[0]
+        name = fillet["radius"]["parameter"]
+        row = [p for p in self.program["user_parameters"] if p["name"] == name]
+        self.assertEqual(1, len(row), self.program["user_parameters"])
+        self.assertEqual("radius", row[0]["quantity"])
+        self.assertAlmostEqual(fillet["radius"]["value"], row[0]["nominal"], places=9)
+
+    def test_the_blend_area_is_counted_once_and_only_once(self) -> None:
+        # A partial-arc cylinder can be claimed by another archetype where a
+        # torus never could -- as a side of the extrude, or the wall of a bore.
+        # Rebuilding it twice would put more than the scan in the coverage.
+        self.assertAlmostEqual(
+            self.program["covered_area_fraction"],
+            sum(g["area_fraction"] for g in self.program["archetypes"]),
+            places=9,
+        )
+
+    def test_the_outer_fragments_of_the_round_are_refused_not_filleted(self) -> None:
+        # Only the middle fragment touches exactly two faces. The outer two also
+        # touch a side plane, and a blend against three primaries is not an edge.
+        gates = {
+            entry["region_id"]: entry["gate"] for entry in self.program["unreconstructed"]
+        }
+        fragments = [
+            region["region_hash"]
+            for region in self.record["regions"]
+            if region["accepted"]
+            and region["fit"]["kind"] == "cylinder"
+            and not region.get("fillet_candidate")
+            and region["fit"]["support"]["angular_span_deg"] < 180.0
+        ]
+        self.assertEqual(2, len(fragments))
+        for region_hash in fragments:
+            self.assertIn(region_hash, gates)
+
+    def test_the_fillet_reaches_an_emitted_script_and_the_transaction_builds_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(self.dump))
+            source = emit_mesh_rebuild_script(
+                self.manifest,
+                classification_record(),
+                source_record(self.manifest),
+                self.program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        report, error = run_transaction(source, fakes.make_design(), self.manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        built = [entry for entry in report["created"] if entry["kind"] == "fillet"]
+        self.assertEqual(1, len(built), report)
+        self.assertEqual(self.fillets()[0]["id"], built[0]["archetype_id"])
+        self.assertEqual(self.fillets()[0]["between"], built[0]["between"])
+        self.assertGreater(built[0]["edge_count"], 0)
+        self.assertEqual([], report["fillets_skipped"], report)
+
+
 class RefusalToReplanSeamTests(unittest.TestCase):
     """The refusal `emit-mesh-rebuild` prints, read by `replan-without`.
 
