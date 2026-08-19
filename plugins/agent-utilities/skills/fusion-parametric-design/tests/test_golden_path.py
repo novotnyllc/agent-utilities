@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
+from fusion_design.export_handoff import emit_export_example_script, example_verification_report_bytes
 from fusion_design.manifest import load_manifest
 from fusion_design.planner import build_plan
 from fusion_design.positive_control import _box_specs, emit_positive_control_script
@@ -24,7 +25,7 @@ class GoldenPathTests(unittest.TestCase):
         digest = manifest_sha256(manifest)
         scripts = sorted(GENERATED.glob("*.py"))
         self.assertEqual(
-            {"inventory.py", "positive_control.py", "scaffold.py", "sync_parameters.py", "verify.py"},
+            {"export.py", "inventory.py", "positive_control.py", "scaffold.py", "sync_parameters.py", "verify.py"},
             {path.name for path in scripts},
         )
         for path in scripts:
@@ -36,6 +37,18 @@ class GoldenPathTests(unittest.TestCase):
             emit_positive_control_script(manifest),
             (GENERATED / "positive_control.py").read_text(encoding="utf-8"),
         )
+
+        self.assertEqual(
+            example_verification_report_bytes(manifest),
+            (EXAMPLE / "sample-verification-report.json").read_bytes(),
+        )
+        self.assertEqual(
+            emit_export_example_script(manifest),
+            (GENERATED / "export.py").read_text(encoding="utf-8"),
+        )
+        export_source = (GENERATED / "export.py").read_text(encoding="utf-8")
+        for token in ("stale-verification", "export-capability", "output-exists", "cleanup-incomplete", "FUSION_EXPORT_DIR"):
+            self.assertIn(token, export_source)
 
         data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         verification = data["verification"]

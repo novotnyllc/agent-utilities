@@ -1,0 +1,45 @@
+{
+  "brep_bounding_boxes_mm": {
+    "10_PRODUCT/PROD__BASE": {
+      "max": [
+        100.0,
+        110.0,
+        2.0
+      ],
+      "min": [
+        0.0,
+        50.0,
+        0.0
+      ]
+    },
+    "10_PRODUCT/PROD__LID": {
+      "max": [
+        35.0,
+        13.0,
+        12.0
+      ],
+      "min": [
+        0.0,
+        0.0,
+        10.0
+      ]
+    },
+    "90_VALIDATION/VAL__PD_FIT_COUPON": {
+      "max": [
+        10.0,
+        110.0,
+        2.0
+      ],
+      "min": [
+        0.0,
+        100.0,
+        0.0
+      ]
+    }
+  },
+  "kind": "verification",
+  "manifest_sha256": "7f3e64dbc70edafb0cc28c8082f85fd9209f178e5509aaf2afbc8e89f6884e5e",
+  "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
+  "ok": true,
+  "project": "wearable-controller-pod"
+}
