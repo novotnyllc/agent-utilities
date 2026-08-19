@@ -95,6 +95,7 @@ from .mesh_fitting import (
     _unit,
     fit_primitive,
     parameter_uncertainty,
+    route_kinematic_surface,
 )
 
 
@@ -134,6 +135,7 @@ STAGES = (
     "segmentation",
     "disproof",
     "face-group-agreement",
+    "routing",
     "coverage",
 )
 
@@ -361,7 +363,39 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
         lambda v: 0.0 <= v <= 1.0,
         "how much of the part must be explained before the record is worth anything",
     ),
+    # kinematic router (Pottmann & Randrup 1998), run only on regions the
+    # primitive stage disclaimed
+    "router_residual_sigma_factor": (
+        "float",
+        _positive,
+        "how many measured normal-noise sigmas of n.v the best rigid motion may still miss by",
+    ),
+    "router_eigengap_min": (
+        "float",
+        _positive,
+        "how far the second-smallest eigenvalue must sit from zero, as a fraction of the "
+        "spectrum, before one invariant motion is a single answer rather than a family",
+    ),
+    "router_translation_epsilon": (
+        "float",
+        _positive,
+        "how small the rotation part of the unit motion vector reads as a pure translation",
+    ),
+    "router_pitch_epsilon": (
+        "float",
+        _positive,
+        "how small a screw's scaled pitch reads as a pure rotation rather than a helix",
+    ),
 }
+
+#: The router's gate names, kept together because they are always declared and
+#: read as a set.
+_ROUTER_GATE_NAMES = (
+    "router_residual_sigma_factor",
+    "router_eigengap_min",
+    "router_translation_epsilon",
+    "router_pitch_epsilon",
+)
 
 #: Passed straight through to ``mesh_fitting.fit_primitive``.
 _FIT_GATE_NAMES = (
@@ -2490,6 +2524,10 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 checked.append("parameter-uncertainty")
 
         region_hash = _region_hash(mesh.dump_sha256, triangles)
+        # Kept beside the record rather than in it: the router needs the welded
+        # point indices, and the record already carries the dump-space ones, so
+        # serializing a second index list would grow every fit record for nothing.
+        state.setdefault("region_points", {})[region_hash] = point_indices
         recorded = PrimitiveFit(
             kind=fit.kind,
             accepted=accepted,
@@ -2725,6 +2763,92 @@ def _stage_face_group_agreement(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+#: The router needs six independent rows for six unknowns; below that the 6x6 is
+#: singular by construction. Structural, like _MIN_REGION_POINTS, not a knob.
+_MIN_ROUTER_SAMPLES = 6
+
+
+def _router_gates(state: dict[str, Any]) -> dict[str, float]:
+    spec: DetectionSpec = state["spec"]
+    return {
+        "sigma_theta_rad": float(state["normals"]["sigma_theta_rad"]),
+        "residual_sigma_factor": float(spec.value("router_residual_sigma_factor")),
+        "eigengap_min": float(spec.value("router_eigengap_min")),
+        "translation_epsilon": float(spec.value("router_translation_epsilon")),
+        "pitch_epsilon": float(spec.value("router_pitch_epsilon")),
+    }
+
+
+def _route_points(
+    indices: Sequence[int], state: dict[str, Any], gates: Mapping[str, float]
+) -> dict[str, Any]:
+    """Route one set of welded point indices, or say why it could not be routed."""
+    mesh: WeldedMesh = state["mesh"]
+    frame: _PointFrame = state["frame"]
+    points: list[Vec3] = []
+    normals: list[Vec3] = []
+    for index in indices:
+        normal = frame.normals[index]
+        if normal is None:
+            continue
+        points.append(mesh.vertices[index])
+        normals.append(normal)
+    signature = _dominant_class(frame, indices)
+    if len(points) < _MIN_ROUTER_SAMPLES:
+        return {
+            "verdict": "none",
+            "refusal": None,
+            "signature": signature,
+            "sample_count": len(points),
+            "reason": (
+                f"only {len(points)} of this region's points carry a usable normal, and six "
+                "independent rows are the minimum for a six-parameter motion."
+            ),
+        }
+    try:
+        return route_kinematic_surface(points, normals, signature=signature, **gates)
+    except ValueError as error:
+        # A degenerate sample set (zero extent) is a property of the region, and
+        # naming it is more useful than a stage failure that stops the run.
+        return {
+            "verdict": "none",
+            "refusal": None,
+            "signature": signature,
+            "sample_count": len(points),
+            "reason": f"the region could not be routed: {error}",
+        }
+
+
+def _stage_routing(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Ask the disclaimed regions whether a rigid motion sweeps them.
+
+    Only the disclaimed ones.  A region with an accepted primitive already has
+    an answer, and the router's own degeneracy gate is written on the assumption
+    that a degenerate spectrum means the two stages disagree -- running it on an
+    accepted plane would manufacture that disagreement on every part.
+    """
+    gates = _router_gates(state)
+    routed = 0
+    for region in state["regions"]:
+        if region["accepted"]:
+            continue
+        indices = state["region_points"].get(region["region_hash"], ())
+        region["routing"] = _route_points(indices, state, gates)
+        routed += 1
+    state["record"]["routing"] = {
+        "routed_region_count": routed,
+        "declared_gates": {key: value for key, value in gates.items()},
+        "note": (
+            "Pottmann & Randrup (Computing 60, 1998): a surface is swept by a one-parameter rigid "
+            "motion exactly when every normal is orthogonal to the motion's velocity field, which "
+            "is linear in the six unknowns (c, c_bar). One 6x6 symmetric eigenproblem per region "
+            "answers extrusion, revolution and helix together. The verdict is a proposal: nothing "
+            "may be emitted from it without its own confirmation downstream."
+        ),
+    }
+    return None
+
+
 def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
     topo: _Topology = state["topology"]
     mesh: WeldedMesh = state["mesh"]
@@ -2751,7 +2875,14 @@ def _stage_coverage(state: dict[str, Any]) -> dict[str, Any] | None:
         for r in regions
         if not r["accepted"]
     ]
-    record["unclaimed"] = _unclaimed_components(unclaimed, mesh, topo, frame)
+    gates = _router_gates(state)
+    record["unclaimed"] = _unclaimed_components(
+        unclaimed,
+        mesh,
+        topo,
+        frame,
+        route=lambda indices: _route_points(indices, state, gates),
+    )
     floor = float(state["spec"].value("min_covered_area_fraction"))
     if covered < floor:
         return _refusal(
@@ -2807,12 +2938,19 @@ def _mark_fillet_candidates(
 
 
 def _unclaimed_components(
-    unclaimed: Sequence[int], mesh: WeldedMesh, topo: _Topology, frame: _PointFrame
+    unclaimed: Sequence[int],
+    mesh: WeldedMesh,
+    topo: _Topology,
+    frame: _PointFrame,
+    *,
+    route: Callable[[Sequence[int]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Unclaimed is a first-class outcome, and it says what it looks like.
 
     "Saddle signature, and no supported primitive fits a saddle" is a refusal
-    message a user can act on. "Nothing fit" is not.
+    message a user can act on. "Nothing fit" is not.  Each component also
+    carries its router verdict, so the record distinguishes "swept by a
+    translation nobody could section" from "genuinely doubly curved".
     """
     members = set(unclaimed)
     seen: set[int] = set()
@@ -2845,6 +2983,7 @@ def _unclaimed_components(
                 "area_fraction": area / topo.total_area if topo.total_area > 0.0 else 0.0,
                 "bounding_box": [list(lo), list(hi)],
                 "dominant_curvature": _dominant_class(frame, points),
+                "routing": None if route is None else route(points),
             }
         )
     components.sort(key=lambda c: (-c["area_fraction"], c["triangle_count"]))
@@ -2876,6 +3015,7 @@ def _stage_runners() -> dict[str, Callable[[dict[str, Any]], dict[str, Any] | No
         "segmentation": _stage_segmentation,
         "disproof": _stage_disproof,
         "face-group-agreement": _stage_face_group_agreement,
+        "routing": _stage_routing,
         "coverage": _stage_coverage,
     }
 
@@ -2914,6 +3054,7 @@ def fit_regions(dump: MeshDump, spec: DetectionSpec) -> dict[str, Any]:
         "spec": spec,
         "record": record,
         "regions": [],
+        "region_points": {},
         "flags": [],
     }
 

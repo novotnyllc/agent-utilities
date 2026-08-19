@@ -52,7 +52,17 @@ _SIMPLER_KINDS = {
     "torus": ("plane", "cylinder", "sphere"),
 }
 
-ENTITY_KINDS = {"line", "arc", "circle"}
+ENTITY_KINDS = {"line", "arc", "circle", "spline"}
+
+#: What the kinematic router may conclude. ``none`` is a verdict, not an error:
+#: it says the region admits no one-parameter rigid motion, which is the honest
+#: answer for a doubly-curved patch.
+ROUTER_VERDICTS = {"extrusion", "revolution", "helical", "none"}
+
+#: The router's own refusals, from the closed set the reconstruction stages
+#: share. A refusal is never a verdict: it says the measurement did not license
+#: one, and the region falls through.
+ROUTER_REFUSALS = {"router-ambiguous", "router-signature-conflict"}
 
 INTENT_KINDS = {
     "coaxial",
@@ -178,15 +188,27 @@ def _solve(matrix: Sequence[Sequence[float]], rhs: Sequence[float]) -> tuple[flo
     return out if all(math.isfinite(v) for v in out) else None
 
 
-def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], tuple[Vec3, ...]]:
-    """Cyclic Jacobi on a symmetric 3x3; eigenpairs sorted by ascending value."""
+def _jacobi_eigen(
+    matrix: Sequence[Sequence[float]],
+) -> tuple[tuple[float, ...], tuple[tuple[float, ...], ...]]:
+    """Cyclic Jacobi on a symmetric n x n; eigenpairs sorted by ascending value.
+
+    The 3x3 case is the one the primitive fits use and the 6x6 case is the
+    kinematic router's; they are the same sweep over off-diagonal pairs, so
+    there is one implementation rather than two that can drift apart.
+    Eigenvectors come back normalized, and a vector that normalizes to nothing
+    comes back as the corresponding basis vector rather than as zeros, so a
+    caller never has to distinguish "degenerate" from "absent".
+    """
+    n = len(matrix)
     a = [list(row) for row in matrix]
-    v = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    pairs_to_sweep = [(p, q) for p in range(n) for q in range(p + 1, n)]
     for _ in range(64):
-        off = abs(a[0][1]) + abs(a[0][2]) + abs(a[1][2])
+        off = sum(abs(a[p][q]) for p, q in pairs_to_sweep)
         if off <= 1e-18:
             break
-        for p, q in ((0, 1), (0, 2), (1, 2)):
+        for p, q in pairs_to_sweep:
             apq = a[p][q]
             if abs(apq) <= 1e-20:
                 continue
@@ -194,24 +216,33 @@ def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ..
             t = math.copysign(1.0, theta) / (abs(theta) + math.sqrt(theta * theta + 1.0))
             c = 1.0 / math.sqrt(t * t + 1.0)
             s = t * c
-            for k in range(3):
+            for k in range(n):
                 akp, akq = a[k][p], a[k][q]
                 a[k][p], a[k][q] = c * akp - s * akq, s * akp + c * akq
-            for k in range(3):
+            for k in range(n):
                 apk, aqk = a[p][k], a[q][k]
                 a[p][k], a[q][k] = c * apk - s * aqk, s * apk + c * aqk
-            for k in range(3):
+            for k in range(n):
                 vkp, vkq = v[k][p], v[k][q]
                 v[k][p], v[k][q] = c * vkp - s * vkq, s * vkp + c * vkq
     pairs = sorted(
-        ((a[i][i], (v[0][i], v[1][i], v[2][i])) for i in range(3)),
+        ((a[i][i], tuple(v[row][i] for row in range(n))) for i in range(n)),
         key=lambda kv: kv[0],
     )
-    vectors: list[Vec3] = []
-    for _, raw in pairs:
-        unit = _unit(raw)
-        vectors.append(unit if unit is not None else (0.0, 0.0, 1.0))
+    vectors: list[tuple[float, ...]] = []
+    for index, (_value, raw) in enumerate(pairs):
+        norm = math.sqrt(sum(component * component for component in raw))
+        if not math.isfinite(norm) or norm < 1e-15:  # pragma: no cover - Jacobi keeps it unitary
+            vectors.append(tuple(1.0 if k == index else 0.0 for k in range(n)))
+            continue
+        vectors.append(tuple(component / norm for component in raw))
     return tuple(p[0] for p in pairs), tuple(vectors)
+
+
+def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], tuple[Vec3, ...]]:
+    """Cyclic Jacobi on a symmetric 3x3; eigenpairs sorted by ascending value."""
+    values, vectors = _jacobi_eigen(matrix)
+    return values, tuple((v[0], v[1], v[2]) for v in vectors)
 
 
 def _centroid(points: Sequence[Vec3]) -> Vec3:
@@ -578,6 +609,12 @@ class SketchEntity:
     share endpoints exactly and a coincident constraint is trivially satisfiable.
     ``center``/``radius``/``mid`` are present only for arcs and circles — a line
     reports them absent rather than carrying a fabricated centre.
+
+    ``fit_points``/``span_points`` are present only for splines.  ``fit_points``
+    are the points Fusion's *fitted* spline interpolates — few, chosen, and the
+    only thing a human will ever drag; ``span_points`` are the section points the
+    span was measured from, carried so the transaction can compare the spline
+    Fusion actually built against the mesh rather than against a prediction.
     """
 
     kind: str
@@ -588,10 +625,22 @@ class SketchEntity:
     center: Vec3 | None = None
     radius: float | None = None
     mid: Vec3 | None = None
+    fit_points: tuple[Vec3, ...] | None = None
+    span_points: tuple[Vec3, ...] | None = None
 
     def __post_init__(self) -> None:
         if not _in_closed_set(self.kind, ENTITY_KINDS):
             raise ValueError(f"kind must be one of {', '.join(sorted(ENTITY_KINDS))}.")
+        if self.kind == "spline":
+            if not self.fit_points or len(self.fit_points) < 2:
+                raise ValueError("a spline entity needs at least two fit points.")
+            if not self.span_points or len(self.span_points) < len(self.fit_points):
+                raise ValueError(
+                    "a spline entity carries the span points it was measured from, so the "
+                    "transaction can check the curve Fusion built against them."
+                )
+        elif self.fit_points is not None or self.span_points is not None:
+            raise ValueError("only a spline entity carries fit points.")
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -607,6 +656,10 @@ class SketchEntity:
             out["radius"] = self.radius
         if self.mid is not None:
             out["mid"] = list(self.mid)
+        if self.fit_points is not None:
+            out["fit_points"] = [list(p) for p in self.fit_points]
+        if self.span_points is not None:
+            out["span_points"] = [list(p) for p in self.span_points]
         return out
 
 
@@ -649,12 +702,280 @@ def _arc_fit(points: Sequence[Vec3], u: Vec3, v: Vec3) -> tuple[Vec3, float, flo
     return centre, r, worst
 
 
+class ProfileUnresolvable(ValueError):
+    """A span no entity in the vocabulary can carry inside its declared budget.
+
+    Raised rather than returned because the alternative — handing back the
+    biarc chain the span was already approximated by — is the "mesh in sketch
+    clothing" this stage exists to refuse.  ``detail`` carries the measured
+    numbers so the caller's refusal can quote them instead of restating the
+    threshold.
+    """
+
+    def __init__(self, message: str, detail: dict[str, Any]):
+        ValueError.__init__(self, message)
+        self.detail = detail
+
+
+def _chord_params(points: Sequence[Vec3]) -> list[float]:
+    values = [0.0]
+    for a, b in zip(points, points[1:]):
+        values.append(values[-1] + _length(_sub(b, a)))
+    return values
+
+
+def _natural_cubic(ts: Sequence[float], ys: Sequence[float]) -> list[float]:
+    """Second derivatives of the natural cubic interpolant. Tridiagonal, O(k)."""
+    n = len(ts)
+    if n < 3:
+        return [0.0] * n
+    lower = [0.0] * n
+    diagonal = [1.0] * n
+    upper = [0.0] * n
+    rhs = [0.0] * n
+    for i in range(1, n - 1):
+        h0 = ts[i] - ts[i - 1]
+        h1 = ts[i + 1] - ts[i]
+        if h0 <= 0.0 or h1 <= 0.0:  # pragma: no cover - callers dedupe by spacing
+            return [0.0] * n
+        lower[i] = h0
+        diagonal[i] = 2.0 * (h0 + h1)
+        upper[i] = h1
+        rhs[i] = 6.0 * ((ys[i + 1] - ys[i]) / h1 - (ys[i] - ys[i - 1]) / h0)
+    for i in range(1, n):
+        factor = lower[i] / diagonal[i - 1]
+        diagonal[i] -= factor * upper[i - 1]
+        rhs[i] -= factor * rhs[i - 1]
+    out = [0.0] * n
+    for i in range(n - 2, 0, -1):
+        out[i] = (rhs[i] - upper[i] * out[i + 1]) / diagonal[i]
+    return out
+
+
+def _cubic_at(ts: Sequence[float], ys: Sequence[float], m: Sequence[float], t: float) -> float:
+    n = len(ts)
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if ts[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    h = ts[hi] - ts[lo]
+    if h <= 0.0:  # pragma: no cover - guarded by the spacing floor
+        return ys[lo]
+    a = (ts[hi] - t) / h
+    b = (t - ts[lo]) / h
+    return (
+        a * ys[lo]
+        + b * ys[hi]
+        + ((a * a * a - a) * m[lo] + (b * b * b - b) * m[hi]) * (h * h) / 6.0
+    )
+
+
+def _interpolant_deviation(
+    points: Sequence[Vec3], params: Sequence[float], knots: Sequence[int]
+) -> tuple[int, float]:
+    """Worst distance from a span point to the interpolant at its own parameter.
+
+    Compared at the matched chord parameter rather than by true point-to-curve
+    distance: it is an O(n) upper bound on the geometric deviation, so it is
+    conservative in the direction that matters -- it never reports a span
+    closer to the curve than it is.
+    """
+    ts = [params[k] for k in knots]
+    curves = [
+        _natural_cubic(ts, [points[k][axis] for k in knots]) for axis in range(3)
+    ]
+    values = [[points[k][axis] for k in knots] for axis in range(3)]
+    worst_index, worst = knots[0], 0.0
+    for index, point in enumerate(points):
+        t = params[index]
+        estimate = tuple(_cubic_at(ts, values[axis], curves[axis], t) for axis in range(3))
+        distance = _length(_sub(point, estimate))  # type: ignore[arg-type]
+        if distance > worst:
+            worst_index, worst = index, distance
+    return worst_index, worst
+
+
+def _curvature_extrema(points: Sequence[Vec3]) -> list[int]:
+    """Interior indices where the smoothed discrete turning angle peaks.
+
+    The INUS disclosure's "curvature distribution" split rule (008 S2.5), used
+    here only to *seed* the fit points: a curve's extrema of curvature are where
+    an interpolant most needs a point, so starting there converges in fewer
+    insertions than starting from the ends alone.  It decides nothing on its
+    own, which is why it needs no threshold of its own.
+    """
+    n = len(points)
+    if n < 5:
+        return []
+    turning = [0.0] * n
+    for index in range(1, n - 1):
+        a = _unit(_sub(points[index], points[index - 1]))
+        b = _unit(_sub(points[index + 1], points[index]))
+        if a is None or b is None:
+            continue
+        turning[index] = 1.0 - max(-1.0, min(1.0, _dot(a, b)))
+    smoothed = [
+        (turning[max(i - 1, 0)] + turning[i] + turning[min(i + 1, n - 1)]) / 3.0
+        for i in range(n)
+    ]
+    return [
+        index
+        for index in range(2, n - 2)
+        if smoothed[index] > smoothed[index - 1] and smoothed[index] > smoothed[index + 1]
+    ]
+
+
+def select_fit_points(
+    points: Sequence[Vec3],
+    *,
+    tolerance: float,
+    min_spacing: float,
+    max_points: int,
+) -> tuple[tuple[int, ...], float]:
+    """The smallest set of interpolated fit points that stays within tolerance.
+
+    Fusion's editable spline is a *fitted* spline -- an interpolant through fit
+    points -- so the host-side question is never "what approximating B-spline
+    fits these points" but "which few points must the curve pass through".
+    Greedy insert-worst (the simple form of Park & Lee's dominant-point
+    selection): start from the ends plus the curvature extrema, and keep adding
+    the point the current interpolant misses by the most.
+
+    Both floors refuse rather than widen.  Below ``min_spacing`` the loop would
+    be reproducing scanner texture, and past ``max_points`` the result is not
+    something a human edits point by point -- either way the honest answer is
+    that this span is not a sketch curve, which is what the exception says.
+    """
+    if len(points) < 2:
+        raise ValueError("a spline span needs at least two points.")
+    params = _chord_params(points)
+    knots = [0, len(points) - 1]
+    for index in _curvature_extrema(points):
+        if len(knots) >= max_points:
+            break
+        if all(abs(params[index] - params[k]) >= min_spacing for k in knots):
+            knots.append(index)
+    knots.sort()
+    while True:
+        worst_index, worst = _interpolant_deviation(points, params, knots)
+        if worst <= tolerance:
+            return tuple(knots), worst
+        gap = min(abs(params[worst_index] - params[k]) for k in knots)
+        if gap < min_spacing:
+            raise ProfileUnresolvable(
+                f"this span needs a fit point {gap:.6g} from its neighbour to reach "
+                f"{tolerance:.6g}, which is inside the declared {min_spacing:.6g} spacing floor; "
+                "below that the curve is reproducing measurement noise, not shape.",
+                {
+                    "reason": "fit-point-spacing",
+                    "worst_deviation": worst,
+                    "tolerance": tolerance,
+                    "spacing": gap,
+                    "min_spacing": min_spacing,
+                    "fit_point_count": len(knots),
+                },
+            )
+        if len(knots) >= max_points:
+            raise ProfileUnresolvable(
+                f"this span still deviates by {worst:.6g} at the declared budget of {max_points} "
+                "fit points; a profile needing more is not one a human edits point by point.",
+                {
+                    "reason": "fit-point-budget",
+                    "worst_deviation": worst,
+                    "tolerance": tolerance,
+                    "max_points": max_points,
+                    "fit_point_count": len(knots),
+                },
+            )
+        knots.append(worst_index)
+        knots.sort()
+
+
+def _turn_deg(points: Sequence[Vec3], index: int) -> float:
+    """The polyline's own turning angle at one interior vertex, in degrees."""
+    if index <= 0 or index >= len(points) - 1:
+        return 0.0
+    a = _unit(_sub(points[index], points[index - 1]))
+    b = _unit(_sub(points[index + 1], points[index]))
+    if a is None or b is None:
+        return 0.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, _dot(a, b)))))
+
+
+def _merge_spline_runs(
+    entities: Sequence[SketchEntity],
+    spans: Sequence[tuple[int, int]],
+    pts: Sequence[Vec3],
+    *,
+    tolerance: float,
+    min_spacing: float,
+    max_points: int,
+    min_arc_run: int,
+    corner_tolerance_deg: float,
+) -> tuple[SketchEntity, ...]:
+    """Replace a corner-free chain of arcs with the one spline it approximates.
+
+    The trigger is the discriminating one, and it is the ``_SIMPLER_KINDS``
+    discipline read backwards.  A designed outline separates its arcs with lines
+    or with corners, so a run of one or two arcs is arcs.  ``min_arc_run`` or
+    more consecutive arcs with no corner between them is a *curve* that the
+    greedy contest biarc-approximated: each arc's centre and radius is then an
+    artefact of where the fit happened to break, and dimensioning them would
+    write a dozen parameters nobody measured.  One spline through a few chosen
+    points is the same geometry with the editability it actually has.
+    """
+    out: list[SketchEntity] = []
+    index = 0
+    count = len(entities)
+    while index < count:
+        run_end = index
+        while (
+            run_end + 1 < count
+            and entities[run_end].kind == "arc"
+            and entities[run_end + 1].kind == "arc"
+            and _turn_deg(pts, spans[run_end][1]) <= corner_tolerance_deg
+        ):
+            run_end += 1
+        if entities[index].kind != "arc" or run_end - index + 1 < min_arc_run:
+            out.append(entities[index])
+            index += 1
+            continue
+        span_points = tuple(pts[spans[index][0] : spans[run_end][1] + 1])
+        knots, residual = select_fit_points(
+            span_points,
+            tolerance=tolerance,
+            min_spacing=min_spacing,
+            max_points=max_points,
+        )
+        out.append(
+            SketchEntity(
+                kind="spline",
+                start=span_points[0],
+                end=span_points[-1],
+                residual=residual,
+                point_count=len(span_points),
+                fit_points=tuple(span_points[k] for k in knots),
+                span_points=span_points,
+            )
+        )
+        index = run_end + 1
+    return tuple(out)
+
+
 def classify_polyline(
     points: Any,
     *,
     tolerance: float,
     closed: bool = False,
     normal: Any = None,
+    spline_tolerance: float | None = None,
+    min_fit_point_spacing: float | None = None,
+    max_fit_points: int | None = None,
+    min_arc_run: int = 3,
+    corner_tolerance_deg: float = 10.0,
 ) -> tuple[SketchEntity, ...]:
     """Split a section polyline into line and arc runs within ``tolerance``.
 
@@ -666,10 +987,23 @@ def classify_polyline(
     A closed polyline is first rotated to start at its sharpest corner, so a
     square section yields four lines rather than five; a closed loop that fits a
     single circle within tolerance is reported as one ``circle`` entity.
+
+    ``spline_tolerance`` opts the third entity kind in.  Left ``None`` the
+    vocabulary is lines and arcs exactly as before, because a spline is only
+    honest when the caller has declared the two floors that keep it from
+    reproducing noise -- so declaring one of the three declares all of them.
     """
     pts = list(_as_points(points, "points", 2))
     tol = _as_tolerance(tolerance, "tolerance")
     plane_normal = None if normal is None else _as_direction(normal, "normal")
+    if spline_tolerance is not None:
+        spline_tol = _as_tolerance(spline_tolerance, "spline_tolerance")
+        spacing = _as_tolerance(min_fit_point_spacing, "min_fit_point_spacing")
+        if isinstance(max_fit_points, bool) or not isinstance(max_fit_points, int) or max_fit_points < 2:
+            raise ValueError("max_fit_points must be a whole number of at least two.")
+        if isinstance(min_arc_run, bool) or not isinstance(min_arc_run, int) or min_arc_run < 2:
+            raise ValueError("min_arc_run must be a whole number of at least two.")
+        _as_tolerance(corner_tolerance_deg, "corner_tolerance_deg")
 
     if closed:
         if len(pts) < 3:
@@ -695,6 +1029,7 @@ def classify_polyline(
 
     _n, u, v = _plane_basis(pts, plane_normal)
     entities: list[SketchEntity] = []
+    spans: list[tuple[int, int]] = []
     i = 0
     n = len(pts)
     # ponytail: O(n^2) greedy re-fits every extension; a incremental-moment fit
@@ -726,6 +1061,7 @@ def classify_polyline(
                     mid=pts[(i + arc_end) // 2],
                 )
             )
+            spans.append((i, arc_end))
             i = arc_end
             continue
         entities.append(
@@ -737,8 +1073,20 @@ def classify_polyline(
                 point_count=line_end - i + 1,
             )
         )
+        spans.append((i, line_end))
         i = line_end
-    return tuple(entities)
+    if spline_tolerance is None:
+        return tuple(entities)
+    return _merge_spline_runs(
+        entities,
+        spans,
+        pts,
+        tolerance=spline_tol,
+        min_spacing=spacing,
+        max_points=int(max_fit_points),  # type: ignore[arg-type]
+        min_arc_run=int(min_arc_run),
+        corner_tolerance_deg=float(corner_tolerance_deg),
+    )
 
 
 def _sharpest_corner(points: Sequence[Vec3]) -> int:
@@ -753,6 +1101,191 @@ def _sharpest_corner(points: Sequence[Vec3]) -> int:
         if turn > best_turn + 1e-12:
             best_index, best_turn = k, turn
     return best_index
+
+
+# --------------------------------------------------------------------------
+# 2b. the kinematic-surface router
+# --------------------------------------------------------------------------
+
+#: A signature that is doubly curved with the same sign cannot be swept by a
+#: translation: an extrusion is flat in the sweep direction by construction. The
+#: signature never vetoes on its own (existing doctrine), so the contradiction is
+#: recorded and routed to the *conservative* outcome rather than to either claim.
+_TRANSLATION_IMPOSSIBLE_SIGNATURES = {"peak-pit"}
+
+
+def route_kinematic_surface(
+    points: Sequence[Vec3],
+    normals: Sequence[Vec3],
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None = None,
+) -> dict[str, Any]:
+    """Is this region swept by a one-parameter rigid motion, and which one?
+
+    Pottmann & Randrup (*Computing* 60, 1998).  A rigid motion's velocity field
+    is ``v(x) = c_bar + c x x``; a surface is swept by that motion exactly when
+    every surface normal is orthogonal to the field, ``n . v = 0`` -- which is
+    **linear in the six unknowns** ``(c, c_bar)``.  Accumulating
+    ``M = sum a a^T`` over rows ``a = [x x n, n]`` is one O(N) pass, and the
+    smallest eigenpair of the 6x6 symmetric ``M`` answers extrusion, revolution
+    and helix in one test rather than three detectors.
+
+    Points are centred on the region centroid and scaled by its extent before
+    the rows are built.  That is mandatory, not tidiness: the two halves of each
+    row otherwise carry different units and the recovered pitch comes out in
+    garbage ones.  Everything reported is un-scaled afterwards, and both the
+    scaled and the unscaled quantities are in the record so a reviewer can see
+    how close the call was.
+
+    The verdict is a *proposal*.  Nothing downstream may emit on it without its
+    own confirmation -- for an extrusion, that the sections along the direction
+    actually agree.
+    """
+    if len(points) != len(normals):
+        raise ValueError("the router needs one normal per point.")
+    if len(points) < 6:
+        raise ValueError("the router needs at least six samples for a six-parameter fit.")
+    centre = _centroid(points)
+    scale = _extent(points)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("the router needs a region with a positive extent.")
+
+    matrix = [[0.0] * 6 for _ in range(6)]
+    used = 0
+    for point, raw_normal in zip(points, normals):
+        normal = _unit(raw_normal)
+        if normal is None:
+            continue
+        scaled = _scale(_sub(point, centre), 1.0 / scale)
+        moment = _cross(scaled, normal)
+        row = (moment[0], moment[1], moment[2], normal[0], normal[1], normal[2])
+        for i in range(6):
+            for j in range(6):
+                matrix[i][j] += row[i] * row[j]
+        used += 1
+    if used < 6:
+        raise ValueError("the router needs at least six samples carrying usable normals.")
+
+    values, vectors = _jacobi_eigen(matrix)
+    smallest, second, largest = values[0], values[1], values[5]
+    winner = vectors[0]
+    omega = (winner[0], winner[1], winner[2])
+    u_bar = (winner[3], winner[4], winner[5])
+    residual = math.sqrt(max(smallest, 0.0) / used)
+    residual_gate = residual_sigma_factor * sigma_theta_rad
+    # How far the *second* smallest eigenvalue sits from zero, on the spectrum's
+    # own scale. It is the right quantity rather than the difference of the two
+    # smallest: what makes an eigenvector meaningless is a null space with more
+    # than one direction in it, and that is exactly `second ~ 0`.
+    spread = max(abs(largest), _ZERO_RESIDUAL_FLOOR_RATIO)
+    eigengap = second / spread
+
+    omega_magnitude = _length(omega)
+    pitch_scaled = (
+        _dot(omega, u_bar) / (omega_magnitude * omega_magnitude)
+        if omega_magnitude > 0.0
+        else math.inf
+    )
+    # Un-scale: with x = centre + scale * x', n.(u_bar + omega x x') = 0 becomes
+    # n.(scale * u_bar - omega x centre + omega x x) = 0.
+    c_vector = omega
+    c_bar = _sub(_scale(u_bar, scale), _cross(omega, centre))
+
+    record: dict[str, Any] = {
+        "verdict": "none",
+        "refusal": None,
+        "sample_count": used,
+        "eigenvalues": list(values),
+        "residual_rad": residual,
+        "residual_gate_rad": residual_gate,
+        "sigma_theta_rad": sigma_theta_rad,
+        "eigengap": eigengap,
+        "eigengap_min": eigengap_min,
+        "translation_magnitude": omega_magnitude,
+        "translation_epsilon": translation_epsilon,
+        "pitch_scaled": None if math.isinf(pitch_scaled) else pitch_scaled,
+        "pitch_epsilon": pitch_epsilon,
+        "scale": scale,
+        "centre": list(centre),
+        "c": list(c_vector),
+        "c_bar": list(c_bar),
+        "direction": None,
+        "axis_point": None,
+        "pitch": None,
+        "signature": signature,
+        "note": (
+            "n.(c_bar + c x x) = 0 over the region's own normals; the residual is an RMS of that "
+            "dot product over unit normals and unit-extent positions, so it reads as an angle in "
+            "radians and is gated against the measured normal-noise floor rather than a constant."
+        ),
+    }
+    if residual > residual_gate:
+        record["reason"] = (
+            f"no rigid motion leaves this region invariant: the best one still misses the normals "
+            f"by {residual:.6g} rad against a declared gate of {residual_gate:.6g} rad."
+        )
+        return record
+    if eigengap < eigengap_min:
+        # A plane admits a three-parameter family of invariant motions and a
+        # sphere any rotation about its centre, so a degenerate spectrum means
+        # the primitive stage and the router disagree about this region. Picking
+        # an eigenvector out of a degenerate subspace would be a guess.
+        record["refusal"] = "router-ambiguous"
+        record["reason"] = (
+            f"the second-smallest eigenvalue is {eigengap:.6g} of the spectrum against a declared "
+            f"minimum of {eigengap_min:.6g}: this region's invariant motions form a family rather "
+            "than a single one, so no eigenvector describes it."
+        )
+        return record
+
+    if omega_magnitude <= translation_epsilon:
+        direction = _unit(u_bar)
+        if direction is None:  # pragma: no cover - |omega|^2 + |u_bar|^2 == 1
+            record["refusal"] = "router-ambiguous"
+            record["reason"] = "the recovered motion has neither a rotation nor a translation part."
+            return record
+        if signature in _TRANSLATION_IMPOSSIBLE_SIGNATURES:
+            record["refusal"] = "router-signature-conflict"
+            record["reason"] = (
+                f"the normals fit a translation, and the region's dominant curvature signature is "
+                f"{signature!r} -- doubly curved with one sign, which no extrusion can be. The two "
+                "measurements contradict each other, so this falls through rather than picking one."
+            )
+            return record
+        record["verdict"] = "extrusion"
+        record["direction"] = list(_canonical_direction(direction))
+        record["reason"] = (
+            f"the recovered motion is a translation: its rotation part is {omega_magnitude:.6g} "
+            f"against a declared {translation_epsilon:.6g}."
+        )
+        return record
+
+    axis = _unit(c_vector)
+    assert axis is not None  # |omega| > translation_epsilon > 0
+    magnitude_sq = _dot(c_vector, c_vector)
+    axis_point = _scale(_cross(c_vector, c_bar), 1.0 / magnitude_sq)
+    pitch = _dot(c_vector, c_bar) / magnitude_sq
+    record["direction"] = list(_canonical_direction(axis))
+    record["axis_point"] = list(axis_point)
+    record["pitch"] = pitch
+    if abs(pitch_scaled) <= pitch_epsilon:
+        record["verdict"] = "revolution"
+        record["reason"] = (
+            f"the recovered motion is a rotation: its scaled pitch is {pitch_scaled:.6g} against a "
+            f"declared {pitch_epsilon:.6g}."
+        )
+        return record
+    record["verdict"] = "helical"
+    record["reason"] = (
+        f"the recovered motion is a screw of scaled pitch {pitch_scaled:.6g}, beyond the declared "
+        f"{pitch_epsilon:.6g}. Helical geometry is reported and not emitted."
+    )
+    return record
 
 
 # --------------------------------------------------------------------------

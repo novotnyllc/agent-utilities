@@ -27,6 +27,8 @@ from typing import Any, Iterable, Sequence
 
 from .mesh_fitting import (
     PRIMITIVE_KINDS,
+    ROUTER_REFUSALS,
+    ROUTER_VERDICTS,
     PrimitiveFit,
     Vec3,
     _add,
@@ -186,10 +188,30 @@ class RegionFit:
     fit: PrimitiveFit | None
     axial_span: float | None
     uncertainty: dict[str, float] | None
+    #: U2's kinematic-router verdict, present only on regions the primitive
+    #: stage disclaimed. ``None`` means the router did not run here, which is a
+    #: different thing from having run and found nothing -- and the difference
+    #: is why this is not defaulted to an empty verdict.
+    routing: dict[str, Any] | None = None
+    #: The region's dominant Besl-Jain signature, carried so an unreconstructed
+    #: region can say what it looks like rather than only that it did not fit.
+    dominant_curvature: str | None = None
 
     @property
     def accepted(self) -> bool:
         return self.fit is not None and self.fit.accepted
+
+    def routed(self, verdict: str) -> bool:
+        """Did the router reach ``verdict`` here, with no refusal against it?"""
+        if not isinstance(self.routing, dict) or self.routing.get("refusal"):
+            return False
+        return self.routing.get("verdict") == verdict
+
+    def router_direction(self) -> Vec3 | None:
+        if not isinstance(self.routing, dict):
+            return None
+        value = self.routing.get("direction")
+        return _vector(value)
 
     def anchor(self) -> Vec3 | None:
         """The fit's representative point, or ``None`` when it has none."""
@@ -225,6 +247,8 @@ class RegionFit:
             fit=fit,
             axial_span=self.axial_span,
             uncertainty=self.uncertainty,
+            routing=self.routing,
+            dominant_curvature=self.dominant_curvature,
         )
 
 
@@ -299,6 +323,50 @@ def _parse_uncertainty(raw: Any, path: str) -> dict[str, float] | None:
     return out
 
 
+def _parse_routing(raw: Any, path: str) -> dict[str, Any] | None:
+    """Read U2's router verdict, or refuse it. Absent is absent, never 'none'.
+
+    A verdict outside the closed set, or a verdict claimed alongside a refusal,
+    is refused rather than read past: this block is what licenses a region with
+    no primitive fit to be built into a feature, so an unreadable one must stop
+    the plan rather than quietly route nothing.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _malformed(path, "an object, or absent when the router did not run")
+    verdict = raw.get("verdict")
+    if verdict not in ROUTER_VERDICTS:
+        raise _malformed(f"{path}.verdict", f"one of {', '.join(sorted(ROUTER_VERDICTS))}")
+    refusal_token = raw.get("refusal")
+    if refusal_token is not None and refusal_token not in ROUTER_REFUSALS:
+        raise _malformed(
+            f"{path}.refusal", f"null or one of {', '.join(sorted(ROUTER_REFUSALS))}"
+        )
+    if refusal_token is not None and verdict != "none":
+        raise _malformed(
+            f"{path}.verdict",
+            "'none' when a refusal is recorded; a refusal says the measurement licensed no verdict",
+        )
+    direction = raw.get("direction")
+    if direction is not None and _vector(direction) is None:
+        raise _malformed(f"{path}.direction", "a finite three-element vector when present")
+    if verdict in ("extrusion", "revolution", "helical") and _vector(direction) is None:
+        raise _malformed(
+            f"{path}.direction",
+            "present on a routed verdict; a motion with no recoverable direction is not a verdict",
+        )
+    return dict(raw)
+
+
+def _parse_signature(raw: Any, path: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise _malformed(path, "the region's dominant curvature signature, or absent")
+    return raw.strip()
+
+
 def parse_fit_record(raw: Any) -> FitRecord:
     """Read U2's fit record, refusing rather than defaulting a missing field.
 
@@ -364,6 +432,10 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 fit=fit,
                 axial_span=axial_span,
                 uncertainty=uncertainty,
+                routing=_parse_routing(raw_region.get("routing"), f"{path}.routing"),
+                dominant_curvature=_parse_signature(
+                    raw_region.get("dominant_curvature"), f"{path}.dominant_curvature"
+                ),
             )
         )
     return FitRecord(

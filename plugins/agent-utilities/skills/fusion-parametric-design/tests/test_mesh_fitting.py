@@ -7,6 +7,7 @@ from fusion_design.mesh_fitting import (
     INTENT_KINDS,
     IntentProposal,
     PrimitiveFit,
+    ProfileUnresolvable,
     SketchEntity,
     best_fit,
     classify_polyline,
@@ -14,7 +15,9 @@ from fusion_design.mesh_fitting import (
     fit_primitive,
     propose_design_intent,
     propose_nominal,
+    route_kinematic_surface,
     section_mesh,
+    select_fit_points,
 )
 
 
@@ -901,6 +904,253 @@ class IntentVocabularyTests(unittest.TestCase):
                 deviation=0.0,
                 deviation_unit="deg",
             )
+
+
+# --------------------------------------------------------------------------
+# the kinematic router and the spline entity
+#
+# Both tested on their *judgement*, not on their arithmetic: which verdict a
+# region deserves, and when a span is refused rather than approximated. The
+# geometry either produces those verdicts or the gates are wrong.
+# --------------------------------------------------------------------------
+
+
+def _unitise(vector):
+    length = math.sqrt(sum(c * c for c in vector))
+    return tuple(c / length for c in vector)
+
+
+def extruded_cam_samples(n=40, m=12, height=30.0):
+    """An irregular outline swept along z: the rung-1 case, prismatic but unfittable."""
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        r = 10.0 + 2.0 * math.cos(2.0 * t) + 1.5 * math.sin(3.0 * t)
+        dr = -4.0 * math.sin(2.0 * t) + 4.5 * math.cos(3.0 * t)
+        x, y = r * math.cos(t), r * math.sin(t)
+        tx = dr * math.cos(t) - r * math.sin(t)
+        ty = dr * math.sin(t) + r * math.cos(t)
+        normal = _unitise((ty, -tx, 0.0))
+        for j in range(m):
+            points.append((x, y, height * j / m))
+            normals.append(normal)
+    return points, normals
+
+
+def revolved_samples(n=40, m=12):
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        for j in range(m):
+            z = j * 2.0
+            radius = 8.0 + 0.5 * z - 0.01 * z * z
+            slope = 0.5 - 0.02 * z
+            nr, nz = _unitise((1.0, -slope))[0], _unitise((1.0, -slope))[1]
+            points.append((radius * math.cos(t), radius * math.sin(t), z))
+            normals.append((nr * math.cos(t), nr * math.sin(t), nz))
+    return points, normals
+
+
+def helicoid_samples(n=140, pitch=4.0, base=2.0, rungs=14):
+    points, normals = [], []
+    for k in range(n):
+        s = k * 0.06
+        for j in range(rungs):
+            u = 1.0 + j
+            points.append(((base + u) * math.cos(s), (base + u) * math.sin(s), pitch * s))
+            normals.append(_unitise((pitch * math.sin(s), -pitch * math.cos(s), base + u)))
+    return points, normals
+
+
+def plane_samples(n=20):
+    points = [(i * 1.0, j * 1.0, 0.0) for i in range(n) for j in range(n)]
+    return points, [(0.0, 0.0, 1.0)] * len(points)
+
+
+def cylinder_samples(n=40, m=10):
+    points, normals = [], []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        for j in range(m):
+            points.append((8.0 * math.cos(t), 8.0 * math.sin(t), j * 1.0))
+            normals.append((math.cos(t), math.sin(t), 0.0))
+    return points, normals
+
+
+def ellipsoid_samples(n=24, a=14.0, b=9.0, c=6.0):
+    points, normals = [], []
+    for i in range(n):
+        for j in range(n):
+            u = math.pi * (i + 0.5) / n
+            v = 2.0 * math.pi * j / n
+            x, y, z = a * math.sin(u) * math.cos(v), b * math.sin(u) * math.sin(v), c * math.cos(u)
+            points.append((x, y, z))
+            normals.append(_unitise((x / (a * a), y / (b * b), z / (c * c))))
+    return points, normals
+
+
+GATES = {
+    "sigma_theta_rad": 0.005,
+    "residual_sigma_factor": 3.0,
+    "eigengap_min": 0.005,
+    "translation_epsilon": 0.05,
+    "pitch_epsilon": 0.02,
+}
+
+
+class KinematicRouterTests(unittest.TestCase):
+    def test_a_swept_irregular_outline_routes_to_extrusion_along_its_own_axis(self) -> None:
+        verdict = route_kinematic_surface(*extruded_cam_samples(), **GATES)
+        self.assertEqual("extrusion", verdict["verdict"])
+        self.assertIsNone(verdict["refusal"])
+        # This is the whole rung-1 claim: no primitive fits this wall, and the
+        # router still recovers the direction an extrude has to be built along.
+        self.assertAlmostEqual(1.0, abs(verdict["direction"][2]), places=6)
+
+    def test_a_surface_of_revolution_routes_to_revolution_about_its_own_axis(self) -> None:
+        verdict = route_kinematic_surface(*revolved_samples(), **GATES)
+        self.assertEqual("revolution", verdict["verdict"])
+        self.assertAlmostEqual(1.0, abs(verdict["direction"][2]), places=6)
+        self.assertLessEqual(abs(verdict["pitch_scaled"]), GATES["pitch_epsilon"])
+
+    def test_a_screw_surface_routes_to_helical_and_recovers_its_pitch(self) -> None:
+        verdict = route_kinematic_surface(*helicoid_samples(), **GATES)
+        self.assertEqual("helical", verdict["verdict"])
+        self.assertAlmostEqual(4.0, verdict["pitch"], places=6)
+
+    def test_a_plane_and_a_cylinder_refuse_rather_than_pick_from_a_degenerate_family(self) -> None:
+        # A plane admits a three-parameter family of invariant motions and a
+        # cylinder a two-parameter one. Reporting either as "an extrusion" would
+        # be picking an eigenvector out of a null space with no single direction.
+        for name, samples in (("plane", plane_samples()), ("cylinder", cylinder_samples())):
+            with self.subTest(name):
+                verdict = route_kinematic_surface(*samples, **GATES)
+                self.assertEqual("router-ambiguous", verdict["refusal"])
+                self.assertEqual("none", verdict["verdict"])
+                self.assertLess(verdict["eigengap"], GATES["eigengap_min"])
+
+    def test_a_doubly_curved_surface_reaches_no_verdict(self) -> None:
+        verdict = route_kinematic_surface(*ellipsoid_samples(), **GATES)
+        self.assertEqual("none", verdict["verdict"])
+        self.assertGreater(verdict["residual_rad"], verdict["residual_gate_rad"])
+
+    def test_the_residual_gate_is_tied_to_the_measured_noise_and_not_to_a_constant(self) -> None:
+        points, normals = extruded_cam_samples()
+        loose = route_kinematic_surface(points, normals, **dict(GATES, sigma_theta_rad=0.05))
+        tight = route_kinematic_surface(points, normals, **dict(GATES, sigma_theta_rad=1e-9))
+        self.assertEqual(loose["residual_rad"], tight["residual_rad"])
+        self.assertGreater(loose["residual_gate_rad"], tight["residual_gate_rad"])
+
+    def test_a_doubly_curved_signature_contradicting_a_translation_falls_through(self) -> None:
+        points, normals = extruded_cam_samples()
+        verdict = route_kinematic_surface(points, normals, signature="peak-pit", **GATES)
+        self.assertEqual("router-signature-conflict", verdict["refusal"])
+        self.assertEqual("none", verdict["verdict"])
+
+    def test_a_region_with_fewer_samples_than_unknowns_is_refused_not_fitted(self) -> None:
+        points, normals = plane_samples(n=2)
+        with self.assertRaises(ValueError):
+            route_kinematic_surface(points, normals, **GATES)
+
+
+def cam_outline(n=200):
+    points = []
+    for k in range(n):
+        t = 2.0 * math.pi * k / n
+        r = 10.0 + 2.0 * math.cos(2.0 * t) + 1.5 * math.sin(3.0 * t)
+        points.append((r * math.cos(t), r * math.sin(t), 0.0))
+    return points
+
+
+def rounded_rectangle(width=30.0, height=20.0, radius=5.0, per_side=30):
+    points = []
+    corners = [
+        (width / 2 - radius, height / 2 - radius, 0.0),
+        (-width / 2 + radius, height / 2 - radius, math.pi / 2),
+        (-width / 2 + radius, -height / 2 + radius, math.pi),
+        (width / 2 - radius, -height / 2 + radius, 3 * math.pi / 2),
+    ]
+    for index, (cx, cy, start) in enumerate(corners):
+        for k in range(per_side):
+            angle = start + (math.pi / 2) * k / per_side
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle), 0.0))
+        nx, ny, nstart = corners[(index + 1) % 4]
+        sx = cx + radius * math.cos(start + math.pi / 2)
+        sy = cy + radius * math.sin(start + math.pi / 2)
+        ex, ey = nx + radius * math.cos(nstart), ny + radius * math.sin(nstart)
+        for k in range(1, per_side):
+            f = k / per_side
+            points.append((sx + (ex - sx) * f, sy + (ey - sy) * f, 0.0))
+    return points
+
+
+class SplineProfileTests(unittest.TestCase):
+    SPLINE = {"spline_tolerance": 0.02, "min_fit_point_spacing": 0.3, "max_fit_points": 60}
+
+    def test_lines_and_arcs_are_unchanged_when_no_spline_tolerance_is_declared(self) -> None:
+        # A spline is only honest once the caller has declared the floors that
+        # keep it from reproducing noise, so silence keeps the old vocabulary.
+        entities = classify_polyline(
+            cam_outline(), tolerance=0.01, closed=True, normal=(0.0, 0.0, 1.0)
+        )
+        self.assertEqual(set(), {e.kind for e in entities} - {"line", "arc"})
+
+    def test_a_biarc_chain_through_a_freeform_outline_becomes_one_spline(self) -> None:
+        entities = classify_polyline(
+            cam_outline(), tolerance=0.05, closed=True, normal=(0.0, 0.0, 1.0), **self.SPLINE
+        )
+        splines = [e for e in entities if e.kind == "spline"]
+        self.assertTrue(splines)
+        for spline in splines:
+            # Few interpolated fit points, not a point per sample: the whole
+            # point is a curve a human can drag, not a mesh in sketch clothing.
+            self.assertLess(len(spline.fit_points), spline.point_count // 2)
+            self.assertLessEqual(spline.residual, self.SPLINE["spline_tolerance"])
+            self.assertEqual(spline.fit_points[0], spline.start)
+            self.assertEqual(spline.fit_points[-1], spline.end)
+
+    def test_a_designed_outline_keeps_its_lines_and_arcs(self) -> None:
+        # The discriminating case. A rounded rectangle's arcs are separated by
+        # lines, so no run of them is a biarc approximation of anything, and
+        # replacing them with a spline would throw away four real radii.
+        entities = classify_polyline(
+            rounded_rectangle(), tolerance=0.01, closed=True, normal=(0.0, 0.0, 1.0), **self.SPLINE
+        )
+        kinds = sorted(e.kind for e in entities)
+        self.assertEqual(["arc"] * 4 + ["line"] * 4, kinds)
+
+    def test_chasing_a_noisy_traverse_refuses_on_the_spacing_floor(self) -> None:
+        import random
+
+        rng = random.Random(7)
+        noisy = [
+            (x + rng.gauss(0.0, 0.2), y + rng.gauss(0.0, 0.2), 0.0)
+            for x, y, _z in cam_outline(400)
+        ]
+        with self.assertRaises(ProfileUnresolvable) as caught:
+            select_fit_points(noisy, tolerance=0.001, min_spacing=1.0, max_points=400)
+        self.assertEqual("fit-point-spacing", caught.exception.detail["reason"])
+
+    def test_a_span_past_the_fit_point_budget_refuses_rather_than_emitting(self) -> None:
+        with self.assertRaises(ProfileUnresolvable) as caught:
+            select_fit_points(cam_outline(400), tolerance=1e-6, min_spacing=1e-9, max_points=8)
+        self.assertEqual("fit-point-budget", caught.exception.detail["reason"])
+        self.assertEqual(8, caught.exception.detail["fit_point_count"])
+
+    def test_fit_point_selection_is_deterministic(self) -> None:
+        first = select_fit_points(cam_outline(), tolerance=0.02, min_spacing=0.3, max_points=60)
+        second = select_fit_points(cam_outline(), tolerance=0.02, min_spacing=0.3, max_points=60)
+        self.assertEqual(first, second)
+
+    def test_a_spline_entity_without_its_evidence_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            SketchEntity(kind="spline", start=(0.0, 0.0, 0.0), end=(1.0, 0.0, 0.0),
+                         residual=0.0, point_count=4)
+        with self.assertRaises(ValueError):
+            SketchEntity(kind="line", start=(0.0, 0.0, 0.0), end=(1.0, 0.0, 0.0),
+                         residual=0.0, point_count=2,
+                         fit_points=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)))
+
 
 
 if __name__ == "__main__":

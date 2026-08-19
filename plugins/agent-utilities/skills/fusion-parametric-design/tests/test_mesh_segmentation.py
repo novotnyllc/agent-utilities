@@ -238,6 +238,10 @@ REFERENCE = {
     "heldout_ratio_max": (1.5, "far outside the concentration of a correct model, immediate for an overfit one"),
     "parsimony_alpha": (0.01, "a richer primitive must clear one percent to earn its extra parameters"),
     "min_covered_area_fraction": (0.0, "this fixture measures detection, so coverage is reported not gated"),
+    "router_residual_sigma_factor": (3.0, "three measured normal sigmas, the same consensus band the fits use"),
+    "router_eigengap_min": (0.005, "half a percent of the spectrum separates one motion from a family of them"),
+    "router_translation_epsilon": (0.05, "a rotation part under five percent of a unit motion is a translation"),
+    "router_pitch_epsilon": (0.02, "a screw advancing under two percent of an extent per radian is a rotation"),
 }
 
 
