@@ -74,7 +74,12 @@ from .mesh_fitting import (
 )
 
 
-PROGRAM_VERSION = 1
+# Bumped to 2 by rung 1: archetypes carry an `editability` row, unreconstructed
+# regions carry their router verdict and curvature signature, and a profile may
+# now classify a `spline` entity. D9's validator makes the boundary loud -- a v1
+# executor refuses a v2 program by name rather than best-efforting past fields it
+# does not know how to honour.
+PROGRAM_VERSION = 2
 
 # R8's archetype vocabulary in full.  This planner assigns only the two U4
 # emits; `hole` and `fillet` are U6's, and they are named here so that adding
@@ -628,7 +633,19 @@ def _is_coaxial_with(
 ) -> bool:
     direction, anchor = region.direction(), region.anchor()
     if direction is None or anchor is None or region.fit is None:
-        return False
+        if not region.routed("revolution"):
+            return False
+        # A region no primitive explained, which the kinematic router found
+        # invariant under a rotation, is a surface of revolution about the axis
+        # it recovered -- the same claim a fitted cylinder makes, from a
+        # different measurement. It joins the stack on the same two tests.
+        direction = region.router_direction()
+        anchor = _vector_or_none((region.routing or {}).get("axis_point"))
+        if direction is None or anchor is None:
+            return False
+        return _angle_deg(direction, z) <= angle_tol and (
+            _distance_to_line(anchor, origin, z) <= offset_tol
+        )
     if region.fit.kind == "plane":
         # A plane perpendicular to the axis is a surface of revolution about it.
         return _angle_deg(direction, z) <= angle_tol
@@ -674,7 +691,13 @@ def _extrude_caps(
     planes = [
         region
         for region in regions
-        if region.fit is not None and region.fit.kind == "plane" and region.anchor() is not None
+        # `accepted` explicitly: the caller's list now carries router-claimed
+        # regions whose own fit was refused, and a refused plane fit still
+        # carries a normal. A cap is a measurement, never a leftover parameter.
+        if region.accepted
+        and region.fit is not None
+        and region.fit.kind == "plane"
+        and region.anchor() is not None
     ]
     best: tuple[Any, ...] | None = None
     for index, first in enumerate(planes):
@@ -698,10 +721,34 @@ def _extrude_caps(
     return best[1], best[2], best[3]
 
 
+def _vector_or_none(raw: Any) -> Vec3 | None:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+        return None
+    try:
+        values = tuple(float(v) for v in raw)
+    except (TypeError, ValueError):  # pragma: no cover - the parser already refused these
+        return None
+    return values if all(math.isfinite(v) for v in values) else None
+
+
 def _is_extrude_side(region: RegionFit, normal: Vec3, angle_tolerance_deg: float) -> bool:
+    """Is this region a wall of an extrusion along ``normal``?
+
+    Two independent ways to be one, and this is where rung 1's coverage comes
+    from.  A fitted primitive answers from its own axis or normal.  A region no
+    primitive explained -- the irregular outer wall of a bracket, cam or cover
+    plate -- answers from the kinematic router: a translation-invariant surface
+    whose translation direction is the extrusion direction *is* a side wall,
+    whatever its cross-section looks like.  It is still only a proposal here;
+    the emitter confirms the sections along that direction actually agree
+    before it builds anything.
+    """
     direction = region.direction()
     if direction is None or region.fit is None:
-        return False
+        if not region.routed("extrusion"):
+            return False
+        routed = region.router_direction()
+        return routed is not None and _angle_deg(routed, normal) <= angle_tolerance_deg
     if region.fit.kind == "plane":
         return abs(_angle_deg(direction, normal) - 90.0) <= angle_tolerance_deg
     return _angle_deg(direction, normal) <= angle_tolerance_deg
@@ -709,6 +756,52 @@ def _is_extrude_side(region: RegionFit, normal: Vec3, angle_tolerance_deg: float
 
 def _archetype_id(kind: str, regions: Sequence[str]) -> str:
     return f"{kind}-{sorted(regions)[0][:12]}"
+
+
+#: What "parametric" means, per archetype, in the three senses this pipeline can
+#: distinguish. The result label never flattens them into one word, because they
+#: carry different proofs: a dimension-driven parameter is proven by U5's
+#: perturbation loop, a point-editable curve by U5's fit-point perturbation, and
+#: something frozen is proven by nothing and must not be described as editable.
+_DIMENSION_DRIVEN = {
+    "sketch-extrude": ("extrude distance", "sketch plane offset", "profile line offsets", "profile radii"),
+    "revolve": ("revolve radius", "revolve angle", "profile line offsets", "profile radii"),
+}
+
+
+def _editability(kind: str, members: Sequence[RegionFit]) -> dict[str, Any]:
+    """The honesty row for one archetype, as far as *this* stage can know it.
+
+    Profile entity kinds are deliberately absent here and not guessed: the
+    profile does not exist yet at plan time -- it is sectioned from the dump by
+    the emitter -- so whether this feature ends up with a point-editable spline
+    in it is something only the emitter has measured. Writing "point-editable:
+    spline fit points" here would be an assertion about geometry nobody has cut.
+    """
+    routed = sorted(r.region_hash for r in members if not r.accepted)
+    return {
+        "rung": 1 if routed else 0,
+        "rung_reason": (
+            "at least one member region carries no primitive fit and was claimed by the kinematic "
+            "router, so this feature's cross-section may need entities beyond lines and arcs"
+            if routed
+            else "every member region carries an accepted primitive fit"
+        ),
+        "router_claimed_regions": routed,
+        "dimension_driven": list(_DIMENSION_DRIVEN[kind]),
+        "point_editable": None,
+        "frozen": None,
+        "measured_by": (
+            "The emitter records the measured row -- which profile entities are dimensioned, which "
+            "are spline fit points, and how many -- once it has sectioned the bound dump. "
+            "point_editable and frozen are null here because this stage has not cut a section."
+        ),
+        "proof": (
+            "Dimension-driven parameters are proven by the U5 perturbation loop. Point-editable "
+            "spline fit points are proven by U5's fit-point perturbation, which fails spline-inert "
+            "if moving one moves nothing. Nothing is called editable on the strength of its label."
+        ),
+    }
 
 
 def plan_archetypes(
@@ -738,7 +831,17 @@ def plan_archetypes(
     transform.
     """
     origin, z = frame.origin, frame.z_axis
-    accepted = [region for region in regions if region.accepted]
+    # Rung 1: a region the primitive stage disclaimed but the router routed is a
+    # candidate for a group, on its routed direction alone. It can never be a
+    # *cap* -- caps come from accepted planes, and the datum frame is still
+    # derived from accepted fits only -- so admitting it cannot move the frame
+    # or the plane mapping; it can only contribute a wall or a turned surface.
+    candidates = [
+        region
+        for region in regions
+        if region.accepted or region.routed("extrusion") or region.routed("revolution")
+    ]
+    accepted = candidates
     groups: list[dict[str, Any]] = []
     claimed: set[str] = set()
     unmappable: dict[str, str] = {}
@@ -748,7 +851,11 @@ def plan_archetypes(
         for region in accepted
         if _is_coaxial_with(region, origin, z, angle_tolerance_deg, offset_tolerance)
     ]
-    turned = [r for r in revolve if r.fit is not None and r.fit.kind in ("cylinder", "cone")]
+    turned = [
+        r
+        for r in revolve
+        if r.accepted and r.fit is not None and r.fit.kind in ("cylinder", "cone")
+    ]
     if turned and len(revolve) >= 2:
         members = sorted(region.region_hash for region in revolve)
         claimed.update(members)
@@ -757,7 +864,14 @@ def plan_archetypes(
             for r in turned
             if r.fit is not None and isinstance(r.fit.parameters.get("radius"), float)
         )
-        stations = [_frame_station(frame, z, r.anchor()) for r in revolve if r.anchor() is not None]
+        # Accepted anchors only: the radius and the extent are *measurements*,
+        # and a router verdict measures a motion, not a radius. A routed region
+        # can join a turned stack; it cannot be the thing the stack is sized by.
+        stations = [
+            _frame_station(frame, z, r.anchor())
+            for r in revolve
+            if r.accepted and r.anchor() is not None
+        ]
         groups.append(
             {
                 "id": _archetype_id("revolve", members),
@@ -779,9 +893,12 @@ def plan_archetypes(
                 "radius": {"parameter": None, "value": radius},
                 "constraints": [],
                 "dependencies": [],
+                "editability": _editability("revolve", revolve),
                 "reason": (
-                    f"{len(revolve)} accepted fits are coaxial about the primary axis, including "
-                    f"{len(turned)} turned surface(s); one revolve rebuilds the stack."
+                    f"{len(revolve)} fits are coaxial about the primary axis, including "
+                    f"{len(turned)} turned surface(s) and "
+                    f"{sum(1 for r in revolve if not r.accepted)} routed by invariant rotation; "
+                    "one revolve rebuilds the stack."
                 ),
             }
         )
@@ -831,9 +948,12 @@ def plan_archetypes(
                     },
                     "constraints": [],
                     "dependencies": [],
+                    "editability": _editability("sketch-extrude", (low, high, *sides)),
                     "reason": (
                         f"two parallel cap planes {abs(high_station - low_station):.6g} apart on datum "
-                        f"{datum_plane}, with {len(sides)} side surface(s) perpendicular to them."
+                        f"{datum_plane}, with {len(sides)} side surface(s) perpendicular to them, "
+                        f"{sum(1 for r in sides if not r.accepted)} of them claimed by the "
+                        "kinematic router rather than by a primitive fit."
                     ),
                 }
             )
@@ -853,12 +973,24 @@ def plan_archetypes(
                 f"the accepted {region.fit.kind} fit is neither coaxial with the primary axis nor a "
                 "cap or side of an extrude group, so no archetype in this unit's vocabulary covers it."
             )
+        routing = region.routing if isinstance(region.routing, dict) else None
+        if routing is not None and not region.accepted:
+            # What the region *looks like*, not only that nothing fitted it.
+            # "Saddle-signature region the router found no invariant motion in"
+            # is something a reader can act on; "no fit" is not.
+            gate = (
+                f"{gate} The kinematic router reached verdict {routing.get('verdict')!r}"
+                + (f" refusing {routing['refusal']!r}" if routing.get("refusal") else "")
+                + f": {routing.get('reason', 'no reason recorded')}"
+            )
         unreconstructed.append(
             {
                 "region_id": region.region_hash,
                 "area": region.area,
                 "area_fraction": None,
                 "bounding_box": [list(region.bounding_box[0]), list(region.bounding_box[1])],
+                "dominant_curvature": region.dominant_curvature,
+                "routing": routing,
                 "gate": gate,
             }
         )
@@ -1400,6 +1532,7 @@ _PROGRAM_FIELDS = {
 
 _ARCHETYPE_FIELDS = {
     "id",
+    "editability",
     "kind",
     "operation",
     "regions",
