@@ -785,6 +785,7 @@ class ManifestValidationTests(unittest.TestCase):
             NOZZLE_MATERIALS,
             PRINT_AS_VALUES,
             PRINTABLE_PART_FIELDS,
+            PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
             SOURCE_CONFIDENCES,
             SUPPORT_POLICIES,
@@ -795,7 +796,11 @@ class ManifestValidationTests(unittest.TestCase):
         part = schema["$defs"]["printable_part"]
         self.assertIn("printable_parts", schema["properties"])
         self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
+        self.assertEqual(PRINTABLE_PART_REQUIRED_FIELDS, set(part["required"]))
         self.assertEqual(PRINT_AS_VALUES, set(part["properties"]["print_as"]["enum"]))
+        verification = schema["$defs"]["verification"]
+        self.assertIn("allowed_suppressed_paths", verification["properties"])
+        self.assertIn("allow_suppressed_timeline_features", verification["properties"])
         self.assertEqual(CONTACT_FACES, set(schema["$defs"]["contact_face"]["enum"]))
         self.assertEqual(SUPPORT_POLICIES, set(part["properties"]["support_policy"]["enum"]))
         self.assertEqual(

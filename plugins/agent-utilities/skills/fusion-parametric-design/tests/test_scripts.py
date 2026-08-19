@@ -361,7 +361,11 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertIn("not duplicate_semantic_paths and not missing_component_paths", source)
         self.assertIn("compute_invoked = design.computeAll()", source)
         self.assertIn('timeline["unhealthy"]', source)
-        self.assertLess(source.index("preexisting_duplicate_semantic_paths"), source.index("created = []", source.index("def run(context):")))
+        # The ambiguity refusal must still precede the first component creation.
+        self.assertLess(
+            source.index("preexisting_duplicate_semantic_paths"),
+            source.index("_ensure_component_path(design.rootComponent"),
+        )
         self.assertNotIn("deleteMe", source)
 
         namespace = load_generated_script(source)

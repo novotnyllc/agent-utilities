@@ -127,6 +127,24 @@ class GoldenPathTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "has an invalid minimum"):
             emit_positive_control_script(type(manifest).from_data(oversized_clearance, validate=False))
 
+        # The positive-control boxes stand in for the print parts, so a declared
+        # floor the derived box cannot reach must fail at emit time, not live.
+        # The lid box is 35 x 13 x 2 = 910 mm3 -- only 1.8x its declared floor.
+        unreachable_floor = manifest.to_dict()
+        lid = next(
+            part for part in unreachable_floor["printable_parts"] if part["path"] == "10_PRODUCT/PROD__LID"
+        )
+        lid["minimum_volume_mm3"] = 911.0
+        with self.assertRaisesRegex(ValueError, "below the declared minimum_volume_mm3"):
+            emit_positive_control_script(type(manifest).from_data(unreachable_floor))
+
+        absent_floor = manifest.to_dict()
+        next(
+            part for part in absent_floor["printable_parts"] if part["path"] == "10_PRODUCT/PROD__LID"
+        ).pop("minimum_volume_mm3")
+        with self.assertRaisesRegex(ValueError, "no usable minimum_volume_mm3"):
+            emit_positive_control_script(type(manifest).from_data(absent_floor, validate=False))
+
         missing_allowed_interference = manifest.to_dict()
         missing_allowed_interference["verification"]["interference_checks"].append(
             {

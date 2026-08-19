@@ -665,6 +665,17 @@
             "minLength": 1
           },
           "uniqueItems": true
+        },
+        "allowed_suppressed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "allow_suppressed_timeline_features": {
+          "type": "boolean"
         }
       }
     }

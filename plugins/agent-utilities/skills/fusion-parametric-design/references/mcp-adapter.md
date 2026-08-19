@@ -114,6 +114,16 @@ FUSION_DESIGN_REPORT_END
 
 The agent should parse and retain that JSON. Do not rely only on prose emitted around it.
 
+A run can print more than one such block, so parse every one and treat the last
+as the transaction's final word. Positive control emits a second block whenever
+it created geometry and then failed; its `cleanup` field always carries the same
+five keys (`performed`, `reason`, `deleted`, `errors`, `left_behind`), and
+`left_behind` names every entity still in the document. Scaffolding has no
+rollback by design, so its failure block reports `created` and `left_behind`
+too. Only the verification and export reports are verdicts: the inventory
+report carries no `ok` on the success path (it is a survey) and `ok: false`
+only when the transaction itself failed.
+
 Preflight the execution capability with a unique printed sentinel. If the
 exact sentinel is absent, stop and report the transport failure. Do not encode
 exceptions as successful reports or treat an empty success response as proof

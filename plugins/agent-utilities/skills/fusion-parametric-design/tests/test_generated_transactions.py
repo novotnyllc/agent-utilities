@@ -17,7 +17,7 @@ import unittest
 
 from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.positive_control import emit_positive_control_script
-from fusion_design.scripts import emit_verification_script, manifest_sha256
+from fusion_design.scripts import emit_scaffold_script, emit_verification_script, manifest_sha256
 
 from test_scripts import load_generated_script
 
@@ -397,6 +397,7 @@ class VerificationRunTests(unittest.TestCase):
             "print-parts",
             "required-components",
             "suppressed-occurrence",
+            "unreadable-occurrence-state",
         ):
             self.assertIn(token, report["checked"], token)
         self.assertEqual([], report["not_declared"])
@@ -507,6 +508,96 @@ class VerificationRunTests(unittest.TestCase):
             {row["reason"] for row in reports[0]["print_part_failures"]},
         )
 
+    def test_forged_minimum_volume_is_implausible_against_the_bounding_box(self) -> None:
+        # The supported authoring path: declare a floor low enough that a sliver
+        # clears it. The bounding box the author did not choose catches it.
+        data = self.manifest.to_dict()
+        for part in data["printable_parts"]:
+            part["minimum_volume_mm3"] = 1e-12
+        manifest = Manifest.from_data(data)
+
+        def slivers(path):
+            if path in manifest.verification["expected_print_parts"]:
+                # A part-sized envelope holding 1e-6 mm3 of material.
+                return [
+                    FakeBody(
+                        path.rsplit("/", 1)[-1] + "__BODY",
+                        1e-6,
+                        min_mm=(0.0, 0.0, 0.0),
+                        max_mm=(20.0, 20.0, 12.5),
+                    )
+                ]
+            return solid_part(path)
+
+        occurrences = build_occurrences(manifest, slivers)
+        namespace, _, _ = verification_harness(manifest, occurrences)
+
+        reports, _ = run_and_capture(namespace)
+
+        report = reports[0]
+        self.assertFalse(report["ok"])
+        self.assertIn("print-parts", report["failures"])
+        self.assertEqual(
+            {"implausible-declared-minimum"},
+            {row["reason"] for row in report["print_part_failures"]},
+        )
+        failure = report["print_part_failures"][0]
+        self.assertEqual(5000.0, failure["bounding_box_volume_mm3"])
+        self.assertEqual(1e-3, report["print_part_rules"]["minimum_volume_bounding_box_fraction"])
+        # The hard-coded rules are reported apart from the declared expectations.
+        self.assertEqual(
+            {"minimum_volume_mm3"},
+            set(report["print_part_expectations"]["10_PRODUCT/PROD__BASE"]),
+        )
+        self.assertEqual(1, report["print_part_rules"]["solid_body_count"])
+
+    def test_unreadable_occurrence_state_fails_closed(self) -> None:
+        occurrences = build_occurrences(self.manifest, solid_part)
+
+        class OpaqueOccurrence:
+            """An occurrence whose participation state cannot be read."""
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                if name == "isSuppressed":
+                    raise RuntimeError("Fusion did not expose isSuppressed")
+                return getattr(self._inner, name)
+
+        target = "00_REFERENCES/KEEP__USB_C_INSERTION"
+        occurrences[target] = OpaqueOccurrence(occurrences[target])
+        namespace, _, _ = verification_harness(self.manifest, occurrences)
+
+        reports, _ = run_and_capture(namespace)
+
+        report = reports[0]
+        self.assertFalse(report["ok"])
+        self.assertIn("unreadable-occurrence-state", report["failures"])
+        self.assertEqual([target], report["unreadable_occurrence_states"])
+        self.assertEqual([], report["suppressed_occurrences"])
+        self.assertIsNone(report["occurrence_states"][target]["is_suppressed"])
+
+    def test_declared_suppression_is_recorded_and_passes(self) -> None:
+        target = "00_REFERENCES/KEEP__USB_C_INSERTION"
+        data = self.manifest.to_dict()
+        data["verification"]["allowed_suppressed_paths"] = [target]
+        data["verification"]["allow_suppressed_timeline_features"] = True
+        manifest = Manifest.from_data(data)
+        occurrences = build_occurrences(manifest, solid_part, suppressed=(target,))
+        namespace, _, _ = verification_harness(
+            manifest, occurrences, timeline_states=("healthy", "suppressed")
+        )
+
+        reports, _ = run_and_capture(namespace, expect_failure=False)
+
+        report = reports[0]
+        self.assertTrue(report["ok"])
+        self.assertEqual([], report["failures"])
+        self.assertEqual([target], report["suppressed_occurrences"])
+        self.assertEqual([], report["undeclared_suppressed_occurrences"])
+        self.assertEqual(1, len(report["timeline"]["suppressed"]))
+
     def test_all_timeline_features_suppressed_is_a_failure(self) -> None:
         occurrences = build_occurrences(self.manifest, solid_part)
         namespace, _, _ = verification_harness(
@@ -585,6 +676,42 @@ class VerificationRunTests(unittest.TestCase):
         self.assertIn("ambiguous-components", report["failures"])
         self.assertEqual(["10_PRODUCT/PROD__BASE"], report["ambiguous_component_paths"])
         self.assertIn("10_PRODUCT/PROD__BASE", report["duplicate_semantic_paths"])
+
+
+class ScaffoldRunTests(unittest.TestCase):
+    def test_document_change_discloses_the_components_left_behind(self) -> None:
+        manifest = load_manifest(EXAMPLE)
+        namespace = load_generated_script(emit_scaffold_script(manifest))
+        root = SimpleNamespace(name="Root", allOccurrences=FakeList([]))
+        design = SimpleNamespace(
+            designType="parametric",
+            rootComponent=root,
+            computeAll=lambda: True,
+            timeline=FakeTimeline.with_states(()),
+        )
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=manifest.fusion_document))
+        namespace["_active_design"] = lambda: (app, design)
+        namespace["_ensure_component_path"] = lambda root_component, path: ([path], [])
+        pumps = {"count": 0}
+
+        def switch_document():
+            pumps["count"] += 1
+            app.activeDocument = SimpleNamespace(name="Some Other Design")
+
+        namespace["adsk"].doEvents = switch_document
+
+        reports, error = run_and_capture(namespace)
+
+        self.assertRegex(str(error), "document changed")
+        # Scaffolding cannot roll back, so the failure block must name what it made.
+        report = reports[-1]
+        self.assertEqual("component-scaffold", report["kind"])
+        self.assertFalse(report["ok"])
+        # The guard fires on the first periodic pump, part-way through the loop.
+        self.assertTrue(report["created"])
+        self.assertLess(len(report["created"]), len(namespace["COMPONENT_PATHS"]))
+        self.assertLessEqual(set(report["created"]), set(namespace["COMPONENT_PATHS"]))
+        self.assertEqual(report["created"], report["left_behind"])
 
 
 def positive_control_harness(manifest, *, occurrences=None, timeline_states=("healthy",)):
@@ -758,9 +885,17 @@ class PositiveControlRunTests(unittest.TestCase):
             FakeBody.deleteMe = original_delete
 
         self.assertRegex(str(error), "cleanup left partial artifacts")
-        disclosure = reports[-1]
-        self.assertEqual([], disclosure["cleanup"]["deleted"])
-        self.assertRegex(disclosure["cleanup"]["errors"][0], r"^\S+/\S+: body")
+        cleanup = reports[-1]["cleanup"]
+        self.assertEqual(
+            {"performed", "reason", "deleted", "errors", "left_behind"}, set(cleanup)
+        )
+        self.assertEqual([], cleanup["deleted"])
+        box_paths = sorted(spec["path"] for spec in namespace["BOX_SPECS"])
+        # Every path that failed to delete is still in the document, named as a
+        # path -- not buried as a prefix inside a free-text error string.
+        self.assertEqual(box_paths, cleanup["left_behind"])
+        self.assertEqual(box_paths, sorted(row["path"] for row in cleanup["errors"]))
+        self.assertRegex(cleanup["errors"][0]["detail"], "body")
 
 
 if __name__ == "__main__":

@@ -225,7 +225,8 @@ def _timeline_health(design):
 VERIFICATION = json.loads('{"clearance_checks":[{"id":"pd-to-lid-clearance","minimum_mm":1.0,"one":"00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","two":"10_PRODUCT/PROD__LID"}],"expected_print_parts":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","90_VALIDATION/VAL__PD_FIT_COUPON"],"interference_checks":[{"allow_interference":false,"id":"usb-c-insertion-zone","one":"00_REFERENCES/KEEP__USB_C_INSERTION","two":"10_PRODUCT/PROD__BASE"},{"allow_interference":false,"id":"ekylin-wire-bend-zone","one":"00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","two":"10_PRODUCT/PROD__LID"}],"required_components":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"]}')
 PARAMETER_SPECS = json.loads('[{"expression":"35 mm","name":"src_pd_board_length","units":"mm"},{"expression":"13 mm","name":"src_pd_board_width","units":"mm"},{"expression":"5 mm","name":"src_pd_board_height","units":"mm"},{"expression":"62 mm","name":"src_ekylin_length","units":"mm"},{"expression":"31 mm","name":"src_ekylin_width","units":"mm"},{"expression":"27 mm","name":"src_ekylin_height","units":"mm"},{"expression":"0.5 mm","name":"clr_rigid_xy","units":"mm"},{"expression":"1 mm","name":"clr_rigid_z","units":"mm"},{"expression":"2 mm","name":"fab_wall_thickness","units":"mm"},{"expression":"0.35 mm","name":"fab_fit_clearance","units":"mm"},{"expression":"5 mm","name":"des_corner_radius","units":"mm"},{"expression":"20 mm","name":"pack_usb_c_straight_departure","units":"mm"}]')
 VERIFICATION_NONCE = json.loads('""')
-PRINT_PART_EXPECTATIONS = json.loads('{"10_PRODUCT/PROD__BASE":{"minimum_volume_mm3":1000.0,"solid_body_count":1},"10_PRODUCT/PROD__LID":{"minimum_volume_mm3":500.0,"solid_body_count":1},"90_VALIDATION/VAL__PD_FIT_COUPON":{"minimum_volume_mm3":100.0,"solid_body_count":1}}')
+PRINT_PART_EXPECTATIONS = json.loads('{"10_PRODUCT/PROD__BASE":{"minimum_volume_mm3":1000.0},"10_PRODUCT/PROD__LID":{"minimum_volume_mm3":500.0},"90_VALIDATION/VAL__PD_FIT_COUPON":{"minimum_volume_mm3":100.0}}')
+PRINT_PART_RULES = json.loads('{"minimum_volume_bounding_box_fraction":0.001,"solid_body_count":1}')
 
 
 def _entity_label(entity):
@@ -434,11 +435,11 @@ def run(context):
                 for row in geometry.get(path, {}).get("bodies", [])
                 if row["is_solid"] and row["volume_mm3"] > 1e-9
             ]
-            if len(solid_rows) != expectation["solid_body_count"]:
+            if len(solid_rows) != PRINT_PART_RULES["solid_body_count"]:
                 print_part_failures.append({
                     "path": path,
                     "reason": "solid-body-count",
-                    "expected": expectation["solid_body_count"],
+                    "expected": PRINT_PART_RULES["solid_body_count"],
                     "actual": len(solid_rows),
                     "detail": sorted(row["name"] for row in solid_rows),
                 })
@@ -461,10 +462,40 @@ def run(context):
                     "expected_minimum_mm3": minimum_volume_mm3,
                     "actual_volume_mm3": body_row["volume_mm3"],
                 })
+                continue
+            # The floor is author-chosen, so cross-check it against something the
+            # author did not choose: a solid cannot be a vanishing fraction of its
+            # own bounding box and still be the part.  Without this, a forged
+            # 1e-12 floor reopens the sliver hole through the supported path.
+            box = brep_bounding_boxes.get(path)
+            if isinstance(box, dict) and "min" in box and "max" in box:
+                box_volume_mm3 = 1.0
+                for index in range(3):
+                    box_volume_mm3 *= abs(float(box["max"][index]) - float(box["min"][index]))
+                if not minimum_volume_mm3 >= box_volume_mm3 * PRINT_PART_RULES["minimum_volume_bounding_box_fraction"]:
+                    print_part_failures.append({
+                        "path": path,
+                        "reason": "implausible-declared-minimum",
+                        "declared_minimum_mm3": minimum_volume_mm3,
+                        "bounding_box_volume_mm3": box_volume_mm3,
+                        "required_fraction": PRINT_PART_RULES["minimum_volume_bounding_box_fraction"],
+                    })
 
+        # An unreadable participation state is exactly as indistinguishable from
+        # "not in the model" as a suppressed one, so it fails closed too.
         suppressed_occurrences = sorted(
-            path for path, state in occurrence_states.items() if state["is_suppressed"]
+            path for path, state in occurrence_states.items() if state["is_suppressed"] is True
         )
+        unreadable_occurrence_states = sorted(
+            path for path, state in occurrence_states.items() if state["is_suppressed"] is None
+        )
+        # Suppression is how Fusion models configurations and open/closed/service
+        # states, so it is declarable: undeclared suppression fails, declared
+        # suppression is recorded and passes.
+        undeclared_suppressed_occurrences = sorted(
+            set(suppressed_occurrences) - set(VERIFICATION.get("allowed_suppressed_paths", []))
+        )
+        suppressed_timeline_allowed = bool(VERIFICATION.get("allow_suppressed_timeline_features", False))
 
         failures = []
         if not compute_invoked:
@@ -479,10 +510,12 @@ def run(context):
             failures.append("required-components")
         if timeline["unhealthy"]:
             failures.append("timeline-health")
-        if timeline["suppressed"]:
+        if timeline["suppressed"] and not suppressed_timeline_allowed:
             failures.append("timeline-suppressed")
-        if suppressed_occurrences:
+        if undeclared_suppressed_occurrences:
             failures.append("suppressed-occurrence")
+        if unreadable_occurrence_states:
+            failures.append("unreadable-occurrence-state")
         if any(not result.get("ok", False) for result in clearance_results):
             failures.append("clearance")
         if any(not result.get("ok", False) for result in interference_results):
@@ -499,6 +532,7 @@ def run(context):
             ("parameters", bool(PARAMETER_SPECS)),
             ("ambiguous-components", bool(relevant_paths)),
             ("suppressed-occurrence", bool(occurrence_states)),
+            ("unreadable-occurrence-state", bool(occurrence_states)),
             ("required-components", bool(required_paths)),
             ("clearance", bool(clearance_results)),
             ("interference", bool(interference_results)),
@@ -527,8 +561,11 @@ def run(context):
             "parameter_mismatches": parameter_mismatches,
             "expected_print_parts_missing": expected_print_parts_missing,
             "print_part_expectations": PRINT_PART_EXPECTATIONS,
+            "print_part_rules": PRINT_PART_RULES,
             "print_part_failures": print_part_failures,
             "suppressed_occurrences": suppressed_occurrences,
+            "undeclared_suppressed_occurrences": undeclared_suppressed_occurrences,
+            "unreadable_occurrence_states": unreadable_occurrence_states,
             "timeline": timeline,
             "bounding_boxes_mm": bounding_boxes,
             "brep_bounding_boxes_mm": brep_bounding_boxes,

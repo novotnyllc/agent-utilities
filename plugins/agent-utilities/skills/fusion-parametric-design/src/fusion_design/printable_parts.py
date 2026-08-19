@@ -41,6 +41,13 @@ PRINTABLE_PART_FIELDS = {
     "material",
 }
 
+# The optional fields; everything else in PRINTABLE_PART_FIELDS is required and
+# is pinned against the schema's `$defs.printable_part.required` array by
+# test_schema_json_stays_in_lockstep_with_validator_constants.
+PRINTABLE_PART_OPTIONAL_FIELDS = {"body_name", "quantity", "support_regions"}
+
+PRINTABLE_PART_REQUIRED_FIELDS = PRINTABLE_PART_FIELDS - PRINTABLE_PART_OPTIONAL_FIELDS
+
 
 def _in_closed_set(value: Any, allowed: set[str]) -> bool:
     """Closed-world membership test that survives unhashable JSON values.
@@ -107,6 +114,14 @@ def _validate_printable_parts(
             )
             continue
         _reject_unknown_fields(issues, raw_part, PRINTABLE_PART_FIELDS, path)
+        for field in sorted(PRINTABLE_PART_REQUIRED_FIELDS - set(raw_part)):
+            issues.append(
+                ValidationIssue(
+                    "printable-part-field-required",
+                    f"{path}.{field}",
+                    f"Printable-part field {field!r} is required.",
+                )
+            )
 
         part_id = require_string(raw_part, "id", path)
         if part_id and not valid_name.fullmatch(part_id):

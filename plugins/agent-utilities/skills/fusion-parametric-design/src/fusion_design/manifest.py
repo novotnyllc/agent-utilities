@@ -14,6 +14,7 @@ from .printable_parts import (  # noqa: F401
     MATERIAL_STATUSES,
     PRINT_AS_VALUES,
     PRINTABLE_PART_FIELDS,
+    PRINTABLE_PART_REQUIRED_FIELDS,
     PROTECTED_FEATURE_KINDS,
     SUPPORT_POLICIES,
     SUPPORT_REGION_KINDS,
@@ -642,9 +643,47 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         _reject_unknown_fields(
             issues,
             verification,
-            {"required_components", "clearance_checks", "interference_checks", "expected_print_parts"},
+            {
+                "required_components",
+                "clearance_checks",
+                "interference_checks",
+                "expected_print_parts",
+                "allowed_suppressed_paths",
+                "allow_suppressed_timeline_features",
+            },
             "verification",
         )
+        # Suppression is how Fusion models configurations and open/closed/service
+        # states; declaring it keeps undeclared suppression a hard failure.
+        raw_allowed_suppressed = verification.get("allowed_suppressed_paths")
+        if raw_allowed_suppressed is not None and not isinstance(raw_allowed_suppressed, list):
+            issues.append(
+                ValidationIssue(
+                    "invalid-allowed-suppressed-paths",
+                    "verification.allowed_suppressed_paths",
+                    "allowed_suppressed_paths must be a list of declared component paths.",
+                )
+            )
+        else:
+            for index, value in enumerate(_as_list(raw_allowed_suppressed)):
+                if not isinstance(value, str) or value not in component_paths:
+                    issues.append(
+                        ValidationIssue(
+                            "invalid-allowed-suppressed-paths",
+                            f"verification.allowed_suppressed_paths[{index}]",
+                            f"Allowed suppressed path {value!r} is not declared in component_tree.",
+                        )
+                    )
+        if "allow_suppressed_timeline_features" in verification and not isinstance(
+            verification["allow_suppressed_timeline_features"], bool
+        ):
+            issues.append(
+                ValidationIssue(
+                    "invalid-suppressed-timeline-allowance",
+                    "verification.allow_suppressed_timeline_features",
+                    "allow_suppressed_timeline_features must be a boolean.",
+                )
+            )
         for field in ("required_components", "clearance_checks", "interference_checks", "expected_print_parts"):
             if field not in verification or not isinstance(verification.get(field), list):
                 issues.append(

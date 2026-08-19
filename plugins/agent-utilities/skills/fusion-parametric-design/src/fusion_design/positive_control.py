@@ -338,12 +338,13 @@ def _create_body(occurrence, spec):
 
 
 def _cleanup_created(resources):
+    """Delete what this run created, reporting each path as deleted or left behind."""
     deleted = []
     errors = []
     for path, body, base_feature in reversed(resources):
         pair_errors = _cleanup_pair(body, base_feature)
         if pair_errors:
-            errors.extend(path + ": " + detail for detail in pair_errors)
+            errors.append({"path": path, "detail": "; ".join(pair_errors)})
         else:
             deleted.append(path)
     return sorted(deleted), errors
@@ -442,6 +443,7 @@ def run(context):
             raise RuntimeError("Positive-control geometry did not satisfy its report contract.")
     except Exception as error:
         created_paths = sorted(path for path, _, _ in created_resources)
+        cleanup_failure = None
         if isinstance(error, DocumentChangedError):
             # The guard fired precisely because this document is no longer ours.
             # Deleting from it would be the largest mutation in the transaction,
@@ -449,17 +451,25 @@ def run(context):
             cleanup = {
                 "performed": False,
                 "reason": "active-document-changed",
+                "deleted": [],
+                "errors": [],
                 "left_behind": created_paths,
             }
-            cleanup_failure = None
         else:
             deleted, cleanup_errors = _cleanup_created(created_resources)
-            cleanup = {"performed": True, "deleted": deleted, "errors": cleanup_errors}
-            cleanup_failure = None
+            # Same four keys on every branch, so a reader never has to guess the
+            # shape: anything created and not deleted is still in the document.
+            cleanup = {
+                "performed": True,
+                "reason": "transaction-failed",
+                "deleted": deleted,
+                "errors": cleanup_errors,
+                "left_behind": sorted(set(created_paths) - set(deleted)),
+            }
             if cleanup_errors:
                 cleanup_failure = RuntimeError(
                     "Positive-control transaction failed and cleanup left partial artifacts: "
-                    + "; ".join(cleanup_errors)
+                    + "; ".join(row["path"] + ": " + row["detail"] for row in cleanup_errors)
                 )
         # Always emitted, including when a report was already emitted: a reader
         # reconciling the report against the document must be able to tell

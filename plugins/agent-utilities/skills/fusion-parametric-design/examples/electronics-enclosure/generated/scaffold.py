@@ -274,6 +274,10 @@ def _ensure_component_path(root_component, path):
 
 def run(context):
     report_attempted = False
+    # Scaffolding creates persistent components and has no rollback by design,
+    # so the failure report must still name what this run created.
+    created = []
+    attribute_updates = []
     try:
         app, design = _active_design()
         target_document = _require_target_document(app)
@@ -292,8 +296,6 @@ def run(context):
                 "ok": False,
             })
             raise RuntimeError("Semantic component paths are already ambiguous; refusing to scaffold into an ambiguous tree.")
-        created = []
-        attribute_updates = []
         for index, path in enumerate(sorted(COMPONENT_PATHS, key=lambda item: (item.count("/"), item))):
             path_created, path_attribute_updates = _ensure_component_path(design.rootComponent, path)
             created.extend(path_created)
@@ -333,5 +335,15 @@ def run(context):
     except Exception as error:
         if not report_attempted:
             report_attempted = True
-            _emit({"kind": "component-scaffold", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
+            _emit({
+                "kind": "component-scaffold",
+                "project": PROJECT_NAME,
+                "manifest_sha256": MANIFEST_SHA256,
+                "ok": False,
+                "error": str(error),
+                "created": sorted(set(created)),
+                "attribute_updates": attribute_updates,
+                "left_behind": sorted(set(created)),
+                "traceback": traceback.format_exc(),
+            })
         raise
