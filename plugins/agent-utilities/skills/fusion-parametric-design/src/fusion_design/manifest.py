@@ -68,6 +68,17 @@ SOURCE_KINDS = {
 
 SOURCE_CONFIDENCES = {"published", "verified_cad", "measured", "provisional", "coupon_verified"}
 
+# How much weight each source confidence can carry. Published, verified CAD, and
+# measured are peers: each settles a dimension. Provisional settles nothing, and
+# coupon_verified is the only confidence that records a physical test.
+CLAIM_CONFIDENCE_RANK = {
+    "provisional": 0,
+    "published": 1,
+    "verified_cad": 1,
+    "measured": 1,
+    "coupon_verified": 2,
+}
+
 REFERENCE_REPRESENTATIONS = {
     "native_parametric_plus_exact_brep",
     "parametric_proxy_plus_conservative_pack",
@@ -112,9 +123,9 @@ class Manifest:
     def from_data(cls, data: dict[str, Any], *, validate: bool = True) -> "Manifest":
         copied = json.loads(json.dumps(data))
         if validate:
-            issues = validate_manifest_data(copied)
-            if issues:
-                raise ManifestValidationError(issues)
+            blocking = [issue for issue in validate_manifest_data(copied) if issue.severity == "error"]
+            if blocking:
+                raise ManifestValidationError(blocking)
         return cls(copied)
 
     @property
@@ -170,6 +181,81 @@ def _duplicates(values: Iterable[str]) -> set[str]:
             duplicates.add(value)
         seen.add(value)
     return duplicates
+
+
+def source_confidence(source: Any) -> str:
+    """The confidence a source actually carries, not the one it claims.
+
+    A scan is treated as provisional whatever its confidence field says: a point
+    cloud is evidence of shape, not of a dimension, until a coupon is printed and
+    measured. Anything that is not a well-formed source carries nothing.
+    """
+    if not isinstance(source, dict):
+        return "provisional"
+    confidence = source.get("confidence")
+    if not isinstance(confidence, str) or confidence not in CLAIM_CONFIDENCE_RANK:
+        return "provisional"
+    if source.get("kind") == "scan" and confidence != "coupon_verified":
+        return "provisional"
+    return confidence
+
+
+def source_backs_claim(source: Any, minimum_confidence: str) -> bool:
+    """A claim's confidence may never exceed the confidence of the source it cites.
+
+    ``minimum_confidence`` is the weakest source confidence that can carry the
+    claim: ``"published"`` for any settled (non-provisional) claim, and
+    ``"coupon_verified"`` for a claim that a coupon was printed and measured.
+    """
+    return CLAIM_CONFIDENCE_RANK[source_confidence(source)] >= CLAIM_CONFIDENCE_RANK[minimum_confidence]
+
+
+# Free-text claims a manifest may not make. SKILL.md: "Fusion export is not the
+# slicer. Print time, filament mass, supports, and machine-specific behavior
+# require a configured slicer ... rather than inventing them." These values are
+# copied verbatim into the export index as manufacturing_intent, so an invented
+# claim written here is re-served downstream as if it were evidence.
+#
+# Keyed on the *assertion*, never on the vocabulary: a rationale may discuss
+# supports all it likes ("supports must not touch it"), it may not assert the
+# outcome ("prints without supports"). Narrow on purpose -- a prose gate that
+# fires on legitimate design instructions is worse than the hole it closes.
+_FORBIDDEN_CLAIM_PATTERNS = (
+    (re.compile(r"\bprints?\s+(?:without|with\s+no)\s+support", re.I), "asserts a support-free print outcome"),
+    (re.compile(r"\bno\s+supports?\s+(?:are\s+)?(?:needed|required)", re.I), "asserts a support-free print outcome"),
+    (re.compile(r"\brequires?\s+no\s+supports?\b", re.I), "asserts a support-free print outcome"),
+    (re.compile(r"\bprint\s+time\b", re.I), "states a print time"),
+    (re.compile(r"\bfilament\s+(?:mass|used|usage|length)\b", re.I), "states filament consumption"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:g|grams?)\s+of\s+filament\b", re.I), "states filament consumption"),
+)
+
+
+def claim_text_issue(text: Any) -> str | None:
+    """Return why ``text`` reads as an unbacked slicer claim, or None.
+
+    Only a real slice or a real physical test can settle these; a manifest that
+    states one is inventing evidence.
+    """
+    if not isinstance(text, str):
+        return None
+    for pattern, reason in _FORBIDDEN_CLAIM_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return f"{reason} ({match.group(0).strip()!r})"
+    return None
+
+
+def _reject_claim_text(issues: list[ValidationIssue], text: Any, path: str) -> None:
+    reason = claim_text_issue(text)
+    if reason:
+        issues.append(
+            ValidationIssue(
+                "forbidden-claim-text",
+                path,
+                f"Free text {reason}; that outcome comes only from a configured slicer or a physical test, "
+                "not from the manifest. Describe the design choice instead of asserting the result.",
+            )
+        )
 
 
 def _reject_unknown_fields(
@@ -252,7 +338,10 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             )
 
     sources = _as_list(data.get("sources"))
-    source_ids = [str(source.get("id", "")) for source in sources if isinstance(source, dict)]
+    # Dedupe on the same value that is validated and keyed on below. Deduping the
+    # raw string while validating the stripped one lets 'a' and 'a ' pass both
+    # gates and then collide in source_map.
+    source_ids = [str(source.get("id", "")).strip() for source in sources if isinstance(source, dict)]
     for duplicate in sorted(_duplicates(source_ids)):
         issues.append(ValidationIssue("duplicate-source-id", "sources", f"Source id {duplicate!r} is duplicated."))
 
@@ -315,6 +404,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     "Source notes must be a string.",
                 )
             )
+        _reject_claim_text(issues, raw_source.get("notes"), f"{path}.notes")
 
     parameters = _as_list(data.get("parameters"))
     parameter_names = [str(parameter.get("name", "")) for parameter in parameters if isinstance(parameter, dict)]
@@ -377,12 +467,15 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
             )
 
-        if not name or not valid_name.match(name):
+        # scripts.py writes the *raw* name into Fusion, so a name that only
+        # becomes well-formed after stripping is not the name Fusion will see.
+        if not name or not valid_name.fullmatch(name) or name != raw_parameter.get("name"):
             issues.append(
                 ValidationIssue(
                     "invalid-parameter-name",
                     f"{path}.name",
-                    "Parameter names must begin with a letter and contain only letters, digits, and underscores.",
+                    "Parameter names must begin with a letter, contain only letters, digits, and underscores, "
+                    "and carry no surrounding whitespace.",
                 )
             )
         expected_prefix = ROLE_PREFIXES.get(role)
@@ -444,20 +537,17 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Parameter {name!r} needs a plain-language description.",
                 )
             )
+        _reject_claim_text(issues, description, f"{path}.description")
 
         source = source_map.get(source_id)
-        if (
-            source
-            and source.get("kind") == "scan"
-            and source.get("confidence") != "coupon_verified"
-            and critical
-            and not provisional
-        ):
+        if source is not None and critical and not provisional and not source_backs_claim(source, "published"):
             issues.append(
                 ValidationIssue(
-                    "scan-parameter-not-provisional",
+                    "parameter-confidence-exceeds-source",
                     f"{path}.provisional",
-                    f"Critical parameter {name!r} comes from a scan and must remain provisional until coupon-verified.",
+                    f"Critical parameter {name!r} is not provisional but cites source {source_id!r} "
+                    f"(kind {source.get('kind')!r}, confidence {source.get('confidence')!r}), which carries only "
+                    f"{source_confidence(source)!r} evidence; a claim may not be more confident than its source.",
                 )
             )
 
@@ -490,6 +580,19 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
             )
             continue
+        # Fusion trims and normalizes component names on assignment, so a segment
+        # that is whitespace-only -- or that differs from a sibling only by
+        # surrounding whitespace -- becomes a component the scaffold can never
+        # find again by exact match.
+        if any(segment != segment.strip() or not segment for segment in component_path.split("/")):
+            issues.append(
+                ValidationIssue(
+                    "invalid-component-path",
+                    path,
+                    "Component path segments must be non-empty and carry no surrounding whitespace.",
+                )
+            )
+            continue
         for segment in component_path.split("/"):
             if "+" in segment or re.search(r":\d+$", segment):
                 issues.append(
@@ -511,11 +614,20 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 )
 
     references = _as_list(data.get("references"))
-    reference_ids = [str(reference.get("id", "")) for reference in references if isinstance(reference, dict)]
+    reference_ids = [
+        str(reference.get("id", "")).strip() for reference in references if isinstance(reference, dict)
+    ]
     for duplicate in sorted(_duplicates(reference_ids)):
         issues.append(
             ValidationIssue("duplicate-reference-id", "references", f"Reference id {duplicate!r} is duplicated.")
         )
+
+    # Components owned by the references section: somebody else's hardware plus
+    # the volumes it needs. None of them is printable output, and the keep-out
+    # set is what the interference checks below are protecting.
+    reference_components: set[str] = set()
+    declared_keepouts: set[str] = set()
+    packing_components: list[str] = []
 
     for index, raw_reference in enumerate(references):
         path = f"references[{index}]"
@@ -614,6 +726,21 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         f"Component path {component_path!r} is not declared in component_tree.",
                     )
                 )
+            if component_path:
+                reference_components.add(component_path)
+        if packing:
+            packing_components.append(packing)
+        # The editable proxy and the exact-or-conservative packing solid answer
+        # different questions; one component cannot be both.
+        if authoring and packing and authoring == packing:
+            issues.append(
+                ValidationIssue(
+                    "reference-authoring-equals-packing",
+                    f"{path}.packing_component",
+                    f"Reference {reference_id!r} names {packing!r} as both its authoring and packing model; "
+                    "the editable reference and the packing solid must be different components.",
+                )
+            )
         raw_keepouts = raw_reference.get("keepout_components")
         keepouts = _as_list(raw_keepouts)
         raw_no_keepout_rationale = raw_reference.get("no_keepout_rationale")
@@ -628,6 +755,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         no_keepout_rationale = (
             raw_no_keepout_rationale.strip() if isinstance(raw_no_keepout_rationale, str) else ""
         )
+        _reject_claim_text(issues, raw_no_keepout_rationale, f"{path}.no_keepout_rationale")
         if not isinstance(raw_keepouts, list):
             issues.append(
                 ValidationIssue(
@@ -670,6 +798,31 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         f"Keep-out component {keepout!r} is not declared in component_tree.",
                     )
                 )
+            # A keep-out is the volume the object needs *beyond* its own body.
+            # Naming its own model satisfies reference-keepout-required while
+            # declaring nothing.
+            if keepout in (authoring, packing):
+                issues.append(
+                    ValidationIssue(
+                        "keepout-is-own-model",
+                        f"{path}.keepout_components",
+                        f"Reference {reference_id!r} names its own model {keepout!r} as a functional keep-out; "
+                        "a keep-out must be space the object needs beyond the volume it occupies.",
+                    )
+                )
+            declared_keepouts.add(keepout)
+            reference_components.add(keepout)
+
+    # Two physical objects cannot occupy one solid: sharing a packing model makes
+    # every packing check for one silently stand in for the other.
+    for duplicate in sorted(_duplicates(packing_components)):
+        issues.append(
+            ValidationIssue(
+                "duplicate-packing-component",
+                "references",
+                f"Packing component {duplicate!r} is claimed by more than one reference.",
+            )
+        )
 
     verification = data.get("verification")
     if not isinstance(verification, dict):
@@ -774,6 +927,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     )
                 )
 
+        required_component_set = set(required_components)
         for component_path in expected_print_parts:
             if component_path not in component_path_set:
                 issues.append(
@@ -783,8 +937,35 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                         f"Expected print part {component_path!r} is not declared in component_tree.",
                     )
                 )
+            # Anything the project intends to print must also be something
+            # verification asserts exists; otherwise the print pipeline is told
+            # to produce a part that may never have been modelled.
+            if component_path not in required_component_set:
+                issues.append(
+                    ValidationIssue(
+                        "expected-print-part-not-required",
+                        "verification.expected_print_parts",
+                        f"Expected print part {component_path!r} is not listed in "
+                        "verification.required_components, so verification would pass without it existing.",
+                    )
+                )
+            # A reference model is somebody else's hardware, or validation
+            # geometry for it. It is never printable output (SKILL.md section 5).
+            if component_path in reference_components:
+                issues.append(
+                    ValidationIssue(
+                        "expected-print-part-is-reference-model",
+                        "verification.expected_print_parts",
+                        f"Expected print part {component_path!r} is a reference authoring, packing, or keep-out "
+                        "model; reference geometry is validation geometry, not printable output.",
+                    )
+                )
 
         verification_check_ids: list[str] = []
+        # Keyed on the unordered pair: reversing 'one' and 'two' describes the
+        # same physical relationship and must not hide a contradiction.
+        clearance_minima: dict[frozenset[str], set[float]] = {}
+        allowed_interference_pairs: dict[frozenset[str], str] = {}
         for check_kind, raw_checks in (
             ("clearance", _as_list(verification.get("clearance_checks"))),
             ("interference", _as_list(verification.get("interference_checks"))),
@@ -860,6 +1041,8 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                                 "solids alike). Express 'must not collide' as an interference check.",
                             )
                         )
+                    elif one and two and one != two:
+                        clearance_minima.setdefault(frozenset((one, two)), set()).add(float(minimum))
                 elif not isinstance(raw_check.get("allow_interference"), bool):
                     issues.append(
                         ValidationIssue(
@@ -868,6 +1051,8 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                             "allow_interference must be a boolean.",
                         )
                     )
+                elif raw_check.get("allow_interference") and one and two and one != two:
+                    allowed_interference_pairs[frozenset((one, two))] = path
 
         for duplicate in sorted(_duplicates(verification_check_ids)):
             issues.append(
@@ -877,6 +1062,41 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     f"Verification check id {duplicate!r} is duplicated.",
                 )
             )
+
+        # Each check list validates in isolation, so the contract can demand
+        # mutually impossible outcomes for one pair of components and still
+        # report every check green.
+        for pair, minima in sorted(clearance_minima.items(), key=lambda item: sorted(item[0])):
+            names = " and ".join(sorted(pair))
+            if len(minima) > 1:
+                issues.append(
+                    ValidationIssue(
+                        "contradictory-verification-checks",
+                        "verification.clearance_checks",
+                        f"{names} carry clearance checks demanding different minima "
+                        f"({', '.join(format(value, 'g') for value in sorted(minima))} mm).",
+                    )
+                )
+            if pair in allowed_interference_pairs and max(minima) > 0:
+                issues.append(
+                    ValidationIssue(
+                        "contradictory-verification-checks",
+                        allowed_interference_pairs[pair],
+                        f"{names} are required to keep a gap by a clearance check and permitted to overlap by "
+                        "an interference check with allow_interference true.",
+                    )
+                )
+        for pair, check_path in sorted(allowed_interference_pairs.items(), key=lambda item: item[1]):
+            keepouts = sorted(pair & declared_keepouts)
+            if keepouts:
+                issues.append(
+                    ValidationIssue(
+                        "keepout-interference-allowed",
+                        f"{check_path}.allow_interference",
+                        f"{' and '.join(keepouts)} is a functional keep-out declared by a reference; "
+                        "intrusion into it may not be permitted.",
+                    )
+                )
 
     expected_print_part_paths: list[str] | None = None
     if isinstance(verification, dict):
@@ -903,13 +1123,32 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
     return issues
 
 
+class _DuplicateManifestKey(ValueError):
+    pass
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """json.loads takes last-wins on a duplicate key, so the bytes a reviewer
+    reads and signs off on can say one thing while the object that drives
+    geometry -- and the manifest_sha256 that records provenance -- say another."""
+    mapping = dict(pairs)
+    if len(mapping) != len(pairs):
+        duplicates = sorted(_duplicates(key for key, _ in pairs))
+        raise _DuplicateManifestKey(f"Duplicate object key(s): {', '.join(repr(key) for key in duplicates)}.")
+    return mapping
+
+
 def load_manifest(path: str | Path) -> Manifest:
     manifest_path = Path(path)
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys)
     except FileNotFoundError as exc:
         raise ManifestValidationError(
             [ValidationIssue("manifest-not-found", str(manifest_path), "Manifest file does not exist.")]
+        ) from exc
+    except _DuplicateManifestKey as exc:
+        raise ManifestValidationError(
+            [ValidationIssue("manifest-duplicate-key", str(manifest_path), str(exc))]
         ) from exc
     except json.JSONDecodeError as exc:
         raise ManifestValidationError(

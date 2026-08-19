@@ -760,6 +760,34 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "material": {
+                "properties": {
+                  "status": {
+                    "const": "coupon_verified"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "material"
+            ]
+          },
+          "then": {
+            "properties": {
+              "material": {
+                "required": [
+                  "source_id"
+                ]
+              }
+            }
+          }
         }
       ]
     },

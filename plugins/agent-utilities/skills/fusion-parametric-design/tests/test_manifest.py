@@ -55,7 +55,7 @@ class ManifestValidationTests(unittest.TestCase):
         data["sources"][0]["kind"] = "scan"
         data["parameters"][0]["provisional"] = False
         issues = validate_manifest_data(data)
-        self.assertIn("scan-parameter-not-provisional", {issue.code for issue in issues})
+        self.assertIn("parameter-confidence-exceeds-source", {issue.code for issue in issues})
 
     def test_coupon_verified_scan_parameter_can_be_final(self) -> None:
         data = copy.deepcopy(self.data)
@@ -63,7 +63,27 @@ class ManifestValidationTests(unittest.TestCase):
         data["sources"][0]["confidence"] = "coupon_verified"
         data["parameters"][0]["provisional"] = False
         issues = validate_manifest_data(data)
-        self.assertNotIn("scan-parameter-not-provisional", {issue.code for issue in issues})
+        self.assertNotIn("parameter-confidence-exceeds-source", {issue.code for issue in issues})
+
+    def test_critical_parameter_may_not_outrank_a_provisional_source_of_any_kind(self) -> None:
+        # The scan rule was only ever one instance of the general contract: a
+        # claim's confidence may never exceed the confidence of its source.
+        for kind in ("user_measurement", "conservative_proxy", "third_party_cad", "manufacturer_drawing"):
+            with self.subTest(kind=kind):
+                data = copy.deepcopy(self.data)
+                data["sources"][0]["kind"] = kind
+                data["sources"][0]["confidence"] = "provisional"
+                self.assertEqual(False, data["parameters"][0]["provisional"])
+                self.assertEqual(True, data["parameters"][0]["critical"])
+                self.assertIn("parameter-confidence-exceeds-source", self._codes(data))
+
+    def test_provisional_source_backs_a_parameter_that_admits_it_is_provisional(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["sources"][0]["confidence"] = "provisional"
+        for parameter in data["parameters"]:
+            if parameter.get("source_id") == "pd_trigger_board_measurement":
+                parameter["provisional"] = True
+        self.assertNotIn("parameter-confidence-exceeds-source", self._codes(data))
 
     def test_cli_enforces_schema_identity_and_unknown_field_rules(self) -> None:
         data = copy.deepcopy(self.data)
@@ -194,10 +214,35 @@ class ManifestValidationTests(unittest.TestCase):
         issues = validate_manifest_data(data)
         self.assertNotIn("reference-keepout-required", {issue.code for issue in issues})
 
-    def test_manifest_without_printable_parts_is_still_valid(self) -> None:
+    def test_absent_printable_parts_is_recorded_rather_than_silently_satisfied(self) -> None:
         data = copy.deepcopy(self.data)
         data.pop("printable_parts")
+        issues = validate_manifest_data(data)
+        # Omitting the section stays legal (back-compat) ...
+        self.assertEqual([], [issue for issue in issues if issue.severity == "error"])
+        # ... but the absence is recorded, so no consumer can read "no print
+        # intent declared" as "print intent satisfied".
+        absence = [issue for issue in issues if issue.code == "printable-parts-not-declared"]
+        self.assertEqual(1, len(absence), issues)
+        self.assertEqual("warning", absence[0].severity)
+        for expected in data["verification"]["expected_print_parts"]:
+            self.assertIn(expected, absence[0].message)
+
+    def test_absent_printable_parts_is_silent_when_nothing_is_expected(self) -> None:
+        data = copy.deepcopy(self.data)
+        data.pop("printable_parts")
+        data["verification"]["expected_print_parts"] = []
         self.assertEqual([], validate_manifest_data(data))
+
+    def test_absent_printable_parts_does_not_block_loading(self) -> None:
+        data = copy.deepcopy(self.data)
+        data.pop("printable_parts")
+        broken = ROOT / "tests" / "_no_printable_parts.json"
+        broken.write_text(json.dumps(data), encoding="utf-8")
+        try:
+            self.assertEqual([], load_manifest(broken).printable_parts)
+        finally:
+            broken.unlink(missing_ok=True)
 
     def test_example_printable_parts_validate(self) -> None:
         self.assertEqual([], validate_manifest_data(self.data))
@@ -774,6 +819,173 @@ class ManifestValidationTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn(expected, self._codes(self._with_decision(**{field: padded})))
+    def test_coupon_verified_material_needs_coupon_evidence(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"].pop("source_id", None)
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        # A source may not back a claim stronger than its own confidence.
+        data = copy.deepcopy(self.data)
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["source_id"] = "pd_trigger_board_measurement"
+        self.assertEqual("measured", data["sources"][0]["confidence"])
+        self.assertIn("printable-part-invalid-material", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["sources"][0]["confidence"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["status"] = "coupon_verified"
+        data["printable_parts"][0]["material"]["source_id"] = "pd_trigger_board_measurement"
+        self.assertNotIn("printable-part-invalid-material", self._codes(data))
+
+    def test_contradictory_clearance_and_interference_checks_are_reconciled(self) -> None:
+        pair = ("10_PRODUCT/PROD__BASE", "10_PRODUCT/PROD__LID")
+
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].append(
+            {"id": "base-lid-gap", "one": pair[0], "two": pair[1], "minimum_mm": 2.0}
+        )
+        data["verification"]["interference_checks"].append(
+            {"id": "base-lid-overlap", "one": pair[0], "two": pair[1], "allow_interference": True}
+        )
+        self.assertIn("contradictory-verification-checks", self._codes(data))
+
+        # Reversing 'one' and 'two' describes the same pair and must not hide it.
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].extend(
+            [
+                {"id": "base-lid-gap", "one": pair[0], "two": pair[1], "minimum_mm": 2.0},
+                {"id": "lid-base-gap", "one": pair[1], "two": pair[0], "minimum_mm": 0.0},
+            ]
+        )
+        self.assertIn("contradictory-verification-checks", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["verification"]["interference_checks"][0]["allow_interference"] = True
+        codes = self._codes(data)
+        self.assertIn("keepout-interference-allowed", codes)
+
+    def test_agreeing_checks_on_one_pair_are_not_a_contradiction(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["verification"]["clearance_checks"].extend(
+            [
+                {
+                    "id": "base-lid-gap",
+                    "one": "10_PRODUCT/PROD__BASE",
+                    "two": "10_PRODUCT/PROD__LID",
+                    "minimum_mm": 2.0,
+                },
+                {
+                    "id": "lid-base-gap",
+                    "one": "10_PRODUCT/PROD__LID",
+                    "two": "10_PRODUCT/PROD__BASE",
+                    "minimum_mm": 2.0,
+                },
+            ]
+        )
+        self.assertNotIn("contradictory-verification-checks", self._codes(data))
+
+    def test_a_reference_may_not_stand_in_for_its_own_keepout_or_packing_model(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["references"][0]["keepout_components"] = [
+            "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        ]
+        codes = self._codes(data)
+        self.assertIn("keepout-is-own-model", codes)
+        self.assertNotIn("reference-keepout-required", codes)
+
+        data = copy.deepcopy(self.data)
+        data["references"][0]["packing_component"] = "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC"
+        self.assertIn("reference-authoring-equals-packing", self._codes(data))
+
+        data = copy.deepcopy(self.data)
+        data["references"][1]["packing_component"] = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        self.assertIn("duplicate-packing-component", self._codes(data))
+
+    def test_expected_print_parts_are_reconciled_with_required_components(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["verification"]["required_components"] = ["10_PRODUCT/PROD__BASE"]
+        self.assertIn("expected-print-part-not-required", self._codes(data))
+
+        # A packing proxy is somebody else's hardware, never printable output.
+        pack = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        data = copy.deepcopy(self.data)
+        data["verification"]["expected_print_parts"].append(pack)
+        data["printable_parts"].append(copy.deepcopy(data["printable_parts"][0]))
+        data["printable_parts"][-1].update(id="pack_pd_trigger", path=pack)
+        self.assertIn("expected-print-part-is-reference-model", self._codes(data))
+
+    def test_parameter_names_are_deduped_on_the_value_that_is_validated(self) -> None:
+        data = copy.deepcopy(self.data)
+        duplicate = copy.deepcopy(data["parameters"][0])
+        duplicate["name"] = data["parameters"][0]["name"] + " "
+        duplicate["expression"] = "36 mm"
+        data["parameters"].append(duplicate)
+        codes = self._codes(data)
+        self.assertIn("duplicate-parameter-name", codes)
+        self.assertIn("invalid-parameter-name", codes)
+
+    def test_component_path_segments_reject_whitespace(self) -> None:
+        for bad in ("   ", "10_PRODUCT/PROD__LID ", "10_PRODUCT/ PROD__X"):
+            with self.subTest(path=bad):
+                data = copy.deepcopy(self.data)
+                data["component_tree"].append(bad)
+                self.assertIn("invalid-component-path", self._codes(data))
+
+    def test_duplicate_json_keys_are_rejected_at_load(self) -> None:
+        text = EXAMPLE.read_text(encoding="utf-8").replace(
+            '"provisional": false,\n      "description": "Measured PD trigger board length."',
+            '"provisional": true,\n      "provisional": false,\n      "description": "Measured PD trigger board length."',
+            1,
+        )
+        broken = ROOT / "tests" / "_duplicate_key.json"
+        broken.write_text(text, encoding="utf-8")
+        try:
+            with self.assertRaises(ManifestValidationError) as ctx:
+                load_manifest(broken)
+            self.assertIn("manifest-duplicate-key", str(ctx.exception))
+        finally:
+            broken.unlink(missing_ok=True)
+
+    def test_free_text_may_not_assert_slicer_outcomes(self) -> None:
+        # These values are copied verbatim into the export index as
+        # manufacturing_intent, so an invented claim here is re-served
+        # downstream as if it were evidence.
+        routes = (
+            lambda d, text: d["printable_parts"][0]["orientation"].__setitem__("rationale", text),
+            lambda d, text: d["printable_parts"][0]["protected_features"][0].__setitem__("description", text),
+            lambda d, text: d["printable_parts"][0]["material"].__setitem__("assumption", text),
+            lambda d, text: d["parameters"][0].__setitem__("description", text),
+            lambda d, text: d["sources"][0].__setitem__("notes", text),
+            lambda d, text: d["references"][0].__setitem__("no_keepout_rationale", text),
+        )
+        claims = (
+            "The flat floor sits on the plate and prints without supports.",
+            "No supports are needed for this orientation.",
+            "This orientation requires no supports.",
+            "Print time is about 40 minutes.",
+            "Filament mass is roughly 18 g.",
+        )
+        for index, mutate in enumerate(routes):
+            for claim in claims:
+                with self.subTest(route=index, claim=claim):
+                    data = copy.deepcopy(self.data)
+                    mutate(data, claim)
+                    self.assertIn("forbidden-claim-text", self._codes(data))
+
+    def test_claim_gate_permits_design_instructions_about_supports(self) -> None:
+        # Keyed on the assertion, not the vocabulary: a rationale may discuss
+        # supports, it may not assert the print outcome.
+        for text in (
+            "Keep it support-free and unscarred.",
+            "Snap rim engages the base; supports must not touch it.",
+            "Printing the lid top-down keeps the visible outer face against the plate.",
+            "Per-side printed sliding-fit clearance.",
+        ):
+            with self.subTest(text=text):
+                data = copy.deepcopy(self.data)
+                data["printable_parts"][0]["orientation"]["rationale"] = text
+                self.assertNotIn("forbidden-claim-text", self._codes(data))
 
     def _with_variants(self, *variants):
         data = copy.deepcopy(self.data)
@@ -924,6 +1136,7 @@ class ManifestValidationTests(unittest.TestCase):
 
     def test_schema_json_stays_in_lockstep_with_validator_constants(self) -> None:
         from fusion_design.manifest import (
+            CLAIM_CONFIDENCE_RANK,
             CONTACT_FACES,
             DRYING_STATES,
             MATERIAL_DECISION_FIELDS,
@@ -934,13 +1147,40 @@ class ManifestValidationTests(unittest.TestCase):
             PRINTABLE_PART_FIELDS,
             PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
+            REFERENCE_REPRESENTATIONS,
+            ROLE_PREFIXES,
             SOURCE_CONFIDENCES,
+            SOURCE_KINDS,
             SUPPORT_POLICIES,
             SUPPORT_REGION_KINDS,
         )
 
         schema = json.loads((ROOT / "schema" / "fusion-project.schema.json").read_text(encoding="utf-8"))
         part = schema["$defs"]["printable_part"]
+
+        self.assertEqual(SOURCE_KINDS, set(schema["$defs"]["source"]["properties"]["kind"]["enum"]))
+        self.assertEqual(
+            SOURCE_CONFIDENCES, set(schema["$defs"]["source"]["properties"]["confidence"]["enum"])
+        )
+        # Every confidence must be rankable, or a new enum value silently ranks
+        # as provisional and quietly blocks every claim that cites it.
+        self.assertEqual(SOURCE_CONFIDENCES, set(CLAIM_CONFIDENCE_RANK))
+        self.assertEqual(
+            REFERENCE_REPRESENTATIONS,
+            set(schema["$defs"]["reference"]["properties"]["representation"]["enum"]),
+        )
+        self.assertEqual(set(ROLE_PREFIXES), set(schema["$defs"]["parameter"]["properties"]["role"]["enum"]))
+        # coupon_verified carries a provenance obligation in both artifacts.
+        self.assertIn(
+            {
+                "if": {
+                    "properties": {"material": {"properties": {"status": {"const": "coupon_verified"}}, "required": ["status"]}},
+                    "required": ["material"],
+                },
+                "then": {"properties": {"material": {"required": ["source_id"]}}},
+            },
+            part["allOf"],
+        )
         self.assertIn("printable_parts", schema["properties"])
         self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
         self.assertEqual(PRINTABLE_PART_REQUIRED_FIELDS, set(part["required"]))
