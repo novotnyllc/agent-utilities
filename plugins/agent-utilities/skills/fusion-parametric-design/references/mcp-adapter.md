@@ -48,14 +48,47 @@ Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/
 ## Python modules and dependencies
 
 Fusion's embedded Python is its own runtime; do not assume that a module
-available to the host Python is importable in Fusion. In the current live MCP
-session, `os`, `tempfile`, `hashlib`, and `uuid` imported successfully, while
-`secrets`, `sqlite3`, `numpy`, and `requests` did not. This is live evidence
-for that Fusion installation, not a universal module inventory. Probe an
-optional import in the live session before relying on it, and keep one-shot
-MCP scripts to modules already proven there. Put heavy mesh or other
-non-Fusion processing in the host environment and pass only its result into
-Fusion.
+available to the host Python is importable in Fusion. **Probe it — never quote a
+note, including this one.** Run `emit-capability-probe` against the live Fusion
+and read its report. That command exists because this section previously carried
+a module inventory that was wrong, and the wrong inventory drove an architecture
+decision.
+
+What a later live probe actually found, and what the earlier note got wrong:
+`secrets`, `sqlite3`, `ctypes` and `ensurepip` all import. `numpy` raised a plain
+`ModuleNotFoundError` — **not installed**, which is a different fact from
+unloadable, and it was corrected by installing a matching wheel: numpy 2.5.2 from
+a `cp314` / `macosx_11_0_arm64` wheel imported inside Fusion and ran
+`linalg.eigh`, so the compiled LAPACK path executes. Fusion's Python there was
+3.14.0, `EXT_SUFFIX = .cpython-314-darwin.so`, and `sysconfig.get_platform()`
+reported `macosx-10.15-universal2` — note that the reported platform is *not* the
+wheel tag that loaded. `sys.path` already contained a user-writable
+`~/Library/Application Support/Autodesk/Autodesk Fusion 360/MyScripts/ManuallyInstalled/`.
+
+**Third-party dependencies, if a feature ever wants one, are pip's job and need
+nothing built here.** Cross-target install is one command that resolves
+transitively against foreign tags:
+
+```bash
+python3 -m pip install --only-binary=:all: \
+  --python-version <probed> --implementation <probed> --abi <probed> \
+  --platform <probed> --target <dir> <packages>
+```
+
+Every `<probed>` value comes from the capability probe's `pip_tags`, never from a
+literal in this document or in code. Fusion auto-updates its interpreter, so a
+hardcoded `cp314` becomes a `ModuleNotFoundError` that reads as "not installed" —
+the exact confusion that produced the wrong note above. Install from a pinned
+lock with `--require-hashes`, and record the resolved set and its hashes against
+the Fusion version it was resolved for.
+
+The standing guidance is unchanged, but it does **not** rest on a capability
+claim: put heavy mesh or other non-Fusion processing in the host environment and
+pass only its result into Fusion. The reasons are that host-side numerics are
+fully testable offline with no Fusion running, that the host's Python does not
+move without the user, and that a wheel has to *exist* for Fusion's interpreter
+on the day you need it — a real constraint today, where numpy publishes a `cp314`
+wheel and scipy does not.
 
 Autodesk's [Python-specific issues](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/PythonSpecific_UM.htm)
 guidance about copying pure-Python modules beside a script does not directly
@@ -84,7 +117,10 @@ platform user-cache default can be overridden only with an absolute
 `FUSION_MCP_MODULE_CACHE`. This cache requires POSIX owner/permission semantics
 and fails closed on native Windows. Only regular `.py` files are supported;
 data files, symlinks, hard links, package-manager installation, and
-compiled/native extensions are intentionally excluded. Do not call
+compiled/native extensions are outside this cache's scope — **not** beyond
+Fusion's capability. The cache delivers *our own* pure-Python code with content
+addressing and verified imports; third-party wheels, native extensions included,
+are pip's job, and pip already does them against probed tags (see above). Do not call
 `importlib.invalidate_caches()`; it triggered an unavailable
 `importlib.metadata` import in the observed Fusion runtime. Run heavy mesh or
 other non-Fusion processing in the host environment and pass only its result
