@@ -166,6 +166,10 @@ def emit_export_script(manifest: Manifest, config: ExportConfig) -> str:
         "index_filename": f"export-index__{digest[:8]}.json",
         "parts": parts,
     }
+    # The material decision is a project-level fact, so it rides the index once
+    # rather than being copied onto every artifact.
+    if manifest.material_decision:
+        specs["material_decision"] = manifest.material_decision
 
     transaction = '''import hashlib
 import os
@@ -457,6 +461,8 @@ def run(context):
                 "formats": EXPORT_SPECS["formats"],
                 "artifacts": artifacts,
             }
+            if "material_decision" in EXPORT_SPECS:
+                index["material_decision"] = EXPORT_SPECS["material_decision"]
             design_state_rows = []
             for artifact in artifacts:
                 design_state_rows.append(

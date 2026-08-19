@@ -29,6 +29,16 @@ from test_scripts import load_generated_script
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 
+MATERIAL_DECISION = {
+    "family": "PETG",
+    "formulation": "Prusament PETG",
+    "source_id": "pd_trigger_board_measurement",
+    "confidence": "provisional",
+    "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+    "rationale": "The snap-fit lid needs PETG toughness; PLA would fail brittle at the snap.",
+    "unresolved_risks": ["Snap strain is unverified until the coupon prints."],
+}
+
 FORBIDDEN_CLAIM_KEYS = {
     "slicing",
     "print_time",
@@ -223,6 +233,17 @@ class ExportHandoffEmitterTests(unittest.TestCase):
             planted,
         )
         self.assertEqual({"printer"}, planted & FORBIDDEN_CLAIM_KEYS)
+
+    def test_forbidden_claim_gate_inspects_inside_material_decision(self) -> None:
+        planted: set = set()
+        _collect_keys(
+            {"material_decision": {**MATERIAL_DECISION, "filament": "some-filament", "process_profile": "0.2 fast"}},
+            planted,
+        )
+        self.assertEqual({"filament", "process_profile"}, planted & FORBIDDEN_CLAIM_KEYS)
+        legitimate: set = set()
+        _collect_keys({"material_decision": {**MATERIAL_DECISION, "printer_requirements": "Any nozzle."}}, legitimate)
+        self.assertFalse(legitimate & FORBIDDEN_CLAIM_KEYS)
 
     def test_filename_collisions_fail_at_emit_time(self) -> None:
         good = self._config("/tmp/example-exports")
@@ -503,6 +524,30 @@ class ExportHandoffRuntimeTests(unittest.TestCase):
         keys: set = set()
         _collect_keys(index, keys)
         self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_carries_material_decision_once_at_index_level(self) -> None:
+        from fusion_design.manifest import Manifest
+
+        declared = self.manifest.to_dict()
+        declared["material_decision"] = json.loads(json.dumps(MATERIAL_DECISION))
+        self.manifest = Manifest.from_data(declared)
+
+        report = self._run(self._namespace())[0]
+        self.assertEqual(MATERIAL_DECISION, report["material_decision"])
+        for artifact in report["artifacts"]:
+            self.assertNotIn("material_decision", artifact)
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(MATERIAL_DECISION, index["material_decision"])
+        keys: set = set()
+        _collect_keys(index, keys)
+        self.assertFalse(keys & FORBIDDEN_CLAIM_KEYS, keys & FORBIDDEN_CLAIM_KEYS)
+
+    def test_index_omits_material_decision_when_manifest_declares_none(self) -> None:
+        self.assertEqual({}, self.manifest.material_decision)
+        report = self._run(self._namespace())[0]
+        self.assertNotIn("material_decision", report)
+        index = json.loads(next(self.export_dir.glob("export-index__*.json")).read_text(encoding="utf-8"))
+        self.assertNotIn("material_decision", index)
 
     def test_index_carries_explicit_support_regions(self) -> None:
         from fusion_design.manifest import Manifest
