@@ -46,3 +46,51 @@ the hard part and is done.
 Probe before concluding. A failed import says a module is absent; it does not say the
 runtime refuses that class of module. Record the interpreter's version and ABI tag
 alongside any import probe, because those are what determine whether a wheel can load.
+
+# sys.executable is Fusion, not a Python
+
+Inside Fusion's embedded interpreter:
+
+    sys.executable == ".../Autodesk Fusion.app/Contents/MacOS/Autodesk Fusion"
+
+So **anything that shells out to `sys.executable` launches a second full Fusion instance.**
+Learned by doing it: `ensurepip._bootstrap()` spawned a Fusion process whose command line
+was the pip bootstrap, as a child of the live session. Two instances were running before
+it was killed, and which one an MCP client binds to is undefined.
+
+The same trap applies to `subprocess` with `sys.executable` and to `multiprocessing`.
+
+Consequences:
+
+- **In-process pip is impossible.** `ensurepip` imports fine but is a subprocess bootstrap,
+  and the subprocess is Fusion.
+- **There is no standalone interpreter to shell out to either.** Fusion ships a full
+  `Python.framework` with a `bin/python3`, but the inner
+  `Resources/Python.app/Contents/MacOS/Python` binary is absent, so the wrapper fails with
+  `posix_spawn: ... Undefined error: 0`.
+
+# The working shape
+
+Detect, then resolve elsewhere. Read the triple out of Fusion with a read-only script:
+
+    sys.version_info, sysconfig.get_config_var("EXT_SUFFIX"), sysconfig.get_platform()
+
+observed 2026-08-19 as `3.14.0`, `.cpython-314-darwin.so`, `macosx-10.15-universal2`.
+
+Feed those to pip as explicit target flags:
+
+    pip install --only-binary=:all: \
+      --python-version <detected> --implementation cp --abi <detected> \
+      --platform <detected> --target <dir> <packages>
+
+`--target` may be `~/Library/Application Support/Autodesk/Autodesk Fusion 360/MyScripts/ManuallyInstalled/`,
+already on Fusion's `sys.path`.
+
+**Detect every time; never hardcode the tags.** Fusion auto-updates its bundled Python, and
+a pinned `cp314` becomes silently wrong the day it moves to 3.15 — the failure is a
+`ModuleNotFoundError` that looks exactly like "not installed".
+
+# Rule
+
+Never invoke `sys.executable` from inside a host application's embedded interpreter without
+checking what it points at.
