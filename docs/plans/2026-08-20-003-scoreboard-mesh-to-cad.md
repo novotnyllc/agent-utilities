@@ -115,10 +115,20 @@ counts only parameters exercised by an `emit-mesh-editability` report.
 
 ### 1.4 Componentization (C)
 
-**Distinct physical things in the input ÷ Fusion components emitted with
-placement transforms.** Today the emitter builds one dedicated component
-holding one body per part, with no occurrence transforms — **C = 0 emitted
-everywhere; one body per part is the current ceiling** (design 006 §model;
+**Fusion components emitted with placement transforms ÷ distinct physical
+things evident in the input.** Achieved over target, the same direction as
+every other cell — the first draft had it inverted, which made the stated
+`C = 0` baseline a division by zero and scored ten things collapsed into one
+component as 10 rather than 0.1. Two cases are named rather than computed:
+**no components emitted → `C = 0`** (the state below, and the reason the cell
+reads 0 rather than undefined), and **an unmeasured denominator →
+`C = unmeasured`**, never 0 and never 1 — a part with no evident-things census
+has no cell, which is exactly Dig-Next-2's position today. Over-emission
+(a ratio above 1: more components than things) is a failure of this cell and
+is reported by name — `things-over-partitioned` — not as a score above 1.
+Today the emitter builds one dedicated component holding one body per part,
+with no occurrence transforms — **C = 0 emitted everywhere; one body per part
+is the current ceiling** (design 006 §model;
 verified: no component/occurrence emission exists in any emitter path). For a
 single-object STL the denominator is 1 and the cell is trivially satisfiable by
 the current ceiling *once the emitter declares it*; the cell bites on scans of
@@ -196,7 +206,7 @@ Scoreboard row (aggregate):
 | delivered (live) | **unmeasured** | no slab build has ever run live |
 | V | holes 74 planned of 85 evident bores (87%); prisms: 21/21 hex nut pockets correctly refused as cylinders; fillets **2 planned of 114 candidates** (3 → 2 on the slab path, PR #51 finding 4); extrudes: slab stacks per table; revolve/shell/chamfer/pattern: 0 (shell and revolve unassigned; chamfer/pattern not in vocabulary) | mesh-reconstruction.md; PR #51/#53 |
 | E | **0 proven / parameters emitted per part `unmeasured`** (counts live in the emitted scripts, not in any published table); `interactions_exercised: false` | no U5 report exists for any part |
-| C | 0 components emitted (1 body/part ceiling); inputs are single objects (denominator 1 each) | §1.4 |
+| C | **0** — 0 components emitted (1 body/part ceiling) over a denominator of 1 each, these being single objects: a measured 0, unlike the assembly row below | §1.4 |
 | H | all refusals named (tropical-leaves-style silent loss not observed; every gate token closed-set); area-conservation audit `unmeasured` | §1.5 |
 
 ### 2.2 The four benchmark parts (committed, replayable; manifest on the 2.5D head = post-#48 v1 path)
@@ -227,7 +237,7 @@ the measured disagreement, not silently).
 | delivered | 0.0 (`reconstruction-refused`: "Nothing was built") | 0.0 | coverage.json |
 | V | 0 of the evident set (board slab, 3 mounting holes, can cylinders): **0 cylinders accepted either side of #54** | same; 94/98 curved regions now carry a `material_side` | design -002 §3.3; PR #54 |
 | E | 0 / 0 (nothing emitted) | same | — |
-| C | 0 components; input is an assembly — distinct-things census `unmeasured` (no evident-things table exists) | same | §1.4 |
+| C | **`unmeasured`** — 0 components emitted, and the input is an assembly whose distinct-things census does not exist, so the denominator is unmeasured and the cell is too (§1.4's named case; not 0, which would claim a measured denominator) | same | §1.4 |
 | H | clean: 2,605 unfitted + 1,041 unclaimed components + 3,023 unreconstructed, all enumerated with gates; refusal census re-tallied in design -002 F6 | 609 blocked-no-fit refusals became **518 named skips** — an H improvement (underpowered ≠ disproved) | coverage.json; PR #54 |
 
 The 78.97%-of-area mega-group (448,122 triangles: the board's two faces plus
@@ -391,11 +401,21 @@ needed until something emits. Re-run after scan-seg PR 3 lands (the design's
 own decisive experiment, §6).
 
 **Run D — area-conservation audit (honesty).** A ~50-line host-side script
-over any coverage account: assert Σ(area claimed by emitted archetypes) +
-Σ(area in named unclaimed/unfitted/unreconstructed lists) equals total mesh
-area within float tolerance; first targets: Dig-Next-2 and the honeycomb;
-explicitly audit the <4-point face groups (§1.5). Cost: an hour. Turns H from
-"by construction" into a measured row.
+over any coverage account. **Per stage, and partitioned by region identity
+before summing** — the lists are not disjoint across stages and a naive
+Σ(claimed) + Σ(every named list) over-counts and reports a false honesty
+failure: a region whose fit was rejected is named twice, once by
+`reconstruction_coverage._fit_stage` in `unfitted_regions` and again by
+`plan_archetypes`, which walks every region and puts the same one in
+`unreconstructed` under its rejection text. So: **fit stage** — Σ(area of
+regions with an accepted fit) + Σ(`unfitted_regions`) + Σ(`unclaimed_components`)
+= total mesh area; **plan stage** — Σ(area claimed by emitted archetypes) +
+Σ(`unreconstructed`) = total mesh area, with both sums taken over a set keyed
+by `region_id` so a region named by two lists is counted once and a region
+named by none is the finding. Cross-stage roll-ups state which stage each
+term came from. First targets: Dig-Next-2 and the honeycomb; explicitly audit
+the <4-point face groups (§1.5). Cost: an hour. Turns H from "by construction"
+into a measured row.
 
 **Run E-prod — publish per-part RC-emitted for the eleven.** Fold into Run A
 (same session produces the numbers); listed separately because it is the
