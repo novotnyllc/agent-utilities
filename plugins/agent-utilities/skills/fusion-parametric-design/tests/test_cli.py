@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 import fusion_design.cli as cli_module
+from fusion_design.reconstruction_program import PROGRAM_VERSION
 from fusion_design.cli import main
 from fusion_design.export_handoff import example_verification_report, manufacturing_intent_by_path
 from fusion_design.manifest import load_manifest
@@ -58,7 +59,7 @@ class PlanReconstructionCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(program["manifest_sha256"], manifest_sha256(load_manifest(str(EXAMPLE))))
         self.assertEqual(program["dump_sha256"], fx.DUMP_SHA256)
-        self.assertEqual(program["program_version"], 1)
+        self.assertEqual(program["program_version"], PROGRAM_VERSION)
 
     def test_a_refusal_prints_its_named_reason_and_alternative_and_exits_two(self) -> None:
         import fixtures_fit_record as fx

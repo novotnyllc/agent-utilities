@@ -43,6 +43,35 @@
       "rationale": "three sigma: beyond it is not explained by fit noise.",
       "value": 3.0
     },
+    "slab_evidence": {
+      "event_merge_sigmas": {
+        "rationale": "three combined sigmas: two stations closer than three times their own joint measurement uncertainty are one station, and a slab thinner than what these fits can resolve is not evidence of a slab. The same sigma-multiple reading the licensing arithmetic already uses, applied to offsets instead of angles.",
+        "value": 3.0
+      },
+      "loop_attribution_min_fraction": {
+        "rationale": "how much of a loop may lie on triangles that cast no vote before its walls stop being evidence. The same five per cent as the consensus slack: a slab is sectioned at its midpoint precisely to be far from its own caps, so a loop grazing one there is a station problem.",
+        "value": 0.05
+      },
+      "loop_material_consensus_fraction": {
+        "rationale": "a loop's walls vote by length for which side of it the material is on, and on a designed export they should be unanimous. Five per cent is the room a blend crossing or a sliver at a corner needs; beyond that the winding is saying the section crossed a junction, which is a finding rather than a tolerance to widen.",
+        "value": 0.95
+      },
+      "section_tolerance_mm": {
+        "rationale": "a hundredth of a millimetre is below the smallest feature any of these parts carries and above the float32 quantization their vertices are stored at; the same number the rebuild spec sections with, so the planner and the emitter cut the same loops.",
+        "value": 0.01
+      },
+      "slab_constancy_tolerance_mm": {
+        "rationale": "five hundredths of a millimetre, the same window this corpus declares for binding a built face back to its fitted region. Two sections of one slab are the same wall measured twice; agreeing to less than this is agreement, and disagreeing by more is a taper or a step the slab premise does not cover.",
+        "value": 0.05
+      },
+      "slab_section_fractions": {
+        "rationale": "the quarter and three-quarter stations, the design's own doctrine default. Far enough from the midpoint that a taper or a mid-slab step shows up as disagreement, far enough from the bounding events that neither section grazes a cap and measures coplanar triangles instead of walls.",
+        "value": [
+          0.25,
+          0.75
+        ]
+      }
+    },
     "tangent_tolerance": {
       "rationale": "screening window for tangency on a part of this size.",
       "value": 0.05

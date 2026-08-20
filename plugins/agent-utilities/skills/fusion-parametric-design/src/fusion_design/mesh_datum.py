@@ -250,6 +250,13 @@ class RegionFit:
     # readable normal -- absent, and never a zero block, because a zero block
     # would sum into a group's evidence as if the region had been measured.
     motion_moments: dict[str, Any] | None = None
+    # This region's own triangles, in the *dump's* index space -- the same space
+    # a host-side section addresses. Carried because the 2.5D decomposition asks
+    # "which region does this section segment's wall belong to?", and only the
+    # triangle indices can answer it; the fit record has always written them and
+    # this stage simply stopped discarding them. Empty on a record that predates
+    # them, which is not the same as a region with no triangles.
+    triangle_indices: tuple[int, ...] = ()
 
     @property
     def accepted(self) -> bool:
@@ -294,6 +301,7 @@ class RegionFit:
             fillet=self.fillet,
             blend_shaped=self.blend_shaped,
             motion_moments=self.motion_moments,
+            triangle_indices=self.triangle_indices,
         )
 
 
@@ -407,6 +415,25 @@ def _parse_orientation(raw: Any, path: str) -> tuple[str | None, str | None]:
             f"{path}.material_side", f"one of {', '.join(sorted(MATERIAL_SIDES))}, or null"
         )
     return str(side), None
+
+
+def _parse_triangle_indices(raw: Any, path: str) -> tuple[int, ...]:
+    """The region's dump triangle indices, or empty when the record predates them.
+
+    Absent is allowed and means "this record does not say"; present and not a
+    list of non-negative integers is malformed, because a region that claims
+    triangles has to name ones a dump could hold.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise _malformed(path, "an array of dump triangle indices")
+    out = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise _malformed(path, "an array of non-negative dump triangle indices")
+        out.append(value)
+    return tuple(out)
 
 
 def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | None:
@@ -643,6 +670,9 @@ def parse_fit_record(raw: Any) -> FitRecord:
                     raw_region.get("triangle_count"),
                     area,
                     (lo, hi),
+                ),
+                triangle_indices=_parse_triangle_indices(
+                    raw_region.get("triangle_indices"), f"{path}.triangle_indices"
                 ),
             )
         )

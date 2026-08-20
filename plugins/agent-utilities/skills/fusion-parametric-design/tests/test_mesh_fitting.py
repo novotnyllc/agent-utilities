@@ -478,7 +478,7 @@ class MeshWindingEvidenceTests(unittest.TestCase):
         self.assertFalse(winding["closed"])
         self.assertEqual(3, winding["boundary_edges"])
         self.assertIsNone(winding["winding"])
-        self.assertIn("not closed", winding["unavailable_reason"])
+        self.assertIn("hole in it", winding["unavailable_reason"])
 
     def test_one_flipped_triangle_is_reported_as_a_reversal_not_a_hole(self) -> None:
         tris = list(BOX_TRIS)
@@ -488,6 +488,27 @@ class MeshWindingEvidenceTests(unittest.TestCase):
         self.assertEqual(0, winding["non_manifold_edges"])
         self.assertEqual(3, winding["reversed_edges"])
         self.assertFalse(winding["consistently_wound"])
+
+    def test_a_self_touch_keeps_the_direction_and_names_the_triangles_on_it(self) -> None:
+        # A duplicated triangle: three edges now carry three incident triangles.
+        # The surface has no *hole* in it, so it still encloses its volume and
+        # the winding direction still means something -- and the triangles that
+        # touch the dirt are named so a loop can be judged on whether its own
+        # walls are among them.
+        tris = list(BOX_TRIS) + [BOX_TRIS[0]]
+        winding = mesh_winding_evidence(BOX_VERTS, tris)
+        self.assertFalse(winding["closed"])
+        self.assertEqual(0, winding["boundary_edges"])
+        self.assertEqual(3, winding["non_manifold_edges"])
+        self.assertEqual("outward", winding["winding"])
+        self.assertIsNone(winding["unavailable_reason"])
+        self.assertIn(0, winding["non_manifold_triangles"])
+        self.assertIn(len(BOX_TRIS), winding["non_manifold_triangles"])
+        # And the clean faces are not swept up with them.
+        self.assertLess(len(winding["non_manifold_triangles"]), len(tris))
+
+    def test_a_clean_mesh_names_no_dirty_triangles(self) -> None:
+        self.assertEqual((), mesh_winding_evidence(BOX_VERTS, BOX_TRIS)["non_manifold_triangles"])
 
     def test_an_unwelded_dump_is_welded_by_position_before_the_edges_are_counted(self) -> None:
         # Triangle soup: every triangle carries its own copy of each corner,
@@ -568,6 +589,24 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         tris[flipped] = tuple(reversed(tris[flipped]))
         loose = evidence_at(BOX_VERTS, tris, consensus_fraction=0.5)["loops"][0]
         self.assertEqual("material-inside", loose["verdict"])
+
+    def test_dirt_on_one_body_costs_the_other_bodys_loop_nothing(self) -> None:
+        # Two boxes side by side, one of them with a duplicated triangle. The
+        # mesh as a whole is not closed, so the old whole-mesh licence refused
+        # both loops; the dirt is on one of them, so only that one refuses now.
+        far = [(x + 4.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (far, BOX_TRIS))
+        tris = list(tris) + [tris[0]]
+        evidence = evidence_at(verts, tris)
+        self.assertFalse(evidence["winding"]["closed"])
+        self.assertEqual(0, evidence["winding"]["boundary_edges"])
+        self.assertEqual("outward", evidence["winding"]["winding"])
+        loops = sorted(evidence["loops"], key=lambda row: row["verdict"])
+        self.assertEqual(["material-inside", "unavailable"], [r["verdict"] for r in loops])
+        self.assertEqual([], loops[0]["dirty_wall_triangles"])
+        self.assertEqual(1.0, loops[0]["consensus_fraction"])
+        self.assertTrue(loops[1]["dirty_wall_triangles"])
+        self.assertEqual(["loop-orientation-unavailable"], loops[1]["gates"])
 
     def test_a_torn_mesh_makes_every_loop_unavailable_by_name(self) -> None:
         evidence = evidence_at(BOX_VERTS, BOX_TRIS[:-1])

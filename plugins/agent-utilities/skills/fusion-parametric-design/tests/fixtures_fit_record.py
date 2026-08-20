@@ -310,10 +310,44 @@ def bored_post_record(side="inside", *, bore_axis=(0.0, 0.0, 1.0), extras=()):
     )
 
 
+#: The 2.5D decomposition's declared gates, sized for these fixtures' own
+#: millimetre-scale synthetic parts. Kept out of `spec()` unless a caller asks
+#: for it, so every test that predates slabs stays on the path it was written
+#: for -- undeclared means no decomposition is attempted, which is the planner's
+#: own rule and not a special case for tests.
+SLAB_EVIDENCE = {
+    "event_merge_sigmas": {
+        "value": 3.0,
+        "rationale": "three combined sigmas: two stations closer than that are one station.",
+    },
+    "slab_constancy_tolerance_mm": {
+        "value": 0.05,
+        "rationale": "two sections of one slab are the same wall measured twice; this close is agreement.",
+    },
+    "section_tolerance_mm": {
+        "value": 0.01,
+        "rationale": "below the smallest feature these fixtures carry, above their float noise.",
+    },
+    "loop_material_consensus_fraction": {
+        "value": 0.95,
+        "rationale": "a designed surface's walls should be unanimous; five per cent is sliver room.",
+    },
+    "loop_attribution_min_fraction": {
+        "value": 0.05,
+        "rationale": "how much of a loop may cast no vote before its walls stop being evidence.",
+    },
+    "slab_section_fractions": {
+        "value": [0.25, 0.75],
+        "rationale": "quarter and three-quarter stations: far from the midpoint, far from both caps.",
+    },
+}
+
+
 def spec(
     *,
     basis: str = "uncertainty",
     adopted: list[dict[str, Any]] | None = None,
+    slabs: bool = False,
     **overrides: Any,
 ) -> dict[str, Any]:
     thresholds: dict[str, Any] = {
@@ -390,5 +424,7 @@ def spec(
             "value": 0.05,
             "rationale": "the shop's linear tolerance for this class of part.",
         }
+    if slabs:
+        thresholds["slab_evidence"] = SLAB_EVIDENCE
     thresholds.update(overrides)
     return {"thresholds": thresholds, "adopted": list(adopted or [])}

@@ -80,9 +80,10 @@ from .mesh_fitting import (
     propose_design_intent,
     route_kinematic_group,
 )
+from . import mesh_slabs
 
 
-PROGRAM_VERSION = 1
+PROGRAM_VERSION = 2
 
 # R8's archetype vocabulary in full.  This planner assigns only the two U4
 # emits; `hole` and `fillet` are U6's, and they are named here so that adding
@@ -124,6 +125,8 @@ THRESHOLD_FIELDS = {
     # they judge a candidate revolve's own motion, and none of them means
     # anything without the other four.
     "motion_evidence",
+    # The 2.5D decomposition's gates, nested for the same reason.
+    "slab_evidence",
 }
 
 # Every threshold that is a declared number carrying its own rationale.
@@ -693,6 +696,24 @@ MOTION_GATE_FIELDS = (
     "pitch_epsilon",
 )
 
+# The 2.5D decomposition's gates, declared under `thresholds.slab_evidence` on
+# exactly the `motion_evidence` precedent above: together or not at all, and
+# undeclared means **no slab decomposition is attempted** and the program says
+# so, rather than a default deciding how far apart two stations must be to be
+# two stations. A slab plan without them would be arithmetic nobody chose.
+SLAB_GATE_FIELDS = (
+    "event_merge_sigmas",
+    "slab_constancy_tolerance_mm",
+    "section_tolerance_mm",
+    "loop_material_consensus_fraction",
+    "loop_attribution_min_fraction",
+)
+
+#: The one gate in the block that is a *list* rather than a number: the extra
+#: fractions of each slab's height the constancy guard sections at, beyond the
+#: midpoint it always uses.
+SLAB_SECTION_FRACTIONS = "slab_section_fractions"
+
 # Every named gate this planner can leave a region unreconstructed under. The
 # gate string is "token: prose", and the token is what a reader greps, counts
 # and asserts on; the prose is for the human. Declared here so that adding a
@@ -715,6 +736,16 @@ UNRECONSTRUCTED_GATES = {
     "fillet-radius-disagrees",
     "revolve-motion-unproven",
     "material-side-unavailable",
+    # The 2.5D decomposition's own gates. A slab whose sections disagree, or
+    # whose loops did not classify, is not built, and its regions come back here
+    # naming which measurement failed rather than falling silently into "no
+    # archetype in this unit's vocabulary covers it".
+    "slab-section-inconstant",
+    "slab-loops-unclassified",
+    "loop-orientation-unavailable",
+    "loop-material-contradictory",
+    "loop-parity-contradiction",
+    "slab-wall-unattributed",
 }
 
 _GATE_TOKEN_RE = re.compile(r"\A[a-z0-9]+(-[a-z0-9]+)+\Z")
@@ -1066,9 +1097,21 @@ def _plan_holes(
     express, and containment — and a bore that fails any of the three is left
     unreconstructed naming which, never widened into a hole on the strength of
     the two it passed.
+
+    **A slab stack is one body.** Slab 0 is ``new-body`` and every slab above it
+    is ``join``, so a stack of them is a single solid built by several named
+    features -- and the "which of these bodies is the bore in?" question the
+    single-base rule exists to refuse does not arise. The stack counts as one
+    base, its span is the union of its slabs', and the bore is ordered after the
+    last slab it reaches into. Nothing else about the rule moves: two *separate*
+    bodies still gate every bore ``hole-base-ambiguous``.
     """
     gates: dict[str, str] = {}
-    bases = [group for group in groups if group["kind"] in ("sketch-extrude", "revolve")]
+    candidates = [group for group in groups if group["kind"] in ("sketch-extrude", "revolve")]
+    stack = [group for group in candidates if group.get("slab") is not None]
+    bases: list[Any] = [group for group in candidates if group.get("slab") is None]
+    if stack:
+        bases.append(stack)
     if len(bases) != 1:
         reason = (
             "this program builds no body for a hole to cut."
@@ -1082,7 +1125,9 @@ def _plan_holes(
         for bore in bores:
             gates[bore.region_hash] = f"hole-base-ambiguous: {reason}"
         return [], gates
-    base = bases[0]
+    only = bases[0]
+    members: list[Mapping[str, Any]] = only if isinstance(only, list) else [only]
+    base = members[0]
     if base["kind"] != "sketch-extrude":
         for bore in bores:
             gates[bore.region_hash] = (
@@ -1097,8 +1142,12 @@ def _plan_holes(
     axis = _plane_axis(frame, datum_plane)
     u_name, v_name = IN_PLANE_AXES[datum_plane]
     u_axis, v_axis = _named_axis(frame, u_name), _named_axis(frame, v_name)
-    base_lo = float(base["plane"]["offset"])
-    base_hi = base_lo + float(base["extent"]["value"])
+    spans = [
+        (float(m["plane"]["offset"]), float(m["plane"]["offset"]) + float(m["extent"]["value"]))
+        for m in members
+    ]
+    base_lo = min(lo for lo, _hi in spans)
+    base_hi = max(hi for _lo, hi in spans)
 
     holes: list[dict[str, Any]] = []
     for bore in bores:
@@ -1153,11 +1202,20 @@ def _plan_holes(
                 "profile_source": "fit-primitive",
                 "extent": {"kind": "distance", "parameter": None, "value": high - low},
                 "constraints": [],
-                "dependencies": [str(base["id"])],
+                # Every member of the stack the bore reaches into, ordered after
+                # the last of them: a cut has to come after the material it cuts,
+                # and on a one-member base this is exactly the single id it was.
+                "dependencies": [
+                    str(m["id"])
+                    for m, (lo, hi) in zip(members, spans)
+                    if low <= hi + offset_tolerance and high >= lo - offset_tolerance
+                ]
+                or [str(base["id"])],
                 "reason": (
                     f"an accepted cylinder fit whose material_side is 'inside' -- the mesh's own "
                     f"winding puts solid on the far side of this surface -- lying wholly within "
-                    f"{base['id']} with its axis along datum {datum_plane}'s normal. That is a bore, "
+                    f"{base['id'] if len(members) == 1 else f'the {len(members)}-slab stack'} with "
+                    f"its axis along datum {datum_plane}'s normal. That is a bore, "
                     "and a bore is a hole."
                 ),
             }
@@ -1432,6 +1490,212 @@ def _fillet_archetype(
     }
 
 
+def _slab_not_attempted(reason: str) -> dict[str, Any]:
+    return {
+        "usable": False,
+        "gate": None,
+        "detail": reason,
+        "events": [],
+        "slabs": [],
+        "declared": None,
+        "_gated": {},
+    }
+
+
+def _plan_slabs(
+    groups: list[dict[str, Any]],
+    remaining: Sequence[RegionFit],
+    frame: DatumFrame,
+    datum_plane: str,
+    slab_gates: Mapping[str, Any] | None,
+    dump_mesh: tuple[Sequence[Vec3], Sequence[Sequence[int]]] | None,
+    triangle_regions: Mapping[int, str] | None,
+    bore_regions: set[str],
+    cap_selection: Mapping[str, Any],
+    angle_tolerance_deg: float,
+) -> dict[str, Any]:
+    """Replace the single extrude with one join-only extrude per slab, or leave it.
+
+    The extrude this is handed was already planned by the caller and is the
+    fallback: every path out of here that is not a usable multi-slab
+    decomposition leaves it standing, untouched, with the reason recorded.
+
+    Region assignment is a **partition**: each region goes to the one slab
+    containing the midpoint of its own axial span.  A wall spanning three slabs
+    is measured by all three sections but claimed by one, because the coverage
+    account sums each archetype's regions and a region counted three times would
+    inflate what the program claims to have delivered.
+    """
+    if slab_gates is None:
+        return _slab_not_attempted(
+            "thresholds.slab_evidence was not declared, so no 2.5D decomposition was attempted "
+            "and the single-extrude plan stands. This is the same rule the kinematic router "
+            "follows: undeclared gates mean the claim is not made."
+        )
+    if dump_mesh is None:
+        return _slab_not_attempted(
+            "the mesh dump was not supplied to the planner, and a slab's loops come from sectioning "
+            "the dump's own triangles. Pass --dump to plan-reconstruction to decompose this part."
+        )
+    if cap_selection.get("rule") != "datum-primary-axis":
+        return _slab_not_attempted(
+            "slab-axis-not-primary: the caps this part offers are not perpendicular to the datum "
+            "primary axis, so the extrude already runs across the frame the decomposition is "
+            "defined on. Decomposing along an axis the body is not built along would be a second "
+            "guess on top of the first."
+        )
+
+    vertices, triangles = dump_mesh
+    record = mesh_slabs.decompose(
+        remaining,
+        frame,
+        vertices,
+        triangles,
+        gates=slab_gates,
+        angle_tolerance_deg=angle_tolerance_deg,
+        fallback_sigma=float(slab_gates["slab_constancy_tolerance_mm"]),
+        bore_regions=bore_regions,
+        triangle_regions=triangle_regions,
+    )
+    record["_gated"] = {}
+    slabs = record.get("slabs") or []
+    base = groups[-1]
+    if not record["usable"] or len(slabs) < 2:
+        # One slab is the design's own degenerate case and it is *already* what
+        # the caller planned, so nothing is replaced: the record rides along and
+        # the extrude keeps every field it had.
+        if record["usable"] and len(slabs) == 1:
+            base["slab"] = _slab_block(slabs[0], record, 0, len(slabs))
+        return record
+
+    axis = _plane_axis(frame, datum_plane)
+    assigned: dict[int, list[RegionFit]] = {index: [] for index in range(len(slabs))}
+    for region in remaining:
+        if region.region_hash not in base["regions"]:
+            continue
+        low, high = _station_range(frame, axis, region.bounding_box)
+        middle = (low + high) / 2.0
+        slot = min(
+            range(len(slabs)),
+            key=lambda index: abs(
+                middle - (slabs[index]["station_lo"] + slabs[index]["station_hi"]) / 2.0
+            ),
+        )
+        assigned[slot].append(region)
+
+    events = record["events"]
+
+    def cap_hash(event_index: int) -> str | None:
+        members = [
+            m
+            for m in events[event_index]["members"]
+            if m["kind"] == "plane-fit" and m["region"] in base["regions"]
+        ]
+        if not members:
+            return None
+        # The best-measured member: a cap whose sigma the fit actually reports is
+        # a better name for this boundary than one that fell back to a declared
+        # length, and `cap_regions` is what the fillet path resolves edges against.
+        return min(members, key=lambda m: (m["sigma"], m["region"]))["region"]
+
+    planned: list[dict[str, Any]] = []
+    for index, slab in enumerate(slabs):
+        members = sorted(region.region_hash for region in assigned[index])
+        if not members:
+            # A slab whose section is real but whose walls all belong to another
+            # slab's midpoint claims nothing. It is still built -- the profile is
+            # the material there -- and the record says it claimed no region.
+            members = []
+        caps = [cap_hash(slab["lower_event"]), cap_hash(slab["upper_event"])]
+        identifier = _archetype_id(
+            "sketch-extrude", members or [f"slab{index}-{base['id']}"]
+        )
+        planned.append(
+            {
+                "id": f"{identifier}-s{index}",
+                "kind": "sketch-extrude",
+                "operation": "new-body" if index == 0 and len(groups) == 1 else "join",
+                "regions": members,
+                "plane": {
+                    "datum_plane": datum_plane,
+                    "offset": slab["station_lo"],
+                    "rotation": None,
+                },
+                "cap_selection": cap_selection,
+                "cap_regions": [h for h in caps if h is not None],
+                "profile": None,
+                "profile_source": "mesh-section",
+                "extent": {
+                    "kind": "distance",
+                    "parameter": None,
+                    "value": slab["height"],
+                },
+                "constraints": [],
+                "dependencies": [planned[index - 1]["id"]] if index else [],
+                "motion_evidence": base.get("motion_evidence"),
+                "slab": _slab_block(slab, record, index, len(slabs)),
+                "reason": (
+                    f"slab {index} of {len(slabs)}, between event stations "
+                    f"{slab['station_lo']:.6g} and {slab['station_hi']:.6g} on datum {datum_plane}; "
+                    f"its section closes {len(slab['loops'])} loop(s), constant across "
+                    f"{1 + len(slab['constancy']['fractions'])} stations."
+                ),
+            }
+        )
+
+    # A slab whose own measurement failed is not built: its regions come back
+    # with the gate that stopped it, and the slabs above it still stack because
+    # each one's profile is the material measured at its own station.
+    surviving: list[dict[str, Any]] = []
+    for group, slab in zip(planned, slabs):
+        if slab["gates"]:
+            gate = slab["gates"][0]
+            for region_hash in group["regions"]:
+                record["_gated"][region_hash] = (
+                    f"{gate}: slab {slab['index']} between {slab['station_lo']:.6g} and "
+                    f"{slab['station_hi']:.6g} did not hold its own measurement, so it is not "
+                    "built. See program.slab_decomposition for what was measured."
+                )
+            continue
+        surviving.append(group)
+    for position, group in enumerate(surviving):
+        group["operation"] = "new-body" if position == 0 and len(groups) == 1 else "join"
+        group["dependencies"] = [surviving[position - 1]["id"]] if position else []
+    if not surviving:
+        return record
+    groups[-1:] = surviving
+    return record
+
+
+def _slab_block(
+    slab: Mapping[str, Any], record: Mapping[str, Any], index: int, count: int
+) -> dict[str, Any]:
+    """What one slab carries on its own archetype.
+
+    ``extent_expression`` is the design's station model written down: this
+    slab's depth is the difference of two station parameters, so editing one
+    boundary moves it and everything that references it, and no depth is stored
+    twice.  It is **recorded, not bound**, in this unit -- the emitter still
+    drives each extrude from its own depth parameter, and binding stations that
+    nothing in the timeline references would emit parameters that drive nothing.
+    """
+    lower, upper = slab["lower_event"], slab["upper_event"]
+    return {
+        "index": index,
+        "of": count,
+        "lower_event": lower,
+        "upper_event": upper,
+        "station_parameters": [f"recon_station_{lower}", f"recon_station_{upper}"],
+        "extent_expression": f"recon_station_{upper} - recon_station_{lower}",
+        "relation_to_below": slab["relation_to_below"],
+        "section_station": slab["section_station"],
+        "constancy": slab["constancy"],
+        "winding": slab["winding"],
+        "loops": slab["loops"],
+        "gates": slab["gates"],
+    }
+
+
 def plan_archetypes(
     regions: Sequence[RegionFit],
     frame: DatumFrame,
@@ -1440,7 +1704,10 @@ def plan_archetypes(
     offset_tolerance: float,
     equal_radius_tolerance: float | None = None,
     motion_gates: Mapping[str, float] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    slab_gates: Mapping[str, Any] | None = None,
+    dump_mesh: tuple[Sequence[Vec3], Sequence[Sequence[int]]] | None = None,
+    triangle_regions: Mapping[int, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Assign regions to the archetypes U4 emits; declare everything else.
 
     Precedence is stated and fixed: **revolve first, then sketch-extrude.** A
@@ -1482,12 +1749,29 @@ def plan_archetypes(
     stations along a datum axis measured from the datum origin, and axes are
     named datum axes.  Nothing here is in mesh coordinates with an implied
     transform.
+
+    **Slabs.**  When the caller declares ``slab_evidence`` *and* hands over the
+    dump the fits came from, the single extrude generalises to the 2.5D
+    decomposition: event stations along the datum primary axis, one join-only
+    extrude per slab between consecutive events, each carrying the loops its own
+    section closed and how they classified.  A part whose decomposition yields
+    **one** slab plans exactly what this planner planned before slabs existed —
+    same regions, same caps, same extent — which is what makes the generalisation
+    safe: the old planner is the base case, not a different code path.  Any way
+    the decomposition can fail leaves the single extrude standing, because a
+    stage that can only improve a plan has no business stopping one.
+
+    Returns the groups, the unreconstructed list, and the decomposition record.
     """
     origin, z = frame.origin, frame.z_axis
     accepted = [region for region in regions if region.accepted]
     groups: list[dict[str, Any]] = []
     claimed: set[str] = set()
     unmappable: dict[str, str] = {}
+    decomposition = _slab_not_attempted(
+        "this program plans no extrude on the datum primary axis, so there is nothing to decompose "
+        "into slabs."
+    )
 
     revolve = [
         region
@@ -1635,12 +1919,32 @@ def plan_archetypes(
                     # why they are not a revolve. Null when no group was ever a
                     # revolve candidate, which is not the same as "refused".
                     "motion_evidence": None if motion is None or motion["confirmed"] else motion,
+                    "slab": None,
                     "reason": (
                         f"two parallel cap planes {abs(high_station - low_station):.6g} apart on datum "
                         f"{datum_plane}, with {len(sides)} side surface(s) perpendicular to them."
                     ),
                 }
             )
+            # The 2.5D generalisation, attempted only once the single extrude
+            # exists: it replaces that extrude with one join-only extrude per
+            # slab, or -- on one slab, or on any failure -- leaves it exactly as
+            # planned above and records why.
+            decomposition = _plan_slabs(
+                groups,
+                remaining,
+                frame,
+                datum_plane,
+                slab_gates,
+                dump_mesh,
+                triangle_regions,
+                {region.region_hash for region in bores},
+                cap_selection,
+                angle_tolerance_deg,
+            )
+            for region_hash, gate in decomposition.pop("_gated", {}).items():
+                unmappable[region_hash] = gate
+            claimed = {h for group in groups for h in group["regions"]}
 
     if motion is not None and not motion["confirmed"]:
         # Only reaches a region no archetype claimed: `unmappable` is consulted
@@ -1708,7 +2012,8 @@ def plan_archetypes(
                 "gate": _declared_gate(gate),
             }
         )
-    return groups, unreconstructed
+    decomposition.pop("_gated", None)
+    return groups, unreconstructed, decomposition
 
 
 # --------------------------------------------------------------------------
@@ -2002,6 +2307,57 @@ def _declared_number(issues: list[ValidationIssue], raw: Any, path: str) -> None
         )
 
 
+def _declared_fractions(issues: list[ValidationIssue], raw: Any, path: str) -> None:
+    """The extra stations the constancy guard sections at, as fractions of height.
+
+    A list rather than a number, and validated as one: each entry strictly
+    between 0 and 1 (0 and 1 are the slab's own bounding events, where the
+    section grazes a cap and measures the least), and at least one of them,
+    because a single mid-station section is a sample and the whole point of this
+    gate is that the slab premise gets checked rather than assumed.
+    """
+    if not isinstance(raw, dict):
+        issues.append(
+            ValidationIssue(
+                "threshold-must-be-declared",
+                path,
+                "Every threshold is an object with a value and the rationale for it.",
+            )
+        )
+        return
+    _reject_unknown_fields(issues, raw, {"value", "rationale"}, path)
+    value = raw.get("value")
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(
+            isinstance(entry, bool)
+            or not isinstance(entry, (int, float))
+            or not 0.0 < float(entry) < 1.0
+            for entry in value
+        )
+    ):
+        issues.append(
+            ValidationIssue(
+                "threshold-invalid-value",
+                f"{path}.value",
+                "value must be a non-empty list of fractions strictly between 0 and 1: the extra "
+                "stations, as a share of the slab's own height, that the constancy guard sections "
+                "at beyond the midpoint. 0 and 1 are the slab's bounding events, where a section "
+                "grazes a cap.",
+            )
+        )
+    rationale = raw.get("rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        issues.append(
+            ValidationIssue(
+                "threshold-missing-rationale",
+                f"{path}.rationale",
+                "State why these are the right stations to check the slab premise at.",
+            )
+        )
+
+
 OPTIONAL_THRESHOLDS = ("tangent_tolerance", "equal_radius_tolerance", "nominal_tolerance")
 
 
@@ -2077,6 +2433,49 @@ def validate_program_spec(spec: Any) -> list[ValidationIssue]:
                         motion.get(name),
                         f"program_spec.thresholds.motion_evidence.{name}",
                     )
+        slab = thresholds.get("slab_evidence")
+        # Absent is a decision this stage acts on, exactly as for the router
+        # above: no slab decomposition is attempted without declared gates to
+        # judge one against, and the program records that rather than a default
+        # deciding how far apart two stations have to be to be two stations.
+        # Present and partial is an issue, because none of these means anything
+        # on its own.
+        if slab is not None:
+            path = "program_spec.thresholds.slab_evidence"
+            if not isinstance(slab, dict):
+                issues.append(
+                    ValidationIssue(
+                        "program-spec-invalid-thresholds",
+                        path,
+                        "slab_evidence must be an object carrying the 2.5D decomposition's declared "
+                        f"gates: {', '.join((*SLAB_GATE_FIELDS, SLAB_SECTION_FRACTIONS))}.",
+                    )
+                )
+            else:
+                _reject_unknown_fields(
+                    issues, slab, set(SLAB_GATE_FIELDS) | {SLAB_SECTION_FRACTIONS}, path
+                )
+                for name in SLAB_GATE_FIELDS:
+                    _declared_number(issues, slab.get(name), f"{path}.{name}")
+                    declared = slab.get(name)
+                    value = declared.get("value") if isinstance(declared, dict) else None
+                    if (
+                        name.endswith("_fraction")
+                        and isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                        and float(value) > 1.0
+                    ):
+                        issues.append(
+                            ValidationIssue(
+                                "threshold-invalid-value",
+                                f"{path}.{name}.value",
+                                "This threshold is a fraction of a loop's own length and cannot "
+                                "exceed 1.0; above it the gate can never fire.",
+                            )
+                        )
+                _declared_fractions(
+                    issues, slab.get(SLAB_SECTION_FRACTIONS), f"{path}.{SLAB_SECTION_FRACTIONS}"
+                )
 
     adopted = spec.get("adopted")
     if not isinstance(adopted, list):
@@ -2155,6 +2554,17 @@ def _motion_gates(thresholds: Mapping[str, Any]) -> dict[str, float] | None:
     return {name: float(entry[name]["value"]) for name in MOTION_GATE_FIELDS}
 
 
+def _slab_gates(thresholds: Mapping[str, Any]) -> dict[str, Any] | None:
+    entry = thresholds.get("slab_evidence")
+    if not isinstance(entry, dict):
+        return None
+    gates: dict[str, Any] = {name: float(entry[name]["value"]) for name in SLAB_GATE_FIELDS}
+    gates[SLAB_SECTION_FRACTIONS] = [
+        float(value) for value in entry[SLAB_SECTION_FRACTIONS]["value"]
+    ]
+    return gates
+
+
 def program_sha256(program: Mapping[str, Any]) -> str:
     """Canonical hash over every field but the hash itself."""
     body = {key: value for key, value in program.items() if key != "program_sha256"}
@@ -2167,8 +2577,18 @@ def build_reconstruction_program(
     spec: Mapping[str, Any],
     *,
     manifest_sha256: str,
+    dump: Any = None,
 ) -> dict[str, Any]:
-    """Screen, license, adopt, reconcile, derive the frame, and plan archetypes."""
+    """Screen, license, adopt, reconcile, derive the frame, and plan archetypes.
+
+    ``dump`` is the mesh dump the fit record was derived from, and it is
+    **optional**: without it the planner does exactly what it did before the 2.5D
+    decomposition existed, and the program says so under ``slab_decomposition``.
+    It is needed because a slab's loops are cut from the dump's own triangles and
+    the fit record does not carry them -- the same reason ``profile`` is null on
+    every archetype. Its bytes are bound by ``fit_record.dump_sha256``, which the
+    caller has already checked to have a dump at all.
+    """
     issues = validate_program_spec(spec)
     if issues:
         raise ManifestValidationError(issues)
@@ -2273,13 +2693,35 @@ def build_reconstruction_program(
     all_regions = [
         reconciliation.regions.get(region.region_hash, region) for region in fit_record.regions
     ]
-    groups, unreconstructed = plan_archetypes(
+    dump_mesh = None
+    triangle_regions: dict[int, str] = {}
+    if dump is not None:
+        if dump.sha256 != fit_record.dump_sha256:
+            raise _refuse(
+                "fit-record-malformed",
+                f"the supplied dump hashes to {dump.sha256[:12]}... and this fit record was derived "
+                f"from {fit_record.dump_sha256[:12]}...; sectioning one against the other's fits "
+                "would measure two different parts.",
+                {"dump_sha256": dump.sha256, "fit_record_dump_sha256": fit_record.dump_sha256},
+            )
+        flat, index = dump.vertices_mm, dump.triangles
+        dump_mesh = (
+            [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)],
+            [tuple(index[i : i + 3]) for i in range(0, len(index), 3)],
+        )
+        for region in fit_record.regions:
+            for triangle in region.triangle_indices or ():
+                triangle_regions[int(triangle)] = region.region_hash
+    groups, unreconstructed, decomposition = plan_archetypes(
         all_regions,
         frame,
         angle_tolerance_deg=_threshold(thresholds, "angle_tolerance_deg"),
         offset_tolerance=_threshold(thresholds, "offset_tolerance"),
         equal_radius_tolerance=_threshold(thresholds, "equal_radius_tolerance"),
         motion_gates=_motion_gates(thresholds),
+        slab_gates=_slab_gates(thresholds),
+        dump_mesh=dump_mesh,
+        triangle_regions=triangle_regions or None,
     )
     _attach_constraints(groups, adoptions)
     parameters = _user_parameters(groups, adoptions, fit_record.units)
@@ -2332,6 +2774,16 @@ def build_reconstruction_program(
             ),
         },
         "covered_area_fraction": covered / fit_record.total_area,
+        # The 2.5D decomposition, always present and always honest about what it
+        # did: `events` is the merged station list, and `slab_decomposition`
+        # carries the declared gates, whether the result was usable, and the
+        # reason when it was not.
+        "events": decomposition["events"],
+        "slab_decomposition": {
+            key: value
+            for key, value in decomposition.items()
+            if key not in ("events", "slabs")
+        },
         "profile_note": (
             "Archetype profiles are null here: a section profile comes from the mesh dump's "
             "triangles, which the fit record does not carry, so U3 cannot produce one. The emitter "
@@ -2377,6 +2829,13 @@ _PROGRAM_FIELDS = {
     "relationships",
     "covered_area_fraction",
     "profile_note",
+    # v2: the stations the 2.5D decomposition found along the datum primary
+    # axis, and what became of it. Both are present on every v2 program --
+    # `slab_decomposition.gate` names why when `events` is empty -- because an
+    # absent key would read as "not attempted" where "attempted and refused"
+    # is the fact.
+    "events",
+    "slab_decomposition",
     # Present only on a program produced by `replan-without` (U4/D8): it records
     # which program this one was derived from and which refusal caused the drop,
     # so a second emission run is traceable to the first one's failure.
@@ -2421,6 +2880,12 @@ _ARCHETYPE_FIELDS = {
     # candidate group -- what licensed a revolve, or what refused one and sent
     # these regions here instead. Null when no revolve was ever a candidate.
     "motion_evidence",
+    # sketch-extrude only, v2: which slab of the 2.5D decomposition this extrude
+    # is, the two events that bound it, the loops its section closed and how they
+    # classified, and the constancy evidence for the slab premise. Null on an
+    # extrude planned without a decomposition, which is not the same as a slab
+    # with nothing in it.
+    "slab",
 }
 
 OPERATIONS = {"new-body", "join", "cut", "finish"}

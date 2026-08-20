@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import random
 import unittest
 
 from fusion_design.manifest import ManifestValidationError, ValidationIssue
 from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
+from fusion_design import mesh_slabs as ms
 from fusion_design import reconstruction_program as rp
 
 import fixtures_fit_record as fx
@@ -894,7 +896,10 @@ class ProgramValidatorTests(unittest.TestCase):
 
     def test_an_unknown_program_version_is_refused(self) -> None:
         program = self._valid()
-        program["program_version"] = 2
+        # v1 is the version *before* slabs: it carries no `events` and no
+        # `slab_decomposition`, so this executor refuses it by name rather than
+        # best-efforting a program whose shape it does not implement.
+        program["program_version"] = 1
         codes = [issue.code for issue in self._check(program)["issues"]]
         self.assertIn("program-version-unsupported", codes)
 
@@ -965,6 +970,159 @@ class ProgramValidatorTests(unittest.TestCase):
             rp.PROGRAM_CHECKS = original
         self.assertEqual(recorded, ["ran"])
         self.assertEqual(result["checked"], ("closed-vocabulary",))
+
+
+class EventMergeTests(unittest.TestCase):
+    """The merge rule's own arithmetic, away from any mesh."""
+
+    @staticmethod
+    def _candidates(*pairs):
+        return [
+            {"kind": "plane-fit", "region": f"r{index}", "station": station, "sigma": sigma}
+            for index, (station, sigma) in enumerate(pairs)
+        ]
+
+    def test_stations_inside_their_joint_uncertainty_become_one(self) -> None:
+        events = ms.merge_events(
+            self._candidates((10.0, 0.02), (10.03, 0.02)),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertEqual(2, events[0]["defining_members"])
+        self.assertAlmostEqual(10.015, events[0]["station"], places=9)
+
+    def test_stations_outside_it_stay_two(self) -> None:
+        events = ms.merge_events(
+            self._candidates((10.0, 0.002), (10.03, 0.002)),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(2, len(events))
+
+    def test_complete_linkage_does_not_chain_a_row_of_near_neighbours(self) -> None:
+        # Six stations each 0.02 apart with sigma 0.01: every consecutive pair is
+        # within tolerance of the next, so single linkage would smear all six
+        # into one event 0.1 wide. Linking to the cluster's *first* member stops
+        # it, which is the whole reason the rule is written that way.
+        events = ms.merge_events(
+            self._candidates(*[(10.0 + 0.02 * k, 0.01) for k in range(6)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertGreater(len(events), 1)
+        for event in events:
+            span = max(m["station"] for m in event["members"]) - min(
+                m["station"] for m in event["members"]
+            )
+            self.assertLessEqual(span, 3.0 * math.hypot(0.01, 0.01) + 1e-12)
+
+    def test_the_merged_station_is_weighted_by_inverse_variance(self) -> None:
+        # A fitted plane with a small sigma must dominate a bounding-box
+        # corroboration that agrees with it, not be averaged away by it.
+        events = ms.merge_events(
+            self._candidates((10.0, 0.001), (10.2, 0.1)),
+            event_merge_sigmas=100.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertLess(events[0]["station"], 10.001)
+        self.assertLess(events[0]["sigma"], 0.001)
+        self.assertAlmostEqual(1.0, sum(m["weight"] for m in events[0]["members"]), places=9)
+
+    def test_a_zero_sigma_is_floored_so_a_clean_export_still_merges(self) -> None:
+        # An analytically planar face fits with zero residual, so the derived
+        # tolerance collapses to zero and nothing merges with anything. Measured
+        # on POD-C-LID that produced 76 events and a nine-micron slab.
+        pairs = [(10.0, 0.0), (10.009, 0.0)]
+        self.assertEqual(
+            2, len(ms.merge_events(self._candidates(*pairs), event_merge_sigmas=3.0, sigma_floor=0.0))
+        )
+        floored = ms.merge_events(
+            self._candidates(*pairs), event_merge_sigmas=3.0, sigma_floor=0.01
+        )
+        self.assertEqual(1, len(floored))
+        self.assertEqual([0.0, 0.0], [m["sigma_measured"] for m in floored[0]["members"]])
+
+
+class LoopRoleTests(unittest.TestCase):
+    """The design's classification table, on loop evidence built by hand."""
+
+    @staticmethod
+    def _loop(index, depth, verdict, walls=()):
+        return {
+            "polyline_index": index,
+            "depth": depth,
+            "verdict": verdict,
+            "consensus_fraction": 1.0,
+            "parity_agrees": True,
+            "signed_area_mm2": 1.0,
+            "perimeter_mm": 4.0,
+            "point_count": 4,
+            "wall_regions": list(walls),
+            "gates": [],
+        }
+
+    def test_each_row_of_the_table_is_reachable(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0)]
+        island = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]
+        bore = [(2.5, 2.5), (3.0, 2.5), (3.0, 3.0), (2.5, 3.0)]
+        roles = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", ["wall"]),
+                self._loop(1, 1, "material-outside", ["pocket"]),
+                self._loop(2, 2, "material-inside", ["boss"]),
+                self._loop(3, 1, "material-outside", ["bore-a"]),
+            ],
+            [square, inner, island, bore],
+            {"bore-a"},
+        )
+        self.assertEqual(
+            ["outer", "cavity", "island", "bore"], [row["role"] for row in roles]
+        )
+        # The island's parent is the cavity it stands in, not the outer boundary.
+        self.assertEqual(1, roles[2]["parent"])
+
+    def test_a_loop_with_no_material_verdict_is_unclassified_not_guessed(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        roles = ms.classify_loops(
+            [self._loop(0, 0, "unavailable"), self._loop(1, 0, "contradictory")],
+            [square, square],
+            set(),
+        )
+        self.assertEqual(["unclassified", "unclassified"], [row["role"] for row in roles])
+
+
+class HausdorffTests(unittest.TestCase):
+    def test_two_samplings_of_one_square_agree_to_nothing(self) -> None:
+        # Point-to-polyline, not point-to-point: the same square sampled at
+        # different places along its edges is the same square.
+        coarse = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        fine = [
+            (x, y)
+            for x, y in (
+                (0.0, 0.0), (3.0, 0.0), (10.0, 0.0), (10.0, 7.0),
+                (10.0, 10.0), (1.0, 10.0), (0.0, 10.0), (0.0, 4.0),
+            )
+        ]
+        self.assertAlmostEqual(0.0, ms.hausdorff(coarse, fine), places=12)
+
+    def test_a_shrunken_square_reports_how_far_it_moved(self) -> None:
+        # Symmetric, and the corners are what set it: every inner point is 1 mm
+        # from the outer boundary, but the outer *corner* is sqrt(2) from the
+        # inner one, and a one-way distance would report the smaller number.
+        outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(1.0, 1.0), (9.0, 1.0), (9.0, 9.0), (1.0, 9.0)]
+        self.assertAlmostEqual(math.sqrt(2.0), ms.hausdorff(outer, inner), places=12)
+        self.assertEqual(ms.hausdorff(outer, inner), ms.hausdorff(inner, outer))
+
+    def test_a_count_mismatch_is_a_disagreement_without_a_distance(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        verdict = ms.congruence([square], [square, square], tolerance=1.0)
+        self.assertFalse(verdict["agrees"])
+        self.assertIn("loop counts differ", verdict["reason"])
+        self.assertIsNone(verdict["worst_hausdorff"])
 
 
 if __name__ == "__main__":

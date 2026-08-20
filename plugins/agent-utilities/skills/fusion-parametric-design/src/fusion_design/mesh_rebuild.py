@@ -1447,6 +1447,32 @@ def plan_emission(
             },
         )
 
+    slabs = [
+        group
+        for group in program["archetypes"]
+        if group.get("kind") == "sketch-extrude" and group.get("slab") is not None
+    ]
+    if len(slabs) > 1:
+        # A multi-slab program is a *valid* program this emitter does not yet
+        # implement: it needs one sketch per slab holding several loops, a
+        # profile-set resolver in place of the largest-area rule, and chained
+        # station extents. Building each slab's outer loop and quietly dropping
+        # its cavities would be exactly the improvisation this unit bans, so it
+        # refuses by name and the reader re-plans without the dump.
+        raise _refuse(
+            "program-schema-violation",
+            f"this program decomposes the part into {len(slabs)} slabs, and this emitter builds one "
+            "extrude per sketch from a single closed loop. A slab stack needs the multi-loop "
+            "profile path, which this version does not implement.",
+            {
+                "slab_count": len(slabs),
+                "slab_ids": [str(group["id"]) for group in slabs],
+                "stations": [
+                    [group["plane"]["offset"], group["extent"]["value"]] for group in slabs
+                ],
+            },
+        )
+
     thresholds = spec["thresholds"]
     units = str(program["units"])
     if units != "mm":
