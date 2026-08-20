@@ -167,11 +167,17 @@ class FakeSketchDimensions:
 
 
 class FakeProfile:
-    def __init__(self, area):
+    def __init__(self, area, centroid=None):
         self._area = area
+        self._centroid = tuple(centroid) if centroid is not None else (0.0, 0.0, 0.0)
 
     def areaProperties(self):
-        return SimpleNamespace(area=self._area)
+        return SimpleNamespace(
+            area=self._area,
+            centroid=SimpleNamespace(
+                x=self._centroid[0], y=self._centroid[1], z=self._centroid[2]
+            ),
+        )
 
 
 class FakeSketch:
@@ -208,6 +214,24 @@ class FakeSketch:
 
     @property
     def profiles(self):
+        # What Fusion is declared to enumerate for this sketch. `profile_regions`
+        # is the multi-loop case: the test states the area and centroid of every
+        # region, which is the response the executor matches its plan against.
+        # Re-deriving regions from the fake curves would be reimplementing
+        # Fusion's solver in a double, which proves nothing about Fusion.
+        regions = self.behaviour.get("profile_regions")
+        if isinstance(regions, dict):
+            # Keyed by sketch name: Fusion returns a different enumeration for
+            # every sketch, and one declared list for a whole design would only
+            # ever describe one of them.
+            regions = regions.get(self.name)
+        if regions is not None:
+            return FakeList(
+                [
+                    FakeProfile(row["area_cm2"], tuple(row["centroid_cm"]) + (0.0,))
+                    for row in regions
+                ]
+            )
         count = self.behaviour.get("profile_count", 1)
         return FakeList([FakeProfile(10.0 + index) for index in range(count)])
 

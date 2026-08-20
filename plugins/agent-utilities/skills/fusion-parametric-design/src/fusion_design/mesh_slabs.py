@@ -427,6 +427,83 @@ def _minimax_assignment(cost: Sequence[Sequence[float]]) -> dict[int, int]:
     return {row: column for column, row in enumerate(best)}
 
 
+def containment_parents(loops: Sequence[Sequence[tuple[float, float]]]) -> list[int | None]:
+    """Each loop's *immediate* parent: the innermost loop that still contains it."""
+    depths = [
+        sum(
+            1
+            for other, polygon in enumerate(loops)
+            if other != index and _contains(polygon, points[0])
+        )
+        for index, points in enumerate(loops)
+    ]
+    parents: list[int | None] = []
+    for index, points in enumerate(loops):
+        containing = [
+            other
+            for other, polygon in enumerate(loops)
+            if other != index and _contains(polygon, points[0])
+        ]
+        parents.append(max(containing, key=lambda other: depths[other]) if containing else None)
+    return parents
+
+
+def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict[str, Any]]:
+    """Every region Fusion enumerates for this loop set, and which of them is material.
+
+    **Measured against a live Fusion, because the obvious model is wrong.** A
+    sketch of four nested and disjoint rectangles -- an outer square, two islands
+    in it, and one more square inside the first island -- enumerates *four*
+    profiles, not two: Fusion reports one region per loop, each being that loop
+    minus its immediate children, regardless of nesting parity. It does not know
+    which regions are holes; it reports the planar subdivision.
+
+    So this returns a region for every loop, and flags the even-depth ones as
+    ``material``. The executor extrudes the material regions and must still
+    account for the rest, because a profile the plan cannot name is geometry the
+    transaction would be silently leaving out of the feature.
+
+    A region's area is its own minus its immediate children's, and its centroid
+    is the area-weighted difference of the same -- the two properties Fusion
+    reports, computed the way Fusion computes them. Verified against the probe:
+    92, 3, 4 and 1 cm2 planned, 92, 3, 4 and 1 reported.
+    """
+    parents = containment_parents(loops)
+    depths: list[int] = []
+    for index in range(len(loops)):
+        depth, walk = 0, parents[index]
+        while walk is not None:
+            depth += 1
+            walk = parents[walk]
+        depths.append(depth)
+
+    regions: list[dict[str, Any]] = []
+    for index, points in enumerate(loops):
+        area = abs(_signed_area(points))
+        moment = [value * area for value in polygon_centroid(points)]
+        children = sorted(other for other, parent in enumerate(parents) if parent == index)
+        for child in children:
+            child_area = abs(_signed_area(loops[child]))
+            child_centre = polygon_centroid(loops[child])
+            area -= child_area
+            moment = [moment[k] - child_centre[k] * child_area for k in range(2)]
+        regions.append(
+            {
+                "boundary_loop": index,
+                "hole_loops": children,
+                "depth": depths[index],
+                "material": depths[index] % 2 == 0,
+                "area_mm2": area,
+                "centroid_mm": (
+                    [moment[k] / area for k in range(2)]
+                    if area > 0.0
+                    else list(polygon_centroid(points))
+                ),
+            }
+        )
+    return regions
+
+
 def congruence(
     first: Sequence[Sequence[tuple[float, float]]],
     second: Sequence[Sequence[tuple[float, float]]],

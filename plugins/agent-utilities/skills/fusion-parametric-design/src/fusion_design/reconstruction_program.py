@@ -2178,9 +2178,69 @@ def _user_parameters(
         for region_hash in hashes:
             shared_by_region[region_hash] = shared
 
+    # Station parameters, minted once per event and shared by every slab that
+    # names it. A slab's depth is then an *expression* over two of them rather
+    # than a number of its own, so a boundary is stored once: editing the station
+    # moves that face and every slab referencing it, which is what makes a step
+    # height edit behave like a step height edit. Deviation from 006 E4 (every
+    # extent bound to a named parameter) argued in the design's section C: the
+    # alternative stores each boundary twice and lets an edit tear adjacent slabs
+    # apart, which is the un-parametric behaviour E4 exists to prevent.
+    # Exactly one slab shares no boundary with anything, so there is nothing to
+    # store twice and the station model buys nothing: it keeps the depth
+    # parameter the planner has always given a single extrude, which is what
+    # makes the one-slab case byte-identical to the plan that predates slabs.
+    stack = [
+        group
+        for group in groups
+        if group["kind"] == "sketch-extrude" and group.get("slab") is not None
+    ]
+    stations: dict[str, float] = {}
+    for group in stack if len(stack) > 1 else ():
+        slab = group["slab"]
+        lower, upper = slab["station_parameters"]
+        stations.setdefault(lower, float(group["plane"]["offset"]))
+        stations.setdefault(
+            upper, float(group["plane"]["offset"]) + float(group["extent"]["value"])
+        )
+    for name in sorted(stations, key=lambda key: (stations[key], key)):
+        parameters.append(
+            {
+                "name": name,
+                "quantity": "position",
+                "unit": units,
+                "nominal": stations[name],
+                # Not `centroid`: a station bounds a slab, so moving it changes
+                # that slab's height and therefore how much material the stack
+                # holds. Coalescing removed the equal-cross-section case, so
+                # adjacent slabs differ by construction and the volume moves.
+                "expected_observable": "volume",
+                "observable_rationale": (
+                    "This station is a boundary between two slabs of different cross-section, so "
+                    "moving it grows one and shrinks the other by different amounts and the "
+                    "solid's volume moves. An outermost station moves one slab's height alone, "
+                    "which moves volume too."
+                ),
+                "rationale": (
+                    "event station on the datum primary axis, merged from the accepted plane "
+                    "fits at this boundary and the side regions' spans that end there."
+                ),
+                "driving_archetypes": sorted(
+                    str(g["id"])
+                    for g in groups
+                    if (g.get("slab") or {}).get("station_parameters", ()) and
+                    name in g["slab"]["station_parameters"]
+                ),
+            }
+        )
+
     for group in groups:
         role = "revolve" if group["kind"] == "revolve" else "base"
-        if group["kind"] == "sketch-extrude":
+        if group["kind"] == "sketch-extrude" and group in stack and len(stack) > 1:
+            # Bound to the station pair, not to a depth of its own.
+            group["extent"]["expression"] = group["slab"]["extent_expression"]
+            group["plane"]["offset_parameter"] = group["slab"]["station_parameters"][0]
+        elif group["kind"] == "sketch-extrude":
             parameter = name_for(role, "depth")
             parameters.append(
                 {
@@ -2374,44 +2434,36 @@ def _attach_constraints(
 
 
 def _emission_order(groups: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Bases before cuts before finishing, and deterministic within each class.
+    """A topological order over the archetypes' own dependencies, deterministic.
 
-    Kahn's algorithm over the declared dependencies, with the same
-    ``(rank, id)`` tie-break ``mesh_rebuild.total_order`` uses.  That function
-    re-derives this order and refuses ``program-order-invalid`` when the two
-    disagree, and a rank-then-id sort disagrees as soon as one archetype
-    depends on another whose id sorts after it.  A multi-slab stack does
-    exactly that: ``slab4`` can sort before ``slab3`` while depending on it.
+    Bases before cuts before finishing, and ties broken on ``(rank, id)`` -- but
+    **dependencies first**, which the rank sort alone does not give. A slab stack
+    is the case that showed it: every slab above the first depends on the one
+    below, and their ids are hashes, so ranking by ``(join, id)`` put slab 3
+    before slab 1 and the emitter's own topological check refused the program its
+    planner had just written.
 
-    A cycle or a dangling dependency is not repaired here.  Both are refusals
-    in ``mesh_rebuild``, which owns that vocabulary and states the recourse;
-    this falls back to the plain sorted order so the program still carries one
-    and the refusal there names the real fault instead of an order mismatch.
+    This is deliberately the same sort ``mesh_rebuild.total_order`` performs, so
+    that the declared order and the derived one agree by construction rather
+    than by luck. A cycle -- which this planner's edge set cannot produce -- falls
+    back to the rank sort so that the emitter refuses ``program-order-cyclic``
+    against a program that says plainly what it wanted, rather than this stage
+    raising something the vocabulary here does not carry.
     """
     rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
-    keys = {str(group["id"]): (rank[group["operation"]], str(group["id"])) for group in groups}
-    lexical = sorted(keys, key=lambda identifier: keys[identifier])
-    pending = {
-        str(group["id"]): {
-            str(dependency)
-            for dependency in (group.get("dependencies") or ())
-            if str(dependency) in keys
-        }
-        for group in groups
-    }
+    keys = {str(g["id"]): (rank[g["operation"]], str(g["id"])) for g in groups}
+    pending = {str(g["id"]): set(map(str, g.get("dependencies") or ())) for g in groups}
     ordered: list[str] = []
     while pending:
         ready = sorted(
-            (identifier for identifier, deps in pending.items() if not deps),
+            (identifier for identifier, deps in pending.items() if not deps & set(pending)),
             key=lambda identifier: keys[identifier],
         )
         if not ready:
-            return lexical
+            return [group["id"] for group in sorted(groups, key=lambda g: keys[str(g["id"])])]
         for identifier in ready:
             ordered.append(identifier)
             del pending[identifier]
-        for deps in pending.values():
-            deps.difference_update(ready)
     return ordered
 
 

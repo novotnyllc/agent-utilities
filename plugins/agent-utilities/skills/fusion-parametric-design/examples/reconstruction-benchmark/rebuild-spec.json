@@ -42,6 +42,10 @@
     "loop_attribution_min_fraction": {
       "value": 0.05,
       "rationale": "how much of a loop's length may lie on triangles that cast no vote -- degenerate facets, and facets parallel to the section plane that bound material along the axis rather than across the loop -- before the loop's walls stop being evidence. The same five per cent as the consensus slack, for the same reason: these sections are taken at the mid-station precisely to be far from the caps, so a loop that grazes one there is a station problem rather than a mesh to make allowances for."
+    },
+    "sketch_loop_budget": {
+      "value": 64,
+      "rationale": "a runtime guard, not a solver limit, and measured as one. A live Fusion (2.0.23164) enumerated profiles correctly and built a healthy extrude for every sketch up to 192 disjoint loops -- profiles.count matched the loop count exactly and total area was exact at every step -- so nothing was found to break. What does grow is the cost of *drawing* the sketch through the API: 0.048 s at 8 loops, 1.46 s at 64, 14.3 s at 192, roughly quadratic. 64 is the corpus maximum (POD-B-BASE closes 51 loops in one slab) with headroom, at about a second and a half of drawing. Raise it if a part needs more and the wait is acceptable; the number is here so that a 200-loop sketch is a decision rather than a hang."
     }
   }
 }

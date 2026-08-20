@@ -137,6 +137,37 @@ def stepped_block_mesh(
     return vertices, triangles, groups
 
 
+def nested_shells_dump(size: float = 40.0):
+    """A solid box with a void in it and a boss standing in the void.
+
+    Three closed shells in one dump: the outer solid wound outward, the cavity
+    wound *inward* (which is what a void inside material is as a mesh), and an
+    island inside the cavity wound outward again. Its mid-station section closes
+    three loops at depths 0, 1 and 2 -- the outer boundary, a cavity that is a
+    hole in the profile, and an island that is a profile of its own -- which is
+    the smallest thing that exercises a multi-loop sketch end to end.
+    """
+    outer_v, outer_t, groups = box_mesh(size=size)
+    centre = size / 2.0
+
+    def shrunk(factor: float):
+        return [tuple(centre + (c - centre) * factor for c in point) for point in outer_v]
+
+    reversed_t = [(c, b, a) for a, b, c in outer_t]
+    count = len(outer_v)
+    vertices = list(outer_v) + shrunk(0.6) + shrunk(0.25)
+    triangles = (
+        list(outer_t)
+        + [tuple(i + count for i in t) for t in reversed_t]
+        + [tuple(i + 2 * count for i in t) for t in outer_t]
+    )
+    return make_dump(
+        vertices,
+        triangles,
+        face_groups=list(groups) + [g + 6 for g in groups] + [g + 12 for g in groups],
+    )
+
+
 def stepped_block_dump(**kwargs: Any):
     vertices, triangles, groups = stepped_block_mesh(**kwargs)
     return make_dump(vertices, triangles, face_groups=groups)
@@ -460,6 +491,7 @@ def rebuild_spec(dump_path: str, **overrides: Any) -> dict[str, Any]:
             "entity_match_tolerance_mm": threshold(0.1),
             "loop_material_consensus_fraction": threshold(0.95),
             "loop_attribution_min_fraction": threshold(0.05),
+            "sketch_loop_budget": {"value": 64, "rationale": "fixture budget"},
         },
     }
     thresholds = overrides.pop("thresholds", None)

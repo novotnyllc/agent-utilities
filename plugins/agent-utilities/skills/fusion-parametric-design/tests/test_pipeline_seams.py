@@ -43,7 +43,12 @@ from fusion_design.mesh_editability import (
     emit_mesh_editability_script,
     validate_editability_report,
 )
-from fusion_design.mesh_rebuild import emit_mesh_rebuild_script, plan_emission, replan_without
+from fusion_design.mesh_rebuild import (
+    emit_mesh_rebuild_script,
+    plan_emission,
+    replan_without,
+    total_order,
+)
 from fusion_design.reconstruction_coverage import compose_coverage
 from fusion_design.reconstruction_program import build_reconstruction_program
 from fusion_design import mesh_segmentation as seg
@@ -921,19 +926,30 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         self.assertEqual([1], coalesced())
         self.assertEqual([], coalesced(boss_taper=0.01))
 
-    def test_the_emitter_refuses_a_slab_stack_it_cannot_build(self) -> None:
-        # PR 2 plans slabs and does not emit them: the multi-loop profile path is
-        # a later unit, and building each slab's outer loop while dropping its
-        # cavities would be exactly the improvisation this package bans.
+    def test_the_emitter_builds_the_stack_the_planner_decomposed(self) -> None:
+        # PR 2 refused a slab stack here; PR 3 builds it. Two sketches, two
+        # extrudes, the second joining the first, each on its own event plane
+        # driven by the shared station parameter.
         dump = fx.stepped_block_dump()
         program = self._plan(dump)
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "mesh.bin"
-            path.write_bytes(_dump_bytes(dump))
-            with self.assertRaises(ReconstructionRefused) as caught:
-                plan_emission(program, dump, fx.rebuild_spec(str(path)))
-        self.assertEqual("program-schema-violation", caught.exception.reason)
-        self.assertEqual(2, caught.exception.detail["slab_count"])
+        plan = plan_emission(program, dump, fx.rebuild_spec("unused"))
+        extrudes = [step for step in plan["steps"] if step["kind"] == "sketch-extrude"]
+        self.assertEqual(2, len(extrudes))
+        self.assertEqual(["new-body", "join"], [step["operation"] for step in extrudes])
+        self.assertEqual(
+            ["recon_station_0", "recon_station_1"],
+            [step["plane"]["offset_parameter"] for step in extrudes],
+        )
+        self.assertEqual(
+            ["recon_station_1 - recon_station_0", "recon_station_2 - recon_station_1"],
+            [step["extent"]["parameter"] for step in extrudes],
+        )
+        names = {row["name"] for row in plan["user_parameters"]}
+        self.assertTrue({"recon_station_0", "recon_station_1", "recon_station_2"} <= names)
+        # No depth parameter anywhere: a boundary is stored once, as a station.
+        self.assertEqual([], [name for name in names if name.endswith("_depth")])
+        # Each slab of this block is one loop, so neither needs a profile set.
+        self.assertEqual([[], []], [step["profile_set"] for step in extrudes])
 
     def test_a_tapered_step_refuses_by_measurement_and_the_slab_below_stands(self) -> None:
         # The upper step is a truncated pyramid, so its cross-section differs at
@@ -1158,6 +1174,241 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         self.assertEqual(
             [None], [g.get("slab") for g in program["archetypes"] if g["kind"] == "sketch-extrude"]
         )
+
+
+class SlabEmissionSeamTests(unittest.TestCase):
+    """A slab stack, planned from a real dump and built against the doubles.
+
+    The whole chain: fit the dump, decompose it, emit the transaction, run it.
+    The doubles are told what Fusion enumerates for a multi-loop sketch -- the
+    areas and centroids the plan computed -- because re-deriving regions from
+    fake curves would be reimplementing Fusion's solver in a double and would
+    prove nothing about Fusion. The *model* those numbers come from was measured
+    against a live Fusion instead, and `profile_regions` documents what it
+    returned.
+    """
+
+    def _chain(self, dump, fit_spec=None, **spec_overrides):
+        record = seg.fit_regions(dump, fit_spec or ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        manifest = build_manifest()
+        program = build_reconstruction_program(
+            parse_fit_record(record),
+            fxr.spec(slabs=True, **spec_overrides),
+            manifest_sha256=_manifest_hash(manifest),
+            dump=dump,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(dump))
+            source = emit_mesh_rebuild_script(
+                manifest,
+                classification_record(),
+                source_record(manifest),
+                program,
+                fx.rebuild_spec(str(path)),
+                NONCE,
+            )
+        plan = plan_emission(program, dump, fx.rebuild_spec("unused"))
+        return manifest, program, plan, source
+
+    @staticmethod
+    def _enumeration(plan):
+        """What Fusion is declared to enumerate, taken from the plan's own set.
+
+        One `profile_regions` entry per loop is the model the live probe
+        established; the doubles report exactly that, so the executor's matcher
+        is exercised against the shape Fusion actually returns.
+        """
+        regions = [
+            row
+            for step in plan["steps"]
+            for row in (step.get("profile_set") or [])
+        ]
+        return regions
+
+    def test_a_multi_loop_slab_stack_builds_every_slab(self) -> None:
+        # A solid with a void in it and an island standing in the void: five
+        # slabs, and the middle one's sketch holds three loops enumerating three
+        # regions of which two are material.
+        dump = fx.nested_shells_dump()
+        manifest, program, plan, source = self._chain(dump, ts.spec(min_feature_size=8.0))
+        extrudes = [s for s in plan["steps"] if s["kind"] == "sketch-extrude"]
+        self.assertEqual(5, len(extrudes))
+        self.assertEqual(
+            ["new-body"] + ["join"] * 4, [s["operation"] for s in extrudes]
+        )
+        middle = [s for s in extrudes if len(s["profile_set"]) == 3]
+        self.assertEqual(1, len(middle))
+        self.assertEqual(
+            [True, False, True], [row["material"] for row in middle[0]["profile_set"]]
+        )
+
+        # Each sketch is told what Fusion returns for it -- a different
+        # enumeration per sketch, which is what Fusion does -- and the executor
+        # has to match every region of every one or refuse.
+        design = fakes.make_design(
+            behaviour={
+                "profile_regions": {
+                    step["sketch_name"]: step["profile_set"]
+                    for step in plan["steps"]
+                    if step.get("profile_set")
+                }
+            }
+        )
+        report, error = run_transaction(source, design, manifest.fusion_document)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report)
+        built = [entry for entry in report["created"] if entry["kind"] == "sketch-extrude"]
+        self.assertEqual(5, len(built))
+        self.assertEqual(
+            ["new-body"] + ["join"] * 4, [entry["operation"] for entry in built]
+        )
+
+    def test_one_slab_emits_exactly_what_the_pre_slab_emitter_emitted(self) -> None:
+        """Nothing regresses: a one-slab part builds the same geometry it did.
+
+        Not the same *bytes* -- the plan legitimately carries the slab record and
+        the program's own hash moved with the schema -- but every field the
+        transaction builds from: the sketch plane, the extent, the entities, the
+        constraint schedule, the dimension set and the user parameters. If any of
+        those moved, every currently-emitting part's timeline moved with it.
+        """
+        dump = brick_dump()
+        record = seg.fit_regions(dump, ts.spec())
+        manifest = build_manifest()
+        digest = _manifest_hash(manifest)
+        without = plan_emission(
+            build_reconstruction_program(
+                parse_fit_record(record), fxr.spec(), manifest_sha256=digest
+            ),
+            dump,
+            fx.rebuild_spec("unused"),
+        )
+        with_slabs = plan_emission(
+            build_reconstruction_program(
+                parse_fit_record(record), fxr.spec(slabs=True), manifest_sha256=digest, dump=dump
+            ),
+            dump,
+            fx.rebuild_spec("unused"),
+        )
+        self.assertEqual(without["user_parameters"], with_slabs["user_parameters"])
+        self.assertEqual(without["order"], with_slabs["order"])
+        self.assertEqual(len(without["steps"]), len(with_slabs["steps"]))
+        for before, after in zip(without["steps"], with_slabs["steps"]):
+            for key in (
+                "kind",
+                "operation",
+                "plane",
+                "entities",
+                "constraints",
+                "dimensions",
+                "extent",
+                "feature_name",
+                "sketch_name",
+            ):
+                self.assertEqual(before.get(key), after.get(key), key)
+            # And no profile set at all: one loop, one profile, the path that
+            # predates slabs.
+            self.assertEqual([], after["profile_set"])
+
+    def test_a_sketch_denser_than_the_declared_budget_refuses_by_name(self) -> None:
+        dump = fx.nested_shells_dump()
+        record = seg.fit_regions(dump, ts.spec(min_feature_size=8.0))
+        program = build_reconstruction_program(
+            parse_fit_record(record),
+            fxr.spec(slabs=True),
+            manifest_sha256=_manifest_hash(build_manifest()),
+            dump=dump,
+        )
+        spec = fx.rebuild_spec(
+            "unused",
+            thresholds={"sketch_loop_budget": {"value": 2, "rationale": "deliberately tight"}},
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            plan_emission(program, dump, spec)
+        self.assertEqual("sketch-loop-budget-exceeded", caught.exception.reason)
+        self.assertEqual(3, caught.exception.detail["loop_count"])
+        self.assertEqual(2, caught.exception.detail["budget"])
+
+    def test_the_declared_order_is_the_order_the_emitter_derives(self) -> None:
+        # A slab stack is the case that broke this: every slab above the first
+        # depends on the one below, their ids are hashes, and ranking by
+        # (operation, id) put slab 3 before slab 1 -- so the emitter refused the
+        # program its own planner had just written.
+        dump = fx.nested_shells_dump()
+        record = seg.fit_regions(dump, ts.spec(min_feature_size=8.0))
+        program = build_reconstruction_program(
+            parse_fit_record(record),
+            fxr.spec(slabs=True),
+            manifest_sha256=_manifest_hash(build_manifest()),
+            dump=dump,
+        )
+        self.assertEqual(program["order"], total_order(program["archetypes"]))
+        stack = [
+            str(g["id"]) for g in program["archetypes"] if g.get("slab") is not None
+        ]
+        self.assertEqual(stack, [i for i in program["order"] if i in set(stack)])
+
+    def test_the_densest_slab_of_a_real_part_builds_end_to_end(self) -> None:
+        # The honeycomb organiser: a committed, hash-bound dump of a part
+        # somebody printed, five slabs, and forty hexagonal pockets across them.
+        # It refused `profile-ambiguous` before this unit existed.
+        bench = (
+            Path(__file__).resolve().parents[1] / "examples" / "reconstruction-benchmark"
+        )
+        rows = json.loads((bench / "benchmark-manifest.json").read_text(encoding="utf-8"))
+        meta = rows["results"]["honeycomb_organizer_stl"]
+        fit_spec = seg.load_spec(
+            json.loads(
+                (bench / "results" / "honeycomb_organizer_stl" / "fit-spec.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+        dump = read_mesh_dump(bench / "dumps" / meta["dump"], meta["dump_sha256"])
+        manifest, program, plan, source = self._chain(dump, fit_spec)
+        extrudes = [s for s in plan["steps"] if s["kind"] == "sketch-extrude"]
+        self.assertEqual(5, len(extrudes))
+        cavities = sum(
+            1
+            for step in extrudes
+            for row in step["profile_set"]
+            if not row["material"]
+        )
+        self.assertGreaterEqual(cavities, 40)
+        # One sketch per slab, each on its own event plane, chained by station.
+        self.assertEqual(
+            ["new-body", "join", "join", "join", "join"],
+            [s["operation"] for s in extrudes],
+        )
+        stations = {row["name"] for row in plan["user_parameters"] if "station" in row["name"]}
+        self.assertEqual(6, len(stations))
+        for step in extrudes:
+            self.assertIn(step["plane"]["offset_parameter"], stations)
+            self.assertRegex(step["extent"]["parameter"], r"recon_station_\d+ - recon_station_\d+")
+
+        densest = max(extrudes, key=lambda step: len(step["profile_set"]))
+        design = fakes.make_design(behaviour={"profile_regions": densest["profile_set"]})
+        report, error = run_transaction(source, design, manifest.fusion_document)
+        self.assertIsNotNone(report, error)
+
+    def test_a_profile_fusion_does_not_enumerate_refuses_rather_than_guessing(self) -> None:
+        # The doubles report an enumeration the plan cannot account for. The
+        # largest-area rule would have extruded whatever was biggest; the
+        # resolver names the mismatch instead.
+        dump = fx.nested_shells_dump()
+        manifest, program, plan, source = self._chain(dump, ts.spec(min_feature_size=8.0))
+        densest = max(
+            (s for s in plan["steps"] if s["kind"] == "sketch-extrude"),
+            key=lambda step: len(step["profile_set"]),
+        )
+        wrong = [dict(row, area_cm2 = row["area_cm2"] + 5.0) for row in densest["profile_set"]]
+        report, error = run_transaction(
+            source, fakes.make_design(behaviour={"profile_regions": wrong}), manifest.fusion_document
+        )
+        self.assertIsNotNone(error)
+        self.assertEqual("profile-set-mismatch", report["failures"][0])
 
 
 class PlanToRebuildSeamTests(unittest.TestCase):
