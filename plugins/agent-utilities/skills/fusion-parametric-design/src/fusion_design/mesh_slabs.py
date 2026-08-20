@@ -564,12 +564,22 @@ def decompose(
                 },
                 "winding": evidence["winding"],
                 "loops": loops,
+                # `slab-loops-unclassified` is about the whole section, not only
+                # its outer boundary. An inner loop whose own walls reached no
+                # material verdict is one this stage cannot tell a bore from a
+                # cavity, and building the slab anyway would count its regions
+                # as reconstructed on a question nobody answered.
                 "gates": (
                     []
                     if constant
                     else ["slab-section-inconstant"]
                 )
-                + ([] if outer is not None else ["slab-loops-unclassified"]),
+                + (
+                    []
+                    if outer is not None
+                    and not any(loop["role"] == "unclassified" for loop in loops)
+                    else ["slab-loops-unclassified"]
+                ),
                 "relation_to_below": "first",
                 "_projected": projected,
                 "_outer": outer,

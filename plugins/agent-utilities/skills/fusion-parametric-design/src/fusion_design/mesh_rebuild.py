@@ -1466,9 +1466,18 @@ def plan_emission(
             "profile path, which this version does not implement.",
             {
                 "slab_count": len(slabs),
-                "slab_ids": [str(group["id"]) for group in slabs],
+                "slab_ids": [str(group.get("id")) for group in slabs],
+                # Read defensively: this is the *refusal's own* evidence, and
+                # the program validator admits the v2 `slab` key without
+                # checking the shapes around it, so a hand-edited archetype
+                # carrying `plane: null` reaches here. Raising `TypeError` while
+                # building a named refusal would replace it with a crash.
                 "stations": [
-                    [group["plane"]["offset"], group["extent"]["value"]] for group in slabs
+                    [
+                        (group.get("plane") or {}).get("offset"),
+                        (group.get("extent") or {}).get("value"),
+                    ]
+                    for group in slabs
                 ],
             },
         )

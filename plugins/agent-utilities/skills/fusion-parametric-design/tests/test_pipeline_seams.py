@@ -813,6 +813,44 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         self.assertTrue(slabs[0]["slab"]["constancy"]["constant"])
         self.assertEqual(0.0, round(slabs[0]["plane"]["offset"], 6))
 
+    def test_a_slab_whose_inner_loop_has_no_role_is_gated_even_with_an_outer(self) -> None:
+        """The gate is about the section, not only about its outer boundary.
+
+        A cavity wall crossing a local non-manifold edge reaches no material
+        verdict, so its loop is `unclassified` -- and with an outer loop still
+        present the slab used to be built anyway, counting its regions as
+        reconstructed on a question nobody answered. The role table is forced
+        here rather than fixtured: what is under test is the gate.
+        """
+        from unittest.mock import patch
+
+        from fusion_design import mesh_slabs as ms
+
+        honest = ms.classify_loops
+        calls = []
+
+        def with_one_unclassified(loops, projected, bore_regions):
+            rows = honest(loops, projected, bore_regions)
+            calls.append(1)
+            # Only the first section, so one slab is gated and the other is not:
+            # gating every slab leaves the single-extrude fallback claiming all
+            # the regions, which is a different path.
+            if rows and len(calls) == 1:
+                rows = rows + [dict(rows[0], polyline_index=len(rows), role="unclassified")]
+            return rows
+
+        with patch.object(ms, "classify_loops", with_one_unclassified):
+            program = self._plan(fx.stepped_block_dump())
+        gates = [
+            entry["gate"]
+            for entry in program["unreconstructed"]
+            if entry["gate"].startswith("slab-loops-unclassified")
+        ]
+        self.assertTrue(gates, program["unreconstructed"])
+        # And the outer loop really was there: this is not the old case.
+        decomposition = program["slab_decomposition"]
+        self.assertIsNotNone(decomposition)
+
     def test_dirt_on_one_face_does_not_cost_the_loops_that_do_not_touch_it(self) -> None:
         # One duplicated triangle on the bottom face: three edges now carry three
         # incident triangles, so the mesh is not closed in the whole-mesh sense.

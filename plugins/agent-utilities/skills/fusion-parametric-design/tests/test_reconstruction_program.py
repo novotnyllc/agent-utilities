@@ -921,6 +921,48 @@ class ProgramValidatorTests(unittest.TestCase):
         codes = [issue.code for issue in self._check(program)["issues"]]
         self.assertIn("program-value-out-of-set", codes)
 
+    def test_a_sketch_extrude_missing_the_shapes_the_emitter_reads_is_refused(self) -> None:
+        """The validator's whole job: a named refusal instead of a TypeError later.
+
+        `plane` and `extent` were only ever checked *if* they were objects, so a
+        hand-edited `plane: null` passed every check and reached the emitter's
+        own comprehension over `group["plane"]["offset"]`.
+        """
+        for field, value in (("plane", None), ("extent", None), ("extent", {"value": "deep"})):
+            with self.subTest(field=field, value=value):
+                program = self._valid()
+                extrude = next(
+                    g for g in program["archetypes"] if g["kind"] == "sketch-extrude"
+                )
+                extrude[field] = value
+                issues = self._check(program)["issues"]
+                self.assertIn("program-malformed", [issue.code for issue in issues])
+                self.assertTrue(
+                    any(issue.path.endswith("." + field) for issue in issues),
+                    [issue.path for issue in issues],
+                )
+
+    def test_a_malformed_slab_block_is_refused_by_path(self) -> None:
+        # The v2 key arrived without a shape check, and the emitter reads
+        # `index`, `of` and `loops` from it without asking again.
+        for slab, ending in (
+            ("not-an-object", ".slab"),
+            ({"index": "0", "of": 2, "loops": []}, ".slab.index"),
+            ({"index": 0, "of": 2, "loops": None}, ".slab.loops"),
+        ):
+            with self.subTest(slab=slab):
+                program = self._valid()
+                extrude = next(
+                    g for g in program["archetypes"] if g["kind"] == "sketch-extrude"
+                )
+                extrude["slab"] = slab
+                issues = self._check(program)["issues"]
+                self.assertIn("program-malformed", [issue.code for issue in issues])
+                self.assertTrue(
+                    any(issue.path.endswith(ending) for issue in issues),
+                    [issue.path for issue in issues],
+                )
+
     def test_a_program_edited_after_it_was_built_fails_its_own_hash(self) -> None:
         program = self._valid()
         program["covered_area_fraction"] = 0.5

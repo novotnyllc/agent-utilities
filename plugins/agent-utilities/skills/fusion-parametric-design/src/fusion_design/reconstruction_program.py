@@ -3015,6 +3015,61 @@ def _check_vocabulary(
                     "can only be an origin plane or an offset from one.",
                 )
             )
+        # The shapes the emitter then reads without asking again. Checked here
+        # so a hand-edited program meets a named `program-malformed` instead of
+        # a TypeError downstream -- which is the contract this validator exists
+        # to keep, and the v2 `slab` key arrived without it.
+        if group.get("kind") == "sketch-extrude":
+            if not isinstance(plane, dict):
+                issues.append(
+                    ValidationIssue(
+                        "program-malformed",
+                        f"{path}.plane",
+                        "a sketch-extrude carries the plane it is sketched on; an absent or null "
+                        "plane is not a default.",
+                    )
+                )
+            extent = group.get("extent")
+            value = extent.get("value") if isinstance(extent, dict) else None
+            if (
+                not isinstance(extent, dict)
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "program-malformed",
+                        f"{path}.extent",
+                        "a sketch-extrude carries an extent object with a finite numeric value; "
+                        "the emitter drives the feature's depth from it.",
+                    )
+                )
+        slab = group.get("slab")
+        if slab is not None:
+            if not isinstance(slab, dict):
+                issues.append(
+                    ValidationIssue("program-malformed", f"{path}.slab", "slab must be an object.")
+                )
+            else:
+                for field in ("index", "of"):
+                    if isinstance(slab.get(field), bool) or not isinstance(slab.get(field), int):
+                        issues.append(
+                            ValidationIssue(
+                                "program-malformed",
+                                f"{path}.slab.{field}",
+                                f"{field} must be an integer; it names this slab's place in its "
+                                "own stack.",
+                            )
+                        )
+                if not isinstance(slab.get("loops"), list):
+                    issues.append(
+                        ValidationIssue(
+                            "program-malformed",
+                            f"{path}.slab.loops",
+                            "loops must be an array; the emitter builds one contour per entry.",
+                        )
+                    )
     order = program.get("order")
     if not isinstance(order, list) or sorted(order) != sorted(i for i in identifiers if i is not None):
         issues.append(
