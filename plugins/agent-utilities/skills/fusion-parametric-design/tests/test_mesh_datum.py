@@ -403,7 +403,8 @@ class DatumFrameTests(unittest.TestCase):
         unstable = caught.detail["unstable_membership"]
         self.assertAlmostEqual(1.99, unstable["separation_deg"], places=6)
         self.assertAlmostEqual(3.0 * math.hypot(0.05, 0.05), unstable["bound_deg"], places=12)
-        self.assertIn("same axis re-measured or a rival", caught.message)
+        self.assertIn("this axis re-measured or a rival", caught.message)
+        self.assertEqual("same-axis", unstable["side"])
 
     def test_the_secondary_sigma_carries_the_primary_axis_uncertainty_too(self) -> None:
         # A secondary direction is a plane normal orthogonalised against the

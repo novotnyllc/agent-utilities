@@ -929,52 +929,54 @@ def _decide_axis(
         "margin": margin,
         "frame_margin": frame_margin,
     }
-    # Whether a candidate is *in* that set is itself an angular measurement
-    # against `angle_tolerance_deg`, and it decides the outcome. A candidate
-    # 1.99 deg from the winner is read as a re-measurement of the same axis and
-    # excluded; the same candidate at 2.01 deg joins the set, and its cell can
-    # be lexicographically smaller -- selecting a different X on a difference
-    # smaller than the sigmas both directions state. The cell test below asks
-    # whether a tied candidate's *direction* is stable; this asks whether its
-    # membership is, which is the same question one step earlier.
-    #
-    # ponytail: only a candidate whose separation is provably near the boundary
-    # refuses. One whose direction states no sigma is left to the cell test,
-    # which refuses if it reaches the tie set -- upgrade to refusing here too
-    # if a record ever ships a scored candidate with no direction sigma.
-    for candidate in candidates:
+    def membership_refusal(candidate: AxisCandidate, tied_side: bool):
+        """Is this candidate's same-axis classification reproducible?
+
+        Whether a candidate is *in* the tie set is itself an angular
+        measurement against `angle_tolerance_deg`, and it decides the outcome.
+        A candidate 1.99 deg from the winner is read as a re-measurement of the
+        same axis and excluded, settling the axis on evidence; the same
+        candidate at 2.01 deg joins the set and can carry a lexicographically
+        smaller cell, selecting a different axis -- on a difference smaller
+        than the sigmas both directions state, and in either direction. The
+        cell test asks whether a tied candidate's *direction* is stable; this
+        asks whether its membership is, which is the same question one step
+        earlier.
+
+        ponytail: only a candidate whose separation is provably near the line
+        refuses. One whose direction states no sigma is left to the cell test,
+        which refuses if it reaches the tie set -- upgrade to refusing here too
+        if a record ever ships a scored candidate with no direction sigma.
+        """
         if candidate is winner:
-            continue
+            return None
         if _relative_margin(winner.score, candidate.score) >= frame_margin:
-            continue
+            return None
         if (
             sigma_multiple is None
             or candidate.direction_sigma_deg is None
             or winner.direction_sigma_deg is None
         ):
-            continue
+            return None
+        separation = _angle_deg(candidate.direction, winner.direction)
+        if (separation > angle_tolerance_deg) != tied_side:
+            return None
         bound = (
             sigma_multiple
             * math.hypot(candidate.direction_sigma_deg, winner.direction_sigma_deg)
             + candidate.direction_spread_deg
             + winner.direction_spread_deg
         )
-        separation = _angle_deg(candidate.direction, winner.direction)
-        if separation > angle_tolerance_deg:
-            # In the tie set, where the cell tests below already refuse
-            # whatever they cannot separate reproducibly.
-            continue
-        if angle_tolerance_deg - separation > bound:
-            continue
-        raise _refuse(
+        if abs(separation - angle_tolerance_deg) > bound:
+            return None
+        return _refuse(
             "frame-ambiguous",
-            f"the {axis}-axis winner is separated from candidate "
-            f"{candidate.region_hash[:12]} by less than the declared margin {frame_margin:g} in "
-            "score, and the two are not reproducibly the same axis or different ones: candidate "
-            f"{candidate.region_hash[:12]} sits {separation:.4g} deg from the winner, within "
-            f"{bound:.4g} deg of the {angle_tolerance_deg:g} deg line that decides whether it "
-            "is the same axis re-measured or a rival in the tie, so a re-tessellation can move "
-            "it across and change the axis this rule selects.",
+            f"the {axis}-axis winner is within the declared margin {frame_margin:g} of candidate "
+            f"{candidate.region_hash[:12]} in score, and the two are not reproducibly the same "
+            f"axis or different ones: that candidate sits {separation:.4g} deg from the winner, "
+            f"within {bound:.4g} deg of the {angle_tolerance_deg:g} deg line that decides whether "
+            "it is this axis re-measured or a rival in the tie, so a re-tessellation can move it "
+            "across and change the axis this rule selects.",
             {
                 "axis": axis,
                 "winner": winner.to_dict(),
@@ -986,9 +988,19 @@ def _decide_axis(
                     "candidate": candidate.to_dict(),
                     "separation_deg": separation,
                     "bound_deg": bound,
+                    "side": "tied" if tied_side else "same-axis",
                 },
             },
         )
+
+    # The excluded side first, because it is reachable even when the scores
+    # never tie: a candidate read as this axis re-measured never becomes a
+    # rival, so nothing below would look at it.
+    for candidate in candidates:
+        refusal = membership_refusal(candidate, tied_side=False)
+        if refusal is not None:
+            raise refusal
+
     if margin is None or margin >= frame_margin:
         return winner, record
 
@@ -1051,6 +1063,14 @@ def _decide_axis(
                 ],
             },
         )
+    # And the other side of the same line: a tied candidate can move below the
+    # tolerance, leave the set, and hand the selection back to the score
+    # winner. Checked after the cell tests, so a tie the quantization genuinely
+    # cannot separate still reports as that.
+    for candidate in tied:
+        refusal = membership_refusal(candidate, tied_side=True)
+        if refusal is not None:
+            raise refusal
     chosen_cell, _key, chosen = celled[0]
     # `runner_up` so far is the highest scorer's rival, and the rule just
     # overrode the score ranking -- when it promoted that rival, the record
