@@ -311,7 +311,12 @@ entities each, with residuals on the record.
    of scope). Expected firings drop from nine parts of ten to the rare
    genuinely-2.5D-incompatible case, and the refusal detail now carries the
    full per-loop evidence table, so the next reader sees *why* instead of a
-   loop count.
+   loop count. **[Superseded 2026-08-20 for slab-stack programs: the
+   overloaded token is replaced by the cause-specific set of Amendment §A.3
+   (`slab-track-ambiguous`, `slab-stack-disconnected`,
+   `slab-track-merge-unlicensed`, `multi-body-output-unlicensed`); a
+   two-outer-loop station is a two-track station under §A.1, not an
+   ambiguity.]**
 
 Every refusal above stops the slab, the slab's regions go to unreconstructed
 with the gate named, and `replan-without` composes as today.
@@ -389,7 +394,12 @@ station), which is the editability that matters, and the report says which.
 Total order: slabs ascending by station; then holes (each after the last slab
 it cuts); then the shell (D); then fillets. All existing tie-breaks and the
 `program-order-invalid`/`-cyclic` cross-checks apply unchanged; each slab
-depends on its predecessor (join needs a body).
+depends on its predecessor (join needs a body). **[Superseded 2026-08-20:
+"each slab depends on its predecessor" was internally inconsistent with
+`relation_to_below: disjoint` and is replaced by track-edge dependencies —
+a slab joins its *track* predecessor, tracks may begin `new-body` at any
+station, and temporary multiple bodies are the designed state; see
+Amendment §A.1.]**
 
 **Exactly two events → exactly one slab**, and the plan degenerates to
 today's single extrude: same profile machinery, same cap semantics
@@ -623,6 +633,12 @@ mechanism working, not breaking.
 
 # PR sequence — each lands green, each improves something measurable
 
+**[Ordering note 2026-08-20: cross-lane sequencing defers to
+`docs/reviews/2026-08-20-oracle-design-review.md` §2 — the slab-track graph
+and virtual-closure contract (Amendment §A.1–§A.4) must land before design
+-004's C3 per-thing parametric recursion; PR 0a's non-vacuity gate precedes
+this lane's re-measures.]**
+
 | PR | Content | Size | Measurable improvement |
 | --- | --- | --- | --- |
 | **1** | `section_mesh` per-segment triangle provenance; loop→region attribution and host-side winding/material helpers (manifold check, signed volume, per-loop verdicts); `profile-ambiguous` refusal detail upgraded to carry the per-loop evidence table. Synthetic-mesh tests for every verdict and every refusal in B's ladder. | M | The nine production-part refusals now *name* every loop's walls and material side — diagnosis without behaviour change. |
@@ -671,9 +687,10 @@ re-measure.
 
 # Not achievable within this design, named
 
-- **Multi-body stations** (two disjoint outer loops at one station): refused
-  `profile-ambiguous` with full evidence; multi-body reconstruction is a
-  scope decision for a later unit.
+- **Multi-body stations** (two disjoint outer loops at one station):
+  *represented* as slab tracks (Amendment §A.1) with temporary bodies;
+  multi-body *delivery* remains a scope decision, refused
+  `multi-body-output-unlicensed` (was `profile-ambiguous`; §A.3).
 - **Fully enclosed voids** via shell: `shell-opening-unidentified` until the
   internal-surface deviation question is answered (D).
 - **Tapered and lofted slabs**: `slab-section-inconstant` by measurement;
@@ -687,3 +704,192 @@ re-measure.
   recovers *a* parameterization consistent with the measured surface, and the
   join-only slab stack makes that explicit rather than pretending to know
   which pocket was a cut.
+
+---
+
+# Amendment A — external-review incorporation (2026-08-20)
+
+*Incorporates review finding 5 (P1) and parts of finding 7 from
+`docs/reviews/2026-08-20-oracle-design-review.md`, plus missing decisions 16,
+17 and 18 (decided here). The measured trigger: five production parts refuse
+`profile-ambiguous` with perfect loop-winding verdicts — not an orientation
+failure, but discontinuous slab stacks forced into a whole-part fallback whose
+section is multi-loop by construction, exactly the internal inconsistency the
+review named: `relation_to_below` may be `disjoint`, yet every slab after the
+first was `join` and depended on its predecessor because "join needs a body."
+A disjoint slab cannot necessarily join its predecessor. Sections A.1–A.4
+below supersede the passages they name; everything else in this design
+stands.*
+
+## A.1 The slab-track graph (finding 5; missing decision 16, decided)
+
+The missing model is correspondence of material components **across** slabs;
+per-slab verification at three stations never established it. Added:
+
+- **Nodes:** connected material components within each slab's section (a
+  slab may hold several).
+- **Edges:** evidence-backed correspondence across adjacent events, licensed
+  per edge kind. `continuation` edges require **footprint overlap across the
+  event** — the persisting component's post-event footprint overlaps its
+  pre-event footprint. Congruence is *not* required: an ordinary
+  step-in/step-out changes the footprint of one persisting component and
+  remains a continuation. Congruence stays what it always was — the
+  within-slab constancy and coalescing test, where a fully congruent
+  section is evidence the event is not topology-changing at all (§A.2).
+  `branch` and `merge` edges are
+  topology-changing by definition, so congruence with the pre-transition
+  footprints cannot be required of them; they are licensed by
+  **containment/overlap plus evidenced connectivity** instead: each
+  pre-transition component's footprint overlaps the post-transition section,
+  and that section shows the overlapped components connected (`merge`) or
+  one component's footprint continuing as disjoint successors (`branch`).
+  The U-shaped part's bridge slab is the motivating instance: its single
+  connected component is congruent with neither track below it, but contains
+  both footprints and connects them — a licensed `merge`, not a
+  death-plus-birth.
+- **Track states**, closed set: `birth`, `continuation`, `branch`, `merge`,
+  `death`, `temporary-disconnection`.
+- **A track may begin as `new-body` at any station**, not only slab 0. A
+  U-shaped or bridged part legitimately runs two disjoint tracks at lower
+  stations that merge later into one connected solid; a PCB's protrusions
+  are born and die at different stations. Temporary multiple bodies are the
+  designed representation of that interval.
+- **Tracks join only when contact is evidenced** (the merging slab's section
+  shows the components connected). An unevidenced join refuses
+  `slab-track-merge-unlicensed`.
+- **A track that never joins** is one of exactly three named outcomes: a
+  true multi-body result (refused `multi-body-output-unlicensed` until a
+  scope decision licenses multi-body delivery), a componentization candidate
+  (handed to design -004's lane with its track evidence), or a
+  cause-specific refusal from §A.3.
+- **The whole-part fallback is removed.** No code path may substitute a
+  whole-part section for a discontinuous stack; the five measured refusals
+  become named track outcomes instead of a fallback's collateral.
+
+The join-only doctrine survives *within a track*: each slab of a track joins
+its **track** predecessor, not "the previous slab" globally. §C's dependency
+rule ("each slab depends on its predecessor — join needs a body") is
+superseded accordingly: dependencies follow track edges.
+
+The slab record carries the graph into emission: `track_id` and
+`track_predecessors` (a list serializing **every** incoming edge — empty at
+`birth`, one element for `continuation` and for each `branch` successor,
+one per merging track at `merge`) join the schema. §A.1's track states are
+**transition facts recorded on the event records at their stations**
+(§A.2's `topology-changing-event`), not a single per-slab enum — a
+one-slab protrusion is born at its lower event and dies at its upper event
+and both facts survive, each on its own event; a `temporary-disconnection`
+likewise lives on the event records spanning the gap, where no slab exists
+to carry it. §C's "slab 0 is `new-body`, every later slab `join`" is
+superseded — the emitted operation derives from the slab's incoming edges:
+no predecessor → `new-body`; one predecessor → `join` into the track's
+body; several predecessors (a `merge`) → `join` of **all** evidenced-
+contact predecessor bodies named in `track_predecessors`, which thereafter
+share one track body; a `death` transition ends the track's dependencies at
+its event. Across a `temporary-disconnection` the track **suspends**: no
+operation is emitted for the gap stations, the track's body identity
+persists, and the resuming slab depends on the track's last emitted slab
+and joins the track body only when contact is evidenced at the resumption
+section (the §A.1 merge rule applied to the track's own body) — otherwise
+the resumption is a `birth` plus a later evidenced `merge`, or the
+cause-specific refusal, never a silent bridge. Temporary multiple bodies
+between `birth` and `merge` are the designed emission state, so the emitter
+can encode every valid track graph the planner produces.
+
+## A.2 Event states, separated; loop correspondence defined (finding 5 tail; missing decision 17, decided)
+
+The interior-slab regression (measured, v0.12.0 addendum) shows "a plane
+exists at this station" being allowed to become "the topology changes here."
+Event records now carry one of three states, and only the third divides slab
+tracks:
+
+1. `candidate-geometry-station` — an accepted axis-normal plane exists here;
+2. `corroborating-station` — side-region endpoints agree, or a coalesced
+   flush-boss plane (the demotion in §A's coalescing rule maps here);
+3. `topology-changing-event` — the section's track structure measurably
+   differs across the station (loop count, component connectivity, or a
+   track state transition from §A.1).
+
+Coalescing congruent sections is evidence *against* topology change, never
+sufficient evidence *for* it elsewhere.
+
+**Loop correspondence across the three constancy sections** (0.25 / mid /
+0.75): loops match by **complete linkage** on centroid distance and on
+**√area difference** (|√A₁ − √A₂|), both within
+`slab_constancy_tolerance_mm` — √area is length-dimensioned, so the one
+declared length tolerance governs both comparisons and mesh units or part
+scale cannot change the verdict (the declared threshold already in the
+vocabulary — no new constant); an unmatched loop names itself
+in the `slab-section-inconstant` refusal rather than failing the slab on a
+bare count mismatch. Matching is a deterministic **one-to-one global
+assignment**, not a greedy pair walk: among assignments of maximum
+cardinality over the eligible (complete-linkage) pairs, take the one
+minimizing total quantized centroid distance, remaining ties broken by loop
+serial — so overlapping candidate pairs cannot select different
+correspondences on different runs. Unmatched loops on either side drive the
+track edges and the `slab-section-inconstant` decision deterministically.
+
+## A.3 Cause-specific tokens replacing `profile-ambiguous`'s overload (review vocabulary table)
+
+`profile-ambiguous` was carrying four meanings (multi-body station,
+discontinuous stack, loop composition, whole-part fallback). New closed-set
+planner refusals:
+
+- `slab-track-ambiguous` — correspondence evidence supports more than one
+  track graph; the candidates are enumerated.
+- `slab-stack-disconnected` — a track dies with no evidenced continuation
+  and no licensed outcome.
+- `slab-track-merge-unlicensed` — §A.1's unevidenced join.
+- `multi-body-output-unlicensed` — the track graph terminates in more than
+  one body and multi-body delivery is out of scope.
+
+**Scope and propagation:** `slab-track-ambiguous`,
+`slab-stack-disconnected` and `slab-track-merge-unlicensed` are
+**track-scoped** — they stop the affected track's slabs, whose regions go to
+unreconstructed with the token named exactly as the refusal ladder demands,
+while other tracks proceed. `multi-body-output-unlicensed` is
+**delivery-scoped**: it refuses the *output*, never the evidence — the track
+graph, the per-track slab programs and the correspondence evidence stay on
+the record and are handed to design -004's componentization lane intact
+(§A.1's second outcome); the affected regions still route to unreconstructed
+with the token, but nothing §A.1 requires to remain addressable is erased.
+
+`profile-ambiguous` **retires for slab-stack programs** (it survives only as
+the terminal composition token on the degenerate one-slab path, where its
+original meaning still holds). The B-ladder's item 5 and the "Not
+achievable — multi-body stations" entry are superseded by these tokens: a
+two-outer-loop station is now a two-track station, represented, and refused
+only at delivery scope, with the right name.
+
+## A.4 Open captures and cut-open sub-meshes (finding 7 interop; missing decision 18, decided)
+
+The loop ladder's licence (closed, consistently wound, positive signed
+volume) is unchanged — but two inputs now satisfy it by contract rather than
+failing globally:
+
+- **A thing sub-mesh cut off a base** (design -004's per-thing recursion)
+  runs the ladder with the **virtual closure surface** of design -004 §4.6 in
+  place: transient, evidence-class `inferred-by-contact` /
+  `inferred-by-continuation`, used for topology/winding/section-closure/
+  volume only, excluded from deviation grading and area conservation, its
+  cap station entering §A.2 as a `candidate-geometry-station` with the cap's
+  recorded uncertainty. The ladder never learns to "tolerate" open meshes;
+  it receives closed ones whose closure is honestly labelled. Closure
+  segments carry **no dump-triangle provenance** and are **excluded from the
+  material-side consensus**; their winding is inherited from the licensed
+  contact plane's normal as oriented by the interface record, labelled with
+  the cap's evidence class — B's per-segment provenance tables list them
+  under the derived-geometry ledger, never as source triangles, so they stay
+  out of deviation grading and area conservation on every path.
+- **Globally open captures** (boundary edges unrelated to any interface —
+  Dig-Next-2's 158 edges, all 46 slabs `slab-section-open`): v1 policy is
+  the hard refusal `capture-boundary-unclosed` (token shared with design
+  -004 §4.6). A locally licensed closure procedure for capture boundaries is
+  a registered follow-up in the emission lane, not attempted here.
+  **Precedence:** the global open-capture check runs *before* the ladder's
+  closure step — boundary edges unrelated to any licensed interface refuse
+  `capture-boundary-unclosed` first, so a globally open capture can no
+  longer reach `loop-orientation-unavailable` (which keeps its original
+  meaning: orientation/winding failure on a mesh whose boundary is either
+  empty or fully licensed). Design -004 and the scoreboard can rely on the
+  shared token being the one actually emitted.

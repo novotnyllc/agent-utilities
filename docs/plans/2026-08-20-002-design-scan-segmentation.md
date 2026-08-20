@@ -256,7 +256,10 @@ a node splits when its best fit is **rejected above the split floor** (never on
 size); T1–T5 terminal rules; P1 (strict partition, asserted every level), P2
 (strict decrease), P3 (floor), P4 (productivity — a split none of whose
 children improves the parent's residual by a declared margin is
-`split-unproductive`, capping useless work at one level). Work bound: ≤ d_max
+`split-unproductive`, capping useless work at one level). **[Superseded:
+P4's existential form and the bare "rejected above the floor splits" trigger
+are replaced by the reason-aware licence and aggregate productivity predicate
+of §A.1; T1–T5 are defined there.]** Work bound: ≤ d_max
 whole-mesh fitting passes regardless of splitter. Storage: one int32
 permutation + node table; a region is `(offset, count)`. New flags join
 `REGION_FLAGS` (`split-ineffective`, `split-unproductive`,
@@ -316,7 +319,8 @@ datum recovery from their normal families (0.13°) → cross-cut passes 1..n. On
 a part where pass 0 yields no accepted fits, the fallback ladder is: (1)
 three-axis offset-histogram seeding on trimmed-PCA normals (A's measured-Hough,
 ~20 lines) to recover families directly; (2) if no orthogonal frame emerges,
-named flag `datum-unavailable` and **A1's proxy region grower runs as the
+named flag `segmentation-datum-unavailable` (renamed per §A.7; scope decision
+in §A.5) and **A1's proxy region grower runs as the
 standalone splitter** (layered frontier growth against the region's own fitted
 proxy, refit on raw vertices every K layers) — order-independent of the
 cross-cut because it plugs into the same `split(node)` socket. A's
@@ -342,7 +346,11 @@ the repo has no estimator that is. So PR 4 scopes one explicitly — the
 empirical semivariogram range of a region's own plane residuals over its mesh
 graph, the length at which the variogram reaches its sill — with its own tests
 against a synthetic correlated field of known length, and it declares that
-length on the record beside the block size derived from it. Reading the σ_form
+length on the record beside the block size derived from it. **[Superseded:
+"a region's own plane residuals" is circular — the candidate would calibrate
+its own null. PR 4's estimator is respecified in §A.4: one frozen,
+candidate-independent correlation record per scan, consumed by Moran,
+held-out, covariance inflation, and relation uncertainty alike.]** Reading the σ_form
 ladder as if it were a length is exactly the substitution this design refuses
 elsewhere; taking a block size that nothing measured would put an undeclared
 constant under the one gate the plan is loosening. Never by raising `moran_z_max`. Bootstrap
@@ -433,6 +441,10 @@ shipment-1 number adjusts predictions; this one reorders the plan.
 ---
 
 ## 6. PR sequence
+
+**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
+`docs/reviews/2026-08-20-oracle-design-review.md` §2 (PR 0a/0b first); PR
+contents below stand, amended per §A.1–§A.6.]**
 
 One opus worker, one PR at a time, tree green after each, each PR names the
 measured claim it must move and re-runs the Dig-Next-2 artifacts to prove it.
@@ -530,7 +542,7 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
   super-cell, **a new 1-D KDE station peak finder** (§4.2 — the existing event
   helpers merge stations from accepted fits' offsets and answer a different
   question, so nothing here is a reuse), cell×CC intersect, peel driver;
-  datum-bootstrap ladder incl. `datum-unavailable`), spec block with every
+  datum-bootstrap ladder incl. `segmentation-datum-unavailable`), spec block with every
   derivation, tests including the peak finder's own.
 - **Size:** ~360–460 added (~60 of it the station detector).
 - **Measured claim (gate-independent by design):** the 448,122-triangle group
@@ -576,7 +588,7 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
   (a) mixed-cell area — cells whose joint fit fails with multi-surface residual
   signatures — exceeds a declared fraction, or (b) fragment area — adjacent
   cells individually under support floors whose union fits — exceeds one, or
-  (c) **any part in the corpus reaches `datum-unavailable`**. (a) licenses A's
+  (c) **any part in the corpus reaches `segmentation-datum-unavailable`**. (a) licenses A's
   proxy grower inside cells; (b) licenses HFP-over-regions (threshold-free, cut
   by the existing parsimony-F gate); (c) licenses the same grower as the
   *standalone* splitter §4.3's fallback ladder requires — without it a
@@ -776,3 +788,397 @@ which branch the measurement selected and what it refuted.*
 - **σ_form stays shipped and load-bearing where it binds** — it binds on the
   desktop organiser, and the horn now reaches emission. Refuted as *this
   part's* explanation is not refuted as a mechanism.
+
+---
+
+## Amendment A — external-review incorporation (2026-08-20)
+
+*Incorporates the accepted findings of the external design review preserved at
+`docs/reviews/2026-08-20-oracle-design-review.md` (GPT-5.6 Sol, Pro tier,
+verdict REVISE BEFORE IMPLEMENTATION). Findings 2, 3, 8, 9, 10 and 14 land
+here; this amendment supersedes the specific passages it names and nothing
+else. House rules apply throughout: verified facts carry sources, assumptions
+are labelled, every new threshold is caller-declared through
+`_declared_number` with a rationale, and every new token joins a closed set.
+The PR ordering in §6 is subordinated to the canonical cross-lane order in the
+review file §2 (see §A.8).*
+
+### A.1 The split licence, made reason-aware (finding 2 — accepted)
+
+§4.1's P4 ("a split none of whose children improves the parent's residual …
+is `split-unproductive`") was an existential rule, and the review's confetti
+scenario against it is not hypothetical: the 443 accepted ≤ 99-triangle planes
+on Dig-Next-2 (F4) are the measured face of exactly this failure — locally
+flat patches of surfaces no justified primitive explains, each passing plane
+gates honestly. A splitter driven by "any child improved" would manufacture
+more of them and call it coverage, contradicting 007's foundational rule that
+unexplained geometry stays unclaimed rather than being absorbed. P4 is
+replaced as follows.
+
+**T1–T5, defined** (previously referenced, never written — missing decision
+1, decided here):
+
+- **T1 `terminal-accepted`** — the node's fit passed every gate. Terminal;
+  claimed; leaves the frontier.
+- **T2 `terminal-below-floor`** — support below the split floor (area or
+  triangle count). Terminal, named. Never split: splitting cannot create
+  evidence.
+- **T3 `terminal-insufficient-evidence`** — the fit was rejected for an
+  *information-class* reason (table below). Terminal without splitting; the
+  rejection reason is carried on the node.
+- **T4 `terminal-split-unproductive`** — a licensed split was attempted and
+  failed the aggregate productivity predicate below. The parent remains the
+  addressable terminal, with both the split attempt and the predicate's
+  numbers recorded.
+- **T5 `terminal-depth-exhausted`** — d_max reached. Terminal, named
+  (`split-depth-exhausted` flag, unchanged).
+
+**Which rejections license a split** (missing decision 2, decided here).
+A rejected fit above the floor no longer licenses a split by itself; the
+*reason* does:
+
+| Rejection class | Examples (existing tokens) | Split? |
+| --- | --- | --- |
+| **mixed-support** — evidence of more than one surface | multimodal residual distribution, disconnected inlier support, incompatible normal families, multiple competing primitive candidates | licenses a split |
+| **wrong-kind structure** | `residual-structure` (Moran), directional-bin structure | licenses a split **only when** the proposed children jointly explain ≥ `split_min_children_explained` of the parent's area under the predicate below |
+| **insufficient-information** | support floors, `parameter-uncertainty`, span gates, capture boundary, `segmentation-datum-unavailable`, `correlation-model-unidentified` | terminates as T3 — splitting an information-starved region manufactures smaller information-starved regions |
+
+This licence governs **every splitter entry point**, and the two paths that
+look like exceptions are not splits of a T3 terminal: the standalone proxy
+grower of §4.3/§A.5 is **scan-scoped** — when
+`segmentation-datum-unavailable` fires no cross-cut exists, and the grower
+*is* the splitter for the whole scan (the token names the scan's missing
+datum, not a node's evidence class, so no node is simultaneously terminal
+and splittable); and §A.3's mandatory proxy refinement runs on a
+**joint-fit rejection over a mixed lateral cell**, which is the
+mixed-support class (row 1) by definition. A node terminal as T3 is never
+split by any path.
+
+**The aggregate productive-split predicate** (missing decision 3, decided
+here) replaces the existential rule. A split stands only when **all** of the
+following hold, evaluated on **reserved validation triangles** — a blocked
+subset of the node (block scale from the §A.4 correlation record; octree-cell
+parity, the §10.3 idiom) reserved **when the node is created, before any fit
+on the node runs** — neither the parent model, any child model, **nor
+`split(node)` itself** sees the validation blocks: partition discovery
+(cross-cut, station finder, proxy refinement) runs on the non-validation
+subset only, and the reserved triangles are assigned to the chosen children
+after the boundary is fixed, then scored. (1)–(2) therefore compare
+held-out losses on both sides of a boundary the held-out data did not help
+choose (a parent that was already fit on all triangles is refit on the
+non-validation subset before grading), and the tree cannot search
+partitions and then grade the winner on the evidence that chose it:
+
+1. area-weighted mean child validation loss ≤ parent validation loss ×
+   (1 − `split_min_loss_improvement`);
+2. children whose own validation loss improves on the parent's carry ≥
+   `split_min_improved_fraction` of the parent's area;
+3. the **fractional** improvement in (1) — (parent validation loss −
+   area-weighted mean child validation loss) / parent validation loss,
+   dimensionless — exceeds `split_boundary_cost` × (new boundary length /
+   the parent's boundary scale), where the boundary scale is the parent's
+   boundary length or, when that length is zero, **sqrt(parent area)** — a
+   closed connected surface has no boundary, sqrt(area) is its natural
+   perimeter scale, and the root split of a watertight capture must be
+   licensable. Both sides are dimensionless, so mesh units and part scale
+   cannot flip the verdict; new boundaries are a model cost, paid for in
+   measured improvement, never free;
+4. the area-weighted mean in (1) is computed over **all** children — no
+   child's loss may be dropped. Toward the improved fraction in (2) and the
+   wrong-kind clause's explained fraction count: **T1 `terminal-accepted`**
+   children, and children whose rejection falls in a **split-licensing
+   class of the table** (mixed-support or wrong-kind) *and* whose own
+   validation loss improves on the parent's — the table itself licenses
+   those children for the next level, so counting them as zero progress
+   would cap every tree at depth 1 and make d_max > 1 dead text.
+   Insufficient-information and other terminal children are recorded with
+   their class and contribute **zero**. The confetti guard survives because
+   this credit is provisional to the tree walk, never to a claim: area is
+   *claimed* only by T1 descendants, and a lineage that never reaches T1
+   ends as named terminals with its provisional credit expired. (The
+   earlier "any named terminal class" form was vacuous; a T1-only form
+   over-corrects and breaks multi-level decomposition; this reading is the
+   one the licence table itself makes consistent.)
+
+A proposed child that receives **zero reserved validation triangles** —
+possible because blocks are reserved before the partition and assigned only
+after its boundary is fixed — is **ungradable, by name**: it enters (1) at
+the parent's validation loss and counts as not-improved in (2), the
+conservative substitution under which an ungradable child can never help
+license a split, and the ungradable set is recorded on the split attempt.
+A **node** whose own reserved validation set is empty (possible at the
+block floor on tiny nodes) makes the ordinary predicate **ungradable as a
+whole**: the parent validation loss is undefined, so the split attempt is
+non-licensing, named as such on the record, and never graded on training
+loss instead. The topology-licensed path below is unaffected — it grades
+on topology, not loss.
+
+**Topology-licensed splits.** When the licensing rejection is
+*disconnected inlier support*, the split severs nothing on the mesh: the
+children are the connected components of the parent's support, no new
+surface boundary is created, and coplanar components can show no residual
+improvement at all — grading that split on (1)–(3) would make the table's
+own licence unreachable (T4 by construction, and an exact fit puts a zero
+in condition 3's denominator). For that reason-class only, (1)–(3) are
+replaced by: **every** child — terminal children included — corresponds to
+an evidenced connected component of the parent's support (terminal status
+affects only whether a child is claimed, never whether it must be a
+component), the children partition the parent exactly, and each claimed
+child passes its own gates — the split's productivity *is* the evidenced
+separation, and the record names the reason-class that licensed it. A
+fragmentation whose pieces are not the support's connected components is
+not this split and takes the ordinary predicate. Because this path grades
+on topology rather than held-out loss, it is **discovered on the full
+parent** — the holdout restriction exists to protect loss grading and does
+not apply here — and the exact-partition check runs on the full parent,
+validation triangles included, so lineage stays exact. Triangles outside
+every inlier component (outliers) attach deterministically to the
+dual-graph-nearest component (quantized distance, ties by the 007 §2.3
+idiom) and are enumerated on the record; a set with no adjacency to any
+component forms one named residual child — every source triangle lands in
+exactly one child.
+
+New declared thresholds, each `{value, rationale}` through
+`_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,
+the split explains noise re-partitioned, not structure), `split_min_improved_fraction`
+(default 0.5 — a split justified by one flattering sliver while half the
+parent stays unexplained is the confetti mechanism by construction),
+`split_min_children_explained` (default 0.5, same rationale applied to the
+wrong-kind class), `split_boundary_cost` (default 0.05 per unit boundary
+ratio — small, but nonzero so boundary manufacture is never free),
+`split_validation_fraction` (default 0.25 — enough blocked area to grade
+against without starving the fit; blocked, not random, per §10.3's argument).
+Defaults are declared starting points to be re-derived against the first
+post-splitter census, and the record carries whichever value ran.
+
+`REGION_FLAGS` grows the closed set: `terminal-insufficient-evidence`
+(carrying the rejection token). `split-unproductive` keeps its name, now
+meaning T4 under the aggregate predicate.
+
+### A.2 Partition lineage and invalidation — a first-class contract (finding 3 — accepted; missing decision 8, decided)
+
+This section is **shared infrastructure**: 004's `plan-decomposition`
+(interface-split refinement) and 003's H audit consume it by reference —
+design -004 §A.2 and the scoreboard cite this section and restate nothing.
+The region tree gave partition identity; nothing yet said what happens to
+evidence derived from a terminal that is later refined (fits, covariances,
+held-out and Moran verdicts, relationships, datum contributions, coverage
+claims, cached reconstruction decisions). The review's failure scenario — an
+accepted board plane split into base + interface strips whose child inherits
+a covariance computed over triangles it no longer contains — is exactly the
+kind of silent semantic rot 010's hash chain does *not* prevent: hashes
+protect artifact identity, not meaning after a partition mutation.
+
+**The lineage model** (immutable):
+
+```text
+source_triangle_id
+    -> partition_version
+        -> terminal_region_id
+            -> owner_id                    {base | thing-k | interface-j | residual}, assemblies only
+                -> fit/plan/emission disposition
+```
+
+**The rules:**
+
+1. Every partition mutation (split, interface-split, peel removal) creates a
+   new `partition_version`, recorded in the stage record.
+2. Every child carries its parent's id and its exact source-triangle subset
+   (ranges over the permutation, as in PR 1).
+3. A parent's fit is **never** inherited as an accepted child fit.
+4. Every non-interface child is re-fit and re-gated under its own support.
+5. Relationships, datum-frame contributions, and program claims computed
+   against a replaced node are invalidated — marked
+   `invalidated-by-partition` with the version that did it — and recomputed
+   or dropped, never silently retained.
+6. Every consumer (coverage, program, scoreboard, assignment record) cites
+   the exact `partition_version` it consumed; a version mismatch is a
+   refusal, the same shape as `dump-hash-mismatch`.
+7. Inferred surfaces (virtual closure caps, inferred base footprints —
+   design -004 §4.6) live in a separate **derived-geometry ledger** and never
+   enter original-area conservation.
+
+`invalidated-by-partition` joins the closed vocabulary. This contract is the
+substrate that makes 003's H rule enforceable (silently-unclaimed = 0, exact,
+by triangle identity — 003 §1.5 amended) and the precondition for 004's PR
+C-4 (canonical order, review file §2, step 7). Missing decision 7 (where
+decomposition sits relative to frame/relationships) is decided in design
+-004 §A.2 *on top of* this contract: whatever ran earlier against a replaced
+partition version is invalidated by rule 5, so the ordering question loses
+its sting — it becomes a cost question, not a correctness one.
+
+The same argument settles **PR 0b's records** (§A.6, which the canonical
+order runs before the region tree and the peels): they are **provisional by
+construction** — each cites the `partition_version` it ran against, rule 5
+invalidates and recomputes them on every subsequent partition mutation, and
+rule 6 means the scoreboard and every other consumer accept only records
+citing the current version; a stale relationship is a version-mismatch
+refusal, never silently consumed. Running the rewrite early therefore costs
+recomputation, never correctness.
+
+### A.3 Separation certificates on cross-cut boundaries (finding 8 — accepted)
+
+§4.2's claim that the two label sources "share no failure mode" is true for
+the axial/planar families and **false by construction for the lateral
+super-cell**: the §2.1 fix deliberately removed station from lateral labels,
+so lateral and ambiguous-family surfaces are protected only by the local
+dihedral CC — a tangent plane/cylinder transition, adjacent cylinders joined
+by a smooth fillet, or two vertical faces bridged by scan waviness can
+percolate there with no cell barrier. Flush same-station surfaces and oblique
+(45°) faces that fall into the ambiguity family are further shared-failure
+cases. The measured PCB top/bottom split stands (station cells genuinely
+separate those faces — survived-attack 3), but the design must say *which*
+protection each boundary actually had:
+
+- Every produced boundary records a **separation certificate**:
+  `separation_basis ∈ {local, cell, both}`.
+- `both` is strong; no further check.
+- `cell`-only requires a joint-fit comparison across the boundary before the
+  two sides may be claimed separately.
+- `local`-only inside a lateral super-cell is **not percolation-protected**:
+  when the containing cell's joint fit rejects, the proxy-distance refinement
+  splitter (§4.3) **must** run there. This moves the proxy refinement for
+  mixed lateral cells from PR 5's conditional census gate into the
+  correctness path: it ships in the PR 3/4 cycle (canonical order step 5).
+  PR 5's remaining scope (HFP merge, gate (b); standalone grower, gate (c))
+  keeps its census gates.
+- A child boundary with neither an observed crease nor a statistically
+  decisive competing-model split cannot license separately *emitted*
+  features; the two sides stay one claim with the certificate recorded.
+
+### A.4 The correlation model, made non-circular (finding 9 — accepted; missing decisions 5 and 6, decided)
+
+§4.4/PR 4 as written estimated the correlation length from **each candidate's
+own residual semivariogram** — the candidate helping define its own null. The
+failure is concrete: a bowed sheet fitted as a plane has a broad systematic
+residual trend; the semivariogram reads that trend as a long correlation
+length; large bootstrap blocks then normalize away the structure Moran exists
+to reject. PR 4 is respecified:
+
+- **One frozen, candidate-independent correlation record per scan (or per
+  regime), from a preliminary calibration phase.** The calibration
+  population is selected **without any correlation-sensitive gate**: small
+  regions passing support floors and a raw residual-magnitude cut only —
+  Moran, held-out and every other consumer of the record play no part in
+  selecting it, so the record never conditions on the null it defines. (The
+  443-plane population on this part is the measured face of what that
+  selection yields — locally flat patches whose high-passed residuals are
+  noise samples, the §2.1 self-correction argument, now load-bearing here.
+  Their small extent bounds the *observable* range; where the sill is not
+  reached within it, the record refuses rather than extrapolates — the
+  `correlation-model-unidentified` outcome below — so small-patch selection
+  can under-observe long-range structure but never silently understate it.)
+  Directional empirical variograms; under anisotropy the **conservative
+  maximum** range is used. The record `{range(s), sill, source-region ids,
+  estimator params, hash}` is **frozen at the end of the calibration phase,
+  before any candidate acceptance**, and cited by every consumer — the
+  phase ordering is what makes PR 4 implementable on a new scan with no
+  prior accepted population.
+- **All four correlation-sensitive consumers read the same record** (decision
+  6: yes, one length): (1) Moran bootstrap block size; (2) held-out block
+  separation — the fixed ≈ 8 ℓ_med scale of 007 §10.3 is replaced by the
+  measured range where a record exists (007 flags its own AR(1) inflation as
+  approximate; this is the upgrade it anticipated); (3) covariance /
+  effective-sample-size inflation (replacing the lag-1 AR(1) ρ̄ of 007 §7.3
+  when the record exists); (4) relation and snap uncertainty through the
+  inflated covariances.
+- **Deterministic block construction** (decision 5): blocks are the point
+  sets of octree cells at the smallest level whose cell edge ≥ the recorded
+  range; block resampling uses the stage RNG under the content-addressed
+  seed (KTD-8); **the primitive is refit inside every bootstrap replicate**
+  — otherwise the null excludes parameter-estimation effects and is too
+  narrow.
+- **`correlation-model-unidentified`** (new closed-set token): the variogram
+  reaches no stable sill, or the source population is too small. The
+  affected candidates terminate in the insufficient-information class (T3,
+  §A.1) rather than being judged under a null the data cannot calibrate.
+
+PR 4 remains merged into PR 3's cycle — the addendum's pivot already forced
+that; this amendment changes what PR 4 builds, not when.
+
+### A.5 Datum bootstrap: scope decided (finding 10 — accepted with modification; missing decision 4, decided/split)
+
+**Decision: declared initial-domain limitation.** Orthogonal-datum scans are
+the supported initial domain of PRs 1–4. A scan on which the bootstrap ladder
+(§4.3) recovers no orthogonal frame terminates with the named refusal
+**`segmentation-datum-unavailable`** (renamed from `datum-unavailable` — see
+§A.7) and flows to the single-body path exactly as a refused segmentation
+does today. PR 5 gate (c) stands unchanged as the designed escalation: the
+first observed `segmentation-datum-unavailable` part licenses the standalone
+proxy grower. Rationale, per review file §4.1: both measured fixtures are
+strongly datum-oriented; a no-datum splitter shipped now would be unmeasured
+code with no fixture to prove its claim against, violating §9's "a claim
+without its number does not merge."
+
+**Datum lifecycle contract** (the decided half of missing decision 4):
+
+- The global datum is **frozen across peel passes**. Stations are
+  re-estimated on the residual each pass (unchanged), and each pass's
+  station set is versioned in the record beside the `partition_version` it
+  produced — region identities must never depend on extraction order
+  through an unversioned station drift.
+- Datum acceptance floors, declared: ≥ 2 independent normal families
+  separated by ≥ `datum_min_family_separation_deg` (default 45°, rationale:
+  below that, "independent" families are one family with spread); family
+  evidence spatial dispersion ≥ `datum_min_dispersion` (default 0.25 of
+  extent, rationale: a datum built from one corner of the part is that
+  corner's datum); winner–runner-up confidence margin follows 007 §9's
+  z-margin idiom.
+- **Open, owner seg PR 3:** contamination/background handling (pedestal or
+  table planes dominating the object datum; scan-texture patches read as
+  stable families). Registered, not silently missing.
+
+### A.6 Relationships: PR 0b, class semantics, hard budgets (finding 14 — accepted with modification; missing decision 25, decided)
+
+§3.5 already ordered the rewrite ahead of the splitter. The measured 2.13 GB
+program artifact (v0.12.0 baseline, review prompt addendum) moves it earlier
+still: **the rewrite is PR 0b in the canonical order** — before the
+region-tree PR, whose gates re-run the Dig-Next-2 artifact set and would
+otherwise re-materialize multi-GB programs on every check.
+
+- **Class formation, named** (the §4.5 gap): equivalence classes form by
+  **complete linkage** — every implied pair within the class deviates by
+  less than the declared window, and the class record carries a
+  maximum-pairwise-deviation certificate — or by a **joint shared-parameter
+  fit** in which every member passes its own §8.4-style rollback gate.
+  Union-find over pairwise "within tolerance" edges is banned (chaining
+  makes implied pairs unreconstructible). Only under one of these two is
+  `not-omitted` a valid disposition; anything else is `not-tested` or
+  contested, exactly as §4.5's two classes demand.
+- **Hard budgets, declared before allocation** (each `{value, rationale}`):
+  `max_relationship_records` (default 20,000 — ~20× the expected ~10³
+  post-rewrite class count, two orders below the measured 104,014
+  pathology); `max_relationship_bytes` (default 50 MB serialized — jsonl
+  streaming bounds peak memory but not artifact size, and 156.6 MB → 2.13 GB
+  is the measured growth curve being cut); `max_planning_rss_mb` (default
+  2,048 — the planning stage must run on the host that runs it today).
+  Exceeding any budget refuses **`relationship-budget-exceeded`** (new
+  closed-set token) *before* allocation, with the census of what would have
+  been proposed. A budget refusal is a modelling-error signal, never a
+  licence to fall back to the pair loop.
+
+### A.7 Vocabulary renames applied (review collision table)
+
+Normative from this amendment forward; existing artifacts carry the old keys
+until the named PR migrates them, and the migration is recorded, not silent:
+
+| Old (in this doc) | New | Migration |
+| --- | --- | --- |
+| `datum-unavailable` | `segmentation-datum-unavailable` | seg PR 3 (the token's birth PR) |
+| `min_feature_size` as station peak separation (§4.2) | `min_station_separation` (initialized at the declared 1.6 mm, same rationale) | seg PR 3; `fit-spec.json` keeps `min_feature_size` for 007's resolvable-scale sense until 007's own rename lands |
+| `unclaimed_components` (diagnostic population) | `unclaimed-surface-component` | first PR that touches the coverage record schema (PR 1) |
+
+007's `min_feature_size` → `min_resolvable_surface_scale` and 004's
+thing-support floor → `min_thing_support_extent` are those documents' rows;
+see review file §3.
+
+### A.8 Sequencing superseded
+
+§6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to the
+canonical cross-lane order in `docs/reviews/2026-08-20-oracle-design-review.md`
+§2: PR 0a (non-vacuity gate, emission lane) and PR 0b (§A.6) precede
+everything here; the amended split licence (§A.1) is design-complete before
+the region-tree skeleton lands; the lineage contract (§A.2) ships *inside*
+the region-tree PR; cross-cut + correlation model remain one shipment with
+§A.3's certificates and the lateral-cell proxy refinement. PR contents in §6
+are otherwise unchanged.

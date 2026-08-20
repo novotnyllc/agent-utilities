@@ -53,6 +53,60 @@ not merely approaches it.
 Module paths below are relative to
 `plugins/agent-utilities/skills/fusion-parametric-design/`.
 
+**Review incorporation (2026-08-20).** The external design review preserved at
+`docs/reviews/2026-08-20-oracle-design-review.md` returned REVISE BEFORE
+IMPLEMENTATION, with this document's ontology as its first P0. The accepted
+findings are folded in below: §0 (the four-concept ontology, finding 1), §4.1
+(the licence split, finding 6), §4.6 (virtual closure, finding 7), §4.7
+(placement observability and instancing, finding 12), R5 (lateral contact,
+finding 13), R4/§7 (the C denominator, finding 11.3), and Amendment A at the
+end (decided items, renames, sequencing). Passages the amendments supersede
+are marked in place.
+
+---
+
+## 0. The object ontology — four concepts, never collapsed
+
+The review's central attack stands: this design as first written moved
+directly from a surface partition to components-and-occurrences while
+defining its goal as "distinct physical things," and those are not equivalent
+propositions. The measured face of the attack is any injection-molded lid:
+integral bosses and ribs detach at a narrow contact band, meet it along
+closed curves, and reconstruct independently — satisfying every
+`separable-at-interface` condition — while being features of one physical
+part. No held-out comparison can resolve it, because both readings explain
+the observed exterior geometry. So the design is **rewritten around
+componentization as an editing decomposition**, with physical thinghood a
+strictly stronger, optional claim. Four concepts, each with the exact claim
+it supports:
+
+| Concept | Claim supported | Evidence bar |
+| --- | --- | --- |
+| **`surface-region`** | these triangles share a geometric model | a gated fit (the segmentation lane's product) |
+| **`geometric-subobject`** | the exterior surface admits a stable separable partition here | boundary/separability evidence + partition stability + exact ownership + closure accounting (the C1 partition licence, §4.1) |
+| **`physical-thing`** | independent-object evidence exists **beyond** geometric separability | an independent channel: an observed gap or seam, disconnected source topology, a mutually occluding boundary, a uniquely evidenced assembly interface, or an explicit caller declaration |
+| **`delivery-component`** | the output policy chooses a Fusion component as an editing unit | the C2 delivery licence (§4.1) |
+
+Rules that follow, binding on every stage and record below:
+
+1. A geometric subobject may become a Fusion component; its status is
+   **`componentized-geometric`**, never `physical-thing-evidenced`, unless an
+   independent-channel item above is on the record. "Base and subobject both
+   reconstruct" is **not** that channel — it is the definition of geometric
+   separability, restated.
+2. Both statuses join the closed component-status vocabulary (§2 item 9);
+   the browser-tree note and the census report them distinctly, and the
+   scoreboard's C cell counts them distinctly (003 §1.4 amended: the
+   numerator's claim level is named).
+3. The product story survives intact — an editing decomposition of a fused
+   scan into placed, statused components is the deliverable and still
+   exceeds the documented commercial bar — it just stops asserting
+   physics it has not measured. A user who wants the bosses as components
+   gets them, labelled as what the evidence supports.
+4. Every refusal and licence in this document is re-read under this table:
+   "thing" below means *candidate geometric subobject* at detection time,
+   and its post-licence status names which rung it actually reached.
+
 ---
 
 ## 1. Verified facts vs assumptions
@@ -146,7 +200,10 @@ all of it — no defect found in any item:
 4. **Per-DOF placement evidence, with `rotation-unconstrained` recorded** and
    a canonical representative chosen by a declared deterministic rule,
    labelled `canonical-not-observed` (Fusion needs a full rigid transform;
-   the ambiguity lives in the record and the component note).
+   the ambiguity lives in the record and the component note). *[Formalized
+   and extended in §4.7: information matrix, nullspace, stabilizer group,
+   discrete alternates, per-mode evidence class — the Boolean vector alone
+   is superseded.]*
 5. **Components + occurrences, never bodies.** The occurrence transform is
    the placement record — the one datum a fused scan uniquely provides over
    separately-scanned parts, and the datum the commercial workflow throws
@@ -154,7 +211,9 @@ all of it — no defect found in any item:
 6. **Instancing licensed by fitted-parameter agreement within joint
    uncertainty plus aligned mesh deviation**, with `instance-breakout`
    revocable per occurrence; patterns are claims, emitted only when a lattice
-   fit passes a declared gate (`pattern-not-claimed` otherwise).
+   fit passes a declared gate (`pattern-not-claimed` otherwise). *[Superseded
+   in form by §4.7: pairwise tolerance is nontransitive; classes form by
+   complete linkage or joint class fit, per tier.]*
 7. **The five-stage ladder C1→C5** (partition record → placed reference-mesh
    components → per-thing reconstruction → instancing/patterns → attachment
    semantics), with **C2 as the first shipped headline**. Kinematic joints
@@ -219,8 +278,10 @@ partition onto owner classes {base, thing-k, interface-j, residual}, where
   the same tree the recursion mechanism uses. No second data structure; the
   assignment is a projection of the tree, generated and checked in the same
   stage.
-- **Where segmentation refused** (no accepted base face: `datum-unavailable`,
-  or the mega-group still terminal-unfitted), decomposition cannot evaluate
+- **Where segmentation refused** (no accepted base face:
+  `segmentation-datum-unavailable` — renamed per 002 §A.7, this consumer
+  updated with the migration — or the mega-group still terminal-unfitted),
+  decomposition cannot evaluate
   either its trigger or its license. Verdict:
   `componentization-refused: no-accepted-base`, assignment degenerates to
   nothing (no assembly layer emitted), and the part flows down the
@@ -309,7 +370,7 @@ layers, cheapest first:
    reading only when the comparison is decisive by its declared margin, or
    the spec declares `decomposition: prefer-things` (geometry's policy
    escape, kept). When both fit and neither is decisive:
-   `thing-boundary-ambiguous` at the top level — the monolithic model ships,
+   `decomposition-model-ambiguous` at the top level (renamed per §A.5) — the monolithic model ships,
    with the candidate partition enumerated beside it, never silently chosen.
 
 The floor must be set (and regression-tested) so the 11 production parts do
@@ -344,33 +405,58 @@ Reconciled, with the measured evidence behind each floor:
   the span gate per design -002 A4, still an assumption until the
   post-cross-cut fit record exists). Through-hole parts refuse
   `interface-pierced`; complex shells refuse per-thing; each named.
-- **The ~40 denominator itself is `unmeasured` (F7) and the first C1 run
-  publishes the evident-things census** — the scoreboard's C-cell
-  denominator becomes a measured number on the same run that first populates
-  its numerator. Until then every prediction above is [I]-labelled and
-  falsifiable by that run.
+- **The ~40 denominator itself is `unmeasured` (F7) — and the detector being
+  scored can never produce it** (review finding 11.3: if the detector finds
+  8 and publishes a census of 8, C reads 8/8 — circular by construction).
+  The first C1 run still publishes its census, but as the *numerator-side*
+  count of what was found. The denominator comes independently: for
+  acceptance fixtures (Dig-Next-2 first) a **human-reviewed evident-things
+  table** authored from inspection of the scan/photos *before* PR C-4's
+  acceptance run, committed with provenance; on ordinary unlabeled scans
+  `C = unmeasured`, with the raw counts always reported — candidates,
+  licensed geometric subobjects, physical things evidenced, component
+  definitions, occurrences (per §0's distinction). Until the reviewed table
+  exists every prediction above is [I]-labelled and falsifiable by that run.
 
 Per-stage acceptance numbers for the Dig-Next-2 fixture are consolidated in
 §7.
 
 ### R5 — Laterally-touching things: the merged pseudo-thing, named, is the honest disposition
 
-**Ruling: confirm the geometry expert's disposition, delivered through the
-product expert's vocabulary; record it as a permanent limit unless capture
-improves. No overrule — no candidate mechanism stays inside the evidence
-rules.**
+**Ruling (amended 2026-08-20, review finding 13): the merged pseudo-thing
+stays the honest default, but the original "no fix exists" claim was too
+broad and is narrowed to the case that is actually information-theoretically
+non-identifiable.** The permanent limit is precisely:
 
-When two or more things touch laterally, the fused sub-surface contains no
-evidence of the internal boundary — not a curve, not a band. Every k-way
-partition closes with invented internal faces; several may fit equally.
-Therefore:
+> the observed exterior surface is compatible with multiple internal
+> partitions, and no additional evidence or declared prior distinguishes
+> them
+
+— renamed **`lateral-interface-unobserved-and-partition-nonunique`** (the old
+blanket name over-claimed). It is *not* true for all laterally touching
+things. Evidence that can distinguish partitions, each already inside the
+evidence rules: an observed crease or gap; a T-junction or occlusion contour;
+two independently supported primitive continuations that determine a
+**unique** hidden contact; a matching complete instance elsewhere on the
+part; a second view exposing part of the interface. The design already
+permits an unobserved bottom as `inferred-by-contact`; it now consistently
+permits a **uniquely determined lateral completion** as
+**`inferred-by-continuation`** (new evidence class, closed set), under the
+same discipline: the inferred interface area separately enumerated in the
+derived-geometry ledger (002 §A.2 rule 7), no scan-deviation claim on that
+area, alternative partitions tested, and refusal the moment more than one
+completion survives. And per §0: even a unique geometric split licenses a
+*geometric decomposition* (`componentized-geometric`), never physical
+identity by itself.
+
+When the limit genuinely applies — no distinguishing evidence at all:
 
 - One separable sub-surface with no internal-split evidence ships as **one
   merged pseudo-thing per contact cluster**, a real component, placed and
   measurable, named as what it is: `thing-cluster-03 [merged:
   boundary-unobserved]`, status `recognized-reference` (or higher if the
   merged surface reconstructs), with the contact-cluster membership question
-  carried as `thing-boundary-ambiguous` in its record.
+  carried as `lateral-interface-unobserved` in its record (renamed per §A.5).
 - Congruence against instances elsewhere on the board may *nominate* a split
   (two footprints of a known class); nominations are recorded as proposals
   with their evidence, never asserted. A prior can nominate; only a fit can
@@ -447,7 +533,11 @@ structure without ever changing it.**
   running it always is the cost of not missing a whole input class, and the
   census line it produces (`things: 0, decomposition-not-triggered` plus its
   own component count) is what the production corpus records when it finds
-  nothing.
+  nothing. **Per §0: `separable-at-interface` nominates a *geometric
+  subobject* candidate and nothing stronger — an integral boss satisfies
+  this signal too, which is exactly why the resulting component's status is
+  `componentized-geometric` unless an independent physical-thing channel is
+  on the record.**
 - **Candidates,** from evidence the pipeline already computes (F4):
   island-chain detection over `classify_loops` output (footprint recurrence
   under `congruence`, concentric within pooled sigma, across contiguous
@@ -458,11 +548,31 @@ structure without ever changing it.**
   cross-check between them recorded as disagreement, never silently
   reconciled — the same two-source no-shared-failure-mode principle as the
   cross-cut splitter.
-- **License:** the base reconstructs with thing sub-meshes removed AND each
-  claimed thing's sub-mesh reconstructs under the same gates. Fitting
-  partitions beyond one → `thing-boundary-ambiguous`, all recorded.
-  **Both halves are statements about sub-meshes, so the stage that evaluates
-  this license is the stage that extracts them.** The first draft put
+- **Licences — three, split by what each stage actually claims** (review
+  finding 6: the single licence as first written contradicted the
+  reference-first ladder — a clearly separable connector shell with
+  unreconstructable freeform detail could never become a thing, so C2 could
+  never place it even as a reference mesh, defeating C2's main value):
+  - **C1 partition licence** (claims a *geometric subobject*, §0):
+    boundary/separability evidence (the two detection signals), partition
+    stability under the declared perturbations, exact triangle ownership
+    under the assignment invariant, and closure accounting per §4.6. Fitting
+    partitions beyond one → `partition-nonunique` (renamed per §A.5), all
+    candidates recorded. **Reconstruction is not part of this licence.**
+  - **C2 delivery licence** (claims a *delivery-component*): the source
+    triangle slice re-hashes to its recorded digest and the placement is
+    reproduced exactly as a reference mesh. Failure to reconstruct lowers a
+    component's status to `recognized-reference`; it never erases an
+    otherwise-licensed component boundary. The base itself may remain a
+    reference component at C2.
+  - **C3 reconstruction licence** (upgrades status): the existing primitive
+    or parametric gates pass on the sub-mesh, with §4.6's virtual closure in
+    force. This is where "the base reconstructs with thing sub-meshes
+    removed AND each claimed thing's sub-mesh reconstructs" now lives — as
+    the *upgrade* gate, per thing, not as the admission ticket.
+  Sub-mesh extraction stays in the stage that needs it first: C1's stability
+  and closure accounting are statements about sub-meshes, so the stage that
+  evaluates the partition licence is the stage that extracts them. The first draft put
   extraction in PR C-5 while C1 shipped in C-4, which left C-4 unable to
   evaluate its own license, unable to claim a single thing, and unable to
   reach its ≥ 8 acceptance floor. Extraction moves into C-4 (§6): it is
@@ -517,11 +627,119 @@ what it does not permit is recorded, not worked around silently.
 
 | Stage | Ships | Fusion surface | Gated by |
 | --- | --- | --- | --- |
-| C1 | assignment record, evident-things census, complexity witness, **thing sub-mesh extraction** (the license is evaluated on the sub-meshes, §4.1) | none (extraction and the license's reconstruction passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
+| C1 | assignment record, **detection census** (numerator-side; the human-reviewed evident-things *table* is a separately authored artifact, R4 — never this census), complexity witness, **thing sub-mesh extraction** (the partition licence is evaluated on the sub-meshes, §4.1: extraction, stability, ownership, closure accounting — **no reconstruction**; that gate is C3's) | none (all C1 passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
 | C2 | grounded base + N placed reference-mesh components + ≤1 residual component | components, occurrences, `transform2`, mesh bodies | C1 + PC-1/2/7 (PC-9/10 for its report) |
 | C3 | per-thing status upgrades reference → primitive → parametric; two-level coverage; R3 layers 2–3 | geometry inside existing components; structure untouched | C2 + PC-11; parametric prisms also on 2.5D lane PRs 4–6 |
 | C4 | instancing verdicts + occurrences; lattice-gated patterns | `addExistingComponent`, pattern features | C3 + PC-3/8 |
 | C5 | rigid as-built joints / rigid group; grounded-base semantics | `AsBuiltJoints`, `RigidGroups`, `isGrounded` | C4 + PC-4/5/6 |
+
+### 4.6 The virtual closure surface — the contract PC-11 probes, stated as an algorithm's input (review finding 7; missing decisions 14, 15 and 18, decided)
+
+"Closure is supplied by the interface record, never by fabricated triangles"
+was a principle without a representation. Downstream, 001's loop ladder
+*requires* a closed, consistently wound mesh and a positive signed volume —
+its manifold check refuses anything less — and a thing sub-mesh cut off a
+base is open at its contact loop **by construction**. The measured reality:
+all 46 slabs on Dig-Next-2 are `slab-section-open`. Without this contract,
+scan fit coverage can rise while RC stays zero. The contract:
+
+- **A virtual closure surface is transient** — generated on demand from the
+  licensed contact plane and the recorded cut loop; **never added to the
+  source mesh**, never serialized as triangles into any dump.
+- Evidence class **`inferred-by-contact`** (bottom caps against an observed
+  base face) or **`inferred-by-continuation`** (R5's uniquely determined
+  lateral completions); the class rides every derived quantity. **v1
+  representation limit:** this contract represents closures generated from
+  a licensed plane and recorded cut loop, so `inferred-by-continuation` is
+  licensed in v1 only for **planar** completions; a uniquely determined
+  *nonplanar* completion has no closure surface this contract can generate
+  — it refuses (the R5 merged-pseudo-thing default stands) and a
+  continuation-derived surface representation is a registered follow-up
+  (owner: PR C-6), not smuggled in here.
+- **Used for**: topology (manifold check passes with the cap in place),
+  winding inheritance, section closure, event creation at the cap's station,
+  and volume. **Excluded from**: scan-deviation grading and original-area
+  conservation — it lives in the derived-geometry ledger (002 §A.2 rule 7).
+- **Carries uncertainty**: the interface plane's fitted sigmas, the cut
+  loop's polyline residuals, and the placement uncertainty of the thing it
+  closes; derived events cite them.
+- **The base side is symmetric** (decision 15): removing a thing leaves an
+  unobserved footprint in the base's face. If the base model fills it, that
+  fill is `inferred-by-contact`, enumerated separately, never graded against
+  scan.
+- **Globally open captures** (decision 18 — boundaries unrelated to any
+  component interface, e.g. the scan's 158 boundary edges): v1 policy is the
+  hard refusal **`capture-boundary-unclosed`** (new closed-set token). A
+  locally licensed closure procedure for capture boundaries is a registered
+  follow-up (owner: emission lane), not smuggled in here. 002's segmentation
+  and this design's componentization do not, by themselves, close a capture
+  — this token is what says so by name. **Scope:** the token is
+  stage-scoped to closure-dependent operations. C1 partition and C2
+  reference-mesh delivery proceed — neither needs a closed mesh — while C3
+  per-thing reconstruction and every slab/loop-ladder operation refuse with
+  it. The partial record is the ordinary one: affected components stay
+  `recognized-reference` with the token recorded, and stage gates and
+  acceptance claims count them exactly there, never as reconstruction
+  failures of some other name.
+
+### 4.7 Placement observability and instancing, formalized (review finding 12; missing decisions 19, 20, 21 and 26, decided)
+
+The per-DOF Boolean vector of §2 item 4 was the right instinct and an
+insufficient representation: it cannot express a cylinder's continuous
+rotational stabilizer, a sphere's full one, a square component's discrete 90°
+ambiguity, coupled translation/rotation uncertainty, permutation ambiguity
+among identical things, or a near-symmetric canonical axis that flips under
+noise. The pose record becomes:
+
+- a canonical local frame (from the thing's own datum, deterministic rule
+  declared);
+- the world occurrence transform, with the convention (decision 19) fixed as
+  `local_vertices = inverse(T_occurrence) · source_world_vertices`, and a
+  round-trip requirement: the occurrence transform must reconstruct the
+  source-world placement within declared `placement_roundtrip_tol` (default
+  1e-6 · extent, rationale: numerically meaningful against float64 transform
+  composition, far below any measured placement uncertainty);
+- a **pose information matrix** with its **rank and nullspace** — the
+  information matrix is the one serialized form (decision 20 sharpened): its
+  nullspace *is* the set of unconstrained directions, which is the
+  observability claim the record makes. A covariance may be carried as a
+  derived convenience, never as the source of the rank/nullspace fields — a
+  covariance nullspace means the opposite (zero variance), and unbounded
+  modes have no finite covariance representation at all. The six-DOF
+  serialization conventions — tangent basis, coordinate frame, perturbation
+  side, translation/rotation scaling, numerical rank cutoff — are **PR
+  C-5's pose-record schema contract to declare**; registered here as that
+  PR's owned implementation item, not silently missing;
+- a **continuous stabilizer group** (none / axis-rotation / full-rotation);
+- **discrete alternate transforms** (the 90° class and its kin), enumerated;
+- an **evidence class per constrained mode**, closed set: `observed`,
+  `relation-inferred`, `contact-inferred`, `canonical-only`,
+  `unconstrained`.
+
+The occurrence-move editability check proves Fusion editability; it does
+**not** prove the initial semantic frame was observed — the record's
+per-mode evidence classes are what carry that claim, and `canonical-only`
+modes stay visibly canonical in the component note (consensus item 4's
+labelling, kept).
+
+**Instancing** (decision 21): "fitted parameters agree within joint
+uncertainty" is pairwise and nontransitive; union-find over such edges is
+banned (the same rule as 002 §A.6). Instance classes form by **complete
+linkage or a joint class fit**, contested members enumerated, with
+tier-specific licences:
+
+| Instance tier | Required agreement |
+| --- | --- |
+| reference mesh | observed mesh congruence on compatible visibility masks; same interface evidence class |
+| primitive | joint primitive fit; support, span, and a placement-equivalence class |
+| parametric | same reconstruction-program topology and licensed parameter vector |
+| pattern | instance licence **plus** a separately gated lattice fit (unchanged) |
+
+**Rigid grouping is a delivery policy, not evidence** (decision 26): C5's
+rigid group / as-built joints are labelled **`pose-locked-for-delivery`**
+unless attachment evidence exists — a static scan establishes current
+relative pose, not zero physical degrees of freedom. `motion-not-evidenced`
+stands beside it, unchanged.
 
 ---
 
@@ -556,6 +774,14 @@ what it does not permit is recorded, not worked around silently.
 ---
 
 ## 6. PR sequence
+
+**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
+`docs/reviews/2026-08-20-oracle-design-review.md` §2 — PR C-1 is itself the
+step that lands the §0 ontology in the schema (the bootstrap that satisfies
+the prerequisite; nothing precedes it on this lane), and C-2/C-3 require
+C-1; C-4 only after 002 §A.2's lineage contract is implemented; slab tracks
++ virtual closure (001 §A, §4.6) before C-6. PR contents below stand,
+amended per §0/§4.1/§4.6/§4.7.]**
 
 One worker, one PR at a time, tree green after each, each PR names the
 measured claim it must move **in scoreboard terms** (RC recognition
@@ -627,13 +853,27 @@ blocked PRs name their gate.
   property check (dropped region, double-assigned region, cluster with no
   chain, chain with no component).
 - **Size:** ~600–700 added (the extractor is ~150–200 of it).
-- **Fusion surface:** still none. Extraction and the license's reconstruction
-  passes are host-side; the stage ends at the existing pause with a record.
+- **Fusion surface:** still none. Extraction and the partition licence's
+  stability/ownership/closure passes are host-side (no reconstruction runs
+  here — that gate is C3's, per §4.1 as amended); the stage ends at the
+  existing pause with a record.
 - **Measured claim (Dig-Next-2, merged head):** assignment record with
-  ≥ 8 things (§7 C1 row); assignment coverage ≥ 0.80; every residual island
-  itemized; **the evident-things census published** — the scoreboard's C
-  denominator becomes measured (F7 retired). 11-part corpus: geometry
-  byte-identical; census lines additive (`things: 0,
+  ≥ 8 **licensed geometric subobjects** — the C-4 floor is geometric-only
+  (`componentized-geometric` candidates under the C1 partition licence, per
+  §0; "things" in this PR's prose means exactly that and nothing stronger);
+  assignment coverage ≥ 0.80; every residual island itemized; **the
+  detection census published** (numerator side; the C denominator comes
+  from the independent human-reviewed evident-things table, per R4 as
+  amended). The status-aware match census — `physical-thing-evidenced`
+  detections matched one-to-one to annotations, unmatched entries on both
+  sides enumerated — is published as a **detection metric** (recall against
+  the table), never as C: §1.4's numerator counts *emitted* Fusion
+  components with placement transforms, and this stage emits none, so C-4
+  moves no C value at any claim level; physical C is computed only after
+  matched detections have been delivered as placed components (C2, PR
+  C-5). A run may pass the geometric floor while headline C stays honestly
+  0. 11-part corpus:
+  geometry byte-identical; census lines additive (`things: 0,
   decomposition-not-triggered` + witness numbers).
 - **Risk:** δ mis-estimation (A4 — visible as band-area growth, a census
   number); detection under-count (the floor-8 acceptance fails → the run's
@@ -648,8 +888,17 @@ blocked PRs name their gate.
   sub-mesh extractor is C-4's, per §4.1; this stage consumes the sub-meshes
   and their recorded digests rather than producing them.)
 - **Size:** ~150–250 added.
-- **Measured claim (Dig-Next-2):** C cell moves 0 → 1 base + ≥ 8 placed
-  occurrences (§7 C2 row); every component's mesh slice re-hashes to its
+- **Measured claim (Dig-Next-2):** the C cell's **raw counts** move 0 → 1
+  base + ≥ 8 placed occurrences (§7 C2 row) — C1-licensed geometric
+  subobjects, delivered. `C-geometric` stays `unmeasured` unless an
+  independent reviewed table of evident *geometric subobjects* is added
+  (003 §1.4 — the physical evident-things table is the wrong denominator
+  for it, and the detector's own census would be circular), and headline
+  (physical) C stays 0 or `unmeasured` until `physical-thing-evidenced`
+  detections have been emitted as placed components and matched to the
+  reviewed evident-things table (003 §1.4; C-4 as amended) — this run
+  claims no positive C score at any claim level; every component's mesh
+  slice re-hashes to its
   recorded digest; occurrence-move check passes on ≥ 1 real thing; H: every
   non-thing square millimetre named (residual + below-support + interface
   band areas sum with the claimed areas to total mesh area — the
@@ -710,7 +959,9 @@ and the semantics, last because each is a claim on top of claims.
 Floors are acceptance (a run below the floor fails the stage's gate and the
 census must say why); bands are [I] predictions on record to be falsified.
 Denominator: ~40 distinct things assumed from visual inspection —
-`unmeasured` until the C1 census (F7), which is itself a C1 deliverable.
+`unmeasured` until the **independent human-reviewed evident-things table**
+exists (R4 as amended; authored before PR C-4's acceptance run, never by the
+detector being scored).
 
 | Stage | Acceptance floor | Prediction [I] | Also required |
 | --- | --- | --- | --- |
@@ -761,7 +1012,7 @@ position — C5's honest claim is whatever this shows).
 
 | item | status | licence to revisit |
 | --- | --- | --- |
-| Lateral-contact thing boundaries | **permanent limit** (R5): merged pseudo-thing per cluster, named | improved capture (partial-disassembly rescan) or a new evidence channel; not solvable inside current evidence rules |
+| Lateral contact, `lateral-interface-unobserved-and-partition-nonunique` (R5 as amended) | **permanent limit only when no distinguishing evidence exists**: merged pseudo-thing per cluster, named | distinguishing evidence per amended R5 (crease/gap, occlusion contour, unique `inferred-by-continuation` completion, matched instance, second view), improved capture, or a new evidence channel |
 | Through-hole parts (`interface-pierced`) | deferred, first follow-up | multi-patch interface design |
 | Kinematic joint inference | rejected (`motion-not-evidenced`) | motion evidence (multiple captures) |
 | Taxonomic naming ("capacitor") | deferred | a classification lane with its own evidence and refusals |
@@ -845,3 +1096,113 @@ PC-2 could. It runs first, in PR C-2, before any emitter code is written.
    PR C-4 ships a fit-remove-recurse loop; the mitigating shape argument
    (same procedure, evidence-licensed, no sensitivity escalation) mirrors
    design -002 §4.7 and should be recorded with it.
+
+---
+
+## Amendment A — external-review incorporation (2026-08-20)
+
+*Companion to the in-place revisions (§0, §4.1, §4.6, §4.7, R4, R5). Source:
+`docs/reviews/2026-08-20-oracle-design-review.md`. This section records the
+decisions that had no natural in-place home, the vocabulary renames, and the
+one open item this lane owns.*
+
+### A.1 Vocabulary additions (closed sets, field-scoped)
+
+The closed sets are **per field**, and PR C-1's malformed-record validators
+check each field against its own set — a token that is valid in another
+field's set is rejected in this one:
+
+- `claim_level` (§0's ontology rung): `componentized-geometric` |
+  `physical-thing-evidenced` | `residual` — the third value is the C2
+  residual component's level (it owns below-support and otherwise-unclaimed
+  geometry, licensed as neither a geometric subobject nor a physical
+  thing); `residual` never counts in any C numerator, and the field stays
+  mandatory on every component, the residual included.
+- `fidelity_status` (what was actually delivered — §4.1's C2/C3 ladder),
+  complete closed set: `recognized-reference` (the C2 floor) |
+  `recognized-primitive` | `recognized-parametric` — the reference →
+  primitive → parametric upgrade rungs of the C3 reconstruction licence,
+  enumerated in full so a validly upgraded component record is never
+  rejected by the validator or mislabeled as a reference.
+- `evidence_class`: + `inferred-by-continuation` (R5).
+- `refusal`: + `capture-boundary-unclosed` (§4.6).
+- `delivery_semantics`: + `pose-locked-for-delivery` (§4.7).
+- `lineage_state`: + `invalidated-by-partition` (inherited from 002 §A.2).
+
+Claim level and fidelity are **orthogonal fields, both always present** —
+§0's "status" statements set `claim_level`, §4.1's ladder statuses set
+`fidelity_status`, and the reference-first core case records both without
+discarding either (`claim_level: componentized-geometric`,
+`fidelity_status: recognized-reference`), so the browser, census and
+scoreboard can distinguish a geometric reference component from a
+reconstructed geometric component or an unlicensed reference.
+
+### A.2 Pipeline position vs frame and relationships (missing decision 7, decided; composition-table row 3 resolved)
+
+`plan-decomposition` runs **after `segment-fit` and before `frame-relate`**
+in 010's stage order. The global frame and every relationship proposal are
+computed against the **post-decomposition partition version**; anything
+computed against an earlier version is invalidated by 002 §A.2 rule 5, so an
+implementation that runs frame-relate early pays a recompute, never a
+correctness bug. C3's host-side reconstruction passes (the upgrade gate —
+C1 runs none, per §4.1 as amended) are an accepted transitional state under
+010's migration (010 M2–M3 move them in-Fusion; same records either way) — the review's "undecided" row is decided as:
+order fixed here, host/Fusion placement follows 010's migration schedule.
+
+### A.3 Interface mechanics (missing decisions 11, 12, 13 — decided)
+
+- **Contact-curve bootstrap (11).** Two passes. Pass 1: cut the dual graph
+  by the *plane-distance* band (non-base triangles within δ of the accepted
+  base face's plane); the boundary loops of the components that detach are
+  the **contact curves**. Pass 2 (authoritative): the interface band is
+  re-derived as the non-base triangles within δ of those curves (R1's
+  definition, now with its input defined); the pass-1 band is discarded.
+  Both passes and their δ derivations are recorded.
+- **Overlapping bands from multiple base faces (12).** A triangle within δ
+  of contact curves from two or more candidate base faces is owned by the
+  interface of the **nearest curve**, distance ties broken on quantized
+  values (007 §2.3 idiom); the contested set is enumerated in the interface
+  record, never silently resolved.
+- **Interface triangles at C2 (13).** Delivered inside the **base
+  component's mesh body slice** (the joint is physically continuous with the
+  base), while ownership in the assignment record stays `interface-j` — the
+  browser shows every triangle exactly once, the evidence never blends the
+  owner classes, and the deviation over band triangles still grades against
+  the joint (consensus item 2, unchanged). Ownership and delivery are
+  therefore **distinct identities with distinct digests**: the assignment
+  record's *ownership digest* hashes each owner's triangle set
+  (`interface-j` separate from `base`), while C2's *delivery digest* hashes
+  the delivered mesh slice per component (the base slice including its
+  interface bands). H audits ownership digests; C2's re-hash check audits
+  delivery digests; a change in either forces re-emission of the affected
+  component, and neither digest is ever derived from the other. Revisited
+  at C5 when joints give the band a semantic home; the revisit is
+  registered here so it cannot happen silently.
+
+### A.4 Open item (registered, not decided): stable thing-ID migration
+
+Missing decision 22. Region identity is content-addressed over triangle
+index sets, so any segmentation-boundary change changes the hash — but PC-10
+re-emission and user-rename preservation need ids stable across runs. A
+design note (candidate: stable ids assigned at first licence, carried
+through 002 §A.2 lineage links, with a declared match threshold for
+re-identification across partition versions) is **required in PR C-4 before
+PR C-5 relies on stable ids**. Owner: PR C-4.
+
+### A.5 Vocabulary renames applied (review collision table)
+
+| Old (this doc) | New | Notes |
+| --- | --- | --- |
+| `thing-boundary-ambiguous` (three senses) | `decomposition-model-ambiguous` (R3's both-fit, neither decisive), `partition-nonunique` (multiple fitting partitions, §4.1/R5), `lateral-interface-unobserved` (the evidence condition inside R5's renamed limit) | each use-site now names one sense; the R3 claim-rule's token is `decomposition-model-ambiguous` |
+| thing-support floor derived from `min_feature_size` (F9) | `min_thing_support_extent` (initialized from the same declared 1.6 mm, own rationale) | lands with PR C-1's schema |
+| `inferred-by-contact` doing double duty as lineage | evidence classes (`evidence_class`) and source lineage (`source_derivation` / `derived_from`) stay separate schemas | already the design's intent; now stated |
+
+### A.6 R3's comparison, tightened by finding 1
+
+R3's held-out comparison decides **model preference between two readings of
+the same surface**; under §0 it can promote a decomposition to
+*geometric-subobject* status only. It is never evidence of physical
+thinghood — the injection-molded-lid case defeats it by construction, since
+both readings explain the observed exterior. `decomposition-preferred-on-held-out`
+therefore licenses `componentized-geometric` delivery, and the physical-thing
+channels of §0 remain the only path to `physical-thing-evidenced`.
