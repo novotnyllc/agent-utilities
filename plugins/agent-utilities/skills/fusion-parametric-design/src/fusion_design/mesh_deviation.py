@@ -188,13 +188,12 @@ UNCLASSIFIED_MEANING = (
 )
 OMISSION_EXPLAINS_MEANING = (
     "The reconstruction's own tessellation reaches past the threshold from every scanned surface, "
-    "and no scanned vertex lies inside the reconstruction -- but it reaches no further than the "
-    "omitted detail this run also measured, and a rebuilt surface standing where an omitted "
-    "feature used to be reads exactly like that. The unsigned direction cannot separate the two, "
-    "so the omission is taken as the account of it and the numbers for both are recorded above. "
-    "What this does NOT establish is that there is no invented material *as well*: a part carrying "
-    "both, with the invention lying between scanned vertices, would look like this. Classifying "
-    "these samples against a closed source solid is what would settle it."
+    "and no scanned vertex lies inside the reconstruction -- and every one of those samples was "
+    "classified against the source solid by ray parity and lies INSIDE it. A rebuilt surface "
+    "standing where an omitted feature used to be is exactly that, so the omission this run also "
+    "measured accounts for all of them and none of them is invented material. Had one fallen "
+    "outside the source solid the run would have failed closed, which is what stops a large "
+    "omission masking a smaller invention beside it."
 )
 VERDICT_NOTE = (
     "These two numbers answer different questions and neither certifies the other. A small maximum "
@@ -343,6 +342,30 @@ def _median_edge_mm(vertices, triangles):
     return lengths[len(lengths) // 2]
 
 
+def _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
+    """Squared distance from a point to the three edges of a triangle."""
+    best = None
+    for sx, sy, sz, ex, ey, ez in (
+        (ax, ay, az, bx, by, bz),
+        (bx, by, bz, cx, cy, cz),
+        (cx, cy, cz, ax, ay, az),
+    ):
+        ux, uy, uz = ex - sx, ey - sy, ez - sz
+        length_sq = ux * ux + uy * uy + uz * uz
+        if length_sq <= 0.0:
+            t = 0.0
+        else:
+            t = ((px - sx) * ux + (py - sy) * uy + (pz - sz) * uz) / length_sq
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        qx = px - (sx + ux * t)
+        qy = py - (sy + uy * t)
+        qz = pz - (sz + uz * t)
+        value = qx * qx + qy * qy + qz * qz
+        if best is None or value < best:
+            best = value
+    return best
+
+
 def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
     """Squared distance from a point to a triangle, closed form.
 
@@ -359,6 +382,18 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
     acx = cx - ax
     acy = cy - ay
     acz = cz - az
+    # A zero-area facet is a *segment*, not a vertex, and a scan does carry
+    # them: two coincident corners, or three collinear ones. The region tests
+    # below decide on barycentric signs that a degenerate triangle does not
+    # have, and land on a corner -- for (0,0,0), (0,0,0), (2,0,0) queried at
+    # (1, 0.1, 0) that reports 1.005 where the answer is 0.1, which inflates a
+    # deviation into a false failure. Answered against the three edges instead,
+    # before any of that runs.
+    nx = aby * acz - abz * acy
+    ny = abz * acx - abx * acz
+    nz = abx * acy - aby * acx
+    if nx * nx + ny * ny + nz * nz <= 0.0:
+        return _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz)
     apx = px - ax
     apy = py - ay
     apz = pz - az
@@ -406,7 +441,7 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
         return qx * qx + qy * qy + qz * qz
     denominator = va + vb + vc
     if denominator == 0.0:
-        return apx * apx + apy * apy + apz * apz
+        return _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz)
     v = vb / denominator
     w = vc / denominator
     qx = px - (ax + abx * v + acx * w)
@@ -475,6 +510,76 @@ class _TriangleGrid(object):
                             self.buckets[key].append(offset)
                         else:
                             self.buckets[key] = [offset]
+
+    def encloses(self, x, y, z):
+        """Is this point inside the closed surface these triangles describe?
+
+        Ray parity along +x, over the grid's own cells so only the triangles in
+        the row are tested rather than every triangle in the mesh. The direction
+        is nudged off the axes because a ray through a shared edge or vertex is
+        counted twice or not at all, and a deterministic nudge makes that
+        vanishingly unlikely instead of merely rare.
+
+        Returns ``None`` when the answer cannot be trusted: an open surface has
+        no inside, and this is the one question where "probably" is not an
+        answer -- the caller fails closed on ``None`` rather than guessing.
+        """
+        direction = (1.0, 0.00013, 0.00007)
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
+        cell = self.cell
+        cj, ck = int(math.floor(y / cell)), int(math.floor(z / cell))
+        if not (low_j <= cj <= high_j and low_k <= ck <= high_k):
+            return False
+        candidates = set(self.oversized)
+        for i in range(max(int(math.floor(x / cell)), low_i) - 1, high_i + 2):
+            # One cell either side on the two off-axis coordinates, because the
+            # nudged ray drifts out of the row it started in.
+            for j in (cj - 1, cj, cj + 1):
+                for k in (ck - 1, ck, ck + 1):
+                    candidates.update(self.buckets.get((i, j, k), ()))
+        crossings = 0
+        for offset in candidates:
+            hit = self._ray_hits(offset, x, y, z, direction)
+            if hit is None:
+                return None
+            crossings += hit
+        return crossings % 2 == 1
+
+    def _ray_hits(self, offset, x, y, z, direction):
+        """1 when the ray from (x, y, z) crosses this triangle, else 0.
+
+        Moller-Trumbore. ``None`` when the ray grazes the triangle's plane or
+        passes within float noise of an edge, where the parity count would be
+        arbitrary.
+        """
+        a = self.triangles[offset] * 3
+        b = self.triangles[offset + 1] * 3
+        c = self.triangles[offset + 2] * 3
+        v = self.vertices
+        e1 = (v[b] - v[a], v[b + 1] - v[a + 1], v[b + 2] - v[a + 2])
+        e2 = (v[c] - v[a], v[c + 1] - v[a + 1], v[c + 2] - v[a + 2])
+        px = direction[1] * e2[2] - direction[2] * e2[1]
+        py = direction[2] * e2[0] - direction[0] * e2[2]
+        pz = direction[0] * e2[1] - direction[1] * e2[0]
+        det = e1[0] * px + e1[1] * py + e1[2] * pz
+        scale = max(abs(e1[0]), abs(e1[1]), abs(e1[2]), abs(e2[0]), abs(e2[1]), abs(e2[2]), 1.0)
+        if abs(det) <= 1e-12 * scale * scale:
+            return None
+        inverse = 1.0 / det
+        t0 = (x - v[a], y - v[a + 1], z - v[a + 2])
+        u = (t0[0] * px + t0[1] * py + t0[2] * pz) * inverse
+        qx = t0[1] * e1[2] - t0[2] * e1[1]
+        qy = t0[2] * e1[0] - t0[0] * e1[2]
+        qz = t0[0] * e1[1] - t0[1] * e1[0]
+        w = (direction[0] * qx + direction[1] * qy + direction[2] * qz) * inverse
+        if min(u, w, 1.0 - u - w) < -1e-09:
+            return 0
+        if min(abs(u), abs(w), abs(1.0 - u - w)) <= 1e-09:
+            # On an edge: the parity of a ray through a shared edge depends on
+            # which of the two triangles rounds it in, so there is no answer.
+            return None
+        distance = (e2[0] * qx + e2[1] * qy + e2[2] * qz) * inverse
+        return 1 if distance > 1e-09 else 0
 
     def _coarse_occupancy(self):
         if not hasattr(self, "_coarse"):
@@ -1288,7 +1393,34 @@ def run(context):
         # reverse direction reaches further than the omission does.
         omitted_reach = max(outside_gaps) if outside_gaps else 0.0
         recon_reach = report["reconstruction_to_source"]["max_mm"]
-        explained_by_omission = bool(unclassified) and recon_reach <= omitted_reach
+        # Each of those samples is classified against the source *solid*, one
+        # by one. A comparison of global maxima cannot separate the two cases
+        # -- a 3 mm omitted boss would account for a 2 mm invented one beside
+        # it -- because a maximum carries no spatial attribution. Ray parity
+        # against the source's own triangles does: a rebuilt surface standing
+        # where an omitted feature used to be lies INSIDE the scanned solid,
+        # and invented material lies outside it.
+        #
+        # `None` from `encloses` is an open surface, where inside has no
+        # meaning; that sample stays unaccounted for and the run fails closed,
+        # which is the answer this module gives everywhere it cannot see.
+        outside_source = 0
+        inside_source = 0
+        unresolved = 0
+        for point, distance in zip(sample_points, sample_distances):
+            if distance <= invented_threshold:
+                continue
+            verdict = source_grid.encloses(point[0], point[1], point[2])
+            if verdict is None:
+                unresolved += 1
+            elif verdict:
+                inside_source += 1
+            else:
+                outside_source += 1
+        report["reconstruction_to_source"]["beyond_threshold_inside_source"] = inside_source
+        report["reconstruction_to_source"]["beyond_threshold_outside_source"] = outside_source
+        report["reconstruction_to_source"]["beyond_threshold_unresolved"] = unresolved
+        explained_by_omission = bool(unclassified) and not outside_source and not unresolved
         established = bool(invented_count) or not unclassified or explained_by_omission
         report["verdict"] = {
             "invented_material": {
@@ -1304,6 +1436,9 @@ def run(context):
                 "sign_probe": convention_evidence,
                 "unclassified_reconstruction_samples": unclassified,
                 "unclassified_explained_by_omission": explained_by_omission,
+                "unclassified_inside_source": inside_source,
+                "unclassified_outside_source": outside_source,
+                "unclassified_unresolved": unresolved,
                 "unclassified_reach_mm": recon_reach,
                 "omitted_reach_mm": omitted_reach,
                 "meaning": (

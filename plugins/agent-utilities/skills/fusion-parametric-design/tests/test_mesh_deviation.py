@@ -455,6 +455,67 @@ class DeviationVerdictTests(unittest.TestCase):
         self.assertGreater(verdict["unclassified_reconstruction_samples"], 0)
         self.assertAlmostEqual(3.0, report["reconstruction_to_source"]["max_mm"])
 
+    def test_an_omitted_feature_accounts_for_its_own_reconstructed_samples(self) -> None:
+        """A rebuilt surface standing where an omitted feature was is inside the scan.
+
+        The rebuild stops 2 mm short of the scan. Its top face is therefore
+        2 mm from any scanned surface -- which reads exactly like invented
+        material to the unsigned direction -- and every one of those samples
+        classifies INSIDE the source solid, which invented material cannot.
+        So the omission accounts for them and the run passes with the
+        omitted-detail advisory it should have.
+        """
+        # Sampled at 2 mm, so the rebuild's top face carries interior nodes:
+        # an unsubdivided scan has only corners, and every corner of this
+        # rebuild lies on a scanned wall.
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)),
+                reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0)),
+            )
+        )[0]
+        self.assertTrue(report["ok"], report.get("failures"))
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("pass", verdict["severity"])
+        self.assertGreater(verdict["unclassified_reconstruction_samples"], 0)
+        self.assertTrue(verdict["unclassified_explained_by_omission"])
+        self.assertEqual(0, verdict["unclassified_outside_source"])
+        self.assertEqual(0, verdict["unclassified_unresolved"])
+        self.assertGreater(verdict["unclassified_inside_source"], 0)
+        self.assertEqual("advisory", report["verdict"]["omitted_detail"]["severity"])
+
+    def test_an_omission_cannot_mask_an_invention_beside_it(self) -> None:
+        """Global maxima have no spatial attribution; per-sample classification does.
+
+        The same rebuild, 2 mm short, plus a boss the scan does not carry that
+        stands *outside* the scanned solid. A comparison of reaches would let
+        the 2 mm omission account for the boss; classifying each sample does
+        not, because the boss's samples fall outside the source.
+        """
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0))
+        inner = reconstruction.meshManager.createMeshCalculator
+        reconstruction.meshManager = SimpleNamespace(
+            createMeshCalculator=lambda: _boss_calculator(
+                inner(), (9.0, 9.0, 10.5), (10.0, 10.0, 11.5)
+            )
+        )
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)),
+                reconstruction=reconstruction,
+            ),
+            failure="invented-material-unclassified",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["invented-material-unclassified"], report["failures"])
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("not-established", verdict["severity"])
+        self.assertFalse(verdict["unclassified_explained_by_omission"])
+        self.assertGreater(verdict["unclassified_outside_source"], 0)
+        # The omission is still there and still measured; it just accounts for
+        # its own samples and not for the boss's.
+        self.assertGreater(verdict["unclassified_inside_source"], 0)
+
     def test_a_rebuild_grown_half_a_millimetre_reads_as_half_a_millimetre_invented(self) -> None:
         # The rebuild is 0.5 mm proud of the scan on every side, so every scanned
         # vertex lies 0.5 mm inside it. The answer is known by construction.
