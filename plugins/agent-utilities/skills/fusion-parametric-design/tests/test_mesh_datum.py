@@ -667,6 +667,43 @@ class DatumFrameTests(unittest.TestCase):
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
         self.assertEqual(caught.exception.detail["axis"], "secondary")
 
+    def test_the_membership_bound_carries_the_primary_axis_tilt_over_its_lever(
+        self,
+    ) -> None:
+        """The clearance being measured is measured *against the primary axis*.
+
+        `radial` is what is left of the offset once the primary axis is
+        subtracted, so a tilt of that axis moves it by `axial * delta` over the
+        lever the tilt pivots on -- the same lever this module already
+        propagates into the direction's own sigma. Bounding the clearance by
+        the endpoint positional sigmas alone therefore understates it, and on a
+        long part the understatement is the whole margin: these pins clear a
+        0.5 mm tolerance by 0.4 mm and sit 160 mm from the primary fit's
+        anchor, where 0.05 deg of axis tilt is worth 0.14 mm -- three of which
+        eat the margin. They were stable members carrying a 9 deg direction
+        sigma, which is the contradiction.
+        """
+
+        def sigmas(z: float) -> list[float | None]:
+            record = fx.record(
+                [
+                    fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                    fx.cylinder("pin-a", (0.0, 0.0, 1.0), (0.9, 0.0, z), 0.2, 8.0, 6.0),
+                    fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 0.9, z), 0.2, 8.0, 6.0),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
+            )
+            with self.assertRaises(ReconstructionRefused) as caught:
+                derive_datum_frame(_regions(record), **FRAME_ARGS)
+            self.assertEqual(caught.exception.reason, "frame-ambiguous")
+            return [entry["direction_sigma_deg"] for entry in caught.exception.detail["tied"]]
+
+        # Level with the primary fit's own anchor there is no lever, and the
+        # candidates are stable members with a measured direction sigma.
+        self.assertNotIn(None, sigmas(4.0))
+        # 160 mm up the axis, the same clearance no longer survives the tilt.
+        self.assertEqual([None, None], sigmas(164.0))
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [

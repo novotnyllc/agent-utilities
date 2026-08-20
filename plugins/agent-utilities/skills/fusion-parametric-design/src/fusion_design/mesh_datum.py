@@ -1380,10 +1380,26 @@ def _secondary_from_second_axis(
         positional = _combined_positional_sigma(
             region.sigma(_ANCHOR_SIGMA_KEY[fit.kind]), origin_sigma
         )
+        # `radial` is what is left after subtracting the primary axis, so a tilt
+        # of that axis moves it too: over the lever the tilt pivots on, by
+        # `axial * delta`. Bounding the clearance by the endpoints' positional
+        # sigma alone therefore understates it, and a candidate sitting just
+        # outside `offset_tolerance` on a long, weakly-measured primary axis
+        # passes a test its own axis can fail -- which is the case this guard
+        # exists to catch. Independent measurements, so in quadrature; the two
+        # levers inside `axial` are added because one tilt swings both.
+        axial = abs(_dot(_sub(anchor, primary_anchor), z)) + abs(
+            _dot(_sub(origin, primary_anchor), z)
+        )
+        radial_sigma = (
+            None
+            if positional is None or z_sigma_deg is None
+            else math.hypot(positional, axial * math.radians(z_sigma_deg))
+        )
         stable_membership = (
-            positional is not None
+            radial_sigma is not None
             and sigma_multiple is not None
-            and radial - positional * sigma_multiple > offset_tolerance
+            and radial - radial_sigma * sigma_multiple > offset_tolerance
         )
         x = _unit(perpendicular)
         if x is None:
@@ -1402,10 +1418,8 @@ def _secondary_from_second_axis(
         # a secondary anchor level with that cap has zero axial offset from the
         # origin and the whole anchor-to-cap distance from the pivot. Both
         # levers are measured from the pivot and added, because the tilt swings
-        # the origin and the anchor the same way at once.
-        axial = abs(_dot(_sub(anchor, primary_anchor), z)) + abs(
-            _dot(_sub(origin, primary_anchor), z)
-        )
+        # the origin and the anchor the same way at once. (`axial` is computed
+        # above, where the membership bound needs the same lever.)
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
