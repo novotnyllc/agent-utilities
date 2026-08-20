@@ -363,8 +363,11 @@ honeycomb byte-identical (manifest `re_measured` notes, PR #54 body). These
 gains are fit-level; RC-scripted moves on no benchmark part from #54 alone.
 
 Scoreboard cells common to all four: delivered `unmeasured` (never built
-live); E = 0 proven; C = 1 scripted (one placed component each, denominator 1)
-and `unmeasured` live; H clean — every stop carries a named gate, and the
+live); E = 0 proven; C: raw scripted occurrence count 1 (one placed
+component each — a pre-`claim_level` record, so headline C is `unmeasured`
+under amended §1.4, which requires an emitted component carrying
+`physical-thing-evidenced`; the count is reported as a raw number, never as
+a C value) and `unmeasured` live; H clean — every stop carries a named gate, and the
 two "refuse" parts are the honesty exemplar (the leaves' 8 slabs refuse with
 the measured disagreement, not silently).
 
@@ -393,8 +396,10 @@ outcome removes the need for the splitter; scan-seg PRs 1–3 unchanged.**
    unmeasured on all 16 parts. 2. Deviation has **never been graded on a slab
    build** (PR #50's live acceptance is a synthetic 20×20×10 block). 3. E is
    0-proven everywhere; the only committed editability artifact is the
-   acceptance *checklist*. 4. C is 1 scripted on every single-object part (one placed component
-   each) and `unmeasured` live; assembly decomposition is 0 everywhere and no
+   acceptance *checklist*. 4. C: the raw scripted occurrence count is 1 on
+   every single-object part (one placed component each; headline C
+   `unmeasured` under amended §1.4 — pre-`claim_level` records) and
+   `unmeasured` live; assembly decomposition is 0 everywhere and no
    lane moves it. 5. Scan
    recognition is fit-level ~11% with RC-scripted still 0.
 

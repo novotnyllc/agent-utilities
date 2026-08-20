@@ -900,6 +900,19 @@ the parent's validation loss and counts as not-improved in (2), the
 conservative substitution under which an ungradable child can never help
 license a split, and the ungradable set is recorded on the split attempt.
 
+**Topology-licensed splits.** When the licensing rejection is
+*disconnected inlier support*, the split severs nothing on the mesh: the
+children are the connected components of the parent's support, no new
+surface boundary is created, and coplanar components can show no residual
+improvement at all — grading that split on (1)–(3) would make the table's
+own licence unreachable (T4 by construction, and an exact fit puts a zero
+in condition 3's denominator). For that reason-class only, (1)–(3) are
+replaced by: every child is a connected component of the parent's support
+(or lands in a named terminal class), the children partition the parent
+exactly, and each claimed child passes its own gates — the split's
+productivity *is* the evidenced separation, and the record names the
+reason-class that licensed it.
+
 New declared thresholds, each `{value, rationale}` through
 `_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,
 the split explains noise re-partitioned, not structure), `split_min_improved_fraction`

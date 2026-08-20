@@ -814,9 +814,12 @@ Coalescing congruent sections is evidence *against* topology change, never
 sufficient evidence *for* it elsewhere.
 
 **Loop correspondence across the three constancy sections** (0.25 / mid /
-0.75): loops match by **complete linkage** on centroid distance and area
-difference within `slab_constancy_tolerance_mm` (the declared threshold
-already in the vocabulary — no new constant); an unmatched loop names itself
+0.75): loops match by **complete linkage** on centroid distance and on
+**√area difference** (|√A₁ − √A₂|), both within
+`slab_constancy_tolerance_mm` — √area is length-dimensioned, so the one
+declared length tolerance governs both comparisons and mesh units or part
+scale cannot change the verdict (the declared threshold already in the
+vocabulary — no new constant); an unmatched loop names itself
 in the `slab-section-inconstant` refusal rather than failing the slab on a
 bare count mismatch. Matching is a deterministic **one-to-one global
 assignment**, not a greedy pair walk: among assignments of maximum

@@ -278,8 +278,10 @@ partition onto owner classes {base, thing-k, interface-j, residual}, where
   the same tree the recursion mechanism uses. No second data structure; the
   assignment is a projection of the tree, generated and checked in the same
   stage.
-- **Where segmentation refused** (no accepted base face: `datum-unavailable`,
-  or the mega-group still terminal-unfitted), decomposition cannot evaluate
+- **Where segmentation refused** (no accepted base face:
+  `segmentation-datum-unavailable` — renamed per 002 §A.7, this consumer
+  updated with the migration — or the mega-group still terminal-unfitted),
+  decomposition cannot evaluate
   either its trigger or its license. Verdict:
   `componentization-refused: no-accepted-base`, assignment degenerates to
   nothing (no assembly layer emitted), and the part flows down the
