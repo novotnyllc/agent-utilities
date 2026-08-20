@@ -227,6 +227,21 @@ def validate_editability_spec(spec: Any, parameters_declared: Any = ()) -> list[
             # in `not_exercised` and the report never counts it as proven.
             continue
         observable = entry.get("expected_observable")
+        if observable == "none":
+            # The planner already said this vocabulary has no observable for
+            # this parameter. Exercising it anyway records `parameter-inert`
+            # against a parameter that drives real geometry, which is the
+            # over-claim in the other direction: decline it instead.
+            issues.append(
+                ValidationIssue(
+                    "editability-spec-invalid-parameters",
+                    f"{path}.expected_observable",
+                    "the program declares no observable for this parameter, so it cannot be "
+                    "proven by perturbation here; carry the reason and set exercise: false "
+                    "rather than perturbing it and recording it inert.",
+                )
+            )
+            continue
         if observable not in OBSERVABLES:
             issues.append(
                 ValidationIssue(

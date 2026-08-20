@@ -730,6 +730,7 @@ UNRECONSTRUCTED_GATES = {
     "hole-radius-absent",
     "fillet-fit-unaccepted",
     "fillet-neighbour-unreconstructed",
+    "fillet-edge-owner-ambiguous",
     "fillet-neighbour-shared",
     "fillet-edge-unidentified",
     "fillet-radius-undeclared",
@@ -1284,6 +1285,43 @@ def _same_feature_edge(
     return f"{cap}-side", None
 
 
+def _blend_outside_its_owners(
+    region: RegionFit,
+    frame: DatumFrame,
+    owners: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Why this blend's edge cannot be named from the coverage partition, or ``None``.
+
+    Only slab groups can be wrong this way. A single extrude owns every region
+    it claims outright, so its faces and its claims are the same set; a slab
+    stack's claims are a partition over a stack that shares its walls, and a
+    blend sitting outside the claiming slab's own station range is an edge that
+    slab does not carry.
+    """
+    slabs = [group for group in owners if group.get("slab") is not None]
+    if not slabs:
+        return None
+    plane = slabs[0].get("plane") or {}
+    axis = _plane_axis(frame, str(plane.get("datum_plane") or "XY"))
+    low, high = _station_range(frame, axis, region.bounding_box)
+    middle = (low + high) / 2.0
+    for group in slabs:
+        block = group["slab"]
+        if block["station_lo"] <= middle <= block["station_hi"]:
+            return None
+    ranges = ", ".join(
+        f"{group['id']} [{group['slab']['station_lo']:.6g}, {group['slab']['station_hi']:.6g}]"
+        for group in slabs
+    )
+    return (
+        f"this blend sits at station {middle:.6g} on the datum axis, outside the range of every "
+        f"slab that claims its neighbours ({ranges}). A slab stack shares its walls, so which "
+        "slab *builds* the face this edge runs along is not what the coverage partition records, "
+        "and rounding the claiming slab's nearest edge would round a slab interface instead of "
+        "this blend."
+    )
+
+
 def _plan_fillets(
     regions: Sequence[RegionFit],
     groups: Sequence[Mapping[str, Any]],
@@ -1372,6 +1410,20 @@ def _plan_fillets(
                 "and this blend's neighbours did not both become features. There is no edge to "
                 "round."
             )
+            continue
+        # On the slab path an owner is a *coverage* partition, not the feature
+        # that produces this edge: a wall spanning three slabs is measured by
+        # all three and claimed by one, and the fillet path was reading that
+        # claim as physical ownership. A blend at a boundary away from the
+        # claiming slab then names an edge of the wrong extrude -- the nearest
+        # candidate on an adjacent slab is its *interface*, and a non-adjacent
+        # one shares no edge at all. Nothing here can re-point it: which slab
+        # carries which face is a fact the emitter learns from Fusion, and the
+        # partition deliberately does not record it. So the case is refused by
+        # name rather than rounded on a guess.
+        stray = _blend_outside_its_owners(region, frame, [by_id[o] for o in owners])
+        if stray is not None:
+            gates[region.region_hash] = "fillet-edge-owner-ambiguous: " + stray
             continue
         selector: str | None = None
         if len(owners) != 2:
@@ -2146,13 +2198,131 @@ OBSERVABLE_FOR_QUANTITY = {
     "position": "centroid",
 }
 
-OBSERVABLES = {"volume", "centroid", "bbox"}
+#: ``none`` is not an observable; it is the declaration that this vocabulary
+#: has none for a parameter, which is a different statement from any of the
+#: three and the only honest one for an interface between two sections that
+#: agree in area *and* in centroid. A parameter carrying it is emitted with the
+#: reason on it, and an editability spec must decline to exercise it rather
+#: than perturb it and record `parameter-inert` against a station that drives
+#: real geometry.
+OBSERVABLES = {"volume", "centroid", "bbox", "none"}
+
+
+def _sections_differ_in_area(
+    below: Mapping[str, Any], above: Mapping[str, Any], tolerance: float | None
+) -> bool:
+    """Do these two sections enclose measurably different areas?
+
+    Not ``!=``. These are floating-point sums over a tessellated section, so
+    two geometrically equal areas essentially never agree to the last bit and a
+    bare inequality is true for a difference of one part in 1e15 -- which would
+    declare ``volume`` on every station and leave the whole equal-area case,
+    the one this comparison exists for, unreachable on measured geometry.
+
+    The window is the caller's own ``slab_constancy_tolerance_mm`` times the
+    section's perimeter, which is the area a boundary displaced by that
+    tolerance sweeps. That is the same number, and the same reasoning, this
+    stage already uses to decide whether two sections of one slab are the same
+    section -- so a difference it calls agreement here is a difference it calls
+    agreement there. No new threshold, and it scales with the part.
+    """
+    lower, upper = _section_material_area(below), _section_material_area(above)
+    if tolerance is None:
+        # No declared tolerance means no declared decomposition either, and
+        # this station cannot exist. Fall back to the bare comparison rather
+        # than invent a window.
+        return lower != upper
+    perimeter = max(_section_perimeter(below), _section_perimeter(above))
+    return abs(lower - upper) > float(tolerance) * max(perimeter, 1.0)
+
+
+def _section_material_centroid(slab: Mapping[str, Any]) -> list[float] | None:
+    """Where one slab's own section carries its material area, or ``None``.
+
+    Same sign convention as `_section_material_area` -- outer and islands add,
+    cavities subtract, bores are absent because their holes are cut later -- so
+    the two numbers describe the same figure. ``None`` when a loop states no
+    centroid or the areas cancel, which is a section this comparison cannot
+    speak about.
+    """
+    total = 0.0
+    moment = [0.0, 0.0]
+    for loop in slab.get("loops") or ():
+        role = loop.get("role")
+        if role not in ("outer", "island", "cavity"):
+            continue
+        centre = loop.get("centroid_mm")
+        if not isinstance(centre, (list, tuple)) or len(centre) != 2:
+            return None
+        area = abs(float(loop.get("signed_area_mm2") or 0.0))
+        signed = -area if role == "cavity" else area
+        total += signed
+        for axis in range(2):
+            moment[axis] += float(centre[axis]) * signed
+    if total <= 0.0:
+        return None
+    return [moment[axis] / total for axis in range(2)]
+
+
+def _sections_differ_in_centroid(
+    below: Mapping[str, Any], above: Mapping[str, Any], tolerance: float | None
+) -> bool:
+    """Do these two sections carry their material about measurably different points?
+
+    A length against a length: the declared ``slab_constancy_tolerance_mm`` is
+    how far this stage already accepts a boundary having moved, so a centroid
+    that moved less than it moved by nothing this stage can measure. Unknown
+    reads as *different*, because the equal-centroid branch is the one that
+    declines to name an observable and it may only be reached on evidence.
+    """
+    here, there = _section_material_centroid(below), _section_material_centroid(above)
+    if here is None or there is None or tolerance is None:
+        return True
+    return math.dist(here, there) > float(tolerance)
+
+
+def _section_perimeter(slab: Mapping[str, Any]) -> float:
+    """The total boundary length of this slab's section, from its own loops."""
+    return sum(
+        abs(float(loop.get("perimeter_mm") or 0.0))
+        for loop in slab.get("loops") or ()
+        if loop.get("role") in ("outer", "island", "cavity")
+    )
+
+
+def _section_material_area(slab: Mapping[str, Any]) -> float:
+    """The material area of one slab's own section, from its classified loops.
+
+    Outer boundaries and islands add, cavities subtract. Bores are absent on
+    purpose: each is a hole feature this program cuts separately, ordered after
+    the extrude, so the section this slab draws still has them filled.
+
+    These are the areas of the *sectioned chords*, which is what this stage
+    has. The emitter later classifies a loop whose points lie on a circle into
+    that circle, and the circle encloses more -- so two sections agreeing here
+    can disagree once built. Classifying in the planner is not the fix: the
+    classifier's tolerance is a rebuild-spec threshold this stage never sees,
+    and a second classifier fitted to a second tolerance would disagree with
+    the emitter's, which is the failure this would be trying to avoid. The
+    basis is recorded on the parameter instead, so a reader knows which areas
+    were compared.
+    """
+    total = 0.0
+    for loop in slab.get("loops") or ():
+        role = loop.get("role")
+        area = abs(float(loop.get("signed_area_mm2") or 0.0))
+        if role in ("outer", "island"):
+            total += area
+        elif role == "cavity":
+            total -= area
+    return total
 
 
 def _user_parameters(
     groups: Sequence[Mapping[str, Any]],
     adoptions: Sequence[Mapping[str, Any]],
     units: str,
+    section_tolerance: float | None = None,
 ) -> list[dict[str, Any]]:
     """One named parameter per driven quantity, shared where a relationship says so.
 
@@ -2178,9 +2348,125 @@ def _user_parameters(
         for region_hash in hashes:
             shared_by_region[region_hash] = shared
 
+    # Station parameters, minted once per event and shared by every slab that
+    # names it. A slab's depth is then an *expression* over two of them rather
+    # than a number of its own, so a boundary is stored once: editing the station
+    # moves that face and every slab referencing it, which is what makes a step
+    # height edit behave like a step height edit. Deviation from 006 E4 (every
+    # extent bound to a named parameter) argued in the design's section C: the
+    # alternative stores each boundary twice and lets an edit tear adjacent slabs
+    # apart, which is the un-parametric behaviour E4 exists to prevent.
+    # Exactly one slab shares no boundary with anything, so there is nothing to
+    # store twice and the station model buys nothing: it keeps the depth
+    # parameter the planner has always given a single extrude, which is what
+    # makes the one-slab case byte-identical to the plan that predates slabs.
+    stack = [
+        group
+        for group in groups
+        if group["kind"] == "sketch-extrude" and group.get("slab") is not None
+    ]
+    stations: dict[str, float] = {}
+    for group in stack if len(stack) > 1 else ():
+        slab = group["slab"]
+        lower, upper = slab["station_parameters"]
+        stations.setdefault(lower, float(group["plane"]["offset"]))
+        stations.setdefault(
+            upper, float(group["plane"]["offset"]) + float(group["extent"]["value"])
+        )
+    for name in sorted(stations, key=lambda key: (stations[key], key)):
+        # Which observable moves is *measured*, not assumed. An outermost
+        # station moves one slab's height alone, so the volume moves with it.
+        # An interior one grows one slab and shrinks the other, and the volume
+        # moves only if their sections differ in area. Coalescing establishes
+        # that adjacent sections are not *congruent*, which is weaker: two
+        # different shapes of equal area leave the total volume exactly
+        # unchanged, and declaring `volume` there makes the perturbation proof
+        # report a correct station as `parameter-inert`.
+        below = next((g for g in stack if g["slab"]["station_parameters"][1] == name), None)
+        above = next((g for g in stack if g["slab"]["station_parameters"][0] == name), None)
+        if below is None or above is None:
+            observable = "volume"
+            observable_rationale = (
+                "An outermost station bounds one slab only, so moving it changes that slab's "
+                "height and the solid's volume with it."
+            )
+        elif _sections_differ_in_area(below["slab"], above["slab"], section_tolerance):
+            observable = "volume"
+            observable_rationale = (
+                "This station separates sections of "
+                f"{_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2 -- a difference beyond the area a "
+                "boundary displaced by the declared slab_constancy_tolerance_mm would sweep -- so "
+                "moving it grows one slab and shrinks the other by different amounts and the "
+                "solid's volume moves."
+            )
+        elif not _sections_differ_in_centroid(
+            below["slab"], above["slab"], section_tolerance
+        ):
+            observable = "none"
+            observable_rationale = (
+                "This station separates two sections that agree in area and in centroid "
+                f"({_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2, centroids within the declared "
+                "slab_constancy_tolerance_mm) while not being congruent -- concentric equal-area "
+                "shapes are the case. Moving it trades material of one shape for material of the "
+                "other at the same rate and about the same point, so the volume, the centroid and "
+                "the bounding box are all unchanged: no observable in this vocabulary sees it. "
+                "The station still drives real geometry, so it is named as unobservable rather "
+                "than declared against something that does not move -- perturbing it would report "
+                "`parameter-inert` against a correct parameter, which is the over-claim in the "
+                "other direction."
+            )
+        else:
+            observable = "centroid"
+            observable_rationale = (
+                "This station separates two sections whose measured areas agree to within the area "
+                "a boundary displaced by the declared slab_constancy_tolerance_mm would sweep "
+                f"({_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2), and of different shape -- "
+                "coalescing established only that they are not congruent. Moving it therefore "
+                "trades material of one shape for material of the other at the same rate, leaving "
+                "the volume exactly unchanged and moving the centroid. Should those two shapes "
+                "also share a centroid, no observable in this vocabulary moves and the proof will "
+                "report this station inert: that is a fact about the part, not a fault in the "
+                "parameter."
+            )
+        parameters.append(
+            {
+                "name": name,
+                "quantity": "position",
+                "unit": units,
+                "nominal": stations[name],
+                "expected_observable": observable,
+                "observable_rationale": observable_rationale,
+                "observable_basis": (
+                    "the two adjacent sections' material areas as this stage sectioned them, in "
+                    "chords. The emitter classifies a loop whose points lie on a circle into that "
+                    "circle, which encloses more, so a station whose sections agree in chord area "
+                    "can move the volume after all -- and this parameter would then read inert "
+                    "against `centroid`. Nothing here can tell: the classifier's own tolerance is "
+                    "a rebuild-spec threshold this stage never sees."
+                ),
+                "rationale": (
+                    "event station on the datum primary axis, merged from the accepted plane "
+                    "fits at this boundary and the side regions' spans that end there."
+                ),
+                "driving_archetypes": sorted(
+                    str(g["id"])
+                    for g in groups
+                    if (g.get("slab") or {}).get("station_parameters", ()) and
+                    name in g["slab"]["station_parameters"]
+                ),
+            }
+        )
+
     for group in groups:
         role = "revolve" if group["kind"] == "revolve" else "base"
-        if group["kind"] == "sketch-extrude":
+        if group["kind"] == "sketch-extrude" and group in stack and len(stack) > 1:
+            # Bound to the station pair, not to a depth of its own.
+            group["extent"]["expression"] = group["slab"]["extent_expression"]
+            group["plane"]["offset_parameter"] = group["slab"]["station_parameters"][0]
+        elif group["kind"] == "sketch-extrude":
             parameter = name_for(role, "depth")
             parameters.append(
                 {
@@ -2374,44 +2660,36 @@ def _attach_constraints(
 
 
 def _emission_order(groups: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Bases before cuts before finishing, and deterministic within each class.
+    """A topological order over the archetypes' own dependencies, deterministic.
 
-    Kahn's algorithm over the declared dependencies, with the same
-    ``(rank, id)`` tie-break ``mesh_rebuild.total_order`` uses.  That function
-    re-derives this order and refuses ``program-order-invalid`` when the two
-    disagree, and a rank-then-id sort disagrees as soon as one archetype
-    depends on another whose id sorts after it.  A multi-slab stack does
-    exactly that: ``slab4`` can sort before ``slab3`` while depending on it.
+    Bases before cuts before finishing, and ties broken on ``(rank, id)`` -- but
+    **dependencies first**, which the rank sort alone does not give. A slab stack
+    is the case that showed it: every slab above the first depends on the one
+    below, and their ids are hashes, so ranking by ``(join, id)`` put slab 3
+    before slab 1 and the emitter's own topological check refused the program its
+    planner had just written.
 
-    A cycle or a dangling dependency is not repaired here.  Both are refusals
-    in ``mesh_rebuild``, which owns that vocabulary and states the recourse;
-    this falls back to the plain sorted order so the program still carries one
-    and the refusal there names the real fault instead of an order mismatch.
+    This is deliberately the same sort ``mesh_rebuild.total_order`` performs, so
+    that the declared order and the derived one agree by construction rather
+    than by luck. A cycle -- which this planner's edge set cannot produce -- falls
+    back to the rank sort so that the emitter refuses ``program-order-cyclic``
+    against a program that says plainly what it wanted, rather than this stage
+    raising something the vocabulary here does not carry.
     """
     rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
-    keys = {str(group["id"]): (rank[group["operation"]], str(group["id"])) for group in groups}
-    lexical = sorted(keys, key=lambda identifier: keys[identifier])
-    pending = {
-        str(group["id"]): {
-            str(dependency)
-            for dependency in (group.get("dependencies") or ())
-            if str(dependency) in keys
-        }
-        for group in groups
-    }
+    keys = {str(g["id"]): (rank[g["operation"]], str(g["id"])) for g in groups}
+    pending = {str(g["id"]): set(map(str, g.get("dependencies") or ())) for g in groups}
     ordered: list[str] = []
     while pending:
         ready = sorted(
-            (identifier for identifier, deps in pending.items() if not deps),
+            (identifier for identifier, deps in pending.items() if not deps & set(pending)),
             key=lambda identifier: keys[identifier],
         )
         if not ready:
-            return lexical
+            return [group["id"] for group in sorted(groups, key=lambda g: keys[str(g["id"])])]
         for identifier in ready:
             ordered.append(identifier)
             del pending[identifier]
-        for deps in pending.values():
-            deps.difference_update(ready)
     return ordered
 
 
@@ -2920,7 +3198,17 @@ def build_reconstruction_program(
         triangle_regions=triangle_regions or None,
     )
     _attach_constraints(groups, adoptions)
-    parameters = _user_parameters(groups, adoptions, fit_record.units)
+    slab_thresholds = _slab_gates(thresholds)
+    parameters = _user_parameters(
+        groups,
+        adoptions,
+        fit_record.units,
+        section_tolerance=(
+            None
+            if slab_thresholds is None
+            else float(slab_thresholds["slab_constancy_tolerance_mm"])
+        ),
+    )
     # Each archetype carries the share of the scan it accounts for. Without it
     # the coverage account could only subtract regions the *program* left out,
     # never one the *build* failed to deliver -- and a fillet that was planned

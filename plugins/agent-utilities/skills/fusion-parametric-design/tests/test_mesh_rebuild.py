@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from io import StringIO
 import json
+import math
 from pathlib import Path
 import re
 import tempfile
@@ -22,6 +23,7 @@ from fusion_design.mesh_dump import MeshDumpError
 from fusion_design.mesh_rebuild import (
     EMITTED_KINDS,
     _clip_half,
+    _constraint_schedule,
     _require_chained,
     emit_mesh_rebuild_script,
     plan_emission,
@@ -393,6 +395,24 @@ class PlannerTests(unittest.TestCase):
             plan_emission(program, self.dump, self.spec)
         self.assertEqual("program-parameter-unbound", caught.exception.reason)
 
+    def test_a_plane_naming_a_non_string_offset_parameter_refuses_by_name(self):
+        """A JSON array here used to raise `TypeError: unhashable type`.
+
+        The program validator checks the plane's datum and not this field, so a
+        serialized program carrying anything unhashable reached the `in seen`
+        membership test and crashed planning, escaping the named refusal this
+        emitter promises for a malformed program. Absent and null still mean
+        "this plane names no station"; anything else present has to be a name.
+        """
+        for value in ([], ["recon_station_1"], {"name": "recon_station_1"}, 3, "", "   "):
+            with self.subTest(offset_parameter=value):
+                archetype = fx.extrude_archetype()
+                archetype["plane"]["offset_parameter"] = value
+                program = fx.program(self.dump.sha256, archetypes=[archetype])
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    plan_emission(program, self.dump, self.spec)
+                self.assertEqual("program-schema-violation", caught.exception.reason)
+
     def test_a_collision_with_an_existing_manifest_parameter_refuses(self):
         with self.assertRaises(ReconstructionRefused) as caught:
             self.plan(manifest_parameter_names=["recon_base_1_depth"])
@@ -570,10 +590,308 @@ class SpecValidationTests(unittest.TestCase):
         codes = {issue.code for issue in validate_rebuild_spec(spec)}
         self.assertIn("threshold-invalid-value", codes)
 
+    def test_a_fractional_loop_budget_is_rejected_rather_than_floored(self):
+        # The budget counts loops and `int()` floors it at the point of use: a
+        # declared 2.9 would enforce 2 and a declared 0.5 would refuse every
+        # sketch, so the spec would say one number and the gate apply another.
+        for value in (2.9, 0.5):
+            with self.subTest(value=value):
+                spec = fx.rebuild_spec("dump.bin")
+                spec["thresholds"]["sketch_loop_budget"] = {
+                    "value": value,
+                    "rationale": "fixture budget",
+                }
+                issues = validate_rebuild_spec(spec)
+                self.assertIn("threshold-invalid-value", {issue.code for issue in issues})
+                self.assertTrue(
+                    any(issue.path.endswith("sketch_loop_budget.value") for issue in issues),
+                    [issue.path for issue in issues],
+                )
+        # And a value `int()` cannot convert at all comes back as the named
+        # diagnostic rather than as a traceback. `json.loads` accepts NaN and
+        # Infinity by default, so a spec off the wire reaches this.
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                spec = fx.rebuild_spec("dump.bin")
+                spec["thresholds"]["sketch_loop_budget"] = {
+                    "value": value,
+                    "rationale": "fixture budget",
+                }
+                self.assertIn(
+                    "threshold-invalid-value",
+                    {issue.code for issue in validate_rebuild_spec(spec)},
+                )
+        # A whole number expressed as a float is still a whole number.
+        spec = fx.rebuild_spec("dump.bin")
+        spec["thresholds"]["sketch_loop_budget"] = {"value": 8.0, "rationale": "fixture budget"}
+        self.assertEqual([], validate_rebuild_spec(spec))
+
     def test_unknown_threshold_keys_are_rejected(self):
         spec = fx.rebuild_spec("dump.bin")
         spec["thresholds"]["fudge"] = fx.threshold(1.0)
         self.assertTrue(validate_rebuild_spec(spec))
+
+
+class MultiLoopSketchTests(unittest.TestCase):
+    """A sketch holding several loops is several closed contours, not one long one."""
+
+    @classmethod
+    def setUpClass(cls):
+        manifest = build_manifest()
+        cls.directory = tempfile.TemporaryDirectory()
+        dump = fx.box_dump()
+        path = Path(cls.directory.name) / "mesh.bin"
+        path.write_bytes(_dump_bytes(dump))
+        cls.source = emit_mesh_rebuild_script(
+            manifest,
+            classification_record(),
+            source_record(manifest),
+            fx.program(dump.sha256, manifest_sha256=_manifest_hash(manifest)),
+            fx.rebuild_spec(str(path)),
+            NONCE,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def _namespace(self):
+        return fakes.load_transaction(self.source, fakes.make_design(), "unused")
+
+    @staticmethod
+    def _square(loop, x0, y0, side):
+        corners = [
+            (x0, y0), (x0 + side, y0), (x0 + side, y0 + side), (x0, y0 + side)
+        ]
+        rows = []
+        for index, start in enumerate(corners):
+            end = corners[(index + 1) % len(corners)]
+            row = {
+                "kind": "line",
+                "start_cm": list(start),
+                "end_cm": list(end),
+                "start_mm": [value * 10.0 for value in start],
+                "end_mm": [value * 10.0 for value in end],
+                "residual_mm": 0.0,
+            }
+            if loop is not None:
+                row["loop"] = loop
+            rows.append(row)
+        return rows
+
+    def test_each_loop_closes_onto_its_own_start_not_the_previous_loop_s(self):
+        """The chaining bug this test exists for, stated as identity of points.
+
+        Flattened, one `previous_end` and one `first_start` served every loop:
+        the first edge of each later loop began at the preceding loop's
+        endpoint, and the final edge closed onto the *first* loop's start. That
+        is one bridged, open chain where the plan wanted two closed ones.
+        """
+        namespace = self._namespace()
+        design = fakes.make_design()
+        sketch = fakes.FakeSketch(design, None, {})
+        step = {"entities": self._square(0, 0.0, 0.0, 4.0) + self._square(1, 1.0, 1.0, 1.0)}
+        curves = namespace["_build_entities"](sketch, step, [])
+        self.assertEqual(8, len(curves))
+        for first, last in ((0, 3), (4, 7)):
+            with self.subTest(loop=first // 4):
+                # The loop closes: its last curve ends on the very point its
+                # first curve starts from, the same object Fusion shares.
+                self.assertIs(curves[first].startSketchPoint, curves[last].endSketchPoint)
+                # And it is chained through: every edge starts where the last ended.
+                for index in range(first, last):
+                    self.assertIs(curves[index].endSketchPoint, curves[index + 1].startSketchPoint)
+        # Nothing bridges the two: loop 1 does not begin on loop 0's endpoint.
+        self.assertIsNot(curves[3].endSketchPoint, curves[4].startSketchPoint)
+
+    def test_a_classified_arc_is_measured_as_an_arc_and_not_as_its_chords(self):
+        """Zero classification residual, ten percent of the area, on an octagon.
+
+        A regular octagon's vertices lie exactly on its circumscribed circle,
+        so `classify_polyline` turns it into that circle with no residual at
+        all -- and the circle encloses about 10% more than the chords do. The
+        planned region properties therefore have to come from the classified
+        entities, or Fusion builds exactly what was asked for and the matcher
+        calls it `profile-set-mismatch`.
+        """
+        from fusion_design.mesh_rebuild import _sampled_entities
+        from fusion_design import mesh_slabs as ms
+
+        radius = 5.0
+        circle = [
+            {
+                "kind": "circle",
+                "center_mm": [0.0, 0.0],
+                "radius_mm": radius,
+                "start_mm": [radius, 0.0],
+                "end_mm": [radius, 0.0],
+                "residual_mm": 0.0,
+            }
+        ]
+        corners = [
+            (radius * math.cos(2.0 * math.pi * k / 8.0), radius * math.sin(2.0 * math.pi * k / 8.0))
+            for k in range(8)
+        ]
+        chords = [
+            {
+                "kind": "line",
+                "start_mm": list(corners[k]),
+                "end_mm": list(corners[(k + 1) % 8]),
+                "residual_mm": 0.0,
+            }
+            for k in range(8)
+        ]
+        exact = math.pi * radius * radius
+        sampled = abs(ms._signed_area(_sampled_entities(circle)))
+        chorded = abs(ms._signed_area(_sampled_entities(chords)))
+        # The classified circle is measured as a circle, to about a hundredth
+        # of a percent -- three orders below the chord error, and orders below
+        # the matcher's own window.
+        self.assertLess(abs(sampled - exact) / exact, 2e-04)
+        # And the chords the section actually carried are 10% short of it,
+        # which is the error that used to reach the matcher.
+        self.assertGreater((exact - chorded) / exact, 0.09)
+
+    def test_the_sampling_allowance_follows_the_arc_the_sampler_walked(self):
+        """A major arc's allowance was computed for the minor one.
+
+        `_sampled_entities` takes the way round that passes through the
+        recorded mid point, so a classified arc can sweep more than half a
+        turn. The allowance normalised the endpoint difference to the minor
+        sweep regardless -- about 27 times too small for a 270 degree arc, and
+        the shortfall it is meant to cover is what the executor's window adds,
+        so a large-radius profile with perfectly valid tolerances failed
+        `profile-set-mismatch` on arithmetic rather than on geometry.
+        """
+        from fusion_design.mesh_rebuild import _sampling_shortfall
+
+        radius, per_arc = 20.0, 256
+        # Start at 0 deg, end at 270 deg, through 135 deg: the major way round.
+        row = {
+            "kind": "arc",
+            "center_mm": [0.0, 0.0],
+            "radius_mm": radius,
+            "start_mm": [radius, 0.0],
+            "mid_mm": [
+                radius * math.cos(math.radians(135.0)),
+                radius * math.sin(math.radians(135.0)),
+            ],
+            "end_mm": [0.0, -radius],
+            "residual_mm": 0.0,
+        }
+
+        def shortfall(sweep):
+            return (radius**2 / 2.0) * (sweep - per_arc * math.sin(sweep / per_arc))
+
+        self.assertAlmostEqual(
+            shortfall(3.0 * math.pi / 2.0), _sampling_shortfall([row]), places=12
+        )
+        # And that is 27 times the number the minor-arc reading produced.
+        self.assertGreater(
+            _sampling_shortfall([row]) / shortfall(math.pi / 2.0), 26.0
+        )
+        # Dropping the mid point leaves the minor arc, which is the honest
+        # reading when nothing recorded which way round it goes.
+        del row["mid_mm"]
+        self.assertAlmostEqual(
+            shortfall(math.pi / 2.0), _sampling_shortfall([row]), places=12
+        )
+
+    def test_a_single_loop_step_carries_no_loop_key_and_is_unchanged(self):
+        namespace = self._namespace()
+        sketch = fakes.FakeSketch(fakes.make_design(), None, {})
+        curves = namespace["_build_entities"](
+            sketch, {"entities": self._square(None, 0.0, 0.0, 4.0)}, []
+        )
+        self.assertEqual(4, len(curves))
+        self.assertIs(curves[0].startSketchPoint, curves[3].endSketchPoint)
+
+    def test_no_pairwise_constraint_couples_two_independent_contours(self):
+        """Every pairwise layer, not only the tangent junctions.
+
+        Two contours in one sketch are independent geometry sharing a plane. A
+        parallel, perpendicular, concentric or equal-radius between them ties
+        them together, and a later dimension on one then moves or
+        overconstrains the other. Two rotated rectangles are the case for the
+        line layers: every line of each is parallel to one of the other's.
+        """
+        def rotated(loop, cx, cy, side, degrees):
+            radians = math.radians(degrees)
+            cos, sin = math.cos(radians), math.sin(radians)
+            corners = []
+            for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                x, y = dx * side / 2.0, dy * side / 2.0
+                corners.append((cx + x * cos - y * sin, cy + x * sin + y * cos))
+            rows = []
+            for index, start in enumerate(corners):
+                end = corners[(index + 1) % len(corners)]
+                rows.append(
+                    {
+                        "kind": "line",
+                        "loop": loop,
+                        "start_mm": list(start),
+                        "end_mm": list(end),
+                        "residual_mm": 0.0,
+                    }
+                )
+            return rows
+
+        # 30 degrees off the axes, so nothing is horizontal or vertical and
+        # layer 1b is the layer that fires.
+        entities = rotated(0, 0.0, 0.0, 10.0, 30.0) + rotated(1, 40.0, 40.0, 6.0, 30.0)
+        schedule = _constraint_schedule(entities, fx.rebuild_spec("dump.bin")["thresholds"])
+        pairs = [entry for entry in schedule if len(entry["entities"]) == 2]
+        self.assertTrue(pairs, schedule)
+        for entry in pairs:
+            loops = {entities[index]["loop"] for index in entry["entities"]}
+            self.assertEqual(1, len(loops), entry)
+
+    def test_the_constraint_schedule_does_not_wrap_out_of_one_loop_into_the_next(self):
+        """Layer 1c's junction pairing, which wrapped over the flattened list.
+
+        Each entity is paired with the one that follows it, wrapping at the
+        end. Flattened, "the end" was the end of the *whole* list, so the last
+        entity of one contour was paired with the first of the next -- two
+        entities sharing no point -- and only the final loop ever had its own
+        closing junction checked. The fixture puts an arc at the end of loop 0
+        and a perpendicular line at the start of loop 1, which is exactly the
+        pair that used to produce a tangent across the boundary.
+        """
+        def line(loop, start, end):
+            return {
+                "kind": "line",
+                "loop": loop,
+                "start_mm": list(start),
+                "end_mm": list(end),
+                "residual_mm": 0.0,
+            }
+
+        entities = [
+            # Loop 0: a line running up from the arc's own endpoint, then the arc.
+            line(0, (10.0, 0.0), (10.0, 6.0)),
+            {
+                "kind": "arc",
+                "loop": 0,
+                "start_mm": [10.0, 6.0],
+                "end_mm": [10.0, 0.0],
+                "center_mm": [0.0, 0.0],
+                "radius_mm": 10.0,
+                "residual_mm": 0.0,
+            },
+            # Loop 1, elsewhere entirely, whose first entity happens to be
+            # perpendicular to loop 0's arc radius at that arc's endpoint.
+            line(1, (40.0, 0.0), (40.0, 5.0)),
+            line(1, (40.0, 5.0), (45.0, 5.0)),
+        ]
+        schedule = _constraint_schedule(entities, fx.rebuild_spec("dump.bin")["thresholds"])
+        for entry in schedule:
+            loops = {entities[index].get("loop") for index in entry["entities"]}
+            self.assertEqual(1, len(loops), entry)
+        # The fixture bites: the junction that *is* real, inside loop 0, is
+        # found -- so the absence above is the boundary being respected rather
+        # than layer 1c never firing at all.
+        tangents = [entry["entities"] for entry in schedule if entry["kind"] == "tangent"]
+        self.assertEqual([[1, 0]], tangents, schedule)
 
 
 class EmittedSourceTests(unittest.TestCase):

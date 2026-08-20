@@ -1138,6 +1138,41 @@ class EventLinkageTests(unittest.TestCase):
         self.assertTrue(verdict["agrees"], verdict)
         self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
 
+    def test_a_blend_outside_its_owner_slab_is_refused_not_rounded(self) -> None:
+        """A slab's claim is a coverage partition, not physical ownership.
+
+        A wall spanning three slabs is measured by all three and claimed by
+        one, so a blend at a boundary away from the claiming slab names an edge
+        that slab does not carry -- the nearest candidate on an adjacent slab
+        is its *interface*, and a non-adjacent one shares no edge at all.
+        Which slab builds which face is not in the partition, so the case is
+        refused by name.
+        """
+        record = parse_fit_record(fx.turned_record())
+        frame = rp.derive_datum_frame(
+            record.regions,
+            frame_margin=0.1,
+            angle_tolerance_deg=2.0,
+            offset_tolerance=0.5,
+            sigma_multiple=3.0,
+        )
+        blend = next(region for region in record.regions if region.axial_span)
+        owner = {
+            "id": "sketch-extrude-a-s0",
+            "plane": {"datum_plane": "XY"},
+            "slab": {"station_lo": 900.0, "station_hi": 950.0},
+        }
+        reason = rp._blend_outside_its_owners(blend, frame, [owner])
+        self.assertIsNotNone(reason)
+        self.assertIn("outside the range of every slab", reason)
+        # Inside it, nothing is refused; and a group that is not a slab at all
+        # owns every region it claims outright, so it is never wrong this way.
+        inside = dict(owner, slab={"station_lo": -1000.0, "station_hi": 1000.0})
+        self.assertIsNone(rp._blend_outside_its_owners(blend, frame, [inside]))
+        self.assertIsNone(
+            rp._blend_outside_its_owners(blend, frame, [{"id": "e", "slab": None}])
+        )
+
     def test_a_cap_slot_is_named_by_position_not_by_list_order(self) -> None:
         """`cap_regions` says what exists; the fillet path needs which slot.
 
@@ -1369,6 +1404,175 @@ class HausdorffTests(unittest.TestCase):
         self.assertFalse(verdict["agrees"])
         self.assertIn("loop counts differ", verdict["reason"])
         self.assertIsNone(verdict["worst_hausdorff"])
+
+
+class StationObservableTests(unittest.TestCase):
+    """Which observable a station moves is measured, not assumed.
+
+    Coalescing establishes that two adjacent sections are not *congruent*.
+    That is weaker than "different area": two different shapes of equal area
+    leave the total volume exactly unchanged when the station between them
+    moves, so declaring `volume` there makes the perturbation proof report a
+    correct station as `parameter-inert`.
+    """
+
+    def _stack(self, upper_area, tolerance=0.05, centroids=None):
+        groups = []
+        for index, (low, high, area) in enumerate(
+            ((0.0, 4.0, 100.0), (4.0, 8.0, upper_area))
+        ):
+            lower, upper = f"recon_station_{index}", f"recon_station_{index + 1}"
+            groups.append(
+                {
+                    "id": f"sketch-extrude-s{index}",
+                    "kind": "sketch-extrude",
+                    "operation": "join",
+                    "regions": [],
+                    "plane": {"datum_plane": "XY", "offset": low, "rotation": None},
+                    "extent": {"kind": "distance", "parameter": None, "value": high - low},
+                    "slab": {
+                        "index": index,
+                        "of": 2,
+                        "station_parameters": [lower, upper],
+                        "extent_expression": f"{upper} - {lower}",
+                        "loops": [
+                            {
+                                "role": "outer",
+                                "signed_area_mm2": area,
+                                # A 40 mm square: the window is the tolerance
+                                # times this, the area a boundary displaced by
+                                # the tolerance would sweep.
+                                "perimeter_mm": 40.0,
+                            }
+                            | ({} if centroids is None else {"centroid_mm": centroids[index]})
+                        ],
+                    },
+                }
+            )
+        return {
+            row["name"]: row
+            for row in rp._user_parameters(groups, [], "mm", section_tolerance=tolerance)
+            if row["quantity"] == "position"
+        }
+
+    def test_sections_of_different_area_move_the_volume(self) -> None:
+        stations = self._stack(60.0)
+        self.assertEqual("volume", stations["recon_station_1"]["expected_observable"])
+        self.assertIn("100 and 60 mm2", stations["recon_station_1"]["observable_rationale"])
+
+    def test_sections_of_equal_area_move_the_centroid_and_not_the_volume(self) -> None:
+        stations = self._stack(100.0)
+        interior = stations["recon_station_1"]
+        self.assertEqual("centroid", interior["expected_observable"])
+        self.assertIn("leaving the volume exactly unchanged", interior["observable_rationale"])
+        # And the honest caveat is on the record rather than left to be found.
+        self.assertIn("report this station inert", interior["observable_rationale"])
+
+    def test_a_regions_extent_is_measured_from_the_regions_own_centroid(self) -> None:
+        """The comment said "its own centroid" and the code used the loop's.
+
+        `centroid_mm` is area-weighted with the holes subtracted, so an
+        off-centre hole moves it away from the boundary loop's centroid.
+        Measuring the lever arms from the boundary's centroid understates the
+        extent, which narrows the centroid window this number exists to widen
+        and refuses `profile-set-mismatch` on an accepted displacement.
+        """
+        from fusion_design import mesh_slabs as ms
+
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        hole = [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0), (1.0, 4.0)]
+        region = next(
+            row for row in ms.profile_regions([square, hole]) if row["boundary_loop"] == 0
+        )
+        centre = region["centroid_mm"]
+        # The hole in the bottom-left corner pushes the region's centroid up
+        # and right of the square's own (5, 5).
+        self.assertGreater(centre[0], 5.0)
+        self.assertGreater(centre[1], 5.0)
+        expected = max(
+            math.dist(point, centre) for loop in (square, hole) for point in loop
+        )
+        self.assertAlmostEqual(expected, region["extent_mm"], places=12)
+        # Strictly more than the boundary loop's own centroid would have given.
+        self.assertGreater(
+            region["extent_mm"],
+            max(math.dist(point, (5.0, 5.0)) for point in square),
+        )
+
+    def test_two_sections_about_the_same_point_declare_no_observable(self) -> None:
+        """Equal area *and* equal centroid: nothing in this vocabulary moves.
+
+        Concentric equal-area shapes are the case -- moving the station trades
+        material of one shape for material of the other at the same rate and
+        about the same point, so volume, centroid and bounding box are all
+        unchanged. Declaring `centroid` there makes the perturbation proof
+        report `parameter-inert` against a station that drives real geometry,
+        which is the over-claim in the other direction. It is named instead.
+        """
+        interior = self._stack(100.0, centroids=[[3.0, 4.0], [3.0, 4.0]])[
+            "recon_station_1"
+        ]
+        self.assertEqual("none", interior["expected_observable"])
+        self.assertIn("no observable in this vocabulary sees it", interior["observable_rationale"])
+        # Equal areas about *different* points still move the centroid.
+        moved = self._stack(100.0, centroids=[[3.0, 4.0], [3.0, 9.0]])["recon_station_1"]
+        self.assertEqual("centroid", moved["expected_observable"])
+        # And an unstated centroid reads as different rather than as equal: the
+        # branch that declines to name an observable is only reached on evidence.
+        self.assertEqual("centroid", self._stack(100.0)["recon_station_1"]["expected_observable"])
+
+    def test_a_spec_may_not_perturb_a_parameter_with_no_observable(self) -> None:
+        from fusion_design import mesh_editability as me
+        import test_mesh_editability as te
+
+        spec = te.spec()
+        spec["parameters"][0]["expected_observable"] = "none"
+        codes = {issue.code for issue in me.validate_editability_spec(spec)}
+        self.assertIn("editability-spec-invalid-parameters", codes)
+
+    def test_float_noise_is_not_a_difference_in_area(self) -> None:
+        """`!=` on measured areas made the equal-area branch unreachable.
+
+        These are floating-point sums over a tessellated section: two
+        geometrically equal areas essentially never agree to the last bit, so a
+        bare inequality declared `volume` on every station and the perturbation
+        proof then reported a correct one inert. The window is the caller's own
+        `slab_constancy_tolerance_mm` times the section perimeter -- the area a
+        boundary displaced by that tolerance sweeps, which is the same number
+        this stage uses to call two sections of one slab the same section.
+        """
+        # One part in 1e13, which is float noise and not a step.
+        stations = self._stack(100.0 * (1.0 + 1e-13))
+        self.assertEqual("centroid", stations["recon_station_1"]["expected_observable"])
+        # 0.05 mm x 40 mm perimeter = 2 mm2 of window; 3 is beyond it.
+        self.assertEqual(
+            "volume", self._stack(103.0)["recon_station_1"]["expected_observable"]
+        )
+        # And 1 mm2 is inside it: a step this stage would not call a step.
+        self.assertEqual(
+            "centroid", self._stack(101.0)["recon_station_1"]["expected_observable"]
+        )
+
+    def test_an_outermost_station_still_moves_the_volume(self) -> None:
+        for upper_area in (60.0, 100.0):
+            stations = self._stack(upper_area)
+            for name in ("recon_station_0", "recon_station_2"):
+                self.assertEqual("volume", stations[name]["expected_observable"])
+
+    def test_a_cavity_is_subtracted_from_the_section_it_sits_in(self) -> None:
+        # The material area, not the outer boundary's: two slabs whose outer
+        # loops differ but whose material areas agree do not move the volume.
+        slab = {
+            "loops": [
+                {"role": "outer", "signed_area_mm2": 100.0},
+                {"role": "cavity", "signed_area_mm2": -30.0},
+                {"role": "island", "signed_area_mm2": 5.0},
+                # A bore is cut by its own feature, ordered after this extrude,
+                # so this section still draws the material it sits in.
+                {"role": "bore", "signed_area_mm2": 9.0},
+            ]
+        }
+        self.assertAlmostEqual(75.0, rp._section_material_area(slab))
 
 
 class SlabStackContinuityTests(unittest.TestCase):

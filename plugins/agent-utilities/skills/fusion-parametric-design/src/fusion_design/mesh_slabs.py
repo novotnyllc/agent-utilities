@@ -427,6 +427,122 @@ def _minimax_assignment(cost: Sequence[Sequence[float]]) -> dict[int, int]:
     return {row: column for column, row in enumerate(best)}
 
 
+def containment_parents(loops: Sequence[Sequence[tuple[float, float]]]) -> list[int | None]:
+    """Each loop's *immediate* parent: the innermost loop that still contains it."""
+    depths = [
+        sum(
+            1
+            for other, polygon in enumerate(loops)
+            if other != index and _contains(polygon, points[0])
+        )
+        for index, points in enumerate(loops)
+    ]
+    parents: list[int | None] = []
+    for index, points in enumerate(loops):
+        containing = [
+            other
+            for other, polygon in enumerate(loops)
+            if other != index and _contains(polygon, points[0])
+        ]
+        parents.append(max(containing, key=lambda other: depths[other]) if containing else None)
+    return parents
+
+
+def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict[str, Any]]:
+    """Every region Fusion enumerates for this loop set, and which of them is material.
+
+    **Measured against a live Fusion, because the obvious model is wrong.** A
+    sketch of four nested and disjoint rectangles -- an outer square, two islands
+    in it, and one more square inside the first island -- enumerates *four*
+    profiles, not two: Fusion reports one region per loop, each being that loop
+    minus its immediate children, regardless of nesting parity. It does not know
+    which regions are holes; it reports the planar subdivision.
+
+    So this returns a region for every loop, and flags the even-depth ones as
+    ``material``. The executor extrudes the material regions and must still
+    account for the rest, because a profile the plan cannot name is geometry the
+    transaction would be silently leaving out of the feature.
+
+    A region's area is its own minus its immediate children's, and its centroid
+    is the area-weighted difference of the same -- the two properties Fusion
+    reports, computed the way Fusion computes them. Verified against the probe:
+    92, 3, 4 and 1 cm2 planned, 92, 3, 4 and 1 reported.
+    """
+    parents = containment_parents(loops)
+    depths: list[int] = []
+    for index in range(len(loops)):
+        depth, walk = 0, parents[index]
+        while walk is not None:
+            depth += 1
+            walk = parents[walk]
+        depths.append(depth)
+
+    regions: list[dict[str, Any]] = []
+    for index, points in enumerate(loops):
+        area = abs(_signed_area(points))
+        # Once, not once per point: `polygon_centroid` is O(n), and a sampled
+        # arc carries 256 points per arc, so recomputing it inside the extent
+        # scan made region measurement O(n^2) on the densest loops.
+        centre = polygon_centroid(points)
+        moment = [value * area for value in centre]
+        children = sorted(other for other, parent in enumerate(parents) if parent == index)
+        for child in children:
+            child_area = abs(_signed_area(loops[child]))
+            child_centre = polygon_centroid(loops[child])
+            area -= child_area
+            moment = [moment[k] - child_centre[k] * child_area for k in range(2)]
+        # The region's own centroid -- area-weighted, holes subtracted -- and
+        # the extent is measured from *it*, over its holes' boundaries as well
+        # as its own. The boundary loop's centroid is a different point as soon
+        # as a hole sits off-centre, and measuring the lever arms from it
+        # understates the extent, narrowing the very centroid window this
+        # number exists to widen.
+        region_centroid = (
+            [moment[k] / area for k in range(2)] if area > 0.0 else list(centre)
+        )
+        regions.append(
+            {
+                "boundary_loop": index,
+                "hole_loops": children,
+                "depth": depths[index],
+                "material": depths[index] % 2 == 0,
+                "area_mm2": area,
+                # The boundary this region is bounded by, its own and its
+                # holes'. Carried because an accepted snap is *allowed* to move
+                # that boundary, and the area that moves with it is the
+                # displacement times this length -- which is what the executor's
+                # profile match has to allow for.
+                "perimeter_mm": _perimeter(points)
+                + sum(_perimeter(loops[child]) for child in children),
+                # How far this region reaches from its own centroid: the lever
+                # arm a displaced boundary swings its area on, which is what
+                # bounds how far the *centroid* can move. A boundary-point
+                # displacement does not bound it -- on a long thin region a
+                # 0.05 mm move of half one edge shifts the centroid by tenths.
+                "extent_mm": max(
+                    (
+                        math.dist(point, region_centroid)
+                        for loop in [points] + [loops[child] for child in children]
+                        for point in loop
+                    ),
+                    default=0.0,
+                ),
+                "centroid_mm": region_centroid,
+            }
+        )
+    return regions
+
+
+def _perimeter(points: Sequence[tuple[float, float]]) -> float:
+    """The closed length of one projected loop."""
+    count = len(points)
+    if count < 2:
+        return 0.0
+    return sum(
+        math.dist(points[index], points[(index + 1) % count]) for index in range(count)
+    )
+
+
 def congruence(
     first: Sequence[Sequence[tuple[float, float]]],
     second: Sequence[Sequence[tuple[float, float]]],
@@ -581,6 +697,9 @@ def classify_loops(
                 "parity_agrees": loop["parity_agrees"],
                 "signed_area_mm2": loop["signed_area_mm2"],
                 "perimeter_mm": loop["perimeter_mm"],
+                # Where this loop's own area sits, so a consumer can ask
+                # whether two sections share a centroid and not only an area.
+                "centroid_mm": list(polygon_centroid(projected[index])),
                 "point_count": loop["point_count"],
                 "wall_regions": loop["wall_regions"],
                 "gates": loop["gates"],

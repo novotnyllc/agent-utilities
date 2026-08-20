@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
@@ -52,6 +53,7 @@ from .mesh_fitting import (
     loop_material_evidence,
     section_mesh,
 )
+from . import mesh_slabs
 from .mesh_reconstruction import _source_evidence, require_classification
 from .reconstruction_program import (
     IN_PLANE_AXES,
@@ -119,6 +121,7 @@ REBUILD_THRESHOLD_FIELDS = {
     "entity_match_tolerance_mm",
     "loop_material_consensus_fraction",
     "loop_attribution_min_fraction",
+    "sketch_loop_budget",
 }
 
 #: The two loop-evidence thresholds are *fractions of a length*, so on top of the
@@ -147,6 +150,14 @@ REBUILD_REFUSALS = {
     "entity-resolution-ambiguous",
     "parameter-name-collision",
     "program-parameter-unbound",
+    # A slab's sketch holds every loop its section closed, and a solver has to
+    # satisfy that whole schedule at once. The budget is the caller's, and the
+    # refusal exists so that the density at which Fusion gives up is a number
+    # somebody declared rather than something discovered by watching it hang.
+    "sketch-loop-budget-exceeded",
+    # The executor's own: Fusion's profile enumeration did not match the set the
+    # plan computed for these loops, so which profiles to extrude is a guess.
+    "profile-set-mismatch",
     # Declared now, raised by nothing yet: the 2.5D loop ladder measures these
     # and records them on the profile-ambiguous evidence table, and the slab
     # planner that refuses on them is a later unit. Declaring them here is what
@@ -217,6 +228,18 @@ REBUILD_REFUSAL_ALTERNATIVES = {
         "An archetype's extent, radius, hole diameter or hole position names no user parameter, so "
         "its dimension would be a magic number in the timeline. Re-plan the program."
     ),
+    "sketch-loop-budget-exceeded": (
+        "This slab's section closes more loops than the declared sketch_loop_budget. Raise the "
+        "budget only if you have evidence the solver holds at that density -- the number exists "
+        "because nobody has measured where it stops. Otherwise the part needs a decomposition "
+        "with more events, or these regions accepted as unreconstructed."
+    ),
+    "profile-set-mismatch": (
+        "Fusion enumerated profiles this sketch's planned loops do not account for, or did not "
+        "enumerate one the plan expects. That is a solver disagreement about the sketch's own "
+        "topology, not a tolerance: check the sketch for a loop that did not close, and re-plan "
+        "rather than extruding whichever profiles happened to match."
+    ),
     # The four below are measured today and refused by nobody. Their alternatives
     # are written now because the token and the way out of it are one thought,
     # and splitting them across units is how a token ends up meaning whatever
@@ -265,6 +288,10 @@ REBUILD_TRANSACTION_FAILURES = {
     "profile-not-found",
     "document-changed",
     "rollback-incomplete",
+    # Raised by the executor's profile-set resolver: Fusion's own enumeration of
+    # a multi-loop sketch did not match the regions the plan computed from the
+    # same loops, so which profiles to extrude is a guess.
+    "profile-set-mismatch",
 }
 
 
@@ -355,6 +382,32 @@ def validate_rebuild_spec(spec: Any) -> list[ValidationIssue]:
             thresholds.get("constraint_rejection_budget"),
             "rebuild_spec.thresholds.constraint_rejection_budget",
         )
+        # A budget counts loops, and `int()` at the point of use floors it: a
+        # declared 2.9 would enforce 2 and a declared 0.5 would refuse every
+        # sketch, so the spec would say one number and the gate would apply
+        # another. Rejected here rather than rounded anywhere.
+        declared_budget = thresholds.get("sketch_loop_budget")
+        budget_value = declared_budget.get("value") if isinstance(declared_budget, dict) else None
+        if (
+            isinstance(budget_value, (int, float))
+            and not isinstance(budget_value, bool)
+            # `int()` raises on a NaN or an infinity rather than returning a
+            # number to compare, and `json.loads` hands both through by
+            # default -- so a malformed spec would crash the CLI here instead
+            # of coming back as the named diagnostic `_declared_number` already
+            # recorded for it.
+            and math.isfinite(float(budget_value))
+            and float(budget_value) != int(budget_value)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "threshold-invalid-value",
+                    "rebuild_spec.thresholds.sketch_loop_budget.value",
+                    "This budget counts loops, so it must be a whole number; a fractional one is "
+                    "floored at the point of use and the gate then enforces a limit the spec does "
+                    "not declare.",
+                )
+            )
     rationale = spec.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         issues.append(
@@ -624,6 +677,107 @@ def _entities_2d(
     return out
 
 
+def _arc_span(
+    centre: Sequence[float],
+    start: Sequence[float],
+    end: Sequence[float],
+    sweep_through: Sequence[float] | None = None,
+) -> float:
+    """One arc's signed sweep, taking the way round its recorded mid point.
+
+    Shared by the sampler and the sampling allowance, because they have to agree
+    about which way round the arc goes: an arc classified through its mid point
+    can sweep more than half a turn, and normalising to the minor arc made the
+    allowance about 27 times too small for a 270 deg arc -- small enough to fail
+    a profile whose tolerances were fine.
+    """
+    first = math.atan2(start[1] - centre[1], start[0] - centre[0])
+    last = math.atan2(end[1] - centre[1], end[0] - centre[0])
+    if sweep_through is None:
+        return (last - first + math.pi) % (2.0 * math.pi) - math.pi
+    middle = math.atan2(sweep_through[1] - centre[1], sweep_through[0] - centre[0])
+    forward = (middle - first) % (2.0 * math.pi)
+    whole = (last - first) % (2.0 * math.pi)
+    return whole if forward <= whole else whole - 2.0 * math.pi
+
+
+def _sampled_entities(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> list[tuple[float, float]]:
+    """One loop's classified entities as a dense polyline, in the sketch plane.
+
+    Lines contribute their own endpoints; arcs and circles are sampled, because
+    the point of this is that an arc is *not* its chord. At 256 segments a
+    circle's area is under a hundredth of a percent short -- orders below the
+    match window and orders below the 10% an octagon's chords are out by, which
+    is the error this exists to remove -- and it costs one pass per loop.
+    """
+    points: list[tuple[float, float]] = []
+
+    def arc(centre, radius, start, end, sweep_through=None):
+        first = math.atan2(start[1] - centre[1], start[0] - centre[0])
+        span = _arc_span(centre, start, end, sweep_through)
+        for step in range(per_arc):
+            angle = first + span * step / per_arc
+            points.append((centre[0] + radius * math.cos(angle), centre[1] + radius * math.sin(angle)))
+
+    for row in rows:
+        if row["kind"] == "circle":
+            centre = row["center_mm"]
+            arc(centre, float(row["radius_mm"]), (centre[0] + float(row["radius_mm"]), centre[1]),
+                (centre[0] + float(row["radius_mm"]), centre[1]))
+            # A full turn: `arc` above walks span 0, so lay it out directly.
+            points[-per_arc:] = [
+                (
+                    centre[0] + float(row["radius_mm"]) * math.cos(2.0 * math.pi * step / per_arc),
+                    centre[1] + float(row["radius_mm"]) * math.sin(2.0 * math.pi * step / per_arc),
+                )
+                for step in range(per_arc)
+            ]
+            continue
+        if row["kind"] == "arc" and "center_mm" in row and "radius_mm" in row:
+            arc(
+                row["center_mm"],
+                float(row["radius_mm"]),
+                row["start_mm"],
+                row["end_mm"],
+                row.get("mid_mm"),
+            )
+            continue
+        points.append((row["start_mm"][0], row["start_mm"][1]))
+    return points
+
+
+def _sampling_shortfall(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> float:
+    """How much area the sampling above leaves out, exactly.
+
+    A chord subtends less than its arc, so a sampled arc encloses less than the
+    arc does -- by ``(r^2 / 2) * (theta - k * sin(theta / k))`` over ``k``
+    segments of a ``theta`` sweep. That is a fixed, computable shortfall, and
+    the executor's match window has to carry it: a caller declaring a tight
+    `entity_match_tolerance_mm` on a large-radius profile would otherwise meet
+    `profile-set-mismatch` with no solver movement at all.
+    """
+    total = 0.0
+    for row in rows:
+        radius = row.get("radius_mm")
+        if row["kind"] == "circle" and isinstance(radius, (int, float)):
+            sweep = 2.0 * math.pi
+        elif row["kind"] == "arc" and isinstance(radius, (int, float)) and "center_mm" in row:
+            # Through the mid point, exactly as the sampler goes round it.
+            sweep = abs(
+                _arc_span(
+                    row["center_mm"], row["start_mm"], row["end_mm"], row.get("mid_mm")
+                )
+            )
+        else:
+            continue
+        if sweep <= 0.0:
+            continue
+        total += (float(radius) ** 2 / 2.0) * (
+            sweep - per_arc * math.sin(sweep / per_arc)
+        )
+    return abs(total)
+
+
 def _require_chained(
     entities: Sequence[Mapping[str, Any]], tolerance: float, archetype_id: str
 ) -> None:
@@ -753,6 +907,27 @@ def _extrude_profile(
     # path there is nothing to disambiguate, and an O(triangles) winding pass
     # per archetype to produce a table nobody reads is cost with no reader.
     evidence_table = _loop_evidence(section, dump, normal, thresholds) if len(closed) > 1 else None
+    bore_ids = {id(line) for line in bores}
+    profile_loops = [line for line in closed if id(line) not in bore_ids]
+    if group.get("slab") is not None and len(profile_loops) > 1:
+        # A slab's section closes the material's whole outline at this station:
+        # its outer boundary, its cavities as holes in the profile, and any
+        # island standing in a cavity. One extrude over that whole profile set is
+        # the feature; taking the largest loop and dropping the rest is the
+        # positional choice `_single_closed` exists to refuse.
+        return _slab_profile(
+            group,
+            profile_loops,
+            bores,
+            section,
+            station,
+            origin,
+            u,
+            v,
+            normal,
+            thresholds,
+            evidence_table,
+        )
     polyline = _single_closed(section, str(group["id"]), station, bores, evidence_table)
     entities = classify_polyline(
         polyline.points,
@@ -777,6 +952,159 @@ def _extrude_profile(
         "coplanar_triangles": section.coplanar_triangles,
         "selected_point_count": len(polyline.points),
     }
+    return rows, evidence
+
+
+def _slab_profile(
+    group: Mapping[str, Any],
+    profile_loops: Sequence[Any],
+    bores: Sequence[Any],
+    section: Any,
+    station: float,
+    origin: Vec3,
+    u: Vec3,
+    v: Vec3,
+    normal: Vec3,
+    thresholds: Mapping[str, Any],
+    evidence_table: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """One slab's whole profile set: outer boundary, cavities, islands.
+
+    Each loop is classified and chained on its own -- a gap in one loop is that
+    loop's gap, not the sketch's -- and every entity row carries the ``loop`` it
+    belongs to so the executor can build them into one sketch without chaining
+    across a boundary that is not there.
+
+    ``profile_set`` is the regions a solver will enumerate from these loops,
+    computed host-side by the same rule Fusion uses: each even-depth loop minus
+    its immediate children. The executor matches Fusion's own enumeration
+    against it by centroid and area and refuses ``profile-set-mismatch`` on any
+    zero-or-multiple match, which retires the largest-area rule for slab steps.
+
+    Bores are absent from the sketch entirely, not present as holes: each one is
+    a hole feature this same program cuts, ordered after this extrude, and
+    drawing it here as well would remove its material twice.
+    """
+    identifier = str(group["id"])
+    budget = int(_value(thresholds, "sketch_loop_budget"))
+    if len(profile_loops) > budget:
+        raise _refuse(
+            "sketch-loop-budget-exceeded",
+            f"{identifier}'s section closes {len(profile_loops)} profile loops and the caller "
+            f"declared a budget of {budget}. A sketch this dense is a constraint schedule the "
+            "solver has to satisfy in one go, and finding out where it gives up by watching it "
+            "time out is not a measurement.",
+            {
+                "archetype_id": identifier,
+                "loop_count": len(profile_loops),
+                "budget": budget,
+                "station_mm": station,
+            },
+        )
+
+    flat = [[_project(point, origin, u, v) for point in line.points] for line in profile_loops]
+    # Containment is a topological question and the chords answer it: an arc
+    # and the chords across it enclose the same loops. The *areas* are a
+    # different matter, and they are computed further down from the classified
+    # entities instead -- see `_sampled_entities`.
+    parents = mesh_slabs.containment_parents(flat)
+    regions = mesh_slabs.profile_regions(flat)
+    if not any(region["material"] for region in regions):
+        raise _refuse(
+            "profile-not-found",
+            f"{identifier}'s section at station {station:.6g} mm closes "
+            f"{len(profile_loops)} loop(s) and not one of them bounds material: every region is a "
+            "hole in something. A profile set with no material region is not a profile set.",
+            {"archetype_id": identifier, "station_mm": station, "loops": len(profile_loops)},
+        )
+
+    hole_loops = {
+        region["boundary_loop"] for region in regions if not region["material"]
+    }
+    rows: list[dict[str, Any]] = []
+    sampled: list[list[tuple[float, float]]] = []
+    shortfalls: list[float] = []
+    loop_records: list[dict[str, Any]] = []
+    for index, line in enumerate(profile_loops):
+        entities = classify_polyline(
+            line.points,
+            tolerance=_value(thresholds, "classify_tolerance_mm"),
+            closed=True,
+            normal=normal,
+            segment_triangles=line.segment_triangles or None,
+        )
+        loop_rows = _entities_2d(entities, origin, u, v)
+        _require_chained(
+            loop_rows,
+            _value(thresholds, "profile_chain_tolerance_mm"),
+            f"{identifier} loop {index}",
+        )
+        for row in loop_rows:
+            row["loop"] = index
+        rows.extend(loop_rows)
+        sampled.append(_sampled_entities(loop_rows))
+        shortfalls.append(_sampling_shortfall(loop_rows))
+        loop_records.append(
+            {
+                "loop": index,
+                "role": "hole" if index in hole_loops else "boundary",
+                "parent_loop": parents[index],
+                "entity_count": len(loop_rows),
+                "point_count": len(line.points),
+            }
+        )
+
+    # The properties the executor matches Fusion's enumeration against come
+    # from the *classified* entities, not from the section's chords. A regular
+    # octagon whose vertices lie exactly on a circle has zero circle-fit
+    # residual and 10% less area than the circle, so a region measured on the
+    # chords and built as an arc is a `profile-set-mismatch` on geometry Fusion
+    # built exactly as classified. The classification residual does not bound
+    # that difference, and nothing else here would have caught it.
+    regions = mesh_slabs.profile_regions(sampled)
+
+    evidence: dict[str, Any] = {
+        "source": "mesh-section",
+        "station_mm": station,
+        "station_rationale": (
+            "Sectioned at this slab's own mid-station -- maximally far from both of its bounding "
+            "event planes, where a section cuts walls rather than grazing coplanar cap triangles."
+        ),
+        "open_polyline_count": sum(1 for line in section.polylines if not line.closed),
+        "junction_count": len(section.junctions),
+        "coplanar_triangles": section.coplanar_triangles,
+        "selected_point_count": sum(len(line.points) for line in profile_loops),
+        "loops": loop_records,
+        "loops_excluded_as_bores": len(bores),
+        "loop_budget": budget,
+        "profile_set": [
+            {
+                "boundary_loop": region["boundary_loop"],
+                "hole_loops": region["hole_loops"],
+                "material": region["material"],
+                "area_mm2": region["area_mm2"],
+                # The boundary an accepted snap is licensed to move, so the
+                # executor's profile match can allow the area that moves with it.
+                "perimeter_mm": region["perimeter_mm"],
+                "extent_mm": region["extent_mm"],
+                # What the arc sampling above leaves out for this region, so
+                # the executor's window can carry it rather than refusing on it.
+                "area_sampling_mm2": shortfalls[region["boundary_loop"]]
+                + sum(shortfalls[child] for child in region["hole_loops"]),
+                "centroid_mm": list(region["centroid_mm"]),
+            }
+            for region in regions
+        ],
+        "profile_set_note": (
+            "Every region Fusion is expected to enumerate from these loops -- one per loop, each "
+            "being that loop minus its immediate children, whatever its nesting depth. That is "
+            "what a live Fusion was measured to return, not what even-odd reasoning predicts. The "
+            "executor matches its enumeration against this by centroid and area, extrudes the "
+            "regions flagged `material`, and refuses rather than taking the largest."
+        ),
+    }
+    if evidence_table is not None:
+        evidence["loop_evidence"] = evidence_table
     return rows, evidence
 
 
@@ -1021,9 +1349,17 @@ def _constraint_schedule(
 
     # Layer 1b: perpendicular and parallel between lines the axes did not already
     # pin. A line already made horizontal or vertical needs neither.
+    #
+    # Within one loop only, like every pairwise layer here. Two contours in one
+    # sketch are independent geometry that happens to share a plane, and a
+    # parallel or perpendicular between them couples them: a later dimension on
+    # one then moves or overconstrains the other. Two rotated rectangles in one
+    # slab are the case -- every line of each is parallel to one of the other's.
     for position, (index, _entity, direction) in enumerate(lines):
         for other_index, _other, other_direction in lines[position + 1 :]:
             if index in oriented and other_index in oriented:
+                continue
+            if entities[index].get("loop") != entities[other_index].get("loop"):
                 continue
             assert direction is not None and other_direction is not None
             angle = _angle_between(direction, other_direction)
@@ -1041,7 +1377,19 @@ def _constraint_schedule(
     # Layer 1c: tangency at line-arc junctions, measured at the shared endpoint.
     count = len(entities)
     for index, entity in enumerate(entities):
+        loop = entity.get("loop")
         following_index = (index + 1) % count
+        if entities[following_index].get("loop") != loop:
+            # Wrap inside this entity's own loop. Flattened, the entity after
+            # the last of one contour is the first of the *next* one, and the
+            # two share no endpoint: a tangent constraint between them would
+            # bend an unrelated contour, and only the final loop would ever get
+            # its own closing junction checked.
+            following_index = next(
+                other for other in range(count) if entities[other].get("loop") == loop
+            )
+        if following_index == index:
+            continue
         following = entities[following_index]
         if count < 2 or {entity["kind"], following["kind"]} != {"line", "arc"}:
             continue
@@ -1077,9 +1425,14 @@ def _constraint_schedule(
                  "snapped_from": offset, "snapped_from_unit": "mm"}
             )
 
-    # Layer 1e: concentric and equal radii between curves.
+    # Layer 1e: concentric and equal radii between curves -- within one loop,
+    # for the reason layer 1b states. Two bores of the same radius in one slab's
+    # section are two bores, and tying them together makes one of them stop
+    # being editable on its own.
     for position, (index, entity) in enumerate(curves):
         for other_index, other in curves[position + 1 :]:
+            if entities[index].get("loop") != entities[other_index].get("loop"):
+                continue
             gap = math.dist(entity["center_mm"], other["center_mm"])
             if gap <= length_tolerance:
                 schedule.append(
@@ -1447,41 +1800,6 @@ def plan_emission(
             },
         )
 
-    slabs = [
-        group
-        for group in program["archetypes"]
-        if group.get("kind") == "sketch-extrude" and group.get("slab") is not None
-    ]
-    if len(slabs) > 1:
-        # A multi-slab program is a *valid* program this emitter does not yet
-        # implement: it needs one sketch per slab holding several loops, a
-        # profile-set resolver in place of the largest-area rule, and chained
-        # station extents. Building each slab's outer loop and quietly dropping
-        # its cavities would be exactly the improvisation this unit bans, so it
-        # refuses by name and the reader re-plans without the dump.
-        raise _refuse(
-            "program-schema-violation",
-            f"this program decomposes the part into {len(slabs)} slabs, and this emitter builds one "
-            "extrude per sketch from a single closed loop. A slab stack needs the multi-loop "
-            "profile path, which this version does not implement.",
-            {
-                "slab_count": len(slabs),
-                "slab_ids": [str(group.get("id")) for group in slabs],
-                # Read defensively: this is the *refusal's own* evidence, and
-                # the program validator admits the v2 `slab` key without
-                # checking the shapes around it, so a hand-edited archetype
-                # carrying `plane: null` reaches here. Raising `TypeError` while
-                # building a named refusal would replace it with a crash.
-                "stations": [
-                    [
-                        (group.get("plane") or {}).get("offset"),
-                        (group.get("extent") or {}).get("value"),
-                    ]
-                    for group in slabs
-                ],
-            },
-        )
-
     thresholds = spec["thresholds"]
     units = str(program["units"])
     if units != "mm":
@@ -1713,8 +2031,38 @@ def plan_emission(
             add_parameter(entry)
 
         offset = float(plane["offset"])
-        offset_parameter = None
-        if abs(offset) > 0.0:
+        offset_parameter = plane.get("offset_parameter")
+        # A parameter name, checked as one before it is used as one. The program
+        # validator checks the plane's datum and not this field, so a serialized
+        # program carrying anything unhashable here -- a JSON array is the easy
+        # one -- reached the membership test below and raised `TypeError:
+        # unhashable type`, escaping the named refusal this emitter promises for
+        # a malformed program. Absent and null both mean "this plane names no
+        # station", which is the ordinary case; anything else present has to be
+        # a name.
+        if offset_parameter is not None and (
+            not isinstance(offset_parameter, str) or not offset_parameter.strip()
+        ):
+            raise _refuse(
+                "program-schema-violation",
+                f"{identifier}'s sketch plane declares offset_parameter as "
+                f"{type(offset_parameter).__name__} {offset_parameter!r}; it names a user "
+                "parameter, so it is a non-empty string or it is absent.",
+                {"archetype_id": identifier, "offset_parameter": repr(offset_parameter)},
+            )
+        if offset_parameter:
+            # A slab names its own lower event's station parameter, which the
+            # program already declared and which its neighbour below names too.
+            # Minting a second parameter for the same boundary would store it
+            # twice and let one edit tear the two slabs apart.
+            if offset_parameter not in seen:
+                raise _refuse(
+                    "program-parameter-unbound",
+                    f"{identifier}'s sketch plane names station parameter {offset_parameter!r}, "
+                    "which this program does not declare as a user parameter.",
+                    {"archetype_id": identifier, "parameter": offset_parameter},
+                )
+        elif abs(offset) > 0.0:
             offset_parameter = f"recon_{identifier.replace('-', '_')}_plane_offset"
             add_parameter(
                 {
@@ -1754,6 +2102,27 @@ def plan_emission(
             "constraints": _constraint_schedule(entities, thresholds),
             "dimensions": dimensions,
             "profile_evidence": evidence,
+            # Present only on a multi-loop slab step: the regions the executor
+            # must match Fusion's own enumeration against, in centimetres like
+            # every other coordinate it reads. Absent means one loop, one
+            # profile, and the single-profile path unchanged.
+            "profile_set": [
+                {
+                    "boundary_loop": region["boundary_loop"],
+                    "hole_loops": list(region["hole_loops"]),
+                    "material": region["material"],
+                    "area_cm2": region["area_mm2"] * MM_TO_CM * MM_TO_CM,
+                    # The boundary an accepted snap is allowed to move, so the
+                    # executor can allow the area that moves with it.
+                    "perimeter_cm": region.get("perimeter_mm", 0.0) * MM_TO_CM,
+                    "extent_cm": region.get("extent_mm", 0.0) * MM_TO_CM,
+                    "area_sampling_cm2": region.get("area_sampling_mm2", 0.0)
+                    * MM_TO_CM
+                    * MM_TO_CM,
+                    "centroid_cm": [value * MM_TO_CM for value in region["centroid_mm"]],
+                }
+                for region in evidence.get("profile_set", ())
+            ],
             "adopted_constraints": [
                 {
                     "kind": entry["kind"],
@@ -1771,15 +2140,38 @@ def plan_emission(
                 "angle_expression": _expression(float(group["axis"]["angle_deg"]), "deg"),
             }
         else:
-            parameter = (group.get("extent") or {}).get("parameter")
-            if not parameter:
+            extent = group.get("extent") or {}
+            expression = extent.get("expression")
+            parameter = extent.get("parameter")
+            if expression:
+                # The station model: this slab's depth is the difference of the
+                # two stations that bound it, so no boundary is stored twice.
+                # Every name in the expression must be a parameter this program
+                # declares, or the timeline would carry an expression Fusion
+                # resolves against something nobody planned.
+                unknown = sorted(
+                    name
+                    for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(expression))
+                    if name not in seen
+                )
+                if unknown:
+                    raise _refuse(
+                        "program-parameter-unbound",
+                        f"{identifier}'s extent expression {expression!r} names "
+                        + ", ".join(unknown)
+                        + ", which this program does not declare as user parameters.",
+                        {"archetype_id": identifier, "unknown": unknown},
+                    )
+                step["extent"] = {"kind": "distance", "parameter": str(expression)}
+            elif parameter:
+                step["extent"] = {"kind": "distance", "parameter": parameter}
+            else:
                 raise _refuse(
                     "program-parameter-unbound",
                     f"{identifier} is a {group['kind']} whose distance extent names no user "
                     "parameter, so its depth would be a magic number in the timeline.",
                     {"archetype_id": identifier},
                 )
-            step["extent"] = {"kind": "distance", "parameter": parameter}
         if group["kind"] == "hole":
             step["placement"] = _hole_placement(group, identifier, plane["datum_plane"])
         steps.append(step)
@@ -1824,6 +2216,10 @@ def _to_cm(entity: Mapping[str, Any]) -> dict[str, Any]:
         row["radius_cm"] = float(entity["radius_mm"]) * MM_TO_CM
     if entity.get("on_axis"):
         row["on_axis"] = True
+    if entity.get("loop") is not None:
+        # Which loop of a multi-loop sketch this curve belongs to. Absent on a
+        # single-loop step, so nothing about today's plans changes shape.
+        row["loop"] = int(entity["loop"])
     row["residual_mm"] = entity["residual_mm"]
     return row
 
@@ -1957,8 +2353,23 @@ def _build_entities(sketch, step, missing):
     created = []
     previous_end = None
     first_start = None
+    # Not None: a single-loop step carries no `loop` key at all, and `None` is
+    # the loop it is then in. Starting from a sentinel makes the first entity
+    # open a loop in both cases.
+    current_loop = "no-loop-yet"
     entities = step["entities"]
     for index, entity in enumerate(entities):
+        loop = entity.get("loop")
+        if loop != current_loop:
+            # Each loop is its own closed contour. Carrying `previous_end`
+            # across a boundary starts the next loop at the previous one's
+            # endpoint and closes the last loop onto the *first* loop's start:
+            # one bridged open chain where the sketch wanted several closed
+            # ones, which either trips `profile-set-mismatch` or extrudes
+            # geometry nobody planned.
+            current_loop = loop
+            previous_end = None
+            first_start = None
         kind = entity["kind"]
         if kind == "circle":
             centre = entity["center_cm"]
@@ -1968,7 +2379,7 @@ def _build_entities(sketch, step, missing):
         start = previous_end if previous_end is not None else _point(
             entity["start_cm"][0], entity["start_cm"][1]
         )
-        last = index == len(entities) - 1
+        last = index == len(entities) - 1 or entities[index + 1].get("loop") != loop
         end = first_start if (last and first_start is not None) else _point(
             entity["end_cm"][0], entity["end_cm"][1]
         )
@@ -2047,9 +2458,13 @@ def _profile(sketch, step):
             "to extrude. The plan's entities chained closed host-side; the solver disagreed.",
             {"archetype_id": step["archetype_id"]},
         )
-    # Seeded from nothing rather than from the first profile: the largest-area
-    # scan below picks the winner outright, and a constant subscript here would
-    # be the one place in this transaction that named geometry by position.
+    planned = step.get("profile_set") or []
+    if planned:
+        return _profile_set(sketch, step, planned)
+    # One loop, one region: the largest-area scan below picks the winner
+    # outright. Seeded from nothing rather than from the first profile, because
+    # a constant subscript would be the one place in this transaction that named
+    # geometry by position.
     best = None
     best_area = None
     for index in range(profiles.count):
@@ -2058,6 +2473,146 @@ def _profile(sketch, step):
         if best_area is None or area > best_area:
             best, best_area = candidate, area
     return best
+
+
+def _profile_set(sketch, step, planned):
+    """Match Fusion's own profile enumeration against the regions the plan computed.
+
+    The largest-area rule is retired for a slab: its sketch holds an outer
+    boundary, its cavities and its islands, and "take the biggest" would build
+    the outline and silently drop every pocket in it. Each planned region is
+    matched by centroid *and* area, and zero-or-multiple matches refuse -- which
+    is the same rule the host-side dimension binding already follows, applied to
+    the one place the executor still chose geometry by size.
+
+    Fusion reports a profile's area and centroid in the sketch's own plane, so
+    both are compared in centimetres against the plan's own arithmetic.
+    """
+    profiles = sketch.profiles
+    tolerance = float(PLAN["thresholds"]["entity_match_tolerance_mm"]["value"]) * 0.1
+    # The plan's regions come from the *section*, and the constraints this
+    # transaction then accepts are allowed to move that geometry by up to the
+    # declared displacement tolerance -- so Fusion is enumerating profiles of a
+    # contour that has legitimately moved since. The area that moves with a
+    # displaced boundary is the displacement times the boundary's own length,
+    # which scales with perimeter rather than with the square root of area: on a
+    # long thin region, allowing only the latter refuses a profile set this
+    # transaction itself asked for. Both allowances are the caller's declared
+    # numbers; neither is widened beyond what was accepted.
+    displacement = float(PLAN["thresholds"]["constraint_displacement_tolerance_mm"]["value"]) * 0.1
+    found = []
+    for index in range(profiles.count):
+        candidate = profiles.item(index)
+        properties = candidate.areaProperties()
+        centroid = properties.centroid
+        found.append(
+            {
+                "index": index,
+                "profile": candidate,
+                "area": properties.area,
+                "centroid": (centroid.x, centroid.y, centroid.z),
+            }
+        )
+
+    collection = adsk.core.ObjectCollection.create()
+    taken = []
+    for region in planned:
+        want = region["centroid_cm"]
+        matches = []
+        for entry in found:
+            if entry["index"] in taken:
+                continue
+            # The sketch plane's own u/v are the first two of the profile's
+            # 3-D centroid in sketch space, which is what the plan projected to.
+            gap = (
+                (entry["centroid"][0] - want[0]) ** 2 + (entry["centroid"][1] - want[1]) ** 2
+            ) ** 0.5
+            perimeter = float(region.get("perimeter_cm") or 0.0)
+            area_window = (
+                tolerance * max(1.0, abs(region["area_cm2"]) ** 0.5)
+                + displacement * perimeter
+                # Fusion builds the exact arc; the plan measured a 256-segment
+                # approximation of it. That difference is computed, not
+                # estimated, and it is in the window rather than left to be
+                # refused on when the caller declares a tight tolerance.
+                + float(region.get("area_sampling_cm2") or 0.0)
+            )
+            # The centroid is governed by the changed first *moment*, not by
+            # how far any point moved. An accepted snap that shifts a small
+            # part of a long thin boundary keeps every sketch point inside the
+            # displacement and swings the centroid by the added area times its
+            # lever arm, over the whole area: `displacement * perimeter` of
+            # area at a lever of at most the region's own extent.
+            extent = float(region.get("extent_cm") or 0.0)
+            area = abs(region["area_cm2"])
+            centroid_window = tolerance + displacement * (
+                1.0 + (perimeter * extent / area if area > 0.0 else 0.0)
+            )
+            # The same sampling difference again, and it moves the centroid for
+            # the same reason a snap does: the area the 256-segment
+            # approximation leaves out is real area, sitting at a lever of at
+            # most the region's own extent, over the whole area. Symmetric
+            # regions cancel it and asymmetric ones do not, so the area
+            # allowance above does not cover this and a large-radius arc under
+            # a tight declared tolerance was refused on arithmetic rather than
+            # on geometry.
+            shortfall = float(region.get("area_sampling_cm2") or 0.0)
+            # Over the area that *remains*: Fusion builds the exact arc, so the
+            # shortfall is area the planned region does not have, and dividing
+            # the moment by the sampled area understates the shift it can cause.
+            # Floored at a tenth of the sampled area rather than allowed to
+            # collapse -- a region whose shortfall approaches its whole area is
+            # not a region this window can speak about, and an unbounded number
+            # here would match every profile instead of the right one.
+            reduced = max(area - shortfall, area * 0.1)
+            if reduced > 0.0:
+                centroid_window += shortfall * extent / reduced
+            if gap <= centroid_window and (
+                abs(entry["area"] - region["area_cm2"]) <= area_window
+            ):
+                matches.append(entry)
+        if len(matches) != 1:
+            raise Refused(
+                "profile-set-mismatch",
+                str(len(matches)) + " of the " + str(profiles.count) + " profiles Fusion "
+                "enumerated for " + step["archetype_id"] + " match the planned region bounded by "
+                "loop " + str(region["boundary_loop"]) + "; exactly one must. Extruding whichever "
+                "profiles happened to match would build a body nobody planned.",
+                {
+                    "archetype_id": step["archetype_id"],
+                    "boundary_loop": region["boundary_loop"],
+                    "matches": len(matches),
+                    "enumerated": profiles.count,
+                    "planned": len(planned),
+                    "wanted_area_cm2": region["area_cm2"],
+                    "wanted_centroid_cm": list(want),
+                    "found": [
+                        {"area_cm2": entry["area"], "centroid_cm": list(entry["centroid"][:2])}
+                        for entry in found
+                    ],
+                },
+            )
+        taken.append(matches[0]["index"])
+        if region.get("material"):
+            # Only the material regions go into the feature. The holes are
+            # matched too -- every profile Fusion enumerated has to be one the
+            # plan can name -- and then deliberately left out of the extrude.
+            collection.add(matches[0]["profile"])
+
+    if profiles.count != len(planned):
+        raise Refused(
+            "profile-set-mismatch",
+            "Fusion enumerated " + str(profiles.count) + " profiles for "
+            + step["archetype_id"] + " and the plan computed " + str(len(planned)) + " regions "
+            "from the same loops. A profile the plan does not account for is geometry this "
+            "transaction would leave out of the feature without saying so.",
+            {
+                "archetype_id": step["archetype_id"],
+                "enumerated": profiles.count,
+                "planned": len(planned),
+            },
+        )
+    return collection
 
 
 def _operation(name, missing):
