@@ -24,6 +24,7 @@ import math
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+from typing import ClassVar
 import unittest
 
 from fusion_design.cli import main
@@ -1155,7 +1156,7 @@ class MotionEvidenceSeamTests(unittest.TestCase):
 
     #: The acceptance run's own plate: 80 x 50 x 10, whose only coaxial outward
     #: turned surface is one round of radius 10 that is not centred on it.
-    ACCEPTANCE = dict(
+    ACCEPTANCE: ClassVar[dict] = dict(
         width=80.0, depth=50.0, height=10.0, post_radius=10.0, post_height=6.0,
         post_centre=(22.0, 16.0), nx=16, ny=12, nz=5,
     )

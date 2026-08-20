@@ -105,6 +105,19 @@ class DumpRoundTripTests(unittest.TestCase):
                 read_mesh_dump(path, "c" * 64)
         self.assertEqual("dump-hash-mismatch", caught.exception.reason)
 
+    def test_a_dump_path_that_cannot_be_read_refuses_by_name(self) -> None:
+        """The one way a dump could be wrong that a caller could not branch on.
+
+        A spec whose `dump_path` placeholder was never substituted reached the
+        emitter and escaped as a bare OSError naming errno. Every other way a
+        dump is wrong carries a reason from the closed vocabulary; this one does
+        now too, and it names the path.
+        """
+        with self.assertRaises(MeshDumpError) as caught:
+            read_mesh_dump("dumps/REPLACED_WITH_THE_PARTS_OWN_DUMP", "d" * 64)
+        self.assertEqual("dump-unreadable", caught.exception.reason)
+        self.assertIn("REPLACED_WITH_THE_PARTS_OWN_DUMP", str(caught.exception))
+
     def test_absent_face_groups_are_absent_and_never_one_fabricated_group(self) -> None:
         payload = pack_mesh_dump(
             metadata(face_groups_source="absent"), SQUARE_VERTICES, SQUARE_TRIANGLES, None

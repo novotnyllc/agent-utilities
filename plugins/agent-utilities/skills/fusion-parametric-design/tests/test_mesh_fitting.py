@@ -1352,7 +1352,10 @@ class NormalConstrainedAxisTests(unittest.TestCase):
             centroids, normals, facet_areas=areas, sigma_theta_floor_deg=1e-06
         )
         self.assertGreater(loose["axis_tilt_sigma_deg"], tight["axis_tilt_sigma_deg"])
-        self.assertEqual(0.5, loose["sigma_theta_deg"])
+        # Two multiplications by separately rounded constants (pi/180 and
+        # 180/pi), whose product is not exactly one, so the equality the
+        # arithmetic guarantees is an ulp-wide one.
+        self.assertAlmostEqual(0.5, loose["sigma_theta_deg"], places=12)
         self.assertLess(loose["measured_sigma_theta_deg"], 1e-06)
 
     def test_a_narrow_arc_of_facets_does_not_determine_an_axis_either(self) -> None:

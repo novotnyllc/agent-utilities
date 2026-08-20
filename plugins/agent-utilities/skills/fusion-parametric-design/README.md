@@ -95,8 +95,8 @@ declared source hash before emitting, and `emit-mesh-extract`,
 unless a recorded classification chose a path they implement, for that exact
 mesh source.
 
-`fit-regions` takes no new flags, but its `--spec` declares eight more
-thresholds, each with a rationale like every other: `regime`
+`fit-regions` takes no new flags, but its `--spec` declares one regime
+selector and seven more thresholds, each with a rationale like every other: `regime`
 (`auto` | `tessellation` | `scan`), `tessellation_sigma_over_extent` and
 `vertex_precision_rel` for the measurement regime and its noise floor;
 `min_normal_axis_eigengap` and `normal_sigma_theta_floor_deg` for taking a

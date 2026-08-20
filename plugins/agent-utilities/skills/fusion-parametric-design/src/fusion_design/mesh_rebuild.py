@@ -32,7 +32,12 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
-from .manifest import ManifestValidationError, ValidationIssue, _reject_unknown_fields
+from .manifest import (
+    ManifestValidationError,
+    ValidationIssue,
+    _in_closed_set,
+    _reject_unknown_fields,
+)
 from .mesh_datum import ReconstructionRefused, refusal
 from .mesh_dump import MeshDump, read_mesh_dump
 from .mesh_fitting import (
@@ -1176,10 +1181,22 @@ def _edge_evidence_cm(evidence: Any) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     for key in ("box_min", "box_max", "centroid"):
         value = evidence.get(key)
-        if not isinstance(value, (list, tuple)) or len(value) != 3:
+        # The members are checked, not only the container: `float(item)` on a
+        # hand-edited program's string or None escapes as a bare ValueError or
+        # TypeError, where every other malformed input here refuses by name.
+        if (
+            not isinstance(value, (list, tuple))
+            or len(value) != 3
+            or any(
+                isinstance(item, bool)
+                or not isinstance(item, (int, float))
+                or not math.isfinite(item)
+                for item in value
+            )
+        ):
             raise _refuse(
                 "program-schema-violation",
-                f"a fillet's edge_evidence.{key} must be three datum-frame stations.",
+                f"a fillet's edge_evidence.{key} must be three finite datum-frame stations.",
                 {"edge_evidence": evidence},
             )
         out[key + "_cm"] = [float(item) * MM_TO_CM for item in value]
@@ -1424,7 +1441,10 @@ def plan_emission(
             # feature, and which two is not derivable here -- the planner read it
             # off the cap order it recorded, and an emitter that guessed would be
             # rounding whichever edge it liked.
-            if (len(between) == 1) != (edge_faces in EDGE_FACE_SETS):
+            # `_in_closed_set` rather than `in`: an unhashable edge_faces
+            # from a hand-edited program raises TypeError on `in`, where
+            # every other malformed input here refuses by name.
+            if (len(between) == 1) != _in_closed_set(edge_faces, set(EDGE_FACE_SETS)):
                 raise _refuse(
                     "program-schema-violation",
                     f"{identifier} names {len(between)} archetype(s) and edge_faces "

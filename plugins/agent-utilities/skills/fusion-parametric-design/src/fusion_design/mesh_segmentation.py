@@ -1766,6 +1766,19 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
 #: comparison, not a decision threshold: the question it answers is whether two
 #: facets were generated from one analytic face, and a tessellator's answer is
 #: exact while a scanner's is never within a billionth of a degree of it.
+#:
+#: A billionth of a degree is below what ``acos`` can resolve near 1 -- one ulp
+#: off a unit dot product already reads 1.2e-06 degrees -- so in practice this
+#: comparison asks whether the dot product rounded to exactly 1.0, and a pair
+#: that misses by an ulp counts as *not* coplanar. That is the conservative
+#: direction (it can only push a mesh towards `scan`, which keeps the wider
+#: bands), it needs a *whole mesh* of near misses to change the regime because
+#: `bimodal` needs only one exact pair, and it does not happen on any mesh
+#: measured here: the fixtures put 89% of interior edges at exactly 0.0 with no
+#: near-zero band at all, and the honeycomb organiser -- a vendor STL, normals
+#: computed per facet from different vertex triples -- puts 38.5% there. Widening
+#: it to acos's own resolution would be a threshold moved for a failure nobody
+#: has measured; the regression fixture below pins the behaviour instead.
 _EXACT_COPLANAR_DEG = 1e-9
 
 
@@ -2130,6 +2143,14 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
 
         if accepted:
             residuals = list(_residuals(fit.kind, fit.parameters, points))
+            # Bound before the first branch that can clear `accepted`. Both
+            # structure gates below read it from this scope, and when the support
+            # floors refuse first the block that used to bind it never runs --
+            # leaving the reads safe only because `and` happens to short-circuit
+            # on `accepted` first. That is an operand order, not an invariant,
+            # and an UnboundLocalError here becomes `fit-record-stage-failed` for
+            # the whole mesh.
+            power_floor = max(_BAND_FLOOR_RATIO * fit.extent, 0.1 * surface_scale)
             passed, measured = _support_floors(fit, points, spec, topo.median_edge)
             support.update(measured)
             if not passed:
@@ -2145,8 +2166,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # magnitude inside the measurement noise, and on an exact
                 # synthetic fit it would be reading float noise. Say so rather
                 # than pass or fail on it -- and do not claim the check in
-                # `checked`, because it did not run.
-                power_floor = max(_BAND_FLOOR_RATIO * fit.extent, 0.1 * surface_scale)
+                # `checked`, because it did not run. `power_floor` is bound above.
                 structure = (
                     _moran_i(residuals, point_indices, topo)
                     if fit.rms_residual > power_floor
@@ -2668,10 +2688,26 @@ def _boundary_corroboration(
     answer for a group that closes on itself and for one whose border is not
     round.
     """
-    anchor = fit.parameters.get("axis_point") or fit.parameters.get("center")
     axis = fit.parameters.get("axis_direction")
+    if axis is None:
+        return None
+    # A cylinder and a torus carry one radius. A cone's varies along its axis, so
+    # the number a loop is comparable to is the cone's own radius *at that loop's
+    # station* -- which is what makes ``cone`` in ``_AXIS_KINDS`` true rather than
+    # only declared. It was excluded before any loop was looked at, by a dead
+    # ``anchor`` local that matched ``axis_point`` and ``center`` and so was
+    # always ``None`` for a cone, whose anchor key is ``apex``.
+    apex = fit.parameters.get("apex")
+    half_angle = fit.parameters.get("half_angle_deg")
     radius = fit.parameters.get("radius")
-    if anchor is None or axis is None or not isinstance(radius, float) or radius <= 0.0:
+    taper = 0.0
+    if fit.kind == "cone":
+        if not isinstance(apex, tuple) or not isinstance(half_angle, float):
+            return None
+        taper = math.tan(math.radians(half_angle))
+        if not math.isfinite(taper) or taper <= 0.0:
+            return None
+    elif not isinstance(radius, float) or radius <= 0.0:
         return None
     for loop in _boundary_loops(triangles, mesh, topo):
         # Four points fix a circle and its plane with one to spare; fewer is not
@@ -2703,7 +2739,16 @@ def _boundary_corroboration(
         sigma_axis = uncertainty.get("axis_direction_deg")
         # Absent sigma means the disagreement cannot be sized, so it is reported
         # as unsized rather than as agreement. Empty is unknown, never zero.
-        radius_delta = loop_radius - radius
+        if fit.kind == "cone":
+            # The cone's radius where this loop sits: the loop's own fitted
+            # centre, projected onto the axis from the apex, times the taper.
+            loop_centre = _add(centre, _add(_scale(u, cx), _scale(v, cy)))
+            fitted_radius = taper * _dot(_sub(loop_centre, apex), axis)
+            if not math.isfinite(fitted_radius) or fitted_radius <= 0.0:
+                continue
+        else:
+            fitted_radius = float(radius)
+        radius_delta = loop_radius - fitted_radius
         agrees_radius = (
             None if sigma_r is None else abs(radius_delta) <= sigmas * max(sigma_r, residual)
         )
@@ -2712,7 +2757,7 @@ def _boundary_corroboration(
             "loop_point_count": len(loop),
             "loop_radius": loop_radius,
             "loop_circle_rms": residual,
-            "fitted_radius": radius,
+            "fitted_radius": fitted_radius,
             "radius_delta": radius_delta,
             "loop_normal_to_axis_deg": tilt,
             "declared_sigmas": sigmas,
@@ -2816,10 +2861,13 @@ def _mark_fillet_candidates(
     def primaries_of(name: str) -> tuple[str, ...]:
         return tuple(sorted(n for n in neighbours_of[name] if blends.get(n) is None))
 
-    # Connected components over "adjacent blends that agree", by union of the
-    # walk. Radii are compared pairwise against the running chain mean so a slow
-    # drift cannot creep past a pairwise-only test one link at a time; the whole
-    # chain's spread is re-checked at the end regardless.
+    # Connected components over "adjacent blends that lie between the same two
+    # primaries", by union of the walk. The radius is deliberately *not* tested
+    # link by link: a pairwise test lets a slow drift creep along a run one small
+    # step at a time and still call the whole thing one chain. It is tested once,
+    # on the assembled chain, against the area-weighted mean below -- which is
+    # the stricter check, because every member has to agree with the whole run
+    # rather than only with its neighbour.
     seen: set[str] = set()
     for start_hash in sorted(blends):
         if start_hash in seen or blends[start_hash] is None:

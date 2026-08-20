@@ -1032,6 +1032,33 @@ class DisproofTests(unittest.TestCase):
             if region["fit"]["kind"] == "cylinder":
                 self.assertFalse(region["accepted"], region["fit"].get("rejection"))
 
+    def test_the_power_floor_is_bound_before_any_branch_that_can_clear_accepted(self) -> None:
+        """The support-floors-fail-first path reaches a read of `power_floor`.
+
+        It is safe today only because `and` short-circuits on `accepted` before
+        the read, which is an operand order and not an invariant: reorder that
+        one condition, or set `accepted` back to true anywhere between, and the
+        result is an UnboundLocalError that `fit_regions` turns into
+        `fit-record-stage-failed` for the whole mesh. Asserted on the source
+        because the failure is latent -- no input reaches it while the ordering
+        happens to hold, which is exactly why it needs pinning.
+        """
+        import inspect
+
+        source = inspect.getsource(seg._stage_disproof)
+        bound = source.index("power_floor = max(")
+        refuses = source.index("accepted, rejection = False, (")
+        reads = source.index("fit.rms_residual <= power_floor")
+        self.assertLess(bound, refuses, "power_floor is bound after a branch that can skip it")
+        self.assertLess(bound, reads)
+        # And the arc patch is the input that walks it: support floors refuse it
+        # first, and the stage still completes with a named region refusal.
+        record = seg.fit_regions(
+            make_dump(*arc_patch_mesh(sweep_deg=20.0)), spec()
+        )
+        self.assertIsNone(record["refusal"])
+        self.assertEqual([], [r for r in record["regions"] if r["accepted"]])
+
     def test_the_span_gate_measures_the_arc_it_rejects(self) -> None:
         vertices, _triangles, _groups = arc_patch_mesh(sweep_deg=20.0)
         fit = fit_primitive(vertices, "cylinder")
@@ -1672,6 +1699,34 @@ class NormalConstrainedRegionTests(unittest.TestCase):
         self.assertAlmostEqual(-0.5, measured["radius_delta"], places=6)
         self.assertEqual(wrong.parameters["radius"], measured["fitted_radius"])
 
+    def test_a_cone_is_corroborated_at_the_station_its_own_loop_sits_at(self) -> None:
+        """`_AXIS_KINDS` names cone, and a cone never reached this check.
+
+        The guard read a dead `anchor` local matching `axis_point` or `center`;
+        a cone's anchor key is `apex`, so `anchor` was always None and the
+        function returned before looking at a single loop. A cone's radius also
+        varies along its axis, so the number a loop is comparable to is the
+        cone's radius *at that loop's station* -- apex to loop centre along the
+        axis, times the taper -- and not one constant it does not have.
+        """
+        record = seg.fit_regions(
+            make_dump(*shallow_cone_mesh(taper=0.5)), spec(min_feature_size=3.0)
+        )
+        cone = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cone"][0]
+        boundary = cone["fit"]["support"]["boundary_circle"]
+        self.assertIn("boundary-circle-corroboration", cone["fit"]["support"]["checked"])
+        # The fixture's base ring: radius 8.0 at z = 0, and the cone's own radius
+        # there to a tenth of a percent.
+        self.assertAlmostEqual(8.0, boundary["loop_radius"], places=9)
+        self.assertAlmostEqual(8.0, boundary["fitted_radius"], delta=0.05)
+        self.assertLess(abs(boundary["radius_delta"]), 0.05)
+        self.assertTrue(boundary["agrees_on_axis"])
+        self.assertIsNone(boundary["flag"])
+        # A cone carries no radius sigma, so the radius reading is reported and
+        # explicitly unsized rather than counted as agreement.
+        self.assertIsNone(boundary["radius_sigma"])
+        self.assertIsNone(boundary["agrees_on_radius"])
+
     def test_a_closed_surface_has_no_boundary_to_be_corroborated_by(self) -> None:
         """Absent evidence is absent, not agreement."""
         record = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=3.0))
@@ -1908,6 +1963,27 @@ class RegimeTests(unittest.TestCase):
     def test_a_regime_outside_the_vocabulary_is_refused_at_spec_load(self) -> None:
         with self.assertRaises(seg.SegmentationSpecError):
             spec(regime="exact")
+
+    def test_coplanar_facets_from_different_vertex_triples_still_read_as_exact(self) -> None:
+        """The coplanarity test is `acos` at 1e-09 degrees, below what acos resolves.
+
+        One ulp off a unit dot product already reads 1.2e-06 degrees, so this
+        comparison is really "did the dot product round to exactly 1.0" -- and
+        the question is whether facets generated from one analytic face, whose
+        normals come from *different vertex triples*, do. Measured here: they do,
+        every one of them, so the band between 0 and the threshold is empty and
+        the regime does not turn on where inside it the line sits. A mesh that
+        ever populated that band would read `scan`, which is the conservative
+        side and needs every coplanar pair on the whole mesh to miss, because
+        `dihedral_reads_as_bimodal` needs a single exact pair.
+        """
+        welded = seg.weld_dump(make_dump(*box_mesh(size=20.0, divisions=6)), 1e-09)
+        dihedral = seg._dihedral_degrees(seg._build_topology(welded))
+        exact = [angle for angle in dihedral if abs(angle) < seg._EXACT_COPLANAR_DEG]
+        near_miss = [angle for angle in dihedral if 0.0 < angle < 1e-03]
+        self.assertGreater(len(exact), 0)
+        self.assertEqual([0.0], sorted(set(exact)))
+        self.assertEqual([], near_miss, "coplanar facets landed inside acos's own resolution")
 
 
 class FilletChainTests(unittest.TestCase):

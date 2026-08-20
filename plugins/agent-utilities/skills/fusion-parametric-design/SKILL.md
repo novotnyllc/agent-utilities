@@ -304,8 +304,9 @@ of the right diameter and the wrong kind. A group whose facet normals are
 perpendicular to one axis but occupy fewer distinct directions per turn than the
 declared `min_cylinder_normal_directions_per_turn` is refused
 `cylinder-normals-discrete`, and the sphere that fits the same corners falls with
-it. The detection spec therefore declares eight more thresholds, each with its
-own rationale like every other: `regime` (`auto`, `tessellation` or `scan`),
+it. The detection spec therefore declares one regime selector and seven more
+thresholds, each with its own rationale like every other: `regime` (`auto`,
+`tessellation` or `scan`) selects the regime;
 `tessellation_sigma_over_extent`, `vertex_precision_rel`,
 `min_normal_axis_eigengap`, `normal_sigma_theta_floor_deg`,
 `min_cylinder_normal_directions_per_turn`, `max_fillet_radius_rel_spread` and

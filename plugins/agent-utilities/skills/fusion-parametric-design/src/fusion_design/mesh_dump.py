@@ -245,6 +245,7 @@ MESH_DUMP_REFUSALS = {
     "dump-triangle-index-out-of-range",
     "dump-group-count-invalid",
     "dump-transport-invalid",
+    "dump-unreadable",
 }
 
 
@@ -433,8 +434,23 @@ def parse_mesh_dump(data: bytes, expected_sha256: str) -> MeshDump:
 
 
 def read_mesh_dump(path: str | Path, expected_sha256: str) -> MeshDump:
-    """Read a dump file and refuse it unless its bytes hash to the recorded digest."""
-    return parse_mesh_dump(Path(path).read_bytes(), expected_sha256)
+    """Read a dump file and refuse it unless its bytes hash to the recorded digest.
+
+    A path that cannot be read refuses by name like every other way a dump can
+    be wrong.  It used to escape as a bare ``OSError`` naming errno, which is the
+    one refusal in this module a caller could not branch on -- and the path that
+    produced it most often is a spec whose ``dump_path`` placeholder was never
+    substituted, where "no such file" is the whole diagnosis.
+    """
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise MeshDumpError(
+            "dump-unreadable",
+            f"{path} could not be read ({error.strerror or error}); the dump this program is "
+            "bound to has to be on disk before anything can be emitted against it.",
+        ) from error
+    return parse_mesh_dump(data, expected_sha256)
 
 
 def assemble_inline_dump(report: Any) -> bytes:
