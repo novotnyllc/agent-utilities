@@ -211,12 +211,19 @@ def merge_events(
         entry = dict(row)
         entry["sigma_measured"] = entry["sigma"]
         entry["sigma"] = max(entry["sigma"], floor)
-        if clusters:
-            first = clusters[-1][0]
-            tolerance = event_merge_sigmas * math.hypot(entry["sigma"], first["sigma"])
-            if abs(entry["station"] - first["station"]) <= tolerance:
-                clusters[-1].append(entry)
-                continue
+        if clusters and all(
+            abs(entry["station"] - member["station"])
+            <= event_merge_sigmas * math.hypot(entry["sigma"], member["sigma"])
+            for member in clusters[-1]
+        ):
+            # *Complete* linkage: against every member, not against the first.
+            # Testing only the first makes one imprecise member the cluster's
+            # whole admission rule -- with sigmas 100, 0.01, 0.01 at stations
+            # 0, 1, 2 the two precise plane fits merge through the loose one
+            # even though their own joint tolerance is 0.042, which collapses
+            # two real defining events and deletes the slab between them.
+            clusters[-1].append(entry)
+            continue
         clusters.append([entry])
 
     events: list[dict[str, Any]] = []
@@ -363,6 +370,12 @@ def congruence(
         ),
         "worst_hausdorff": worst if pairs else None,
         "loop_counts": [len(first), len(second)],
+        # Which loop of the first section is which loop of the second. The
+        # geometry is matched by centroid, so anything else compared between
+        # the two sections has to be compared through the same pairing --
+        # `section_mesh` orders its polylines by the triangles it intersected,
+        # and that order is not the same at two stations.
+        "pairs": [(index, other) for index, other, _distance in pairs],
     }
 
 
@@ -550,9 +563,17 @@ def decompose(
             verdict["fraction"] = fraction
             verdict["station"] = other_station
             if verdict["agrees"]:
-                verdict["agrees"] = [
-                    loop["verdict"] for loop in evidence["loops"]
-                ] == [loop["verdict"] for loop in other_evidence["loops"]]
+                # Through the pairing `congruence` just established, not by
+                # list position: two stations can close the same loops and emit
+                # them in a different order, and a positional comparison then
+                # reports differing verdicts for a slab that is constant.
+                here_verdicts = [loop["verdict"] for loop in evidence["loops"]]
+                there_verdicts = [loop["verdict"] for loop in other_evidence["loops"]]
+                verdict["agrees"] = all(
+                    here_verdicts[index] == there_verdicts[other]
+                    for index, other in verdict["pairs"]
+                    if index < len(here_verdicts) and other < len(there_verdicts)
+                )
                 if not verdict["agrees"]:
                     verdict["reason"] = "the loops' material verdicts differ between stations"
             constant = constant and bool(verdict["agrees"])

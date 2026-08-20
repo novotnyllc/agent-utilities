@@ -1087,6 +1087,48 @@ class EventMergeTests(unittest.TestCase):
         self.assertEqual([0.0, 0.0], [m["sigma_measured"] for m in floored[0]["members"]])
 
 
+class EventLinkageTests(unittest.TestCase):
+    """Complete linkage means against every member, not against the first one."""
+
+    def _rows(self, pairs):
+        return [
+            {"station": station, "sigma": sigma, "kind": "plane-fit", "region": f"r{index}"}
+            for index, (station, sigma) in enumerate(pairs)
+        ]
+
+    def test_one_imprecise_member_cannot_admit_two_precise_ones_to_each_other(self) -> None:
+        # Sigmas 100, 0.01, 0.01 at stations 0, 1 and 2. Testing only against
+        # the cluster's first member let the loose one carry both precise plane
+        # fits into one event, even though their own joint tolerance is 0.042
+        # against a separation of 1 -- collapsing two real defining events and
+        # deleting the slab between them.
+        events = ms.merge_events(
+            self._rows([(0.0, 100.0), (1.0, 0.01), (2.0, 0.01)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(2, len(events))
+        self.assertEqual([2, 1], [len(event["members"]) for event in events])
+
+    def test_members_that_agree_with_every_one_of_them_still_merge(self) -> None:
+        events = ms.merge_events(
+            self._rows([(0.0, 0.5), (0.1, 0.5), (0.2, 0.5)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertEqual(3, len(events[0]["members"]))
+
+    def test_congruence_reports_the_pairing_it_matched_on(self) -> None:
+        # Anything else compared between two sections has to go through this,
+        # because `section_mesh` does not emit loops in the same order twice.
+        square = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+        far = [(20.0, 20.0), (22.0, 20.0), (22.0, 22.0), (20.0, 22.0)]
+        verdict = ms.congruence([square, far], [far, square], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+
+
 class LoopRoleTests(unittest.TestCase):
     """The design's classification table, on loop evidence built by hand."""
 
