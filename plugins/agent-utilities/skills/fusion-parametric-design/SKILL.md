@@ -82,7 +82,11 @@ part of *establishing* the working document, not an afterthought:
   them in `DESIGN-STATE.md` under Fusion document state. The user may rename
   the document at any time — later sessions bind by the recorded id and simply
   report the current name (then reconcile `project.fusion_document` when it
-  drifted).
+  drifted). Read the report's `data_file_id_stable`: measured live, the id
+  right after a first save is a local staging path that becomes the stable
+  `urn:` lineage id only after cloud sync — the transaction waits briefly for
+  it, but a `false` means record the id provisionally and refresh it from the
+  next checkpoint save's report; reconnection by a transient id can fail.
 - **Reconnecting in a later session**, in order: an *open* document whose
   dataFile id matches the recorded identity is adopted (never open a second
   copy); a closed one is located by id through Fusion's data API and opened;

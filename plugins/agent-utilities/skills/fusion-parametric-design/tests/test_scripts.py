@@ -679,7 +679,7 @@ class ScriptEmissionTests(unittest.TestCase):
                 name="Wearable Controller Pod v3",
                 isSaved=True,
                 dataFile=SimpleNamespace(
-                    id="df-1",
+                    id="urn:test:df-1",
                     versionNumber=3,
                     parentProject=SimpleNamespace(id="proj-1"),
                     parentFolder=SimpleNamespace(id="folder-1"),
@@ -688,7 +688,7 @@ class ScriptEmissionTests(unittest.TestCase):
         )
         self.assertTrue(saved["available"])
         self.assertEqual(
-            {"id": "df-1", "version_number": 3, "project_id": "proj-1", "folder_id": "folder-1"},
+            {"id": "urn:test:df-1", "version_number": 3, "project_id": "proj-1", "folder_id": "folder-1"},
             saved["data_file"],
         )
 
@@ -722,7 +722,7 @@ class _FakeDocument:
         self.name = name + " v1"
         self.isSaved = True
         self.isModified = False
-        self._data_file = _FakeDataFile("df-new", 1, "proj-1", getattr(folder, "folder_id", "folder-1"))
+        self._data_file = _FakeDataFile("urn:test:df-new", 1, "proj-1", getattr(folder, "folder_id", "folder-1"))
         return True
 
     def save(self, description):
@@ -819,7 +819,8 @@ class DocumentSaveScriptTests(unittest.TestCase):
         self.assertEqual("saved-as", report["save_action"])
         self.assertEqual("adopted-active-document", report["adoption"])
         self.assertEqual([(self.target, "RootFolder", document.save_as_calls[0][2], "")], document.save_as_calls)
-        self.assertEqual("df-new", report["data_file"]["id"])
+        self.assertEqual("urn:test:df-new", report["data_file"]["id"])
+        self.assertTrue(report["data_file_id_stable"])
         self.assertTrue(report["name_matches_manifest"])
         self.assertTrue(document.isSaved)
 
@@ -856,6 +857,41 @@ class DocumentSaveScriptTests(unittest.TestCase):
         self.assertEqual([], missing.save_as_calls)
         self.assertFalse(missing.isSaved)
 
+    def test_a_raising_active_project_falls_back_to_the_data_panel_folder(self) -> None:
+        """Measured live: Data.activeProject raises InternalValidationError on a
+        healthy session, so the probe must catch, and Data.activeFolder -- the
+        save dialog's own default -- is the fallback."""
+        panel = _root_folder(name="PanelFolder")
+
+        class RaisingData:
+            activeFolder = panel
+
+            @property
+            def activeProject(self):
+                raise RuntimeError("2 : InternalValidationError : id.size()")
+
+        source = emit_document_save_script(self.manifest)
+        document = _FakeDocument()
+        app = _FakeApp(documents=[document], active=document, data=RaisingData())
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual("PanelFolder", document.save_as_calls[0][1])
+
+        # With a declared document_folder the path is re-anchored at the panel
+        # folder's own project root.
+        data = self.manifest.to_dict()
+        data["project"]["document_folder"] = "Designs"
+        anchored_source = emit_document_save_script(Manifest.from_data(data))
+        designs = _root_folder(name="Designs")
+        panel.parentProject = SimpleNamespace(rootFolder=_root_folder({"Designs": designs}))
+        anchored_document = _FakeDocument()
+        anchored_app = _FakeApp(
+            documents=[anchored_document], active=anchored_document, data=RaisingData()
+        )
+        anchored = self._run(anchored_source, anchored_app)
+        self.assertTrue(anchored["ok"])
+        self.assertEqual("Designs", anchored_document.save_as_calls[0][1])
+
     def test_no_resolvable_folder_is_a_named_refusal_not_a_silent_untitled(self) -> None:
         source = emit_document_save_script(self.manifest)
         for app, refusal in (
@@ -881,7 +917,7 @@ class DocumentSaveScriptTests(unittest.TestCase):
     def test_checkpoint_saves_a_version_only_when_the_document_is_modified(self) -> None:
         source = emit_document_save_script(self.manifest)
         document = _FakeDocument(
-            name=self.target + " v3", saved=True, data_file=_FakeDataFile("df-1", 3), modified=True
+            name=self.target + " v3", saved=True, data_file=_FakeDataFile("urn:test:df-1", 3), modified=True
         )
         app = _FakeApp(documents=[document], active=document)
         report = self._run(source, app)
@@ -898,7 +934,7 @@ class DocumentSaveScriptTests(unittest.TestCase):
     def test_a_different_saved_document_is_refused_never_adopted(self) -> None:
         source = emit_document_save_script(self.manifest)
         document = _FakeDocument(
-            name="Someone Elses Design v9", saved=True, data_file=_FakeDataFile("df-other"), modified=True
+            name="Someone Elses Design v9", saved=True, data_file=_FakeDataFile("urn:test:df-other"), modified=True
         )
         app = _FakeApp(documents=[document], active=document)
         report = self._run(source, app, expect_error="active-document-not-target")
@@ -907,12 +943,12 @@ class DocumentSaveScriptTests(unittest.TestCase):
         self.assertEqual([], document.save_as_calls)
 
     def test_reconnect_adopts_the_open_document_by_data_file_id(self) -> None:
-        source = emit_document_save_script(self.manifest, "df-1")
-        self.assertIn('DOCUMENT_ID = json.loads(\'"df-1"\')', source)
+        source = emit_document_save_script(self.manifest, "urn:test:df-1")
+        self.assertIn('DOCUMENT_ID = json.loads(\'"urn:test:df-1"\')', source)
         other = _FakeDocument(name="Untitled", saved=False)
         # Renamed by the user: identity is the id, the name is only reported.
         target = _FakeDocument(
-            name="Renamed By The User v7", saved=True, data_file=_FakeDataFile("df-1", 7), modified=False
+            name="Renamed By The User v7", saved=True, data_file=_FakeDataFile("urn:test:df-1", 7), modified=False
         )
         app = _FakeApp(documents=[other, target], active=other)
         report = self._run(source, app)
@@ -927,23 +963,23 @@ class DocumentSaveScriptTests(unittest.TestCase):
         self.assertEqual([], other.save_as_calls)
 
     def test_reconnect_opens_a_closed_document_through_the_data_api(self) -> None:
-        source = emit_document_save_script(self.manifest, "df-9")
-        recorded = _FakeDataFile("df-9", 5)
+        source = emit_document_save_script(self.manifest, "urn:test:df-9")
+        recorded = _FakeDataFile("urn:test:df-9", 5)
         app = _FakeApp(
             documents=[],
             active=None,
-            data=SimpleNamespace(findFileById=lambda identifier: recorded if identifier == "df-9" else None),
+            data=SimpleNamespace(findFileById=lambda identifier: recorded if identifier == "urn:test:df-9" else None),
         )
         report = self._run(source, app)
         self.assertTrue(report["ok"])
         self.assertEqual("opened-recorded-document", report["adoption"])
-        self.assertEqual(["df-9"], app.documents.opened)
-        self.assertEqual("df-9", report["data_file"]["id"])
+        self.assertEqual(["urn:test:df-9"], app.documents.opened)
+        self.assertEqual("urn:test:df-9", report["data_file"]["id"])
 
     def test_reconnect_refuses_a_missing_id_and_reports_name_matches_only_as_hints(self) -> None:
-        source = emit_document_save_script(self.manifest, "df-gone")
+        source = emit_document_save_script(self.manifest, "urn:test:df-gone")
         lookalike = _FakeDocument(
-            name=self.target + " v2", saved=True, data_file=_FakeDataFile("df-different"), modified=True
+            name=self.target + " v2", saved=True, data_file=_FakeDataFile("urn:test:df-different"), modified=True
         )
         app = _FakeApp(
             documents=[lookalike],
@@ -953,7 +989,7 @@ class DocumentSaveScriptTests(unittest.TestCase):
         report = self._run(source, app, expect_error="recorded-document-not-found")
         self.assertFalse(report["ok"])
         self.assertEqual("recorded-document-not-found", report["refusal"])
-        self.assertEqual("df-gone", report["detail"]["recorded_data_file_id"])
+        self.assertEqual("urn:test:df-gone", report["detail"]["recorded_data_file_id"])
         self.assertEqual([self.target + " v2"], report["detail"]["name_match_hints"])
         # A name match is a hint, never an identity: nothing was saved.
         self.assertEqual([], lookalike.save_calls)

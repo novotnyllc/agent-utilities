@@ -814,31 +814,65 @@ def _name_match_hints(app):
     return sorted(hints)
 
 
+def _probe(owner, attribute):
+    """Read a data-API property that may not exist or may itself raise.
+
+    Fusion's data properties raise RuntimeError (not AttributeError) when the
+    backing state is absent -- `Data.activeProject` was measured raising
+    `InternalValidationError` on a live session with three healthy projects --
+    so a bare getattr default is not a probe. Returns (value, error_text).
+    """
+    try:
+        return getattr(owner, attribute), None
+    except Exception as error:
+        return None, str(error)
+
+
 def _resolve_target_folder(app):
     """The folder a first save writes into.
 
-    The manifest's optional ``project.document_folder`` is a "/"-separated path
-    under the active project's root folder; without it the root folder itself
-    is the target. Every hop fails closed with a named refusal -- an offline or
-    projectless Fusion must refuse, never silently keep the document Untitled.
+    The active project's root folder; when Fusion cannot report an active
+    project, the data panel's current folder (`Data.activeFolder`) -- the same
+    default Fusion's own save dialog uses. The manifest's optional
+    ``project.document_folder`` is a "/"-separated path under the project root.
+    Every hop fails closed with a named refusal -- an offline or projectless
+    Fusion must refuse, never silently keep the document Untitled.
     """
-    data = getattr(app, "data", None)
+    data, data_error = _probe(app, "data")
     if not data:
         raise DocumentSaveRefused(
             "data-api-unavailable",
-            {{"detail": "app.data is not available; Fusion may be offline."}},
+            {{"detail": "app.data is not available; Fusion may be offline.", "error": data_error}},
         )
-    project = getattr(data, "activeProject", None)
-    if not project:
+    project, project_error = _probe(data, "activeProject")
+    root = None
+    root_error = None
+    if project:
+        root, root_error = _probe(project, "rootFolder")
+    if not root:
+        active_folder, active_folder_error = _probe(data, "activeFolder")
+        if active_folder and not DOCUMENT_FOLDER:
+            return active_folder
+        if active_folder:
+            # A declared folder path is anchored at a project root, so recover
+            # the root through the panel folder's own project.
+            parent_project, parent_error = _probe(active_folder, "parentProject")
+            if parent_project:
+                root, root_error = _probe(parent_project, "rootFolder")
+            else:
+                root_error = parent_error
+        else:
+            root_error = root_error or active_folder_error
+    if not root:
         raise DocumentSaveRefused(
             "no-active-project",
-            {{"detail": "Fusion has no active project to save into; open or select one."}},
+            {{
+                "detail": "Fusion reports no active project and no data-panel folder to save into; select a project in the Data panel.",
+                "active_project_error": project_error,
+                "resolution_error": root_error,
+            }},
         )
-    folder = getattr(project, "rootFolder", None)
-    if not folder:
-        raise DocumentSaveRefused(
-            "project-root-unavailable", {{"project": getattr(project, "name", None)}}
-        )
+    folder = root
     for segment in [part for part in DOCUMENT_FOLDER.split("/") if part]:
         try:
             child = folder.dataFolders.itemByName(segment)
@@ -866,7 +900,7 @@ def _adopt_recorded_document(app):
     if document is not None:
         adoption = "adopted-open-document"
     else:
-        data = getattr(app, "data", None)
+        data, _data_error = _probe(app, "data")
         find_file = getattr(data, "findFileById", None) if data else None
         if not find_file:
             raise DocumentSaveRefused(
@@ -956,7 +990,21 @@ def run(context):
                 save_action = "already-saved"
         adsk.doEvents()
 
+        # The durable identity is assigned asynchronously: measured live, the
+        # dataFile id immediately after a first save was a local staging path
+        # and became the stable dm.lineage urn only after cloud sync. Wait
+        # briefly for the stable id; a transient one is recorded and flagged,
+        # never silently treated as durable.
         after = _document_saved_state(document)
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            candidate = after.get("data_file") if isinstance(after.get("data_file"), dict) else None
+            if candidate and str(candidate.get("id") or "").startswith("urn:"):
+                break
+            adsk.doEvents()
+            time.sleep(0.25)
+            after = _document_saved_state(document)
+
         identity = after.get("data_file") if isinstance(after.get("data_file"), dict) else None
         failures = []
         if after.get("is_saved") is not True:
@@ -978,6 +1026,13 @@ def run(context):
             "name_matches_manifest": _is_target_name(after.get("name")),
             "document_saved_state": after,
             "data_file": identity,
+            # False means the id is still Fusion's local staging identity (the
+            # save is durable on disk, the *cloud* id is not assigned yet).
+            # Record it provisionally and refresh it from the next checkpoint
+            # save's report; reconnection by a transient id can fail.
+            "data_file_id_stable": bool(
+                identity and str(identity.get("id") or "").startswith("urn:")
+            ),
             "failures": failures,
             "ok": not failures,
         }}
