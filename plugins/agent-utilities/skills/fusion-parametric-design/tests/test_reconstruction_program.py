@@ -1312,6 +1312,7 @@ class SlabStackContinuityTests(unittest.TestCase):
             frame_margin=0.1,
             angle_tolerance_deg=2.0,
             offset_tolerance=0.5,
+            sigma_multiple=3.0,
         )
         groups = [{"id": "sketch-extrude-base", "kind": "sketch-extrude", "regions": []}]
         with patch.object(rp.mesh_slabs, "decompose", return_value=decomposition):
