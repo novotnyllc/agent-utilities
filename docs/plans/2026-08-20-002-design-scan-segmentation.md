@@ -859,20 +859,27 @@ here) replaces the existential rule. A split stands only when **all** of the
 following hold, evaluated on **reserved validation triangles** — a blocked
 subset of the node (block scale from the §A.4 correlation record; octree-cell
 parity, the §10.3 idiom) reserved **when the node is created, before any fit
-on the node runs** — neither the parent model nor any child model sees the
-validation blocks, so (1)–(2) compare held-out losses on both sides rather
-than an in-sample parent against held-out children (a parent that was
-already fit on all triangles is refit on the non-validation subset before
-grading), and the tree cannot search partitions and then grade the winner
-on the evidence that chose it:
+on the node runs** — neither the parent model, any child model, **nor
+`split(node)` itself** sees the validation blocks: partition discovery
+(cross-cut, station finder, proxy refinement) runs on the non-validation
+subset only, and the reserved triangles are assigned to the chosen children
+after the boundary is fixed, then scored. (1)–(2) therefore compare
+held-out losses on both sides of a boundary the held-out data did not help
+choose (a parent that was already fit on all triangles is refit on the
+non-validation subset before grading), and the tree cannot search
+partitions and then grade the winner on the evidence that chose it:
 
 1. area-weighted mean child validation loss ≤ parent validation loss ×
    (1 − `split_min_loss_improvement`);
 2. children whose own validation loss improves on the parent's carry ≥
    `split_min_improved_fraction` of the parent's area;
 3. the improvement in (1) exceeds `split_boundary_cost` × (new boundary
-   length / parent boundary length) — new boundaries are a model cost, paid
-   for in measured improvement, never free;
+   length / the parent's boundary scale), where the boundary scale is the
+   parent's boundary length or, when that length is zero, **sqrt(parent
+   area)** — a closed connected surface has no boundary, sqrt(area) is its
+   natural perimeter scale, and the root split of a watertight capture must
+   be licensable — so the ratio is always finite; new boundaries are a
+   model cost, paid for in measured improvement, never free;
 4. the area-weighted mean in (1) is computed over **all** children — no
    child's loss may be dropped — but only **T1 `terminal-accepted`**
    children count toward the improved fraction in (2) and toward the

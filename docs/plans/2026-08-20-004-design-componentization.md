@@ -696,7 +696,11 @@ noise. The pose record becomes:
   observability claim the record makes. A covariance may be carried as a
   derived convenience, never as the source of the rank/nullspace fields — a
   covariance nullspace means the opposite (zero variance), and unbounded
-  modes have no finite covariance representation at all;
+  modes have no finite covariance representation at all. The six-DOF
+  serialization conventions — tangent basis, coordinate frame, perturbation
+  side, translation/rotation scaling, numerical rank cutoff — are **PR
+  C-5's pose-record schema contract to declare**; registered here as that
+  PR's owned implementation item, not silently missing;
 - a **continuous stabilizer group** (none / axis-rotation / full-rotation);
 - **discrete alternate transforms** (the 90° class and its kin), enumerated;
 - an **evidence class per constrained mode**, closed set: `observed`,
