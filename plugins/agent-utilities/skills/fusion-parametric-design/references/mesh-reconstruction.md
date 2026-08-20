@@ -344,11 +344,15 @@ scores, the margin, the grid and each candidate's cell, against `"evidence"` on
 the ordinary path. **The refusal survives** for the case it still protects: a
 candidate whose measured direction sigma reaches the grid, or which carries no
 measured sigma at all, could quantize either way, and there the honest answer is
-still `frame-ambiguous`. The distance a cell has to clear is the sigma times the
-caller's declared **`sigma_multiple`**, the same confidence multiple the
-relationship licences turn a sigma into a tolerance with — a sigma is one
-standard deviation and not a bound, and a boundary 1.1 sigma away is one an
-ordinary re-tessellation crosses. Under a `declared-absolute` tolerance basis
+still `frame-ambiguous`. The distance a cell has to clear is
+`sigma × sigma_multiple + direction_spread_deg`. `sigma_multiple` is the caller's
+declared confidence multiple, the same one the relationship licences turn a sigma
+into a tolerance with — a sigma is one standard deviation and not a bound, and a
+boundary 1.1 sigma away is one an ordinary re-tessellation crosses. The multiple
+applies to the sigma **and only to the sigma**: `direction_spread_deg` is the
+angular width a merged group's members already span, which is a deterministic
+property of the group rather than a distribution to take a confidence interval
+of, so it is added on top rather than scaled. Under a `declared-absolute` tolerance basis
 there is no multiple declared, the caller having said their numbers are not
 sigmas, and the canonical tie refuses rather than certifying with one nobody
 declared. Two more cases land in the same refusal. A cell spans

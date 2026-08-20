@@ -1016,6 +1016,12 @@ def _decide_axis(
     # ponytail: only members whose own cell is stable can represent the
     # cluster. If every one of them is unstable the score order stands and the
     # cell test below refuses on it, which is the same answer by a longer road.
+    # The score ranking's own winner, kept before the cluster rule can rebind
+    # `winner`: `margin`, `highest_score_runner_up` and `margin_basis` below all
+    # describe the *score* ranking, and `highest_score` naming the canonical
+    # representative instead would make the record disagree with itself about
+    # which candidate the margin was measured on.
+    highest_scorer = winner
     cluster = [
         candidate
         for candidate in candidates
@@ -1136,7 +1142,7 @@ def _decide_axis(
                 "rival, which is the number compared against frame_margin. The selection below "
                 "was made on directions, not on this."
             ),
-            "highest_score": winner.to_dict(),
+            "highest_score": highest_scorer.to_dict(),
             "highest_score_runner_up": None if rival is None else rival.to_dict(),
             "quantization_grid_deg": angle_tolerance_deg,
             "sigma_multiple": sigma_multiple,

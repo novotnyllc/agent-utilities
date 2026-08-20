@@ -1224,8 +1224,16 @@ class DisproofTests(unittest.TestCase):
         skipping them on the mean alone would accept it as the file format's
         own lattice. Same declared floor, applied to each residual.
         """
+        import inspect
         import struct
 
+        def f32(value):
+            return struct.unpack("<f", struct.pack("<f", value))[0]
+
+        # Read from the fixture rather than restated: a duplicated 130.0 that
+        # drifted would push these vertices along the wrong direction, and the
+        # test would pass while testing nothing.
+        offset = inspect.signature(quantized_bore_mesh).parameters["offset"].default
         vertices, triangles, groups = quantized_bore_mesh()
         floor = seg.fit_regions(make_dump(vertices, triangles, groups), spec(min_feature_size=1.0))[
             "noise"
@@ -1245,15 +1253,11 @@ class DisproofTests(unittest.TestCase):
             x, y, z = vertices[index]
             # The bore's axis is the plate's own offset corner, and a radial
             # push is what a real bulge does to the residual.
-            dx, dy = x - 130.0, y - 130.0
+            dx, dy = x - offset, y - offset
             radius = math.hypot(dx, dy)
             if radius < 1e-09:
                 continue
             scale = 5.0 * floor / radius
-
-            def f32(value):
-                return struct.unpack("<f", struct.pack("<f", value))[0]
-
             bulged[index] = (f32(x + dx * scale), f32(y + dy * scale), f32(z))
             moved += 1
         self.assertEqual(6, moved)
@@ -1290,7 +1294,10 @@ class DisproofTests(unittest.TestCase):
         # because of it.
         self.assertIsNotNone(support["moran_i"])
         self.assertGreater(support["moran_i"], 0.0)
-        self.assertLess(support["n_eff"], len(bore["triangle_indices"]))
+        # Against the *point* count, which is what `n_eff` is derived from. The
+        # triangle count is larger on this fixture, so comparing against it holds
+        # even when the correlation adjustment does nothing.
+        self.assertLess(support["n_eff"], bore["point_count"])
 
     def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
         """The note claimed all four gates ran on every accepted fit; two ran on none."""

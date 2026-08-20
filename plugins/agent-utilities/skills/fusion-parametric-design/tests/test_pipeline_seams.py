@@ -963,7 +963,12 @@ class FilletSeamTests(unittest.TestCase):
             for region in self.record["regions"]
             if region["fit"]["kind"] == "cylinder"
             and not region.get("fillet_candidate")
-            and region["fit"]["support"]["angular_span_deg"] < 180.0
+            # `.get`, not `[]`: `partial` includes rejected cylinders, and
+            # `_support_floors` writes the span only once the fit reaches the
+            # gates. A cylinder refused earlier carries no span, and a KeyError
+            # here would hide whichever assertion below actually broke. Its
+            # default is 360, which is "not a partial arc".
+            and region["fit"]["support"].get("angular_span_deg", 360.0) < 180.0
         ]
         self.assertEqual(2, len(partial))
         # One of the three does not survive the fit stage at all: refitting a
