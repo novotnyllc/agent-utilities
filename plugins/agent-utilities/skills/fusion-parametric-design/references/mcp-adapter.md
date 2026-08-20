@@ -176,14 +176,22 @@ extraction, rebuild — can exceed the ceiling.
 
 **Recovery path:** every generated transaction's `_emit` also writes the report
 JSON to a file beside the transaction's own inputs, and names that file in the
-stdout report as `report_tee_path`. One file per transaction *kind* per
-directory, named `fusion-design-report-<kind>-<manifest-sha12>.json`, so two
-transactions writing into one directory do not clobber each other and re-running
-one overwrites only its own report. When a call times out:
+stdout report as `report_tee_path`. The name is
+`fusion-design-report-<kind>-<manifest-sha12>-<run-id>.json`, where the run id
+is bound at run time from the process id and the clock — **one file per run**,
+not one per kind. Two agents driving the same transaction kind against the same
+manifest into the same directory is a hazard this adapter treats as supported,
+and a name without the run id resolved both of them to one path: their writes
+interleaved, and a recovery read could return the other run's report as if it
+were yours. The report is written whole to a `.partial` file and moved into
+place with `os.replace`, so a reader arriving mid-write sees either the previous
+report or the new one and never half of either. When a call times out:
 
 1. do not re-run the transaction — it may have mutated the document already;
-2. read the tee file from the directory the transaction declared;
-3. validate it as below before using it.
+2. read the **newest** file in the declared directory matching
+   `fusion-design-report-<kind>-<manifest-sha12>-*.json`;
+3. validate it as below before using it — including that it describes the work
+   you asked for, since a concurrent run leaves its own file beside yours.
 
 The directory comes from the transaction's own declaration: `dump_dir` for
 extraction and the capability probe, the dump's own directory for a rebuild, and

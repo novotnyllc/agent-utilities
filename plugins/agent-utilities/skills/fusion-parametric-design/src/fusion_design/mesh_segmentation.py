@@ -2831,12 +2831,17 @@ def _open_boundary(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
     """
     directed: dict[int, list[int]] = {}
     dirty_vertices: set[int] = set()
+    # The dirty *edges* themselves, not only their endpoints: a local-licence
+    # query is about distance to the edge, and on a coarse mesh an edge can pass
+    # close to a region while both its endpoints are far from it.
+    dirty_edges: list[tuple[int, int]] = []
     non_manifold = 0
     for (i, j), incident in topo.edges.items():
         if len(incident) == 2:
             continue
         dirty_vertices.add(i)
         dirty_vertices.add(j)
+        dirty_edges.append((i, j))
         if len(incident) != 1:
             non_manifold += 1
             continue
@@ -2863,6 +2868,7 @@ def _open_boundary(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
         "non_manifold_edges": non_manifold,
         "loops": loops,
         "dirty_vertices": dirty_vertices,
+        "dirty_edges": dirty_edges,
     }
 
 
@@ -3053,28 +3059,69 @@ def _local_winding(
     if cache is None:
         boundary = _open_boundary(mesh, topo)
         dirty = sorted(boundary["dirty_vertices"])
+        edges = boundary["dirty_edges"]
+        incident: dict[int, list[tuple[int, int]]] = {}
+        longest = 0.0
+        for edge in edges:
+            longest = max(longest, _length(_sub(mesh.vertices[edge[0]], mesh.vertices[edge[1]])))
+            incident.setdefault(edge[0], []).append(edge)
+            incident.setdefault(edge[1], []).append(edge)
         cache = {
             "vertices": dirty,
+            "incident": incident,
+            # A dirty edge of length L can pass within `margin` of a point while
+            # both its endpoints are as far as hypot(margin, L/2) away, so the
+            # vertex query has to reach that far before the point-to-segment
+            # distances below can be trusted. On a fine mesh this is barely
+            # wider than the margin; on a coarse one it is what stops a long
+            # edge sliding past unseen.
+            "reach": math.hypot(margin, longest / 2.0),
             "grid": _Grid(mesh.vertices, dirty, max(margin, 1e-9)) if dirty else None,
         }
         state["boundary_dirt"] = cache
     if cache["grid"] is None:
         return {"clean": True, "margin": margin, "nearest_dirty_distance": None}
     grid: _Grid = cache["grid"]
+    incident = cache["incident"]
+    reach = cache["reach"]
     nearest = math.inf
     for index in triangles:
-        for vertex in mesh.triangles[index]:
-            point = mesh.vertices[vertex]
-            for other in grid.near(mesh.vertices, point, margin):
-                nearest = min(nearest, _length(_sub(mesh.vertices[other], point)))
-                if nearest == 0.0:
-                    break
+        # The triangle's own corners, and its centroid: a dirty edge crossing a
+        # large triangle can be nearer its middle than any of its corners.
+        probes = [mesh.vertices[vertex] for vertex in mesh.triangles[index]]
+        probes.append(topo.centroids[index])
+        for point in probes:
+            seen: set[tuple[int, int]] = set()
+            for other in grid.near(mesh.vertices, point, reach):
+                for edge in incident.get(other, ()):  # noqa: B007 - small fan
+                    if edge in seen:
+                        continue
+                    seen.add(edge)
+                    nearest = min(
+                        nearest,
+                        _point_segment_distance(
+                            point, mesh.vertices[edge[0]], mesh.vertices[edge[1]]
+                        ),
+                    )
+            if nearest == 0.0:
+                break
     return {
         "clean": nearest > margin,
         "margin": margin,
         "margin_basis": "min_feature_size",
+        "measured_against": "dirty edge segments, from each triangle's corners and centroid",
         "nearest_dirty_distance": None if nearest == math.inf else nearest,
     }
+
+
+def _point_segment_distance(point: Vec3, start: Vec3, end: Vec3) -> float:
+    """Distance from a point to a segment -- not to its endpoints."""
+    span = _sub(end, start)
+    length_sq = _dot(span, span)
+    if length_sq <= 0.0:
+        return _length(_sub(point, start))
+    t = max(0.0, min(1.0, _dot(_sub(point, start), span) / length_sq))
+    return _length(_sub(point, _add(start, _scale(span, t))))
 
 
 def _region_orientation(

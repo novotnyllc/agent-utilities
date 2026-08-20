@@ -2288,6 +2288,31 @@ class LocalWindingLicenceTests(unittest.TestCase):
         self.assertEqual("closed", orientation["licence"])
         self.assertIsNone(orientation["licence_assumption"])
 
+    def test_the_distance_is_to_the_dirty_edge_and_not_to_its_endpoints(self) -> None:
+        """A long dirty edge can pass close while both its ends stay far away.
+
+        Querying dirty *vertices* at the margin misses it: the perpendicular
+        distance from a point to a segment of length L is as much as
+        hypot(margin, L/2) less than the distance to either endpoint. On a
+        coarse mesh that is the difference between refusing a region sitting on
+        missing geometry and calling it locally clean, which lets
+        `material_side` classify a bore beside a hole.
+        """
+        point = (0.0, 0.5, 0.0)
+        start, end = (-10.0, 0.0, 0.0), (10.0, 0.0, 0.0)
+        # 0.5 from the segment; 10.01 from the nearer endpoint.
+        self.assertAlmostEqual(0.5, seg._point_segment_distance(point, start, end))
+        self.assertGreater(min(math.dist(point, start), math.dist(point, end)), 10.0)
+        # Beyond the ends it is the endpoint distance, not the infinite line's.
+        self.assertAlmostEqual(
+            math.dist((20.0, 0.0, 0.0), end),
+            seg._point_segment_distance((20.0, 0.0, 0.0), start, end),
+        )
+        # And a degenerate edge is its own point.
+        self.assertAlmostEqual(
+            math.dist(point, start), seg._point_segment_distance(point, start, start)
+        )
+
     def test_a_region_on_the_dirt_stays_null_and_names_its_distance(self) -> None:
         vertices, triangles, groups = torus_mesh(major_steps=64, minor_steps=24)
         # One group per major step, so the region that owns the hole is separable
