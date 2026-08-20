@@ -15,6 +15,7 @@ from fusion_design.scripts import (
     REPORT_BEGIN,
     REPORT_END,
     _script_prelude,
+    emit_document_save_script,
     emit_inventory_script,
     emit_parameter_sync_script,
     emit_scaffold_script,
@@ -117,6 +118,7 @@ class ScriptEmissionTests(unittest.TestCase):
             emit_parameter_sync_script,
             emit_scaffold_script,
             emit_verification_script,
+            emit_document_save_script,
         ):
             with self.subTest(emitter=emitter.__name__):
                 source = emitter(self.manifest)
@@ -131,6 +133,7 @@ class ScriptEmissionTests(unittest.TestCase):
             "scaffold.py": emit_scaffold_script,
             "verify.py": emit_verification_script,
             "export.py": emit_export_example_script,
+            "save_document.py": emit_document_save_script,
         }
         for filename, emitter in emitted.items():
             with self.subTest(filename=filename):
@@ -638,6 +641,326 @@ class ScriptEmissionTests(unittest.TestCase):
 
     # Behavioural coverage of run(), the occurrence map, and the body summary
     # against realistic geometry doubles lives in test_generated_transactions.py.
+
+    def test_setup_and_verification_reports_carry_the_document_saved_state(self) -> None:
+        for emitter in (emit_inventory_script, emit_verification_script):
+            with self.subTest(emitter=emitter.__name__):
+                self.assertIn('"document_saved_state": _document_saved_state', emitter(self.manifest))
+
+    def test_document_saved_state_fails_closed_on_every_unreadable_probe(self) -> None:
+        state = load_generated_script(_script_prelude(self.manifest))["_document_saved_state"]
+
+        self.assertEqual({"available": False, "reason": "no-active-document"}, state(None))
+
+        no_is_saved = state(SimpleNamespace(name="Untitled"))
+        self.assertFalse(no_is_saved["available"])
+        self.assertEqual("isSaved-unavailable", no_is_saved["reason"])
+        self.assertEqual("Untitled", no_is_saved["name"])
+
+        unsaved = state(SimpleNamespace(name="Untitled", isSaved=False))
+        self.assertTrue(unsaved["available"])
+        self.assertFalse(unsaved["is_saved"])
+        self.assertIsNone(unsaved["data_file"])
+
+        class RaisingDataFile:
+            name = "Broken"
+            isSaved = True
+
+            @property
+            def dataFile(self):
+                raise RuntimeError("no cloud item")
+
+        unreadable = state(RaisingDataFile())
+        self.assertFalse(unreadable["available"])
+        self.assertIn("dataFile-unreadable", unreadable["reason"])
+
+        saved = state(
+            SimpleNamespace(
+                name="Wearable Controller Pod v3",
+                isSaved=True,
+                dataFile=SimpleNamespace(
+                    id="df-1",
+                    versionNumber=3,
+                    parentProject=SimpleNamespace(id="proj-1"),
+                    parentFolder=SimpleNamespace(id="folder-1"),
+                ),
+            )
+        )
+        self.assertTrue(saved["available"])
+        self.assertEqual(
+            {"id": "df-1", "version_number": 3, "project_id": "proj-1", "folder_id": "folder-1"},
+            saved["data_file"],
+        )
+
+
+class _FakeDataFile:
+    def __init__(self, identifier, version=1, project_id="proj-1", folder_id="folder-1"):
+        self.id = identifier
+        self.versionNumber = version
+        self.parentProject = SimpleNamespace(id=project_id)
+        self.parentFolder = SimpleNamespace(id=folder_id)
+
+
+class _FakeDocument:
+    def __init__(self, name="Untitled", saved=False, data_file=None, modified=True):
+        self.name = name
+        self.isSaved = saved
+        self.isModified = modified
+        self._data_file = data_file
+        self.save_calls: list = []
+        self.save_as_calls: list = []
+        self.app = None
+
+    @property
+    def dataFile(self):
+        if self._data_file is None:
+            raise RuntimeError("this document has never been saved")
+        return self._data_file
+
+    def saveAs(self, name, folder, description, tag):
+        self.save_as_calls.append((name, getattr(folder, "name", None), description, tag))
+        self.name = name + " v1"
+        self.isSaved = True
+        self.isModified = False
+        self._data_file = _FakeDataFile("df-new", 1, "proj-1", getattr(folder, "folder_id", "folder-1"))
+        return True
+
+    def save(self, description):
+        self.save_calls.append(description)
+        self.isModified = False
+        self._data_file = _FakeDataFile(
+            self._data_file.id, self._data_file.versionNumber + 1
+        )
+        return True
+
+    def activate(self):
+        self.app.activeDocument = self
+
+
+class _FakeDocuments:
+    def __init__(self, app, documents):
+        self._app = app
+        self._documents = list(documents)
+        self.opened: list = []
+
+    @property
+    def count(self):
+        return len(self._documents)
+
+    def item(self, index):
+        return self._documents[index]
+
+    def open(self, data_file, visible):
+        document = _FakeDocument(
+            name="Wearable Controller Pod v" + str(data_file.versionNumber),
+            saved=True,
+            data_file=data_file,
+            modified=False,
+        )
+        document.app = self._app
+        self._documents.append(document)
+        self._app.activeDocument = document
+        self.opened.append(data_file.id)
+        return document
+
+
+class _FakeApp:
+    def __init__(self, documents=(), active=None, data=None):
+        self.activeDocument = active
+        self.documents = _FakeDocuments(self, documents)
+        for document in self.documents._documents:
+            document.app = self
+        self.data = data
+
+
+def _root_folder(children=None, name="RootFolder"):
+    lookup = dict(children or {})
+    return SimpleNamespace(
+        name=name,
+        folder_id="folder-" + name,
+        dataFolders=SimpleNamespace(itemByName=lambda segment: lookup.get(segment)),
+    )
+
+
+class DocumentSaveScriptTests(unittest.TestCase):
+    """The save/adopt transaction: never leave a design Untitled, never adopt by name."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.manifest = load_manifest(EXAMPLE)
+        cls.target = cls.manifest.fusion_document
+
+    def _run(self, source: str, app, expect_error: str | None = None):
+        namespace = load_generated_script(source)
+        namespace["adsk"].core.Application = SimpleNamespace(get=lambda: app)
+        output = StringIO()
+        if expect_error is None:
+            with redirect_stdout(output):
+                namespace["run"](None)
+        else:
+            with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, expect_error):
+                namespace["run"](None)
+        reports = [
+            json.loads(line) for line in output.getvalue().splitlines() if line.startswith("{")
+        ]
+        self.assertTrue(reports, "the transaction emitted no report")
+        return reports[-1]
+
+    def test_first_save_names_the_untitled_document_from_the_manifest(self) -> None:
+        source = emit_document_save_script(self.manifest)
+        document = _FakeDocument()
+        app = _FakeApp(
+            documents=[document],
+            active=document,
+            data=SimpleNamespace(activeProject=SimpleNamespace(rootFolder=_root_folder())),
+        )
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual("saved-as", report["save_action"])
+        self.assertEqual("adopted-active-document", report["adoption"])
+        self.assertEqual([(self.target, "RootFolder", document.save_as_calls[0][2], "")], document.save_as_calls)
+        self.assertEqual("df-new", report["data_file"]["id"])
+        self.assertTrue(report["name_matches_manifest"])
+        self.assertTrue(document.isSaved)
+
+    def test_manifest_document_folder_resolves_under_the_project_root(self) -> None:
+        data = self.manifest.to_dict()
+        data["project"]["document_folder"] = "Designs/Pods"
+        manifest = Manifest.from_data(data)
+        source = emit_document_save_script(manifest)
+
+        pods = _root_folder(name="Pods")
+        designs = _root_folder({"Pods": pods}, name="Designs")
+        document = _FakeDocument()
+        app = _FakeApp(
+            documents=[document],
+            active=document,
+            data=SimpleNamespace(
+                activeProject=SimpleNamespace(rootFolder=_root_folder({"Designs": designs}))
+            ),
+        )
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual([(self.target, "Pods", document.save_as_calls[0][2], "")], document.save_as_calls)
+
+        missing = _FakeDocument()
+        missing_app = _FakeApp(
+            documents=[missing],
+            active=missing,
+            data=SimpleNamespace(activeProject=SimpleNamespace(rootFolder=_root_folder())),
+        )
+        refusal = self._run(source, missing_app, expect_error="folder-not-found")
+        self.assertFalse(refusal["ok"])
+        self.assertEqual("folder-not-found", refusal["refusal"])
+        self.assertEqual("Designs", refusal["detail"]["segment"])
+        self.assertEqual([], missing.save_as_calls)
+        self.assertFalse(missing.isSaved)
+
+    def test_no_resolvable_folder_is_a_named_refusal_not_a_silent_untitled(self) -> None:
+        source = emit_document_save_script(self.manifest)
+        for app, refusal in (
+            (_FakeApp(documents=[_FakeDocument()], active=None), "no-active-document"),
+            (
+                _FakeApp(documents=[(document := _FakeDocument())], active=document, data=None),
+                "data-api-unavailable",
+            ),
+            (
+                _FakeApp(
+                    documents=[(document := _FakeDocument())],
+                    active=document,
+                    data=SimpleNamespace(activeProject=None),
+                ),
+                "no-active-project",
+            ),
+        ):
+            with self.subTest(refusal=refusal):
+                report = self._run(source, app, expect_error=refusal)
+                self.assertFalse(report["ok"])
+                self.assertEqual(refusal, report["refusal"])
+
+    def test_checkpoint_saves_a_version_only_when_the_document_is_modified(self) -> None:
+        source = emit_document_save_script(self.manifest)
+        document = _FakeDocument(
+            name=self.target + " v3", saved=True, data_file=_FakeDataFile("df-1", 3), modified=True
+        )
+        app = _FakeApp(documents=[document], active=document)
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual("saved-version", report["save_action"])
+        self.assertEqual(1, len(document.save_calls))
+        self.assertEqual(4, report["data_file"]["version_number"])
+
+        clean = self._run(source, app)
+        self.assertTrue(clean["ok"])
+        self.assertEqual("already-saved", clean["save_action"])
+        self.assertEqual(1, len(document.save_calls))
+
+    def test_a_different_saved_document_is_refused_never_adopted(self) -> None:
+        source = emit_document_save_script(self.manifest)
+        document = _FakeDocument(
+            name="Someone Elses Design v9", saved=True, data_file=_FakeDataFile("df-other"), modified=True
+        )
+        app = _FakeApp(documents=[document], active=document)
+        report = self._run(source, app, expect_error="active-document-not-target")
+        self.assertEqual("active-document-not-target", report["refusal"])
+        self.assertEqual([], document.save_calls)
+        self.assertEqual([], document.save_as_calls)
+
+    def test_reconnect_adopts_the_open_document_by_data_file_id(self) -> None:
+        source = emit_document_save_script(self.manifest, "df-1")
+        self.assertIn('DOCUMENT_ID = json.loads(\'"df-1"\')', source)
+        other = _FakeDocument(name="Untitled", saved=False)
+        # Renamed by the user: identity is the id, the name is only reported.
+        target = _FakeDocument(
+            name="Renamed By The User v7", saved=True, data_file=_FakeDataFile("df-1", 7), modified=False
+        )
+        app = _FakeApp(documents=[other, target], active=other)
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual("adopted-open-document", report["adoption"])
+        self.assertEqual("already-saved", report["save_action"])
+        self.assertIs(app.activeDocument, target)
+        self.assertFalse(report["name_matches_manifest"])
+        self.assertEqual("Renamed By The User v7", report["document_name"])
+        # The user's other open document was never saved or renamed.
+        self.assertEqual([], other.save_calls)
+        self.assertEqual([], other.save_as_calls)
+
+    def test_reconnect_opens_a_closed_document_through_the_data_api(self) -> None:
+        source = emit_document_save_script(self.manifest, "df-9")
+        recorded = _FakeDataFile("df-9", 5)
+        app = _FakeApp(
+            documents=[],
+            active=None,
+            data=SimpleNamespace(findFileById=lambda identifier: recorded if identifier == "df-9" else None),
+        )
+        report = self._run(source, app)
+        self.assertTrue(report["ok"])
+        self.assertEqual("opened-recorded-document", report["adoption"])
+        self.assertEqual(["df-9"], app.documents.opened)
+        self.assertEqual("df-9", report["data_file"]["id"])
+
+    def test_reconnect_refuses_a_missing_id_and_reports_name_matches_only_as_hints(self) -> None:
+        source = emit_document_save_script(self.manifest, "df-gone")
+        lookalike = _FakeDocument(
+            name=self.target + " v2", saved=True, data_file=_FakeDataFile("df-different"), modified=True
+        )
+        app = _FakeApp(
+            documents=[lookalike],
+            active=lookalike,
+            data=SimpleNamespace(findFileById=lambda identifier: None),
+        )
+        report = self._run(source, app, expect_error="recorded-document-not-found")
+        self.assertFalse(report["ok"])
+        self.assertEqual("recorded-document-not-found", report["refusal"])
+        self.assertEqual("df-gone", report["detail"]["recorded_data_file_id"])
+        self.assertEqual([self.target + " v2"], report["detail"]["name_match_hints"])
+        # A name match is a hint, never an identity: nothing was saved.
+        self.assertEqual([], lookalike.save_calls)
+
+        offline = _FakeApp(documents=[], active=None, data=None)
+        offline_report = self._run(source, offline, expect_error="data-api-unavailable")
+        self.assertEqual("data-api-unavailable", offline_report["refusal"])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ Use one copy per Fusion design. Replace the instructional text with project fact
 ## Fusion document state
 
 - Fusion document: Not recorded.
+- Document dataFile id (durable identity; from the document-save report — later sessions reconnect by this id, never by name): Not recorded.
+- Document project id / folder id: Not recorded.
 - Document/version/checkpoint: Not recorded.
 - Fusion release: Not recorded.
 - Fusion MCP/package version: Not recorded.

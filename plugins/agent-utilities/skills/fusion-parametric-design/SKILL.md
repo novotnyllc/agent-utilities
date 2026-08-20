@@ -57,9 +57,58 @@ Before the first mutation:
 
 1. Confirm that the active product is a Fusion Design.
 2. Confirm that the design is parametric and design history is enabled.
-3. Save or create a version checkpoint.
+3. Establish the document as named and saved (below) — a version checkpoint requires a saved document.
 4. Capture a read-only inventory report.
 5. Capture an initial viewport image when the MCP supports it.
+
+### The working document is named and saved, never left Untitled
+
+An unsaved Fusion document is one crash away from gone. Naming and saving are
+part of *establishing* the working document, not an afterthought:
+
+- **Creating a document**: name it from the manifest and save it before
+  substantial timeline work begins. The name is `project.fusion_document` — a
+  human-sensible name a person would write ("Router Mount v2"), never a slug,
+  hash, or timestamp.
+- **Adopting the user's existing unsaved document**: save it first, under a
+  name derived from the manifest, and tell the user the name you gave it — a
+  crash mid-transaction must never cost the user work. Read-only inspection of
+  an unsaved document stays allowed; mutation does not.
+- **After each successful transaction batch**: save again. A Fusion save
+  creates a version, and that checkpoint is exactly the desired behavior. Never
+  end a transaction batch with the design in an unsaved Untitled state.
+- **Identity is the dataFile id, never the name.** The first save's report
+  carries the document's dataFile id plus its project and folder ids; record
+  them in `DESIGN-STATE.md` under Fusion document state. The user may rename
+  the document at any time — later sessions bind by the recorded id and simply
+  report the current name (then reconcile `project.fusion_document` when it
+  drifted).
+- **Reconnecting in a later session**, in order: an *open* document whose
+  dataFile id matches the recorded identity is adopted (never open a second
+  copy); a closed one is located by id through Fusion's data API and opened;
+  with no recorded identity, fall back to create-or-adopt above. A recorded id
+  that cannot be found is a named refusal reporting what was recorded and what
+  was findable — never adopt by name alone, though a name match may appear in
+  the refusal as a hint.
+
+All of this is one transaction, `emit-document-save`:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" emit-document-save fusion-project.json -o build/save.py
+"$SKILL_DIR/scripts/fusion-design" emit-document-save fusion-project.json --document-id <recorded dataFile id> -o build/save.py
+```
+
+Without `--document-id` it adopts the active document: an unsaved one is saved
+as `project.fusion_document` into the active project's folder (or the optional
+manifest `project.document_folder`, a "/"-separated path under the project
+root), one already saved under the target name gets a version checkpoint, and a
+*different* saved document is refused. With `--document-id` it reconnects by
+identity as above. Every unresolvable state — offline data API, no active
+project, missing declared folder, missing recorded id — is a named refusal in
+the report, never a silently kept Untitled. Inventory and verification reports
+also carry `document_saved_state` (isSaved, name, dataFile identity,
+fail-closed), so an unsaved or renamed working document is visible in every
+setup and verification pass.
 
 Never switch a populated design from parametric to direct mode. That destroys design history. If the document is direct, stop and recommend a new parametric document or a deliberate manual conversion plan.
 
@@ -490,6 +539,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-inventory <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]
+"$SKILL_DIR/scripts/fusion-design" emit-document-save <manifest> [--document-id <recorded dataFile id>] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-verification <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-mesh-capture <manifest> [-o file.py]

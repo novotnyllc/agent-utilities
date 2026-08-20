@@ -282,6 +282,58 @@ def _occurrence_state(occurrence):
     return state
 
 
+def _document_saved_state(document):
+    """The document's saved identity, fail closed.
+
+    "Unsaved" and "could not read" must never look alike: an unreadable probe is
+    reported as available:false with a named reason, never defaulted to a value
+    that reads as an answer. A saved document's identity is its dataFile id --
+    names are user-mutable and are reported, not trusted.
+    """
+    if document is None:
+        return {{"available": False, "reason": "no-active-document"}}
+    state = {{"available": True, "name": None, "is_saved": None, "data_file": None}}
+    try:
+        state["name"] = str(document.name)
+    except Exception:
+        pass
+    is_saved = getattr(document, "isSaved", None)
+    if is_saved is None:
+        state["available"] = False
+        state["reason"] = "isSaved-unavailable"
+        return state
+    state["is_saved"] = bool(is_saved)
+    if not state["is_saved"]:
+        return state
+    try:
+        data_file = document.dataFile
+    except Exception as error:
+        state["available"] = False
+        state["reason"] = "dataFile-unreadable: " + str(error)
+        return state
+    if not data_file:
+        state["available"] = False
+        state["reason"] = "dataFile-missing-on-saved-document"
+        return state
+    identity = {{}}
+    try:
+        identity["id"] = str(data_file.id)
+    except Exception:
+        identity["id"] = None
+    try:
+        identity["version_number"] = int(data_file.versionNumber)
+    except Exception:
+        identity["version_number"] = None
+    for key, attribute in (("project_id", "parentProject"), ("folder_id", "parentFolder")):
+        try:
+            parent = getattr(data_file, attribute)
+            identity[key] = str(parent.id) if parent else None
+        except Exception:
+            identity[key] = None
+    state["data_file"] = identity
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
     suppressed = []
@@ -375,6 +427,7 @@ def run(context):
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
             "document_name": app.activeDocument.name if app.activeDocument else None,
+            "document_saved_state": _document_saved_state(app.activeDocument),
             "design_type": str(design.designType),
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "parameters": parameters,
@@ -687,6 +740,269 @@ def run(context):
                 "left_behind": sorted(set(created)),
                 "traceback": traceback.format_exc(),
             }})
+        raise
+'''
+
+
+def emit_document_save_script(manifest: Manifest, document_id: str | None = None) -> str:
+    """Emit the document save/adopt transaction.
+
+    Establishes the working document as named and saved: an unsaved Fusion
+    document is one crash away from gone, so naming and saving are part of
+    establishing the document, not an afterthought. Without ``document_id`` the
+    transaction adopts the active document -- saving an unsaved one under the
+    manifest's ``project.fusion_document`` name into the resolved folder, or
+    version-checkpointing one already saved under that name. With
+    ``document_id`` (the dataFile id a previous save report recorded) it
+    reconnects by identity instead: an open document with that id is adopted,
+    a closed one is located through the data API and opened, and anything else
+    is a named refusal. Names are user-mutable and are never used to adopt.
+    """
+    identity = str(document_id).strip() if document_id is not None and str(document_id).strip() else None
+    return _script_prelude(manifest) + f'''DOCUMENT_ID = json.loads({_json_literal(identity)})
+DOCUMENT_FOLDER = json.loads({_json_literal(manifest.document_folder)})
+SAVE_DESCRIPTION = "fusion-parametric-design checkpoint (" + MANIFEST_SHA256[:12] + ")"
+
+
+class DocumentSaveRefused(RuntimeError):
+    """A named refusal: the transaction cannot save safely, and says why."""
+
+    def __init__(self, refusal, detail):
+        self.refusal = refusal
+        self.detail = detail
+        super().__init__(refusal + ": " + json.dumps(detail, sort_keys=True, default=str))
+
+
+def _is_target_name(name):
+    """The manifest name, or the manifest name plus Fusion's own " vN" suffix."""
+    text = str(name or "")
+    if text == FUSION_DOCUMENT_NAME or not text.startswith(FUSION_DOCUMENT_NAME + " v"):
+        return text == FUSION_DOCUMENT_NAME
+    return text[len(FUSION_DOCUMENT_NAME) + 2:].isdigit()
+
+
+def _open_document_by_data_file_id(app, document_id):
+    documents = app.documents
+    for index in range(documents.count):
+        document = documents.item(index)
+        try:
+            data_file = document.dataFile
+        except Exception:
+            # An unsaved open document has no dataFile and cannot be the
+            # recorded one; other people's documents are never touched.
+            continue
+        if data_file and str(getattr(data_file, "id", "")) == document_id:
+            return document
+    return None
+
+
+def _name_match_hints(app):
+    """Open documents whose name matches the manifest target.
+
+    Reported inside a refusal as a hint only, never adopted: names are
+    user-mutable, so a name match is not an identity.
+    """
+    hints = []
+    documents = app.documents
+    for index in range(documents.count):
+        try:
+            name = str(documents.item(index).name)
+        except Exception:
+            continue
+        if _is_target_name(name):
+            hints.append(name)
+    return sorted(hints)
+
+
+def _resolve_target_folder(app):
+    """The folder a first save writes into.
+
+    The manifest's optional ``project.document_folder`` is a "/"-separated path
+    under the active project's root folder; without it the root folder itself
+    is the target. Every hop fails closed with a named refusal -- an offline or
+    projectless Fusion must refuse, never silently keep the document Untitled.
+    """
+    data = getattr(app, "data", None)
+    if not data:
+        raise DocumentSaveRefused(
+            "data-api-unavailable",
+            {{"detail": "app.data is not available; Fusion may be offline."}},
+        )
+    project = getattr(data, "activeProject", None)
+    if not project:
+        raise DocumentSaveRefused(
+            "no-active-project",
+            {{"detail": "Fusion has no active project to save into; open or select one."}},
+        )
+    folder = getattr(project, "rootFolder", None)
+    if not folder:
+        raise DocumentSaveRefused(
+            "project-root-unavailable", {{"project": getattr(project, "name", None)}}
+        )
+    for segment in [part for part in DOCUMENT_FOLDER.split("/") if part]:
+        try:
+            child = folder.dataFolders.itemByName(segment)
+        except Exception as error:
+            raise DocumentSaveRefused(
+                "folder-not-found",
+                {{"segment": segment, "declared_path": DOCUMENT_FOLDER, "error": str(error)}},
+            )
+        if not child:
+            raise DocumentSaveRefused(
+                "folder-not-found",
+                {{
+                    "segment": segment,
+                    "declared_path": DOCUMENT_FOLDER,
+                    "detail": "Declared project.document_folder segment does not exist; create it in Fusion or correct the manifest.",
+                }},
+            )
+        folder = child
+    return folder
+
+
+def _adopt_recorded_document(app):
+    """Reconnect to the recorded document by dataFile id: open wins, then the data API."""
+    document = _open_document_by_data_file_id(app, DOCUMENT_ID)
+    if document is not None:
+        adoption = "adopted-open-document"
+    else:
+        data = getattr(app, "data", None)
+        find_file = getattr(data, "findFileById", None) if data else None
+        if not find_file:
+            raise DocumentSaveRefused(
+                "data-api-unavailable",
+                {{
+                    "recorded_data_file_id": DOCUMENT_ID,
+                    "detail": "The recorded document is not open and app.data.findFileById is not available; Fusion may be offline.",
+                }},
+            )
+        try:
+            data_file = find_file(DOCUMENT_ID)
+        except Exception:
+            data_file = None
+        if not data_file:
+            raise DocumentSaveRefused(
+                "recorded-document-not-found",
+                {{
+                    "recorded_data_file_id": DOCUMENT_ID,
+                    "name_match_hints": _name_match_hints(app),
+                    "detail": "No open document and no data item carries the recorded id; it may have been deleted or moved. Refusing to adopt by name: names are user-mutable.",
+                }},
+            )
+        try:
+            document = app.documents.open(data_file, True)
+        except Exception as error:
+            raise DocumentSaveRefused(
+                "open-failed", {{"recorded_data_file_id": DOCUMENT_ID, "error": str(error)}}
+            )
+        if not document:
+            raise DocumentSaveRefused("open-failed", {{"recorded_data_file_id": DOCUMENT_ID}})
+        adoption = "opened-recorded-document"
+    if app.activeDocument != document:
+        activate = getattr(document, "activate", None)
+        if not activate:
+            raise DocumentSaveRefused(
+                "activate-unavailable", {{"recorded_data_file_id": DOCUMENT_ID}}
+            )
+        activate()
+    adsk.doEvents()
+    if app.activeDocument != document:
+        raise DocumentSaveRefused("activate-failed", {{"recorded_data_file_id": DOCUMENT_ID}})
+    return document, adoption
+
+
+def run(context):
+    report_attempted = False
+    try:
+        app = adsk.core.Application.get()
+        if DOCUMENT_ID:
+            document, adoption = _adopt_recorded_document(app)
+        else:
+            document = app.activeDocument
+            if not document:
+                raise DocumentSaveRefused("no-active-document", {{}})
+            adoption = "adopted-active-document"
+
+        before = _document_saved_state(document)
+        if not DOCUMENT_ID and before.get("is_saved") and not _is_target_name(before.get("name")):
+            raise DocumentSaveRefused(
+                "active-document-not-target",
+                {{
+                    "active_document": before.get("name"),
+                    "manifest_target": FUSION_DOCUMENT_NAME,
+                    "detail": "The active document is a different saved document; refusing to adopt or save it. Activate the target document, or pass the recorded document id.",
+                }},
+            )
+        if before.get("is_saved") is None:
+            # Fail closed: with isSaved unreadable there is no way to know
+            # whether save or saveAs is the safe operation.
+            raise DocumentSaveRefused("saved-state-unreadable", before)
+        if not before.get("is_saved"):
+            folder = _resolve_target_folder(app)
+            if not document.saveAs(FUSION_DOCUMENT_NAME, folder, SAVE_DESCRIPTION, ""):
+                raise DocumentSaveRefused(
+                    "save-as-failed",
+                    {{"name": FUSION_DOCUMENT_NAME, "folder": getattr(folder, "name", None)}},
+                )
+            save_action = "saved-as"
+        else:
+            # An unreadable isModified counts as modified: saving a clean
+            # document costs a version, skipping a dirty one costs the work.
+            if getattr(document, "isModified", True):
+                if not document.save(SAVE_DESCRIPTION):
+                    raise DocumentSaveRefused("save-failed", {{"name": before.get("name")}})
+                save_action = "saved-version"
+            else:
+                save_action = "already-saved"
+        adsk.doEvents()
+
+        after = _document_saved_state(document)
+        identity = after.get("data_file") if isinstance(after.get("data_file"), dict) else None
+        failures = []
+        if after.get("is_saved") is not True:
+            failures.append("still-unsaved")
+        if not identity or not identity.get("id"):
+            failures.append("data-file-identity-unreadable")
+        report = {{
+            "kind": "document-save",
+            "project": PROJECT_NAME,
+            "manifest_sha256": MANIFEST_SHA256,
+            "recorded_data_file_id": DOCUMENT_ID,
+            "adoption": adoption,
+            "save_action": save_action,
+            "document_name": after.get("name"),
+            "manifest_target_name": FUSION_DOCUMENT_NAME,
+            # A rename is not a failure: the document's identity is its dataFile
+            # id. The mismatch is surfaced so project.fusion_document can be
+            # reconciled before name-bound transactions run.
+            "name_matches_manifest": _is_target_name(after.get("name")),
+            "document_saved_state": after,
+            "data_file": identity,
+            "failures": failures,
+            "ok": not failures,
+        }}
+        report_attempted = True
+        _emit(report)
+        if failures:
+            raise RuntimeError("Document save did not verify: " + ", ".join(failures))
+    except DocumentSaveRefused as refused:
+        if not report_attempted:
+            report_attempted = True
+            _emit({{
+                "kind": "document-save",
+                "project": PROJECT_NAME,
+                "manifest_sha256": MANIFEST_SHA256,
+                "recorded_data_file_id": DOCUMENT_ID,
+                "manifest_target_name": FUSION_DOCUMENT_NAME,
+                "ok": False,
+                "refusal": refused.refusal,
+                "detail": refused.detail,
+            }})
+        raise
+    except Exception as error:
+        if not report_attempted:
+            report_attempted = True
+            _emit({{"kind": "document-save", "ok": False, "error": str(error), "traceback": traceback.format_exc()}})
         raise
 '''
 
@@ -1063,6 +1379,7 @@ def run(context):
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
             "verification_nonce": VERIFICATION_NONCE,
+            "document_saved_state": _document_saved_state(app.activeDocument),
             "compute_invoked": compute_invoked,
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "ok": not failures,

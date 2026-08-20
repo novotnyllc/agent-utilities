@@ -6,6 +6,13 @@ A release passes only the checks applicable to its intended use. “Generated su
 
 - Active product is a Fusion Design.
 - Design type is parametric.
+- The inventory and verification reports carry `document_saved_state` — the
+  document's `isSaved`, current name, and dataFile identity (id, version,
+  project and folder ids) — fail closed: an unreadable probe is reported as
+  `available: false` with a named reason, never defaulted, because "unsaved"
+  and "could not read" must not look alike. An unsaved working document at
+  verification time means the document-save transaction was skipped; run it
+  rather than exporting from a document a crash could erase.
 - `Compute All` runs.
 - No timeline error remains; warnings are individually explained.
 - No *undeclared* timeline feature is suppressed. Suppression silently changes the shape away from the recorded intent, so `timeline-suppressed` fails closed unless the manifest declares `verification.allow_suppressed_timeline_features: true` — the escape hatch for designs that model configurations by suppression. Declared suppression is still recorded in `timeline.suppressed`.

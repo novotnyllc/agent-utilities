@@ -44,7 +44,7 @@ class GoldenPathTests(unittest.TestCase):
         digest = manifest_sha256(manifest)
         scripts = sorted(GENERATED.glob("*.py"))
         self.assertEqual(
-            {"export.py", "inventory.py", "positive_control.py", "scaffold.py", "sync_parameters.py", "verify.py"},
+            {"export.py", "inventory.py", "positive_control.py", "save_document.py", "scaffold.py", "sync_parameters.py", "verify.py"},
             {path.name for path in scripts},
         )
         for path in scripts:

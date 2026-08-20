@@ -26,6 +26,28 @@ Every important dimension has one owner:
 
 Never let the same physical fact appear as unrelated literals in multiple sketches or features.
 
+## Document lifecycle
+
+The working document is named and saved before it is mutated, and never left in
+an unsaved Untitled state at the end of a transaction batch — an unsaved Fusion
+document is one crash away from gone, so naming and saving are part of
+establishing the document, not an afterthought:
+
+- the name comes from the manifest's `project.fusion_document` and is
+  human-sensible — what a person would write, never a slug, hash, or timestamp;
+- adopting a user's existing unsaved document means saving it first, under a
+  manifest-derived name stated to the user, before any mutation;
+- each successful transaction batch ends with a save; a Fusion save creates a
+  version, and that checkpoint is the desired behavior;
+- the document's durable identity is its dataFile id, recorded in
+  `DESIGN-STATE.md` after the first save — names are user-mutable, so later
+  sessions reconnect by id (open documents first, then the data API) and only
+  report the current name;
+- an unresolvable save or reconnect — offline data API, no active project,
+  missing declared folder, missing recorded id — is a named refusal, never a
+  silently kept Untitled;
+- read-only inspection of an unsaved document stays allowed.
+
 ## Parametric integrity
 
 A healthy Fusion model has:

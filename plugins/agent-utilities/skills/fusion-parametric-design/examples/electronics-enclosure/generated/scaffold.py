@@ -243,6 +243,58 @@ def _occurrence_state(occurrence):
     return state
 
 
+def _document_saved_state(document):
+    """The document's saved identity, fail closed.
+
+    "Unsaved" and "could not read" must never look alike: an unreadable probe is
+    reported as available:false with a named reason, never defaulted to a value
+    that reads as an answer. A saved document's identity is its dataFile id --
+    names are user-mutable and are reported, not trusted.
+    """
+    if document is None:
+        return {"available": False, "reason": "no-active-document"}
+    state = {"available": True, "name": None, "is_saved": None, "data_file": None}
+    try:
+        state["name"] = str(document.name)
+    except Exception:
+        pass
+    is_saved = getattr(document, "isSaved", None)
+    if is_saved is None:
+        state["available"] = False
+        state["reason"] = "isSaved-unavailable"
+        return state
+    state["is_saved"] = bool(is_saved)
+    if not state["is_saved"]:
+        return state
+    try:
+        data_file = document.dataFile
+    except Exception as error:
+        state["available"] = False
+        state["reason"] = "dataFile-unreadable: " + str(error)
+        return state
+    if not data_file:
+        state["available"] = False
+        state["reason"] = "dataFile-missing-on-saved-document"
+        return state
+    identity = {}
+    try:
+        identity["id"] = str(data_file.id)
+    except Exception:
+        identity["id"] = None
+    try:
+        identity["version_number"] = int(data_file.versionNumber)
+    except Exception:
+        identity["version_number"] = None
+    for key, attribute in (("project_id", "parentProject"), ("folder_id", "parentFolder")):
+        try:
+            parent = getattr(data_file, attribute)
+            identity[key] = str(parent.id) if parent else None
+        except Exception:
+            identity[key] = None
+    state["data_file"] = identity
+    return state
+
+
 def _timeline_health(design):
     unhealthy = []
     suppressed = []
