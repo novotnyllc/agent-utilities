@@ -416,6 +416,56 @@ class DatumFrameTests(unittest.TestCase):
         # (0,1,0) quantizes to (0,29,0) against the +x stack's (29,0,0).
         self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
 
+    def test_a_pooled_stack_carries_its_members_spread_not_just_the_biggest_one(self) -> None:
+        """Which member represents a merged stack rests on areas, and areas move.
+
+        `_merge_parallel` keeps the largest single member as the group's
+        direction, so a re-tessellation that swaps which member is largest moves
+        the merged direction -- by up to the group's own angular spread, even
+        though every member sits safely inside its own cell. The merged
+        candidate's stated sigma has to cover that, or the tie-break certifies a
+        cell the next run can leave.
+        """
+        record = _walled_lid([95.4, 95.4], [95.4, 95.4])
+        # Tilt one wall of the +x stack inside the tolerance: still the same
+        # direction by the module's own rule, and still a real spread. Kept
+        # small enough that the merged cell is stable -- what is under test is
+        # that the spread reaches the sigma, not that it refuses.
+        tilt = 0.2
+        radians = math.radians(tilt)
+        for region in record["regions"]:
+            if region["region_hash"] == fx.region_hash("x1"):
+                region["fit"]["parameters"]["normal"] = [math.cos(radians), math.sin(radians), 0.0]
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        pooled = [
+            entry
+            for entry in frame.evidence["secondary_choice"]["tied"]
+            if "summed over" in entry["basis"]
+        ]
+        self.assertTrue(pooled, frame.evidence["secondary_choice"]["tied"])
+        for entry in pooled:
+            self.assertEqual("propagated", entry["direction_sigma_basis"])
+        # Each member already carries hypot(0.05 plane, 0.05 primary axis); the
+        # tilted stack's 0.2 deg spread dominates that and has to be in the
+        # number, or the representative could change and the cell with it. The
+        # untilted stack keeps the member sigma, which is the control.
+        member = math.hypot(0.05, 0.05)
+        sigmas = sorted(entry["direction_sigma_deg"] for entry in pooled)
+        self.assertAlmostEqual(member, sigmas[0], places=9)
+        self.assertAlmostEqual(math.hypot(member, tilt), sigmas[-1], places=9)
+
+    def test_a_pooled_member_with_no_sigma_leaves_the_stack_with_none(self) -> None:
+        # One member nobody measured makes the whole merged direction
+        # unmeasured: the representative could become that member.
+        record = _tied_lid()
+        for region in record["regions"]:
+            if region["region_hash"] == fx.region_hash("x1"):
+                del region["fit"]["uncertainty"]["normal_deg"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
     def test_a_tied_lid_whose_walls_are_too_uncertain_still_refuses(self) -> None:
         record = _tied_lid()
         for region in record["regions"]:
@@ -471,8 +521,20 @@ class DatumFrameTests(unittest.TestCase):
         secondary = frame.evidence["secondary"]
         self.assertEqual("cone", secondary["kind"])
         self.assertEqual("propagated", secondary["direction_sigma_basis"])
+        # Three measured terms: the cone apex's own sigma over the 9 mm lever,
+        # the origin's over the same lever -- the cap plane's offset sigma and
+        # the primary cylinder's axis-point sigma, which place the two ends of
+        # that origin -- and the primary axis's 0.05 deg tilt levered by the
+        # anchor's 4 mm of axial offset over the same 9 mm.
+        origin_sigma = math.hypot(0.01, 0.01)
         self.assertAlmostEqual(
-            math.hypot(math.degrees(math.atan2(0.01, 9.0)), 0.05 * 4.0 / 9.0),
+            math.hypot(
+                math.hypot(
+                    math.degrees(math.atan2(0.01, 9.0)),
+                    math.degrees(math.atan2(origin_sigma, 9.0)),
+                ),
+                0.05 * 4.0 / 9.0,
+            ),
             secondary["direction_sigma_deg"],
             places=12,
         )

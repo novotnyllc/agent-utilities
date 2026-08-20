@@ -1029,21 +1029,45 @@ def _merge_parallel(
     groups: list[list[Any]] = []
     for candidate in sorted(candidates, key=AxisCandidate.sort_key):
         for group in groups:
-            if _angle_deg(candidate.direction, group[0].direction) <= angle_tolerance_deg:
+            if _angle_deg(candidate.direction, group[0][0].direction) <= angle_tolerance_deg:
+                group[0].append(candidate)
                 group[1] += candidate.area
-                group[2] += 1
                 break
         else:
-            groups.append([candidate, candidate.area, 1])
-    merged = [
-        replace(
-            head,
-            score=total,
-            area=total,
-            basis=head.basis if count == 1 else f"{head.basis}, summed over {count} parallel fits",
+            groups.append([[candidate], candidate.area])
+    merged: list[AxisCandidate] = []
+    for members, total in groups:
+        head = members[0]
+        count = len(members)
+        sigma = head.direction_sigma_deg
+        basis = head.direction_sigma_basis
+        if count > 1:
+            # The representative is the largest single member, and *which*
+            # member that is rests on areas a re-tessellation moves. Two members
+            # each safely inside their own cell can put the merged direction on
+            # either of two cells depending on which one won the area, so the
+            # merged candidate's uncertainty has to cover the whole group's
+            # spread, not just the representative's own. A member with no stated
+            # sigma leaves the group with none, which is what makes it
+            # ineligible for the canonical tie-break rather than quietly stable.
+            spread = max(_angle_deg(head.direction, member.direction) for member in members)
+            sigmas = [member.direction_sigma_deg for member in members]
+            sigma = None if any(s is None for s in sigmas) else math.hypot(max(sigmas), spread)
+            basis = "propagated"
+        merged.append(
+            replace(
+                head,
+                score=total,
+                area=total,
+                direction_sigma_deg=sigma,
+                direction_sigma_basis=basis,
+                basis=(
+                    head.basis
+                    if count == 1
+                    else f"{head.basis}, summed over {count} parallel fits"
+                ),
+            )
         )
-        for head, total, count in groups
-    ]
     return sorted(merged, key=AxisCandidate.sort_key)
 
 
@@ -1115,8 +1139,15 @@ def _origin_on_axis(
     z: Vec3,
     axis_anchor: Vec3,
     angle_tolerance_deg: float,
-) -> tuple[Vec3, str]:
-    """Where the primary axis meets the lowest plane perpendicular to it."""
+) -> tuple[Vec3, str, float | None]:
+    """Where the primary axis meets the lowest plane perpendicular to it.
+
+    Returns the origin, how it was found, and the positional sigma of the
+    region that placed it -- ``None`` where no single region did. The origin is
+    one end of every second-axis candidate's direction, so its own uncertainty
+    turns that direction just as the far anchor's does, and a canonical tie over
+    those directions cannot be called stable without it.
+    """
     caps: list[tuple[Any, ...]] = []
     for region in regions:
         fit = region.fit
@@ -1131,7 +1162,16 @@ def _origin_on_axis(
     if caps:
         station, _area, _normal, _point, region_hash = sorted(caps)[0]
         origin = _add(axis_anchor, _scale(z, station - _dot(z, axis_anchor)))
-        return origin, f"primary axis meets plane {region_hash[:12]} at station {station:.6g}"
+        # The sigma of the region that placed it. The caller combines this with
+        # the primary axis anchor's own, which is what places the origin
+        # *across* the axis -- and the across-axis term is the one that turns a
+        # second-axis direction.
+        cap = next(r for r in regions if r.region_hash == region_hash)
+        return (
+            origin,
+            f"primary axis meets plane {region_hash[:12]} at station {station:.6g}",
+            cap.sigma("offset"),
+        )
 
     planes = sorted(
         (
@@ -1142,7 +1182,13 @@ def _origin_on_axis(
     )
     if planes:
         _area, region_hash, point = planes[0]
-        return point, f"centroid of the largest plane {region_hash[:12]}; no plane is perpendicular to the primary axis"
+        plane = next(r for r in regions if r.region_hash == region_hash)
+        return (
+            point,
+            f"centroid of the largest plane {region_hash[:12]}; no plane is perpendicular to the "
+            "primary axis",
+            plane.sigma("offset"),
+        )
 
     anchors = sorted(
         (region.anchor(), region.region_hash) for region in regions if region.anchor() is not None
@@ -1153,7 +1199,14 @@ def _origin_on_axis(
         sum(a[0][1] for a in anchors) / total,
         sum(a[0][2] for a in anchors) / total,
     )
-    return centroid, "centroid of every accepted fit's anchor point; the part has no fitted plane"
+    # No single region placed this one, so no single region's sigma bounds it.
+    # `None` here makes every second-axis candidate ineligible for the canonical
+    # tie-break, which is the honest answer for an origin nothing measured.
+    return (
+        centroid,
+        "centroid of every accepted fit's anchor point; the part has no fitted plane",
+        None,
+    )
 
 
 def _secondary_candidates(
@@ -1222,6 +1275,7 @@ def _secondary_from_second_axis(
     primary_region_hash: str,
     offset_tolerance: float,
     z_sigma_deg: float | None,
+    origin_sigma: float | None,
 ) -> list[AxisCandidate]:
     """A bolt pattern gives a natural X: the direction to the second axis."""
     out: list[AxisCandidate] = []
@@ -1243,7 +1297,8 @@ def _secondary_from_second_axis(
         if x is None:
             continue
         # This direction is not a fitted axis: it is the direction *to* one, so
-        # two measured numbers move it and both are propagated first-order.
+        # three measured numbers move it and all three are propagated
+        # first-order.
         #
         # The anchor's own positional sigma, spread over the lever arm -- and
         # read under the key this kind's record actually uses.
@@ -1266,9 +1321,15 @@ def _secondary_from_second_axis(
                 basis="perpendicular offset from the origin to a second axis",
                 direction_sigma_deg=(
                     None
-                    if anchor_sigma is None or z_sigma_deg is None
+                    if anchor_sigma is None or z_sigma_deg is None or origin_sigma is None
                     else math.hypot(
-                        math.degrees(math.atan2(anchor_sigma, radial)),
+                        math.hypot(
+                            math.degrees(math.atan2(anchor_sigma, radial)),
+                            # The origin is this direction's other endpoint, and
+                            # moving it across the axis turns the direction over
+                            # the same lever arm as moving the far anchor does.
+                            math.degrees(math.atan2(origin_sigma, radial)),
+                        ),
                         z_sigma_deg * axial / radial,
                     )
                 ),
@@ -1334,7 +1395,29 @@ def derive_datum_frame(
         angle_tolerance_deg=angle_tolerance_deg,
     )
     z = winner.direction
-    origin, origin_source = _origin_on_axis(accepted, z, winner.anchor, angle_tolerance_deg)
+    origin, origin_source, placing_sigma = _origin_on_axis(
+        accepted, z, winner.anchor, angle_tolerance_deg
+    )
+    # A second-axis direction runs from the origin to another axis, so the
+    # origin is one of its two endpoints and its own uncertainty turns that
+    # direction exactly as the far endpoint's does. Two measured numbers place
+    # the origin: the region that named it, and the primary axis's own anchor,
+    # which is what fixes it *across* the axis. Either one missing leaves the
+    # origin without a stated uncertainty -- and a direction with an endpoint
+    # nothing measured is not a direction the canonical tie-break may certify.
+    primary_region = next(
+        (region for region in accepted if region.region_hash == winner.region_hash), None
+    )
+    primary_anchor_sigma = (
+        None
+        if primary_region is None or primary_region.fit is None
+        else primary_region.sigma(_ANCHOR_SIGMA_KEY.get(primary_region.fit.kind, "offset"))
+    )
+    origin_sigma = (
+        None
+        if placing_sigma is None or primary_anchor_sigma is None
+        else math.hypot(placing_sigma, primary_anchor_sigma)
+    )
 
     secondary = _secondary_candidates(accepted, z, angle_tolerance_deg, winner.direction_sigma_deg)
     secondary_basis = "plane parallel to the primary axis"
@@ -1346,6 +1429,7 @@ def derive_datum_frame(
             winner.region_hash,
             offset_tolerance,
             winner.direction_sigma_deg,
+            origin_sigma,
         )
         secondary_basis = "second axis off the primary axis"
     if not secondary:
