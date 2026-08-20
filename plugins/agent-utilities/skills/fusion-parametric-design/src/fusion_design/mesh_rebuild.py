@@ -671,6 +671,58 @@ def _entities_2d(
     return out
 
 
+def _sampled_entities(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> list[tuple[float, float]]:
+    """One loop's classified entities as a dense polyline, in the sketch plane.
+
+    Lines contribute their own endpoints; arcs and circles are sampled, because
+    the point of this is that an arc is *not* its chord. At 256 segments a
+    circle's area is under a hundredth of a percent short -- orders below the
+    match window and orders below the 10% an octagon's chords are out by, which
+    is the error this exists to remove -- and it costs one pass per loop.
+    """
+    points: list[tuple[float, float]] = []
+
+    def arc(centre, radius, start, end, sweep_through=None):
+        first = math.atan2(start[1] - centre[1], start[0] - centre[0])
+        last = math.atan2(end[1] - centre[1], end[0] - centre[0])
+        span = last - first
+        if sweep_through is not None:
+            middle = math.atan2(sweep_through[1] - centre[1], sweep_through[0] - centre[0])
+            # Take the way round that passes through the recorded mid point.
+            forward = (middle - first) % (2.0 * math.pi)
+            whole = (last - first) % (2.0 * math.pi)
+            span = whole if forward <= whole else whole - 2.0 * math.pi
+        for step in range(per_arc):
+            angle = first + span * step / per_arc
+            points.append((centre[0] + radius * math.cos(angle), centre[1] + radius * math.sin(angle)))
+
+    for row in rows:
+        if row["kind"] == "circle":
+            centre = row["center_mm"]
+            arc(centre, float(row["radius_mm"]), (centre[0] + float(row["radius_mm"]), centre[1]),
+                (centre[0] + float(row["radius_mm"]), centre[1]))
+            # A full turn: `arc` above walks span 0, so lay it out directly.
+            points[-per_arc:] = [
+                (
+                    centre[0] + float(row["radius_mm"]) * math.cos(2.0 * math.pi * step / per_arc),
+                    centre[1] + float(row["radius_mm"]) * math.sin(2.0 * math.pi * step / per_arc),
+                )
+                for step in range(per_arc)
+            ]
+            continue
+        if row["kind"] == "arc" and "center_mm" in row and "radius_mm" in row:
+            arc(
+                row["center_mm"],
+                float(row["radius_mm"]),
+                row["start_mm"],
+                row["end_mm"],
+                row.get("mid_mm"),
+            )
+            continue
+        points.append((row["start_mm"][0], row["start_mm"][1]))
+    return points
+
+
 def _require_chained(
     entities: Sequence[Mapping[str, Any]], tolerance: float, archetype_id: str
 ) -> None:
@@ -896,6 +948,11 @@ def _slab_profile(
         )
 
     flat = [[_project(point, origin, u, v) for point in line.points] for line in profile_loops]
+    # Containment is a topological question and the chords answer it: an arc
+    # and the chords across it enclose the same loops. The *areas* are a
+    # different matter, and they are computed further down from the classified
+    # entities instead -- see `_sampled_entities`.
+    parents = mesh_slabs.containment_parents(flat)
     regions = mesh_slabs.profile_regions(flat)
     if not any(region["material"] for region in regions):
         raise _refuse(
@@ -906,11 +963,11 @@ def _slab_profile(
             {"archetype_id": identifier, "station_mm": station, "loops": len(profile_loops)},
         )
 
-    parents = mesh_slabs.containment_parents(flat)
     hole_loops = {
         region["boundary_loop"] for region in regions if not region["material"]
     }
     rows: list[dict[str, Any]] = []
+    sampled: list[list[tuple[float, float]]] = []
     loop_records: list[dict[str, Any]] = []
     for index, line in enumerate(profile_loops):
         entities = classify_polyline(
@@ -929,6 +986,7 @@ def _slab_profile(
         for row in loop_rows:
             row["loop"] = index
         rows.extend(loop_rows)
+        sampled.append(_sampled_entities(loop_rows))
         loop_records.append(
             {
                 "loop": index,
@@ -938,6 +996,15 @@ def _slab_profile(
                 "point_count": len(line.points),
             }
         )
+
+    # The properties the executor matches Fusion's enumeration against come
+    # from the *classified* entities, not from the section's chords. A regular
+    # octagon whose vertices lie exactly on a circle has zero circle-fit
+    # residual and 10% less area than the circle, so a region measured on the
+    # chords and built as an arc is a `profile-set-mismatch` on geometry Fusion
+    # built exactly as classified. The classification residual does not bound
+    # that difference, and nothing else here would have caught it.
+    regions = mesh_slabs.profile_regions(sampled)
 
     evidence: dict[str, Any] = {
         "source": "mesh-section",

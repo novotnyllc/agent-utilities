@@ -672,6 +672,54 @@ class MultiLoopSketchTests(unittest.TestCase):
         # Nothing bridges the two: loop 1 does not begin on loop 0's endpoint.
         self.assertIsNot(curves[3].endSketchPoint, curves[4].startSketchPoint)
 
+    def test_a_classified_arc_is_measured_as_an_arc_and_not_as_its_chords(self):
+        """Zero classification residual, ten percent of the area, on an octagon.
+
+        A regular octagon's vertices lie exactly on its circumscribed circle,
+        so `classify_polyline` turns it into that circle with no residual at
+        all -- and the circle encloses about 10% more than the chords do. The
+        planned region properties therefore have to come from the classified
+        entities, or Fusion builds exactly what was asked for and the matcher
+        calls it `profile-set-mismatch`.
+        """
+        from fusion_design.mesh_rebuild import _sampled_entities
+        from fusion_design import mesh_slabs as ms
+
+        radius = 5.0
+        circle = [
+            {
+                "kind": "circle",
+                "center_mm": [0.0, 0.0],
+                "radius_mm": radius,
+                "start_mm": [radius, 0.0],
+                "end_mm": [radius, 0.0],
+                "residual_mm": 0.0,
+            }
+        ]
+        corners = [
+            (radius * math.cos(2.0 * math.pi * k / 8.0), radius * math.sin(2.0 * math.pi * k / 8.0))
+            for k in range(8)
+        ]
+        chords = [
+            {
+                "kind": "line",
+                "start_mm": list(corners[k]),
+                "end_mm": list(corners[(k + 1) % 8]),
+                "residual_mm": 0.0,
+            }
+            for k in range(8)
+        ]
+        exact = math.pi * radius * radius
+        sampled = abs(ms._signed_area(_sampled_entities(circle)))
+        chorded = abs(ms._signed_area(_sampled_entities(chords)))
+        # The classified circle is measured as a circle, to about a hundredth
+        # of a percent -- three orders below the chord error, and orders below
+        # the matcher's own window.
+        self.assertLess(abs(sampled - exact) / exact, 2e-04)
+        # And the chords the section actually carried are 10% short of it,
+        # which is the error that used to reach the matcher.
+        self.assertGreater((exact - chorded) / exact, 0.09)
+
     def test_a_single_loop_step_carries_no_loop_key_and_is_unchanged(self):
         namespace = self._namespace()
         sketch = fakes.FakeSketch(fakes.make_design(), None, {})
