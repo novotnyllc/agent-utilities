@@ -1029,6 +1029,7 @@ def _slab_profile(
                 # The boundary an accepted snap is licensed to move, so the
                 # executor's profile match can allow the area that moves with it.
                 "perimeter_mm": region["perimeter_mm"],
+                "extent_mm": region["extent_mm"],
                 "centroid_mm": list(region["centroid_mm"]),
             }
             for region in regions
@@ -2035,6 +2036,7 @@ def plan_emission(
                     # The boundary an accepted snap is allowed to move, so the
                     # executor can allow the area that moves with it.
                     "perimeter_cm": region.get("perimeter_mm", 0.0) * MM_TO_CM,
+                    "extent_cm": region.get("extent_mm", 0.0) * MM_TO_CM,
                     "centroid_cm": [value * MM_TO_CM for value in region["centroid_mm"]],
                 }
                 for region in evidence.get("profile_set", ())
@@ -2447,7 +2449,18 @@ def _profile_set(sketch, step, planned):
             area_window = (
                 tolerance * max(1.0, abs(region["area_cm2"]) ** 0.5) + displacement * perimeter
             )
-            if gap <= tolerance + displacement and (
+            # The centroid is governed by the changed first *moment*, not by
+            # how far any point moved. An accepted snap that shifts a small
+            # part of a long thin boundary keeps every sketch point inside the
+            # displacement and swings the centroid by the added area times its
+            # lever arm, over the whole area: `displacement * perimeter` of
+            # area at a lever of at most the region's own extent.
+            extent = float(region.get("extent_cm") or 0.0)
+            area = abs(region["area_cm2"])
+            centroid_window = tolerance + displacement * (
+                1.0 + (perimeter * extent / area if area > 0.0 else 0.0)
+            )
+            if gap <= centroid_window and (
                 abs(entry["area"] - region["area_cm2"]) <= area_window
             ):
                 matches.append(entry)

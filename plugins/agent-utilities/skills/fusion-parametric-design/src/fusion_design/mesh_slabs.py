@@ -501,6 +501,15 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
                 # profile match has to allow for.
                 "perimeter_mm": _perimeter(points)
                 + sum(_perimeter(loops[child]) for child in children),
+                # How far this region reaches from its own centroid: the lever
+                # arm a displaced boundary swings its area on, which is what
+                # bounds how far the *centroid* can move. A boundary-point
+                # displacement does not bound it -- on a long thin region a
+                # 0.05 mm move of half one edge shifts the centroid by tenths.
+                "extent_mm": max(
+                    (math.dist(point, polygon_centroid(points)) for point in points),
+                    default=0.0,
+                ),
                 "centroid_mm": (
                     [moment[k] / area for k in range(2)]
                     if area > 0.0

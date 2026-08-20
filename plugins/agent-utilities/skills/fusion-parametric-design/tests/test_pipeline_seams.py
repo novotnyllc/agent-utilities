@@ -1444,6 +1444,12 @@ class SlabEmissionSeamTests(unittest.TestCase):
         # At least one region's honest displacement exceeds the window the old
         # square-root-of-area rule allowed, or this fixture proves nothing.
         self.assertTrue(widened)
+        # Every planned region also carries the lever arm its centroid can
+        # swing on -- the displaced area's distance from the centroid -- which
+        # is what bounds the centroid, not the boundary-point displacement.
+        for step in extrudes:
+            for row in step["profile_set"]:
+                self.assertGreater(row["extent_cm"], 0.0)
         report, error = run_transaction(
             source,
             fakes.make_design(behaviour={"profile_regions": moved}),
