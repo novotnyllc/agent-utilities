@@ -47,13 +47,13 @@ Work that is running the tooling, not making design decisions. The CLI refuses a
 
 ## Per-harness examples (illustrative, not authoritative)
 
-These names will age; they are examples of the tiers, not requirements. A session routing policy overrides this table.
+These names will age; they are examples of the tiers, not requirements. A session routing policy overrides this table. Effort is part of every route: a dispatch names both model and effort, never model alone.
 
 | Tier | Claude Code example | Codex example |
 |---|---|---|
-| Frontier | Opus or better | GPT-5.6 Sol |
-| Mid | Sonnet | current mid tier |
-| Economy | Haiku | current economy tier, or a GLM-class subscription model for mechanical runs |
+| Frontier | Opus or better, at high (max for the very hardest design work) | GPT-5.6 Sol at max |
+| Mid | Sonnet at medium | Terra at max |
+| Economy | Haiku at low | Luna at max, or a GLM-class subscription model for mechanical runs |
 
 ## Dispatch rules
 
