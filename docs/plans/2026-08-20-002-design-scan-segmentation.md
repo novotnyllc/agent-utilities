@@ -858,9 +858,13 @@ split by any path.
 here) replaces the existential rule. A split stands only when **all** of the
 following hold, evaluated on **reserved validation triangles** — a blocked
 subset of the node (block scale from the §A.4 correlation record; octree-cell
-parity, the §10.3 idiom) set aside *before* the splitter runs and never read
-by it, so the tree cannot search partitions and then grade the winner on the
-evidence that chose it:
+parity, the §10.3 idiom) reserved **when the node is created, before any fit
+on the node runs** — neither the parent model nor any child model sees the
+validation blocks, so (1)–(2) compare held-out losses on both sides rather
+than an in-sample parent against held-out children (a parent that was
+already fit on all triangles is refit on the non-validation subset before
+grading), and the tree cannot search partitions and then grade the winner
+on the evidence that chose it:
 
 1. area-weighted mean child validation loss ≤ parent validation loss ×
    (1 − `split_min_loss_improvement`);

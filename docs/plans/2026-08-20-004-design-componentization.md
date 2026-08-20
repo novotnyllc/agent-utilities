@@ -1084,13 +1084,23 @@ The closed sets are **per field**, and PR C-1's malformed-record validators
 check each field against its own set — a token that is valid in another
 field's set is rejected in this one:
 
-- `component_status`: + `componentized-geometric`,
-  `physical-thing-evidenced` (§0); `recognized-reference` keeps its meaning
-  as the C2 floor status.
+- `claim_level` (§0's ontology rung): `componentized-geometric` |
+  `physical-thing-evidenced`.
+- `fidelity_status` (what was actually delivered — §4.1's C2/C3 ladder):
+  `recognized-reference` keeps its meaning as the C2 floor, upgraded by the
+  C3 reconstruction licence.
 - `evidence_class`: + `inferred-by-continuation` (R5).
 - `refusal`: + `capture-boundary-unclosed` (§4.6).
 - `delivery_semantics`: + `pose-locked-for-delivery` (§4.7).
 - `lineage_state`: + `invalidated-by-partition` (inherited from 002 §A.2).
+
+Claim level and fidelity are **orthogonal fields, both always present** —
+§0's "status" statements set `claim_level`, §4.1's ladder statuses set
+`fidelity_status`, and the reference-first core case records both without
+discarding either (`claim_level: componentized-geometric`,
+`fidelity_status: recognized-reference`), so the browser, census and
+scoreboard can distinguish a geometric reference component from a
+reconstructed geometric component or an unlicensed reference.
 
 ### A.2 Pipeline position vs frame and relationships (missing decision 7, decided; composition-table row 3 resolved)
 

@@ -729,9 +729,14 @@ per-slab verification at three stations never established it. Added:
 - **Nodes:** connected material components within each slab's section (a
   slab may hold several).
 - **Edges:** evidence-backed correspondence across adjacent events, licensed
-  per edge kind. `continuation` edges require footprint overlap **and**
-  congruence within the constancy tolerance — the same measured evidence the
-  coalescing rule already reads. `branch` and `merge` edges are
+  per edge kind. `continuation` edges require **footprint overlap across the
+  event** — the persisting component's post-event footprint overlaps its
+  pre-event footprint. Congruence is *not* required: an ordinary
+  step-in/step-out changes the footprint of one persisting component and
+  remains a continuation. Congruence stays what it always was — the
+  within-slab constancy and coalescing test, where a fully congruent
+  section is evidence the event is not topology-changing at all (§A.2).
+  `branch` and `merge` edges are
   topology-changing by definition, so congruence with the pre-transition
   footprints cannot be required of them; they are licensed by
   **containment/overlap plus evidenced connectivity** instead: each
