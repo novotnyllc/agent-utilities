@@ -178,8 +178,9 @@ regression. The scoreboard is the vector. For ranking work, cells are ordered:
 editable features), then **V** (the "as many recognized things" clause — RC can
 rise while everything is one extrude; V is what says the *things* were
 recognized), then **E** (editable is the adjective; an inert parameter fails
-the sentence), then **C** (componentized is the other adjective; today's
-uniform zero makes it a poor ranker until any lane can move it), with **H** as
+the sentence), then **C** (componentized is the other adjective; the single-object
+cell is already satisfied at the scripted level, so what ranks here is
+assembly decomposition, uniformly zero until a lane can move it), with **H** as
 a guardrail rather than a rank: any change that grows silent area is rejected
 regardless of its other deltas.
 
@@ -272,7 +273,9 @@ outcome removes the need for the splitter; scan-seg PRs 1–3 unchanged.**
    unmeasured on all 16 parts. 2. Deviation has **never been graded on a slab
    build** (PR #50's live acceptance is a synthetic 20×20×10 block). 3. E is
    0-proven everywhere; the only committed editability artifact is the
-   acceptance *checklist*. 4. C is 0 everywhere and no lane moves it. 5. Scan
+   acceptance *checklist*. 4. C is 1 scripted on every single-object part (one placed component
+   each) and `unmeasured` live; assembly decomposition is 0 everywhere and no
+   lane moves it. 5. Scan
    recognition is fit-level ~11% with RC-emitted still 0.
 
 ---
@@ -369,13 +372,16 @@ exists; otherwise the lane's value is stated as the cell it unlocks.
 
 ### 3.7 Componentization — **unranked as implementation; ranked as design work**
 
-No lane in flight moves C, the goal sentence's second adjective. Nothing can be
-ranked against evidence because no design exists: what is a "distinct thing" in
+No lane in flight moves C *where it is still open*. The single-object cell is
+satisfied already — the rebuild transaction places one component per part — so
+what is missing is decomposition: more than one component, and an occurrence
+per recognized thing. Nothing can be ranked against evidence because no design
+exists: what is a "distinct thing" in
 a scan (the cross-cut's datum cells? connected components after board
 subtraction?), what transform evidence licenses an occurrence, what U5 means
 for a placement. **Action:** a design doc with an evident-things census for
-Dig-Next-2 is the entry ticket; until then C stays a uniform, honest 0 on the
-board rather than a pretended lane.
+Dig-Next-2 is the entry ticket; until then the assembly half of C stays an
+honest 0 on the board rather than a pretended lane.
 
 ### 3.8 Coupled-parameter editability (interactions_exercised) — **last**
 
@@ -396,8 +402,16 @@ hash-bound dumps — the PR-era dumps are not committed); host-side `fit-regions
 into a clean document; author per-part editability specs (observable +
 perturbation + rationale per parameter, design 006 D7 arithmetic rules);
 `emit-mesh-editability`; `emit-mesh-deviation` against the immutable source;
-`reconstruction-coverage` last — its `delivered_area_fraction`, E ratio, and
-deviation verdict are the scoreboard entries. Cost: one exclusive Fusion
+`reconstruction-coverage` last. **Three artifacts, three cells — not one
+command.** `reconstruction-coverage` yields `delivered_area_fraction` and
+nothing else on this list: it takes no deviation verdict, and its editability
+stage carries `checked`/`not_exercised` without an emitted-parameter
+denominator or a ratio. So the **deviation verdict is read from
+`emit-mesh-deviation`'s own report**, and **E is computed** — parameters the
+validated editability report proves drive, over the `user_parameters` the
+rebuild report emitted, less any the program declared `expected_observable:
+none` (which are named, not counted against). Record all three per part, each
+against the artifact it came from. Cost: one exclusive Fusion
 session; planning is ~6 min for the corpus (PR #51), drawing ~1.5 s per dense
 sketch (PR #53), deviation ~0.2 s per synthetic run but unmeasured at corpus
 size; the human cost is authoring ~15 editability specs. Estimate half a day of
@@ -428,10 +442,18 @@ failure: a region whose fit was rejected is named twice, once by
 `plan_archetypes`, which walks every region and puts the same one in
 `unreconstructed` under its rejection text. So: **fit stage** — Σ(area of
 regions with an accepted fit) + Σ(`unfitted_regions`) + Σ(`unclaimed_components`)
-= total mesh area; **plan stage** — Σ(area claimed by emitted archetypes) +
-Σ(`unreconstructed`) = total mesh area, with both sums taken over a set keyed
-by `region_id` so a region named by two lists is counted once and a region
-named by none is the finding. Cross-stage roll-ups state which stage each
+= total mesh area (this is the only stage that can close against the whole
+mesh, because it is the only one that sees the unclaimed surface); **plan stage** — Σ(area claimed by emitted archetypes) +
+Σ(`unreconstructed`) = **the total area of the regions the fit stage offered**,
+*not* total mesh area: `plan_archetypes` partitions `fit_record.regions` and
+nothing else, so the `unclaimed_components` — surface that never became a
+region at all, 1,041 of them on Dig-Next-2 — exist only in `_fit_stage` and
+would read as a conservation failure here. The two stages close against each
+other instead: offered-region area + Σ(`unclaimed_components`) = total mesh
+area is the fit stage's identity, and the plan stage's is against the offered
+area it was actually handed. Both sums are taken over a set keyed by
+`region_id`, so a region named by two lists is counted once and a region named
+by none is the finding. Cross-stage roll-ups state which stage each
 term came from. First targets: Dig-Next-2 and the honeycomb; explicitly audit
 the <4-point face groups (§1.5). Cost: an hour. Turns H from "by construction"
 into a measured row.
