@@ -90,10 +90,23 @@ def _active_design():
     return app, design
 
 
+def _is_target_name(name):
+    """The manifest name, or the manifest name plus Fusion's own " vN" suffix.
+
+    Fusion builds differ on whether Document.name carries the version suffix,
+    and a saved-as document may report either form -- so every name-bound
+    check accepts both, and nothing else.
+    """
+    text = str(name or "")
+    if text == FUSION_DOCUMENT_NAME or not text.startswith(FUSION_DOCUMENT_NAME + " v"):
+        return text == FUSION_DOCUMENT_NAME
+    return text[len(FUSION_DOCUMENT_NAME) + 2:].isdigit()
+
+
 def _require_target_document(app):
     active_document = app.activeDocument
     active_name = active_document.name if active_document else None
-    if active_name != FUSION_DOCUMENT_NAME:
+    if not _is_target_name(active_name):
         raise RuntimeError(
             "Active Fusion document " + repr(active_name)
             + " does not match manifest target " + repr(FUSION_DOCUMENT_NAME) + "."
@@ -107,7 +120,7 @@ def _pump_events(app, design, target_document):
     if (
         active_app != app
         or app.activeDocument != target_document
-        or target_document.name != FUSION_DOCUMENT_NAME
+        or not _is_target_name(target_document.name)
         or active_design != design
     ):
         raise DocumentChangedError("Active Fusion document changed while the transaction was running; stopping before further work.")
@@ -258,7 +271,14 @@ def _document_saved_state(document):
         state["name"] = str(document.name)
     except Exception:
         pass
-    is_saved = getattr(document, "isSaved", None)
+    try:
+        is_saved = getattr(document, "isSaved", None)
+    except Exception as error:
+        # Fusion properties raise rather than return None when their backing
+        # state is unavailable; that is "could not read", not "unsaved".
+        state["available"] = False
+        state["reason"] = "isSaved-unreadable: " + str(error)
+        return state
     if is_saved is None:
         state["available"] = False
         state["reason"] = "isSaved-unavailable"

@@ -674,6 +674,17 @@ class ScriptEmissionTests(unittest.TestCase):
         self.assertFalse(unreadable["available"])
         self.assertIn("dataFile-unreadable", unreadable["reason"])
 
+        class RaisingIsSaved:
+            name = "Flaky"
+
+            @property
+            def isSaved(self):
+                raise RuntimeError("2 : InternalValidationError")
+
+        flaky = state(RaisingIsSaved())
+        self.assertFalse(flaky["available"])
+        self.assertIn("isSaved-unreadable", flaky["reason"])
+
         saved = state(
             SimpleNamespace(
                 name="Wearable Controller Pod v3",
@@ -691,6 +702,21 @@ class ScriptEmissionTests(unittest.TestCase):
             {"id": "urn:test:df-1", "version_number": 3, "project_id": "proj-1", "folder_id": "folder-1"},
             saved["data_file"],
         )
+
+    def test_name_bound_guards_accept_fusions_version_suffix(self) -> None:
+        namespace = load_generated_script(_script_prelude(self.manifest))
+        target = self.manifest.fusion_document
+        is_target = namespace["_is_target_name"]
+        self.assertTrue(is_target(target))
+        self.assertTrue(is_target(target + " v12"))
+        self.assertFalse(is_target(target + " v12b"))
+        self.assertFalse(is_target("Another Design"))
+
+        app = SimpleNamespace(activeDocument=SimpleNamespace(name=target + " v3"))
+        self.assertIs(app.activeDocument, namespace["_require_target_document"](app))
+        wrong = SimpleNamespace(activeDocument=SimpleNamespace(name="Another Design"))
+        with self.assertRaisesRegex(RuntimeError, "does not match manifest target"):
+            namespace["_require_target_document"](wrong)
 
 
 class _FakeDataFile:
@@ -997,6 +1023,17 @@ class DocumentSaveScriptTests(unittest.TestCase):
         offline = _FakeApp(documents=[], active=None, data=None)
         offline_report = self._run(source, offline, expect_error="data-api-unavailable")
         self.assertEqual("data-api-unavailable", offline_report["refusal"])
+
+        # Measured live: findFileById raises for a missing id, so the refusal
+        # carries the raw error text rather than swallowing it.
+        def raising_lookup(identifier):
+            raise RuntimeError("3 : file not found")
+
+        raising = _FakeApp(
+            documents=[], active=None, data=SimpleNamespace(findFileById=raising_lookup)
+        )
+        raised_report = self._run(source, raising, expect_error="recorded-document-not-found")
+        self.assertEqual("3 : file not found", raised_report["detail"]["error"])
 
 
 if __name__ == "__main__":
