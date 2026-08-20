@@ -193,6 +193,19 @@ report or the new one and never half of either. When a call times out:
 3. validate it as below before using it — including that it describes the work
    you asked for, since a concurrent run leaves its own file beside yours.
 
+**A unique name stops clobbering; it does not establish ownership.** The run id
+is bound inside the transaction and travels back on stdout, which is the channel
+a timeout loses — so after a timeout the caller cannot say which of two files
+its own run wrote, and two concurrent runs of the same kind against the same
+manifest produce two reports that both satisfy every binding check. The way a
+caller gets an exact file is the one it already controls: **give each concurrent
+run its own `report_dir`**. Every transaction takes that directory from its own
+declaration, so two agents that pass two directories never share a candidate
+set. Where they do share one and two files match your bindings, the honest
+outcome is that you cannot tell them apart: re-establish state from the document
+rather than pick one. The report carries `run_id` so that ambiguity is visible
+rather than silent.
+
 The directory comes from the transaction's own declaration: `dump_dir` for
 extraction and the capability probe, the dump's own directory for a rebuild, and
 `report_dir` for face-group generation, which writes no file of its own and

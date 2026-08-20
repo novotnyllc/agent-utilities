@@ -91,6 +91,10 @@ def _emit(report):
     path = _report_tee_path(report)
     if path is not None and isinstance(report, dict):
         report["report_tee_path"] = path
+        # On the report as well as in the name, so a caller holding two
+        # candidate files can see that they came from two runs rather than
+        # inferring it from the filenames.
+        report["run_id"] = RUN_ID
         try:
             # Written whole and then moved into place: a reader that arrives
             # mid-write must never see half a report and take it for the run's

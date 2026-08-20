@@ -1019,13 +1019,18 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
         points = sorted({v for t in triangles for v in mesh.triangles[t]})
         if len(points) < _SIGMA_A_NEIGHBOURS:
             continue
-        # A surface denser than the estimate needs is sub-sampled: this is a
-        # plane residual over a patch, and it converges long before a quarter of
-        # a million points. Without it the one 448k-triangle group costs more
-        # than every other surface put together.
-        if len(points) > _SIGMA_FORM_MAX_SURFACE_POINTS:
-            points = points[:: len(points) // _SIGMA_FORM_MAX_SURFACE_POINTS]
-        surfaces.append((points, _extent([mesh.vertices[i] for i in points])))
+        # A surface denser than the estimate needs is sub-sampled -- but only in
+        # its *centres*. Thinning the point set itself thins the patches too: on
+        # a 100 mm face thinned to 20,000 points a 0.8 mm patch holds a handful
+        # of them, under `_SIGMA_A_NEIGHBOURS`, so every estimate on that
+        # surface is skipped and the floor can go unavailable on the very parts
+        # it was measured for. The neighbourhood keeps every point the scan
+        # captured; the estimate converges long before a quarter of a million
+        # *centres*, which is what the cap is for.
+        centres = points
+        if len(centres) > _SIGMA_FORM_MAX_SURFACE_POINTS:
+            centres = centres[:: len(centres) // _SIGMA_FORM_MAX_SURFACE_POINTS]
+        surfaces.append((points, centres, _extent([mesh.vertices[i] for i in points])))
     if not surfaces:
         detail["unavailable_reason"] = "no face group carries enough points for a plane residual"
         return detail
@@ -1036,18 +1041,18 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
     while radius <= topo.extent:
         per_surface: list[float] = []
         curved = 0
-        for points, extent in surfaces:
+        for points, centres, extent in surfaces:
             # A surface that does not span the rung cannot report it. Without
             # this every rung above the median surface's own size reports that
             # size instead of the part's waviness.
             if extent < 2.0 * radius:
                 continue
             grid = _Grid(mesh.vertices, points, radius)
-            step = max(1, len(points) // _SIGMA_FORM_CENTRES_PER_SURFACE)
+            step = max(1, len(centres) // _SIGMA_FORM_CENTRES_PER_SURFACE)
             estimates: list[float] = []
             normals: list[Vec3] = []
-            for offset in range(0, len(points), step):
-                centre_point = mesh.vertices[points[offset]]
+            for offset in range(0, len(centres), step):
+                centre_point = mesh.vertices[centres[offset]]
                 near = grid.near(mesh.vertices, centre_point, radius)
                 if len(near) < _SIGMA_A_NEIGHBOURS:
                     continue
@@ -3086,23 +3091,26 @@ def _local_winding(
     reach = cache["reach"]
     nearest = math.inf
     for index in triangles:
-        # The triangle's own corners, and its centroid: a dirty edge crossing a
-        # large triangle can be nearer its middle than any of its corners.
-        probes = [mesh.vertices[vertex] for vertex in mesh.triangles[index]]
-        probes.append(topo.centroids[index])
-        for point in probes:
-            seen: set[tuple[int, int]] = set()
-            for other in grid.near(mesh.vertices, point, reach):
-                for edge in incident.get(other, ()):  # noqa: B007 - small fan
-                    if edge in seen:
-                        continue
+        corners = [mesh.vertices[vertex] for vertex in mesh.triangles[index]]
+        # Every dirty edge that could reach this triangle: found from the
+        # triangle's own corners and its centroid, at a radius wide enough that
+        # no qualifying edge's endpoints can both fall outside it.
+        seen: set[tuple[int, int]] = set()
+        for point in corners + [topo.centroids[index]]:
+            for other in grid.near(mesh.vertices, point, reach + _extent(corners)):
+                for edge in incident.get(other, ()):
                     seen.add(edge)
-                    nearest = min(
-                        nearest,
-                        _point_segment_distance(
-                            point, mesh.vertices[edge[0]], mesh.vertices[edge[1]]
-                        ),
-                    )
+        for edge in seen:
+            # Segment to *triangle*, not segment to four sampled points. A dirty
+            # edge can pass inside the margin of a large triangle while every
+            # corner and the centroid stay outside it, and a region marked clean
+            # on that gets a `material_side` its geometry does not support.
+            nearest = min(
+                nearest,
+                _segment_triangle_distance(
+                    mesh.vertices[edge[0]], mesh.vertices[edge[1]], corners
+                ),
+            )
             if nearest == 0.0:
                 break
     return {
@@ -3122,6 +3130,75 @@ def _point_segment_distance(point: Vec3, start: Vec3, end: Vec3) -> float:
         return _length(_sub(point, start))
     t = max(0.0, min(1.0, _dot(_sub(point, start), span) / length_sq))
     return _length(_sub(point, _add(start, _scale(span, t))))
+
+
+def _segment_segment_distance(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> float:
+    """Closest approach of two segments, clamped at both ends.
+
+    Sampled endpoints are not enough for either one: two segments can cross
+    within microns of each other with every endpoint far away.  Solved on the
+    two parameters, clamped to [0, 1] on each, and falling back to the
+    point-to-segment cases where the pair is parallel or degenerate.
+    """
+    u, v, w = _sub(a1, a0), _sub(b1, b0), _sub(a0, b0)
+    uu, uv, vv = _dot(u, u), _dot(u, v), _dot(v, v)
+    uw, vw = _dot(u, w), _dot(v, w)
+    denominator = uu * vv - uv * uv
+    if uu <= 0.0 or vv <= 0.0 or denominator <= 1e-18 * uu * vv:
+        # Degenerate or parallel: the minimum is attained at an endpoint.
+        return min(
+            _point_segment_distance(a0, b0, b1),
+            _point_segment_distance(a1, b0, b1),
+            _point_segment_distance(b0, a0, a1),
+            _point_segment_distance(b1, a0, a1),
+        )
+    s = max(0.0, min(1.0, (uv * vw - vv * uw) / denominator))
+    t = max(0.0, min(1.0, (uu * vw - uv * uw) / denominator))
+    # Re-clamp the other parameter against the clamped one, which is what makes
+    # the answer right on the boundary of the unit square rather than inside it.
+    s = max(0.0, min(1.0, (t * uv - uw) / uu))
+    t = max(0.0, min(1.0, (s * uv + vw) / vv))
+    return _length(_sub(_add(a0, _scale(u, s)), _add(b0, _scale(v, t))))
+
+
+def _segment_triangle_distance(start: Vec3, end: Vec3, corners: Sequence[Vec3]) -> float:
+    """Closest approach of a segment to a whole triangle, edges and interior.
+
+    Three cases, and all three are needed: the segment can approach an edge, it
+    can stand off the face with an endpoint over the interior, or it can pierce
+    the interior without coming near any edge at all -- which is zero, and which
+    neither of the other two finds.
+    """
+    normal = _unit(_cross(_sub(corners[1], corners[0]), _sub(corners[2], corners[0])))
+
+    def over_face(point: Vec3) -> bool:
+        """Is this point's foot on the face inside the triangle?"""
+        height = _dot(_sub(point, corners[0]), normal)
+        foot = _sub(point, _scale(normal, height))
+        for index in range(3):
+            edge = _sub(corners[(index + 1) % 3], corners[index])
+            if _dot(_cross(edge, _sub(foot, corners[index])), normal) < 0.0:
+                return False
+        return True
+
+    if normal is not None:
+        # Pierces the face: the segment crosses the plane inside the triangle.
+        low = _dot(_sub(start, corners[0]), normal)
+        high = _dot(_sub(end, corners[0]), normal)
+        if (low <= 0.0 <= high or high <= 0.0 <= low) and low != high:
+            crossing = _add(start, _scale(_sub(end, start), low / (low - high)))
+            if over_face(crossing):
+                return 0.0
+    nearest = min(
+        _segment_segment_distance(start, end, corners[index], corners[(index + 1) % 3])
+        for index in range(3)
+    )
+    if normal is None:
+        return nearest
+    for point in (start, end):
+        if over_face(point):
+            nearest = min(nearest, abs(_dot(_sub(point, corners[0]), normal)))
+    return nearest
 
 
 def _region_orientation(

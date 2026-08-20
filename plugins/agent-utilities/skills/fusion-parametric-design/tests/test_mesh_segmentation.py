@@ -2313,6 +2313,43 @@ class LocalWindingLicenceTests(unittest.TestCase):
             math.dist(point, start), seg._point_segment_distance(point, start, start)
         )
 
+    def test_the_distance_is_to_the_whole_triangle_not_to_four_sampled_points(self) -> None:
+        """Corners and a centroid are four points; a triangle is not four points.
+
+        A dirty segment can pass inside the margin of a large triangle while
+        every corner and the centroid stay outside it, and a region marked
+        clean on that gets a `material_side` its geometry does not support.
+        """
+        triangle = [(0.0, 0.0, 0.0), (12.0, 0.0, 0.0), (0.0, 12.0, 0.0)]
+        # A short segment 0.2 above the face, over a point that is not a corner
+        # and not the centroid.
+        start, end = (7.0, 1.0, 0.2), (7.4, 1.4, 0.2)
+        self.assertAlmostEqual(0.2, seg._segment_triangle_distance(start, end, triangle))
+        probes = triangle + [tuple(sum(c[i] for c in triangle) / 3.0 for i in range(3))]
+        self.assertGreater(
+            min(seg._point_segment_distance(p, start, end) for p in probes), 1.0
+        )
+        # A segment piercing the interior is zero, and neither an edge distance
+        # nor an endpoint height finds that.
+        self.assertEqual(
+            0.0, seg._segment_triangle_distance((2.0, 2.0, -3.0), (2.0, 2.0, 3.0), triangle)
+        )
+        # Two segments that cross without sharing an endpoint.
+        self.assertAlmostEqual(
+            1.0,
+            seg._segment_segment_distance(
+                (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 1.0), (0.0, 1.0, 1.0)
+            ),
+        )
+        # Parallel segments fall back to the endpoint cases rather than to a
+        # division by a vanishing determinant.
+        self.assertAlmostEqual(
+            2.0,
+            seg._segment_segment_distance(
+                (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (3.0, 0.0, 0.0), (4.0, 0.0, 0.0)
+            ),
+        )
+
     def test_a_region_on_the_dirt_stays_null_and_names_its_distance(self) -> None:
         vertices, triangles, groups = torus_mesh(major_steps=64, minor_steps=24)
         # One group per major step, so the region that owns the hole is separable
