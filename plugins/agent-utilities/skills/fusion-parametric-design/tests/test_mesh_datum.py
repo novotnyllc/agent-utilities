@@ -18,7 +18,9 @@ from fusion_design.mesh_datum import (
 import fixtures_fit_record as fx
 
 
-FRAME_ARGS = dict(frame_margin=0.1, angle_tolerance_deg=2.0, offset_tolerance=0.5)
+FRAME_ARGS = dict(
+    frame_margin=0.1, angle_tolerance_deg=2.0, offset_tolerance=0.5, sigma_multiple=3.0
+)
 
 
 def _walled_lid(x_walls, y_walls):
@@ -431,7 +433,7 @@ class DatumFrameTests(unittest.TestCase):
         # direction by the module's own rule, and still a real spread. Kept
         # small enough that the merged cell is stable -- what is under test is
         # that the spread reaches the sigma, not that it refuses.
-        tilt = 0.2
+        tilt = 0.02
         radians = math.radians(tilt)
         for region in record["regions"]:
             if region["region_hash"] == fx.region_hash("x1"):

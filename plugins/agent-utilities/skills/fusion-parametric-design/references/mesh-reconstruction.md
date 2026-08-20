@@ -344,7 +344,14 @@ scores, the margin, the grid and each candidate's cell, against `"evidence"` on
 the ordinary path. **The refusal survives** for the case it still protects: a
 candidate whose measured direction sigma reaches the grid, or which carries no
 measured sigma at all, could quantize either way, and there the honest answer is
-still `frame-ambiguous`. Two more cases land in the same refusal. A cell spans
+still `frame-ambiguous`. The distance a cell has to clear is the sigma times the
+caller's declared **`sigma_multiple`**, the same confidence multiple the
+relationship licences turn a sigma into a tolerance with — a sigma is one
+standard deviation and not a bound, and a boundary 1.1 sigma away is one an
+ordinary re-tessellation crosses. Under a `declared-absolute` tolerance basis
+there is no multiple declared, the caller having said their numbers are not
+sigmas, and the canonical tie refuses rather than certifying with one nobody
+declared. Two more cases land in the same refusal. A cell spans
 the tolerance angle's *chord* in each component, so two candidates further apart
 than the tolerance can still share one cell — and a shared cell would put the
 choice back on the scores, which is the comparison this rule replaced. And a

@@ -1268,6 +1268,30 @@ class DisproofTests(unittest.TestCase):
         self.assertFalse(bore["accepted"])
         self.assertIn("residual structure", bore["fit"]["rejection"])
 
+    def test_a_lattice_field_still_reports_its_correlation_for_n_eff(self) -> None:
+        """The precision floor suppresses the *verdict*, not the measurement.
+
+        Quantization residuals are deterministic and therefore correlated, and
+        `n_eff` is read downstream by the parsimony gate and by
+        `parameter_uncertainty`. Leaving it at the full point count treats
+        those correlated samples as independent and understates every sigma
+        derived from them -- which is how a relationship licence or a canonical
+        datum cell gets granted on evidence the fit does not carry.
+        """
+        record = seg.fit_regions(make_dump(*quantized_bore_mesh()), spec(min_feature_size=1.0))
+        bore, = [r for r in record["regions"] if r["fit"]["kind"] == "cylinder"]
+        support = bore["fit"]["support"]
+        # No verdict: no z, no cap, and the gate is not claimed as run.
+        self.assertIsNone(support["moran_z"])
+        self.assertNotIn("moran_z_cap", support)
+        self.assertNotIn("residual-structure", support["checked"])
+        self.assertIn("vertex precision floor", support["moran_unavailable_reason"])
+        # But the correlation is measured, and n_eff is below the point count
+        # because of it.
+        self.assertIsNotNone(support["moran_i"])
+        self.assertGreater(support["moran_i"], 0.0)
+        self.assertLess(support["n_eff"], len(bore["triangle_indices"]))
+
     def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
         """The note claimed all four gates ran on every accepted fit; two ran on none."""
         record = seg.fit_regions(make_dump(*box_mesh()), spec())

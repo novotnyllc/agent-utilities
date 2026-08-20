@@ -2598,12 +2598,22 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # statement about what the gates *can* judge, not a change to
                 # what they judge it against: no declared threshold moves, and
                 # the skip is recorded under its own reason rather than passing.
+                # Measured whenever the statistic has power at all -- the
+                # *verdict* is what the precision floor suppresses, not the
+                # measurement. A lattice residual field is deterministic and
+                # therefore correlated, and `n_eff` is read downstream by
+                # `_parsimony` and by `parameter_uncertainty`: leaving it at the
+                # full point count treats those correlated samples as
+                # independent and understates every sigma derived from them,
+                # which is how a licence or a canonical datum cell gets granted
+                # on evidence the fit does not carry.
                 structure = (
                     _moran_i(residuals, point_indices, topo)
-                    if fit.rms_residual > power_floor and not below_precision
+                    if fit.rms_residual > power_floor
                     else None
                 )
-                if structure is None:
+                judged = structure is not None and not below_precision
+                if structure is None or below_precision:
                     support["moran_z"] = None
                     support["moran_unavailable_reason"] = (
                         "the residual field lies entirely inside the vertex precision floor "
@@ -2617,8 +2627,12 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     )
                 n_eff = float(len(points))
                 if structure is not None:
-                    support["moran_z"] = structure["z"]
+                    # The correlation is kept even when the verdict is not: it
+                    # is what `n_eff` is for, and lattice residuals are the most
+                    # correlated samples on the part.
                     support["moran_i"] = structure["i"]
+                    if judged:
+                        support["moran_z"] = structure["z"]
                     # First-order n_eff inflation for correlated residuals: an
                     # AR(1)-style patch, not a derivation, and conservative
                     # defaults are what keep it honest (spec 7.3, 12.3).
@@ -2630,8 +2644,9 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     cap = float(spec.value("moran_z_max"))
                     if plane_baseline is not None:
                         cap = max(cap, plane_baseline + float(spec.value("moran_baseline_slack")))
-                    support["moran_z_cap"] = cap
-                    if structure["z"] > cap:
+                    if judged:
+                        support["moran_z_cap"] = cap
+                    if judged and structure["z"] > cap:
                         accepted, rejection = False, (
                             f"residual structure: Moran's I z = {structure['z']:.4g} on the mesh "
                             f"graph exceeds {cap:.4g}; the residuals agree with their neighbours in "

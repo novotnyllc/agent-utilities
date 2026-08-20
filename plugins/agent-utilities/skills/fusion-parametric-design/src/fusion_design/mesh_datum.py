@@ -792,7 +792,7 @@ def _first_rival(
 
 
 def _canonical_cell(
-    direction: Vec3, sigma_deg: float | None, grid_deg: float
+    direction: Vec3, sigma_deg: float | None, grid_deg: float, sigma_multiple: float | None
 ) -> tuple[int, int, int] | None:
     """``direction`` as integer cells on a ``grid_deg`` angular grid, or ``None``.
 
@@ -818,11 +818,23 @@ def _canonical_cell(
     and equal magnitude flip the whole vector under jitter -- so it is checked
     here on the same measured sigma.
     """
+    if sigma_multiple is None:
+        # No declared confidence multiple, which is what a `declared-absolute`
+        # tolerance basis means: the caller has said their numbers are not
+        # sigmas. A sigma-based certification has nothing to certify with, so
+        # the tie is refused rather than settled on a multiple nobody declared.
+        return None
     if sigma_deg is None or not isinstance(sigma_deg, (int, float)):
         return None
     if isinstance(sigma_deg, bool) or not math.isfinite(sigma_deg) or sigma_deg < 0.0:
         return None
-    slack = math.sin(math.radians(min(float(sigma_deg), 90.0)))
+    # `sigma_deg` is one standard deviation, read from the record -- not a hard
+    # bound. A cell whose boundary is 1.1 sigma away is one an ordinary
+    # re-tessellation crosses often enough to matter, and the record calls this
+    # choice reproducible. So the distance a cell has to clear is the caller's
+    # own declared `sigma_multiple`, the same confidence multiple the
+    # relationship licences already turn a sigma into a tolerance with.
+    slack = math.sin(math.radians(min(float(sigma_deg) * sigma_multiple, 90.0)))
     half_cell = math.sin(math.radians(grid_deg) / 2.0)
     if slack >= half_cell:
         # The grid is not coarse compared with the uncertainty, which is the
@@ -871,6 +883,7 @@ def _decide_axis(
     axis: str,
     frame_margin: float,
     angle_tolerance_deg: float,
+    sigma_multiple: float | None,
 ) -> tuple[AxisCandidate, dict[str, Any]]:
     """Settle one axis: by evidence when the scores separate, else canonically.
 
@@ -905,7 +918,12 @@ def _decide_axis(
     tied = _tied(candidates, winner, frame_margin, angle_tolerance_deg)
     celled: list[tuple[tuple[int, int, int], tuple[Any, ...], AxisCandidate]] = []
     for candidate in tied:
-        cell = _canonical_cell(candidate.direction, candidate.direction_sigma_deg, angle_tolerance_deg)
+        cell = _canonical_cell(
+            candidate.direction,
+            candidate.direction_sigma_deg,
+            angle_tolerance_deg,
+            sigma_multiple,
+        )
         if cell is None:
             raise _refuse(
                 "frame-ambiguous",
@@ -977,11 +995,13 @@ def _decide_axis(
             "highest_score": winner.to_dict(),
             "highest_score_runner_up": None if rival is None else rival.to_dict(),
             "quantization_grid_deg": angle_tolerance_deg,
+            "sigma_multiple": sigma_multiple,
             "quantization": (
                 "each tied candidate's canonical direction quantized to integer cells of "
                 f"{angle_tolerance_deg:g} deg (cells centred on zero, one cell width per component) "
                 "and the lexicographically smallest cell taken; every tied candidate's stated "
-                "direction sigma is smaller than its distance to the nearest cell boundary, and no "
+                f"direction sigma times the declared sigma_multiple {sigma_multiple} is smaller than its "
+                "distance to the nearest cell boundary, and no "
                 "two of them share a cell, so the same candidate is chosen on any re-tessellation "
                 "that leaves this tie set unchanged. Membership in the tie set is still a score "
                 "comparison against the declared frame margin, so a re-tessellation that moves a "
@@ -1364,6 +1384,7 @@ def derive_datum_frame(
     frame_margin: float,
     angle_tolerance_deg: float,
     offset_tolerance: float,
+    sigma_multiple: float | None,
 ) -> DatumFrame:
     """Derive origin and axes from the accepted fits, or refuse.
 
@@ -1382,7 +1403,7 @@ def derive_datum_frame(
         ("frame_margin", frame_margin),
         ("angle_tolerance_deg", angle_tolerance_deg),
         ("offset_tolerance", offset_tolerance),
-    ):
+    ) + ((("sigma_multiple", sigma_multiple),) if sigma_multiple is not None else ()):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{label} must be a positive finite number declared by the caller.")
 
@@ -1412,6 +1433,7 @@ def derive_datum_frame(
         axis="primary",
         frame_margin=frame_margin,
         angle_tolerance_deg=angle_tolerance_deg,
+        sigma_multiple=sigma_multiple,
     )
     z = winner.direction
     origin, origin_source, placing_sigma = _origin_on_axis(
@@ -1477,6 +1499,7 @@ def derive_datum_frame(
         axis="secondary",
         frame_margin=frame_margin,
         angle_tolerance_deg=angle_tolerance_deg,
+        sigma_multiple=sigma_multiple,
     )
 
     x = _unit(_sub(x_winner.direction, _scale(z, _dot(x_winner.direction, z))))
@@ -1519,5 +1542,6 @@ def derive_datum_frame(
             "frame_margin": frame_margin,
             "angle_tolerance_deg": angle_tolerance_deg,
             "offset_tolerance": offset_tolerance,
+            "sigma_multiple": sigma_multiple,
         },
     )
