@@ -187,10 +187,18 @@ record** (product's C1): a total map from the region tree's terminal
 partition onto owner classes {base, thing-k, interface-j, residual}, where
 `residual` includes the below-support and unclaimed populations, itemized.
 
+- **The band is δ of the *contact curve*, not δ of the face.** A base face's
+  own triangles are at distance zero from it, so a band defined as "within δ of
+  an accepted base face" swallows the whole base region — taking the accepted
+  datum out of the `base` owner and leaving the base with nothing to
+  reconstruct from. The band is therefore defined over the **non-base**
+  triangles within δ of the *contact curve* where a candidate thing meets that
+  face: the face contributes its own boundary strip only where the curve runs,
+  and the rest of the face stays `base`. δ is derived as before; what changed
+  is what it is measured from.
 - **The interface band is a cut of the region tree, not a filter over it.**
-  The band is distance-defined (§4.1 selects triangles within δ of an accepted
-  base face), so it runs through terminal regions rather than along their
-  boundaries, and a map from the *existing* terminals onto owner classes
+  The band is distance-defined, so it runs through terminal regions rather than
+  along their boundaries, and a map from the *existing* terminals onto owner classes
   cannot express it: the region would owe its band triangles to `interface-j`
   and the rest to a thing or the base, which no single owner satisfies. So
   `plan-decomposition` **refines the tree first**: a terminal the band crosses
@@ -411,7 +419,8 @@ structure without ever changing it.**
 
 ### 4.1 Detection (inside `plan-decomposition`)
 
-- **Trigger — and it must be computable where the stage runs.** The stage
+- **Trigger — and it must be computable where the stage runs, and it must not
+  need nesting.** The stage
   sits between fit and plan, so it cannot observe `emit-mesh-rebuild`'s
   verdict: F1's `profile-ambiguous` is raised two stages later, and a trigger
   that waits for it would leave C-4 producing no assignment on the very part
@@ -425,6 +434,20 @@ structure without ever changing it.**
   by the *next* run, which keeps the stage order intact and keeps the trigger
   honest about what it can see. Dig-Next-2 reaches C-4 through (a) and (c)
   both, and the run records which fired.
+  **And (d), always on: the separability signal itself.** The island-chain
+  witness counts persistent depth-≥2 chains and thickness anomalies, which an
+  assembly of side-by-side protrusions does not produce — its things are
+  separate depth-0 exterior loops, its monolithic reading fits, and with no
+  prior refusal for that dump nothing above ever fires, which is the silent
+  regression this section exists to prevent. So the interface census runs on
+  every part rather than only after another signal has fired: when it finds
+  two or more components that detach at a planar interface and meet the band
+  along closed curves (`separable-at-interface`), that is itself a trigger.
+  It is the more expensive of the two signals, which is why it was second;
+  running it always is the cost of not missing a whole input class, and the
+  census line it produces (`things: 0, decomposition-not-triggered` plus its
+  own component count) is what the production corpus records when it finds
+  nothing.
 - **Candidates,** from evidence the pipeline already computes (F4):
   island-chain detection over `classify_loops` output (footprint recurrence
   under `congruence`, concentric within pooled sigma, across contiguous
