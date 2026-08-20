@@ -344,7 +344,15 @@ scores, the margin, the grid and each candidate's cell, against `"evidence"` on
 the ordinary path. **The refusal survives** for the case it still protects: a
 candidate whose measured direction sigma reaches the grid, or which carries no
 measured sigma at all, could quantize either way, and there the honest answer is
-still `frame-ambiguous`. Measured: POD-C-LID (secondary margin 0.042, three tied
+still `frame-ambiguous`. Two more cases land in the same refusal. A cell spans
+the tolerance angle's *chord* in each component, so two candidates further apart
+than the tolerance can still share one cell — and a shared cell would put the
+choice back on the scores, which is the comparison this rule replaced. And a
+secondary candidate's direction is a plane normal orthogonalised against the
+measured primary axis, so the plane's own sigma is a lower bound on it: the two
+measured sigmas are combined in quadrature before the grid sees them
+(`direction_sigma_basis: "propagated"`), and a primary axis with no stated sigma
+leaves no bound to combine. Measured: POD-C-LID (secondary margin 0.042, three tied
 walls whose direction sigmas are 3.7e-08° to 6.9e-07° against a 2° grid) and the
 vendor honeycomb organiser (0.0986, hexagonal symmetry) both plan instead of
 refusing, taking the corpus from ten planned parts of eleven to eleven of eleven,

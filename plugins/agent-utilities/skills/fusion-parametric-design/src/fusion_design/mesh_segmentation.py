@@ -2558,7 +2558,17 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             # those ask whether a residual is inside the *surface's* own error,
             # this asks whether it is inside the precision the coordinates were
             # stored at. Both suppress a verdict; neither is the other.
-            below_precision = fit.rms_residual <= precision_floor
+            #
+            # An RMS below the floor does not mean the field lies inside it: a
+            # localized bulge on 1% of the points at five times the floor still
+            # averages to half of it, and that is a structured bad fit, exactly
+            # what the gates below exist to catch. The claim these gates are
+            # skipped on is "every residual is lattice", so every residual is
+            # what gets bounded -- against the same declared floor, no new
+            # threshold and none moved.
+            below_precision = fit.rms_residual <= precision_floor and all(
+                abs(residual) <= precision_floor for residual in residuals
+            )
             passed, measured = _support_floors(fit, points, spec, topo.median_edge)
             support.update(measured)
             if not passed:

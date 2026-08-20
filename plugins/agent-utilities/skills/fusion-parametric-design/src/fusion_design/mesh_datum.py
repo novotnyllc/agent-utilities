@@ -722,6 +722,12 @@ class AxisCandidate:
     #: ineligible for the canonical tie-break: a direction with no stated
     #: uncertainty cannot be shown to survive a re-tessellation.
     direction_sigma_deg: float | None = None
+    #: How ``direction_sigma_deg`` was arrived at, so a reader can tell a number
+    #: the record measured from one this module combined.  Closed set:
+    #: ``"measured"`` -- read from the fit record for this candidate's own
+    #: direction; ``"propagated"`` -- combined first-order from the record's
+    #: measured sigmas because this direction is derived from more than one fit.
+    direction_sigma_basis: str = "measured"
 
     def sort_key(self) -> tuple[Any, ...]:
         # Total order: score, then supporting area, then the canonicalised
@@ -740,6 +746,7 @@ class AxisCandidate:
             "anchor": list(self.anchor),
             "basis": self.basis,
             "direction_sigma_deg": self.direction_sigma_deg,
+            "direction_sigma_basis": self.direction_sigma_basis,
         }
 
 
@@ -921,19 +928,64 @@ def _decide_axis(
             )
         celled.append((cell, candidate.sort_key(), candidate))
     celled.sort()
+    if len({cell for cell, _key, _entry in celled}) != len(celled):
+        # Two directions further apart than `angle_tolerance_deg` can still land
+        # in one cell, because a cell spans that angle's chord in every
+        # component rather than the angle itself.  `celled.sort()` would then
+        # decide on `sort_key()`, whose first element is the score -- the number
+        # a re-tessellation moves, and the reason this rule exists.  A cell that
+        # does not separate the tied candidates is no better than an unstable
+        # one, and gets the same answer.
+        raise _refuse(
+            "frame-ambiguous",
+            f"the {axis}-axis winner beats its nearest differently-directed rival by "
+            f"{margin:.4g}, below the declared margin {frame_margin:g}, and two tied "
+            f"candidates quantize to the same {angle_tolerance_deg:g} deg cell, so the "
+            "canonical tie-break does not separate them.",
+            {
+                "axis": axis,
+                "winner": winner.to_dict(),
+                "runner_up": None if rival is None else rival.to_dict(),
+                "margin": margin,
+                "frame_margin": frame_margin,
+                "quantization_grid_deg": angle_tolerance_deg,
+                "tied": [
+                    dict(entry.to_dict(), canonical_cell=list(cell))
+                    for cell, _sort, entry in celled
+                ],
+            },
+        )
     chosen_cell, _key, chosen = celled[0]
+    # `runner_up` so far is the highest scorer's rival, and the rule just
+    # overrode the score ranking -- when it promoted that rival, the record
+    # would name one candidate as both the winner and its own runner-up. Report
+    # the runner-up against the candidate actually selected, and keep the score
+    # ranking whole under `highest_score*`. `margin` stays the score-ranking
+    # number, because it is the one the `frame_margin` gate above read to get
+    # here; `margin_basis` says so rather than leaving it to be inferred.
+    chosen_rival = _first_rival(candidates, chosen, angle_tolerance_deg)
     record.update(
         {
             "basis": "arbitrary-canonical",
             "winner": chosen.to_dict(),
+            "runner_up": None if chosen_rival is None else chosen_rival.to_dict(),
+            "margin_basis": (
+                "score ranking: the highest scorer's lead over its nearest differently-directed "
+                "rival, which is the number compared against frame_margin. The selection below "
+                "was made on directions, not on this."
+            ),
             "highest_score": winner.to_dict(),
+            "highest_score_runner_up": None if rival is None else rival.to_dict(),
             "quantization_grid_deg": angle_tolerance_deg,
             "quantization": (
                 "each tied candidate's canonical direction quantized to integer cells of "
                 f"{angle_tolerance_deg:g} deg (cells centred on zero, one cell width per component) "
-                "and the lexicographically smallest cell taken; every tied candidate's measured "
-                "direction sigma is smaller than its distance to the nearest cell boundary, so the "
-                "same candidate is chosen on any re-tessellation."
+                "and the lexicographically smallest cell taken; every tied candidate's stated "
+                "direction sigma is smaller than its distance to the nearest cell boundary, and no "
+                "two of them share a cell, so the same candidate is chosen on any re-tessellation "
+                "that leaves this tie set unchanged. Membership in the tie set is still a score "
+                "comparison against the declared frame margin, so a re-tessellation that moves a "
+                "rival's score across that margin can change the set and with it the answer."
             ),
             "canonical_cell": list(chosen_cell),
             "tied": [
@@ -1105,7 +1157,10 @@ def _origin_on_axis(
 
 
 def _secondary_candidates(
-    regions: Sequence[RegionFit], z: Vec3, angle_tolerance_deg: float
+    regions: Sequence[RegionFit],
+    z: Vec3,
+    angle_tolerance_deg: float,
+    z_sigma_deg: float | None,
 ) -> list[AxisCandidate]:
     """Planes containing the primary axis: their normal, orthogonalised, is X."""
     out: list[AxisCandidate] = []
@@ -1121,6 +1176,17 @@ def _secondary_candidates(
         x = _unit(_sub(normal, _scale(z, _dot(normal, z))))
         if x is None:
             continue
+        # The orthogonalisation subtracts the primary axis, which is itself
+        # measured, so the plane's own sigma is a *lower bound* on the
+        # orthogonalised direction's -- and `_canonical_cell` reads whatever it
+        # is given as the whole bound.  Feeding it the lower bound would certify
+        # cells that the primary axis can move out of, so both measured sigmas
+        # are combined here, first-order and in quadrature: a rotation of the
+        # primary axis by delta tilts a normal perpendicular to it by delta.
+        # Nothing is invented -- when the record states no sigma for either
+        # input the combined bound is unavailable, and an unavailable bound is
+        # what makes the candidate ineligible for the canonical tie-break.
+        plane_sigma = region.sigma("normal_deg")
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
@@ -1130,12 +1196,12 @@ def _secondary_candidates(
                 direction=_canonical_direction(x),
                 anchor=point,
                 basis="normal of a plane parallel to the primary axis, orthogonalised",
-                # The orthogonalisation subtracts the primary axis, which is
-                # itself measured; this carries the plane's own sigma only, so
-                # it is a lower bound on the orthogonalised direction's.  It is
-                # the number the record states, and this module never estimates
-                # an uncertainty the record does not carry.
-                direction_sigma_deg=region.sigma("normal_deg"),
+                direction_sigma_deg=(
+                    None
+                    if plane_sigma is None or z_sigma_deg is None
+                    else math.hypot(plane_sigma, z_sigma_deg)
+                ),
+                direction_sigma_basis="propagated",
             )
         )
     return _merge_parallel(out, angle_tolerance_deg)
@@ -1184,6 +1250,7 @@ def _secondary_from_second_axis(
                     if region.sigma("axis_point") is None
                     else math.degrees(math.atan2(region.sigma("axis_point"), _length(perpendicular)))
                 ),
+                direction_sigma_basis="propagated",
             )
         )
     return sorted(out, key=AxisCandidate.sort_key)
@@ -1247,7 +1314,7 @@ def derive_datum_frame(
     z = winner.direction
     origin, origin_source = _origin_on_axis(accepted, z, winner.anchor, angle_tolerance_deg)
 
-    secondary = _secondary_candidates(accepted, z, angle_tolerance_deg)
+    secondary = _secondary_candidates(accepted, z, angle_tolerance_deg, winner.direction_sigma_deg)
     secondary_basis = "plane parallel to the primary axis"
     if not secondary:
         secondary = _secondary_from_second_axis(
@@ -1297,12 +1364,16 @@ def derive_datum_frame(
                 else "arbitrary-canonical"
             ),
             "primary": winner.to_dict(),
-            "primary_runner_up": None if rival is None else rival.to_dict(),
+            # Relative to the candidate above, which the canonical rule may have
+            # promoted over the highest scorer. `primary_choice` keeps the score
+            # ranking under `highest_score*` when the two differ, so a reader is
+            # never shown one candidate as both the winner and its own runner-up.
+            "primary_runner_up": primary_choice["runner_up"],
             "primary_margin": primary_margin,
             "primary_source": source,
             "primary_choice": primary_choice,
             "secondary": x_winner.to_dict(),
-            "secondary_runner_up": None if x_rival is None else x_rival.to_dict(),
+            "secondary_runner_up": secondary_choice["runner_up"],
             "secondary_margin": secondary_margin,
             "secondary_source": secondary_basis,
             "secondary_choice": secondary_choice,

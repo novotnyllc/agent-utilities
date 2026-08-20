@@ -1214,6 +1214,60 @@ class DisproofTests(unittest.TestCase):
         for token in ("residual-structure", "heldout-residual"):
             self.assertNotIn(token, support["checked"])
 
+    def test_a_bulge_hiding_under_a_flattering_rms_does_not_skip_the_structure_gates(self) -> None:
+        """The skip is licensed by "every residual is lattice", so every residual is bounded.
+
+        An RMS below the precision floor does not put the residual *field*
+        inside it: six of this bore's 576 points pushed out to five times the
+        floor still average to half of it. That is a localized bulge -- a
+        structured bad fit, exactly what these gates exist to catch -- and
+        skipping them on the mean alone would accept it as the file format's
+        own lattice. Same declared floor, applied to each residual.
+        """
+        import struct
+
+        vertices, triangles, groups = quantized_bore_mesh()
+        floor = seg.fit_regions(make_dump(vertices, triangles, groups), spec(min_feature_size=1.0))[
+            "noise"
+        ]["vertex_precision_floor"]
+
+        bore_group = max(groups)
+        first_bore_vertex = min(
+            index
+            for triangle, group in zip(triangles, groups)
+            if group == bore_group
+            for index in triangle
+        )
+        bulged, moved = list(vertices), 0
+        for index in range(first_bore_vertex, len(vertices)):
+            if moved == 6:
+                break
+            x, y, z = vertices[index]
+            # The bore's axis is the plate's own offset corner, and a radial
+            # push is what a real bulge does to the residual.
+            dx, dy = x - 130.0, y - 130.0
+            radius = math.hypot(dx, dy)
+            if radius < 1e-09:
+                continue
+            scale = 5.0 * floor / radius
+
+            def f32(value):
+                return struct.unpack("<f", struct.pack("<f", value))[0]
+
+            bulged[index] = (f32(x + dx * scale), f32(y + dy * scale), f32(z))
+            moved += 1
+        self.assertEqual(6, moved)
+
+        record = seg.fit_regions(make_dump(bulged, triangles, groups), spec(min_feature_size=1.0))
+        bore, = [r for r in record["regions"] if r["fit"]["kind"] == "cylinder"]
+        # The band the old mean-only test could not tell from a lattice.
+        self.assertLessEqual(bore["fit"]["rms_residual"], record["noise"]["vertex_precision_floor"])
+        support = bore["fit"]["support"]
+        self.assertIsNone(support.get("moran_unavailable_reason"))
+        self.assertIsNotNone(support["moran_z"])
+        self.assertFalse(bore["accepted"])
+        self.assertIn("residual structure", bore["fit"]["rejection"])
+
     def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
         """The note claimed all four gates ran on every accepted fit; two ran on none."""
         record = seg.fit_regions(make_dump(*box_mesh()), spec())

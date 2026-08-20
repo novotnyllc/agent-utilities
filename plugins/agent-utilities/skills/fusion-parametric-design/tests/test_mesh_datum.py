@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import random
 import unittest
 
@@ -301,7 +302,7 @@ class DatumFrameTests(unittest.TestCase):
         self.assertEqual(2, len(choice["tied"]))
         self.assertEqual({24.0}, {entry["score"] for entry in choice["tied"]})  # radius 3 x span 8
         # (0,0,1) and (1,0,0) quantize to (0,0,29) and (29,0,0); the smaller
-        # cell is the first, so Z is the +x cylinder's axis.
+        # cell is the first, so Z is the +z cylinder's axis.
         self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
         self.assertEqual([0, 0, 29], choice["canonical_cell"])
 
@@ -320,6 +321,57 @@ class DatumFrameTests(unittest.TestCase):
         self.assertIn("winner", caught.exception.detail)
         self.assertIn("runner_up", caught.exception.detail)
         self.assertEqual(2, len(caught.exception.detail["tied"]))
+
+    def test_two_tied_candidates_in_one_cell_refuse_rather_than_falling_back_to_score(self) -> None:
+        # A cell spans the tolerance angle's *chord* in each component, so two
+        # directions further apart than the tolerance can still share one. The
+        # sort would then decide on `sort_key`, whose first element is the score
+        # -- the number a re-tessellation moves, and the whole reason this rule
+        # replaced the score comparison. Same answer as an unstable cell.
+        # 2.0097 deg apart on a 2 deg grid, and both in cell (0, 0, 29).
+        tilt = 0.0124
+        norm = math.sqrt(1.0 + 2.0 * tilt * tilt)
+        record = fx.record(
+            [
+                fx.cylinder(
+                    "a", (tilt / norm, tilt / norm, 1.0 / norm), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0
+                ),
+                fx.cylinder(
+                    "b", (-tilt / norm, -tilt / norm, 1.0 / norm), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0
+                ),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertIn("same 2 deg cell", caught.exception.message)
+        cells = [entry["canonical_cell"] for entry in caught.exception.detail["tied"]]
+        self.assertEqual([[0, 0, 29], [0, 0, 29]], cells)
+
+    def test_the_secondary_sigma_carries_the_primary_axis_uncertainty_too(self) -> None:
+        # A secondary direction is a plane normal orthogonalised against the
+        # measured primary axis, so the plane's own sigma is a lower bound on
+        # it. `_canonical_cell` reads whatever it is handed as the whole bound,
+        # so the two measured sigmas are combined before it sees them -- and
+        # when the record states no sigma for the primary axis there is no
+        # combined bound to hand it, which is the refusal's own case.
+        record = _tied_lid()
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        tied = frame.evidence["secondary_choice"]["tied"]
+        self.assertEqual({"propagated"}, {entry["direction_sigma_basis"] for entry in tied})
+        # hypot(0.05 plane normal, 0.05 cylinder axis).
+        for entry in tied:
+            self.assertAlmostEqual(math.hypot(0.05, 0.05), entry["direction_sigma_deg"], places=12)
+
+        blind = _tied_lid()
+        for region in blind["regions"]:
+            if region["fit"]["kind"] == "cylinder":
+                del region["fit"]["uncertainty"]["axis_direction_deg"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(blind), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
 
     def test_the_canonical_choice_is_identical_under_shuffled_region_order(self) -> None:
         record = self._crossed_cylinders()
