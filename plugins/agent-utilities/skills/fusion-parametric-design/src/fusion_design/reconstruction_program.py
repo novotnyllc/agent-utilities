@@ -2192,6 +2192,16 @@ def _section_material_area(slab: Mapping[str, Any]) -> float:
     Outer boundaries and islands add, cavities subtract. Bores are absent on
     purpose: each is a hole feature this program cuts separately, ordered after
     the extrude, so the section this slab draws still has them filled.
+
+    These are the areas of the *sectioned chords*, which is what this stage
+    has. The emitter later classifies a loop whose points lie on a circle into
+    that circle, and the circle encloses more -- so two sections agreeing here
+    can disagree once built. Classifying in the planner is not the fix: the
+    classifier's tolerance is a rebuild-spec threshold this stage never sees,
+    and a second classifier fitted to a second tolerance would disagree with
+    the emitter's, which is the failure this would be trying to avoid. The
+    basis is recorded on the parameter instead, so a reader knows which areas
+    were compared.
     """
     total = 0.0
     for loop in slab.get("loops") or ():
@@ -2308,6 +2318,14 @@ def _user_parameters(
                 "nominal": stations[name],
                 "expected_observable": observable,
                 "observable_rationale": observable_rationale,
+                "observable_basis": (
+                    "the two adjacent sections' material areas as this stage sectioned them, in "
+                    "chords. The emitter classifies a loop whose points lie on a circle into that "
+                    "circle, which encloses more, so a station whose sections agree in chord area "
+                    "can move the volume after all -- and this parameter would then read inert "
+                    "against `centroid`. Nothing here can tell: the classifier's own tolerance is "
+                    "a rebuild-spec threshold this stage never sees."
+                ),
                 "rationale": (
                     "event station on the datum primary axis, merged from the accepted plane "
                     "fits at this boundary and the side regions' spans that end there."

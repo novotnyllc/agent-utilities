@@ -723,6 +723,36 @@ def _sampled_entities(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> 
     return points
 
 
+def _sampling_shortfall(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> float:
+    """How much area the sampling above leaves out, exactly.
+
+    A chord subtends less than its arc, so a sampled arc encloses less than the
+    arc does -- by ``(r^2 / 2) * (theta - k * sin(theta / k))`` over ``k``
+    segments of a ``theta`` sweep. That is a fixed, computable shortfall, and
+    the executor's match window has to carry it: a caller declaring a tight
+    `entity_match_tolerance_mm` on a large-radius profile would otherwise meet
+    `profile-set-mismatch` with no solver movement at all.
+    """
+    total = 0.0
+    for row in rows:
+        radius = row.get("radius_mm")
+        if row["kind"] == "circle" and isinstance(radius, (int, float)):
+            sweep = 2.0 * math.pi
+        elif row["kind"] == "arc" and isinstance(radius, (int, float)) and "center_mm" in row:
+            centre = row["center_mm"]
+            first = math.atan2(row["start_mm"][1] - centre[1], row["start_mm"][0] - centre[0])
+            last = math.atan2(row["end_mm"][1] - centre[1], row["end_mm"][0] - centre[0])
+            sweep = abs((last - first + math.pi) % (2.0 * math.pi) - math.pi)
+        else:
+            continue
+        if sweep <= 0.0:
+            continue
+        total += (float(radius) ** 2 / 2.0) * (
+            sweep - per_arc * math.sin(sweep / per_arc)
+        )
+    return abs(total)
+
+
 def _require_chained(
     entities: Sequence[Mapping[str, Any]], tolerance: float, archetype_id: str
 ) -> None:
@@ -968,6 +998,7 @@ def _slab_profile(
     }
     rows: list[dict[str, Any]] = []
     sampled: list[list[tuple[float, float]]] = []
+    shortfalls: list[float] = []
     loop_records: list[dict[str, Any]] = []
     for index, line in enumerate(profile_loops):
         entities = classify_polyline(
@@ -987,6 +1018,7 @@ def _slab_profile(
             row["loop"] = index
         rows.extend(loop_rows)
         sampled.append(_sampled_entities(loop_rows))
+        shortfalls.append(_sampling_shortfall(loop_rows))
         loop_records.append(
             {
                 "loop": index,
@@ -1030,6 +1062,10 @@ def _slab_profile(
                 # executor's profile match can allow the area that moves with it.
                 "perimeter_mm": region["perimeter_mm"],
                 "extent_mm": region["extent_mm"],
+                # What the arc sampling above leaves out for this region, so
+                # the executor's window can carry it rather than refusing on it.
+                "area_sampling_mm2": shortfalls[region["boundary_loop"]]
+                + sum(shortfalls[child] for child in region["hole_loops"]),
                 "centroid_mm": list(region["centroid_mm"]),
             }
             for region in regions
@@ -2037,6 +2073,9 @@ def plan_emission(
                     # executor can allow the area that moves with it.
                     "perimeter_cm": region.get("perimeter_mm", 0.0) * MM_TO_CM,
                     "extent_cm": region.get("extent_mm", 0.0) * MM_TO_CM,
+                    "area_sampling_cm2": region.get("area_sampling_mm2", 0.0)
+                    * MM_TO_CM
+                    * MM_TO_CM,
                     "centroid_cm": [value * MM_TO_CM for value in region["centroid_mm"]],
                 }
                 for region in evidence.get("profile_set", ())
@@ -2447,7 +2486,13 @@ def _profile_set(sketch, step, planned):
             ) ** 0.5
             perimeter = float(region.get("perimeter_cm") or 0.0)
             area_window = (
-                tolerance * max(1.0, abs(region["area_cm2"]) ** 0.5) + displacement * perimeter
+                tolerance * max(1.0, abs(region["area_cm2"]) ** 0.5)
+                + displacement * perimeter
+                # Fusion builds the exact arc; the plan measured a 256-segment
+                # approximation of it. That difference is computed, not
+                # estimated, and it is in the window rather than left to be
+                # refused on when the caller declares a tight tolerance.
+                + float(region.get("area_sampling_cm2") or 0.0)
             )
             # The centroid is governed by the changed first *moment*, not by
             # how far any point moved. An accepted snap that shifts a small
