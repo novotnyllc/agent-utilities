@@ -738,6 +738,20 @@ class _TriangleGrid(object):
         cached = self._coarse_floors.get(key)
         if cached is not None:
             return cached
+        # A query whose own coarse neighbourhood is occupied bounds nothing
+        # away, and that is where a dense scan's samples are: on the surface.
+        # Twenty-seven set lookups settle it, where the scan below reaches the
+        # same answer by walking the coarse set in arbitrary order -- once per
+        # distinct query cell, which made it quadratic in the occupied coarse
+        # cells on exactly the meshes that have the most of them.
+        if any(
+            (key[0] + di, key[1] + dj, key[2] + dk) in coarse
+            for di in (-1, 0, 1)
+            for dj in (-1, 0, 1)
+            for dk in (-1, 0, 1)
+        ):
+            self._coarse_floors[key] = 0
+            return 0
         nearest = None
         for i, j, k in coarse:
             distance = max(abs(i - key[0]), abs(j - key[1]), abs(k - key[2]))

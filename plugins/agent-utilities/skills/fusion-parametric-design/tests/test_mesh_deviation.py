@@ -1286,6 +1286,42 @@ class PointToTriangleTests(unittest.TestCase):
         # Shells 0..99 are empty by construction and are never enumerated.
         self.assertLess(_CountingBuckets.lookups, budget)
 
+    def test_a_surface_query_never_walks_the_coarse_overlay(self) -> None:
+        """The overlay's scan is per distinct query cell, so it has to be rare.
+
+        `_coarse_floor` walks the coarse set in arbitrary order to find the
+        nearest occupied cell -- once per query cell it has not seen, which on
+        a dense scan is once per occupied coarse cell, and quadratic in exactly
+        the meshes that have the most of them. Every one of those queries is on
+        the surface, where the answer is a floor of zero and twenty-seven set
+        lookups say so.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (200.0, 200.0, 200.0), 5.0)
+        flat = [value for vertex in vertices for value in vertex]
+        # A cell wider than the facets, so they bucket rather than land in the
+        # oversized list, which is what puts queries on the overlay at all.
+        grid = self.namespace["_TriangleGrid"](flat, triangles, 8.0)
+
+        class _CountingSet(set):
+            walked = 0
+
+            def __iter__(self):
+                _CountingSet.walked += 1
+                return set.__iter__(self)
+
+        grid._coarse = _CountingSet(grid._coarse_occupancy())
+        grid._coarse_floors = {}
+        for step in range(0, 200, 7):
+            # On the +z face, and just off it: both sit in an occupied coarse
+            # cell or a neighbour of one.
+            self.assertAlmostEqual(0.0, grid.nearest_mm(float(step), float(step), 200.0))
+            self.assertAlmostEqual(0.5, grid.nearest_mm(float(step), float(step), 200.5))
+        self.assertEqual(0, _CountingSet.walked)
+        # And the walk is still there for a point the neighbourhood cannot
+        # settle: far outside, the floor is the coarse bound, not zero.
+        self.assertGreater(grid._coarse_floor(-1000, -1000, -1000), 0)
+        self.assertEqual(1, _CountingSet.walked)
+
     def test_a_triangle_far_larger_than_the_cell_is_still_found(self) -> None:
         # One triangle spanning many cells goes to the oversized list rather than
         # into hundreds of buckets; it must still answer.
