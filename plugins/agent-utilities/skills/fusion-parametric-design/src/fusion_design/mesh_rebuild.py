@@ -391,6 +391,12 @@ def validate_rebuild_spec(spec: Any) -> list[ValidationIssue]:
         if (
             isinstance(budget_value, (int, float))
             and not isinstance(budget_value, bool)
+            # `int()` raises on a NaN or an infinity rather than returning a
+            # number to compare, and `json.loads` hands both through by
+            # default -- so a malformed spec would crash the CLI here instead
+            # of coming back as the named diagnostic `_declared_number` already
+            # recorded for it.
+            and math.isfinite(float(budget_value))
             and float(budget_value) != int(budget_value)
         ):
             issues.append(

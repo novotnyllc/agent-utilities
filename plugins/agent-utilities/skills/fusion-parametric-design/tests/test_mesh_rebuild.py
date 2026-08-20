@@ -589,6 +589,20 @@ class SpecValidationTests(unittest.TestCase):
                     any(issue.path.endswith("sketch_loop_budget.value") for issue in issues),
                     [issue.path for issue in issues],
                 )
+        # And a value `int()` cannot convert at all comes back as the named
+        # diagnostic rather than as a traceback. `json.loads` accepts NaN and
+        # Infinity by default, so a spec off the wire reaches this.
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                spec = fx.rebuild_spec("dump.bin")
+                spec["thresholds"]["sketch_loop_budget"] = {
+                    "value": value,
+                    "rationale": "fixture budget",
+                }
+                self.assertIn(
+                    "threshold-invalid-value",
+                    {issue.code for issue in validate_rebuild_spec(spec)},
+                )
         # A whole number expressed as a float is still a whole number.
         spec = fx.rebuild_spec("dump.bin")
         spec["thresholds"]["sketch_loop_budget"] = {"value": 8.0, "rationale": "fixture budget"}
