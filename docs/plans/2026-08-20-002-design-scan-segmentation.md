@@ -289,9 +289,18 @@ mode. Parameters: ε = quantile of the measured in-plane dihedral distribution
 (from the 443 gate-accepted planes) at 1 − 1/L_max, L_max = measured perimeter
 / mean edge ≈ 1,230 — deliberately loose, percolation intended and neutralized
 by the cell cut; family assignment threshold-free argmax with ambiguity band =
-derived facet-noise tilt (1.76°); stations by 1-D KDE at bandwidth σ_form
-reusing the existing `event_stations`/`event_sigmas` machinery, peaks separated
-by the declared `min_feature_size = 1.6`. **No derived mesh; no constant
+derived facet-noise tilt (1.76°); stations by 1-D KDE at bandwidth σ_form,
+peaks separated by the declared `min_feature_size = 1.6`. **The station
+detector is new code in PR 3, not a reuse.** The only station machinery in the
+repo is `mesh_slabs.collect_event_candidates` / `merge_events` on the unmerged
+2.5D lane (`feat/25d-events`), and it is a different question: it collects
+stations from *accepted fits'* offsets and sigmas and merges them by complete
+linkage, where the cross-cut needs peaks in a 1-D density over raw triangle
+coordinates before any fit exists. `mesh_segmentation._structure_stations`
+computes coordinates for residual analysis and locates no peaks. So PR 3 scopes
+and tests a KDE peak finder of its own (~60 lines, included in its size
+estimate below), and takes the sigma-derived merge tolerance from the 2.5D
+lane's machinery only if that lane has landed by then. **No derived mesh; no constant
 chosen.** Peel: accepted terminal regions leave the frontier; stations
 re-estimated on the residual; **the same procedure every pass, no parameter
 escalation** — which is also what keeps the loop off US11017535B2's
@@ -521,9 +530,14 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
 - **Escalation gate (declared, from PR 3/4's census):** run only if
   (a) mixed-cell area — cells whose joint fit fails with multi-surface residual
   signatures — exceeds a declared fraction, or (b) fragment area — adjacent
-  cells individually under support floors whose union fits — exceeds one.
-  (a) licenses A's proxy grower inside cells; (b) licenses HFP-over-regions
-  (threshold-free, cut by the existing parsimony-F gate).
+  cells individually under support floors whose union fits — exceeds one, or
+  (c) **any part in the corpus reaches `datum-unavailable`**. (a) licenses A's
+  proxy grower inside cells; (b) licenses HFP-over-regions (threshold-free, cut
+  by the existing parsimony-F gate); (c) licenses the same grower as the
+  *standalone* splitter §4.3's fallback ladder requires — without it a
+  no-datum scan has no splitter at all even after the whole plan is complete,
+  and neither census above would ever fire on such a part, because a part with
+  no datum never reaches the cell census.
 - **Files:** `mesh_segmentation.py` (layered proxy grower as a second
   registered splitter; HFP merge pass over terminal regions), tests.
 - **Size:** ~250–350 (grower) + ~90 (HFP).
@@ -638,8 +652,16 @@ measured residual licenses it.
 2. On Dig-Next-2: mega-group split into named terminal regions; board top and
    bottom fitted as planes with the 1.6 mm offset recovered inside its stated
    uncertainty; `covered_area_fraction ≥ 0.25` with every large-region verdict
-   naming a physical reason; holes/cans present as whole-wall cylinder regions
-   with accept/refuse reasons from the declared gate set.
+   naming a physical reason; holes/cans present as regions with accept/refuse
+   reasons from the declared gate set.
+   **Whole-wall cylinder *acceptance* is explicitly not required on this
+   capture.** The addendum measured why: this scan's bore walls are
+   single-sided, so they fail the support floors and the axis-sigma gate
+   honestly, and no segmentation or gate change in PRs 1–6 recovers evidence
+   the capture does not contain. What is required here is that each such region
+   exists as its own region and names that reason — not that it fits. Accepted
+   whole-wall bore cylinders on this part need a re-capture, which is
+   deliberately not scheduled in this plan (§11.5).
 3. `program.json` under 1 MB at the new fit count; `pairs_unexamined = 0` for
    equivalence kinds; contested lists enumerated.
 4. Tessellation corpus unchanged (71%, 85/85 bores).
@@ -661,6 +683,12 @@ measured residual licenses it.
 4. **Emission dependency:** scan `delivered_area_fraction` stays 0.0 until the
    2.5D multi-loop emitter lane's PR 3 lands; this design must not duplicate
    that scope and does not.
+5. **Re-capture of Dig-Next-2 for the bores.** Measured in the addendum: the
+   bore walls are captured single-sided, so the evidence for a full cylinder is
+   not in the scan and no work in this design's PRs can put it there. A
+   two-sided re-capture (or a second pass at a different presentation) is what
+   unblocks accepted whole-wall bore cylinders on this part. Owner: whoever
+   holds the scanner; not scheduled here, and §10.2 is conditioned on it.
 
 ---
 
