@@ -593,12 +593,16 @@ class DeviationVerdictTests(unittest.TestCase):
                 reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0)),
                 spec=spec,
             ),
-            failure="invented-material-unclassified",
+            failure="omitted-detail-unclassified",
         )[0]
         self.assertFalse(report["ok"])
+        self.assertEqual(["omitted-detail-unclassified"], report["failures"])
         omitted = report["verdict"]["omitted_detail"]
         self.assertEqual("not-established", omitted["severity"])
         self.assertGreater(omitted["unresolved_reconstruction_samples"], 0)
+        # The invented verdict is a different question and may be perfectly
+        # established; the token says which one was not.
+        self.assertIn(report["verdict"]["invented_material"]["severity"], ("pass", "failure"))
 
     def test_an_omission_below_its_own_threshold_is_not_an_advisory(self) -> None:
         # The classification uses the *invented* threshold, because that is the

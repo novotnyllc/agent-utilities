@@ -31,6 +31,7 @@ DEVIATION_FAILURES = frozenset(
         "sign-convention-unestablished",
         "invented-material",
         "invented-material-unclassified",
+        "omitted-detail-unclassified",
         "deviation-frames-differ",
     }
 )
@@ -947,21 +948,38 @@ def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, 
     # question about *sign*, so this is a facet-derived step rather than a
     # threshold-sized one -- see `_largest_triangle`.
     step_mm = min(epsilon_mm, inradius / 2.0)
+    # Halved until the two points straddle, or until there is nothing left to
+    # halve. A body thinner than the step has its far wall crossed by the
+    # inward point, which lands outside again -- both points read outside and a
+    # faithful reconstruction is refused for a step nobody chose against its
+    # wall thickness. The step is bounded above by the facet and the declared
+    # threshold and below by the point at which it stops meaning anything.
+    attempts = []
+    for _halving in range(20):
+        step = step_mm / 10.0
+        forward = adsk.core.Point3D.create(
+            centroid[0] / 10.0 + normal[0] * step,
+            centroid[1] / 10.0 + normal[1] * step,
+            centroid[2] / 10.0 + normal[2] * step,
+        )
+        backward = adsk.core.Point3D.create(
+            centroid[0] / 10.0 - normal[0] * step,
+            centroid[1] / 10.0 - normal[1] * step,
+            centroid[2] / 10.0 - normal[2] * step,
+        )
+        forward_containment = body.pointContainment(forward)
+        backward_containment = body.pointContainment(backward)
+        attempts.append(step_mm)
+        if sorted([forward_containment, backward_containment]) == sorted(
+            [inside_enum, outside_enum]
+        ):
+            break
+        if step_mm <= 1e-06:
+            break
+        step_mm /= 2.0
     evidence["probe_step_mm"] = step_mm
+    evidence["probe_steps_tried_mm"] = attempts
     evidence["tolerance_mm"] = max(0.01 * step_mm, 1e-6)
-    step = step_mm / 10.0
-    forward = adsk.core.Point3D.create(
-        centroid[0] / 10.0 + normal[0] * step,
-        centroid[1] / 10.0 + normal[1] * step,
-        centroid[2] / 10.0 + normal[2] * step,
-    )
-    backward = adsk.core.Point3D.create(
-        centroid[0] / 10.0 - normal[0] * step,
-        centroid[1] / 10.0 - normal[1] * step,
-        centroid[2] / 10.0 - normal[2] * step,
-    )
-    forward_containment = body.pointContainment(forward)
-    backward_containment = body.pointContainment(backward)
     probe = {
         "facet_centroid_mm": centroid,
         "facet_normal": normal,
@@ -971,7 +989,11 @@ def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, 
     }
     evidence["straddle_probe"] = probe
     if sorted([forward_containment, backward_containment]) != sorted([inside_enum, outside_enum]):
-        probe["rejected"] = "the two offset points did not straddle the facet"
+        probe["rejected"] = (
+            "the two offset points did not straddle the facet at any step down to "
+            + str(step_mm)
+            + " mm"
+        )
         return False, evidence
     if forward_containment == inside_enum:
         inside_point, outside_point = forward, backward
@@ -1503,6 +1525,7 @@ def run(context):
         # the question it was answering, and the two are declared separately for
         # a reason. A 0.1 mm recess is not an omitted-detail advisory under a
         # 0.25 mm declaration just because it cleared the 0.05 mm one.
+        omitted_established = True
         omitted_inside_source = 0
         omitted_unresolved = 0
         for point, distance in zip(sample_points, sample_distances):
@@ -1520,9 +1543,11 @@ def run(context):
             # here -- an open source mesh, or a ray the parity cannot answer --
             # would have gone by as "not omitted" and the run would have passed
             # over a deviation past the omitted-detail threshold that nothing
-            # classified. Recorded on the verdict below and failed closed with
-            # it.
-            established = False
+            # classified. It is the *omitted* verdict that could not be
+            # established, and the invented one may be perfectly established
+            # alongside it, so this carries its own token rather than borrowing
+            # the invention's and telling a handler the wrong thing.
+            omitted_established = False
             omitted = dict(
                 omitted,
                 severity="not-established",
@@ -1594,6 +1619,15 @@ def run(context):
             raise RuntimeError(
                 "Deviation verdict failed: invented material at "
                 + json.dumps(report["verdict"]["invented_material"]["worst_points"][:1])
+            )
+        if not omitted_established:
+            report["failures"] = ["omitted-detail-unclassified"]
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError(
+                "Deviation verdict failed closed: omitted-detail-unclassified, "
+                + str(omitted_unresolved)
+                + " samples past the omitted-detail threshold could not be classified"
             )
         if not established:
             report["failures"] = ["invented-material-unclassified"]
