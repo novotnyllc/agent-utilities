@@ -486,4 +486,11 @@ def run(context):
             })
         raise
 '''
-    return _script_prelude(manifest) + transaction.replace("__PROBE_SPECS__", _json_literal(specs))
+    # The probe's directory lives under `probe_spec`, not at the top level: read
+    # from the top the tee was always None and the probe wrote no recovery file
+    # at all, which is the one transaction whose whole job is to say what this
+    # Fusion can do before a long extraction is attempted.
+    probe_spec = specs.get("probe_spec") or {}
+    return _script_prelude(manifest, report_dir=probe_spec.get("dump_dir")) + transaction.replace(
+        "__PROBE_SPECS__", _json_literal(specs)
+    )

@@ -1,4 +1,6 @@
 import json
+import os
+import time
 import traceback
 import adsk.core
 import adsk.fusion
@@ -8,13 +10,73 @@ FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+# Where _emit tees its report so a transport timeout loses nothing. None when
+# this transaction declares no output directory of its own.
+REPORT_TEE_DIR = None
+# This run's own identity, so two agents running the same transaction against
+# the same manifest into the same directory write two files rather than racing
+# for one. Bound at run time and not at emission, so the emitted script stays
+# byte-identical across emissions.
+RUN_ID = "%d-%d" % (os.getpid(), int(time.time() * 1000))
 
 
 class DocumentChangedError(RuntimeError):
     """The active document is no longer ours; the transaction must touch nothing further."""
 
 
+def _report_tee_path(report):
+    """Where this report is teed: one file per *run*, beside the run's inputs.
+
+    Named for the report's own `kind`, the manifest it was emitted against, and
+    this run's own identity. The run identity is what makes it safe under the
+    hazard `references/mcp-adapter.md` already treats as supported: two agents
+    driving the same transaction kind against the same manifest into the same
+    directory used to resolve to one path, so their writes interleaved and the
+    recovery read could hand back the other run's report as if it were yours.
+    Recovery is by newest match on the `<kind>-<manifest12>-` prefix rather than
+    by an exact name, which cannot silently return somebody else's answer.
+    """
+    if not REPORT_TEE_DIR:
+        return None
+    kind = report.get("kind") if isinstance(report, dict) else None
+    name = "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(kind or "report"))
+    return os.path.join(
+        REPORT_TEE_DIR,
+        "fusion-design-report-" + name + "-" + MANIFEST_SHA256[:12] + "-" + RUN_ID + ".json",
+    )
+
+
 def _emit(report):
+    # The tee happens before the print and its own path goes into the report, so
+    # the file and the stdout block are the same bytes wherever both survive.
+    path = _report_tee_path(report)
+    if path is not None and isinstance(report, dict):
+        report["report_tee_path"] = path
+        # On the report as well as in the name, so a caller holding two
+        # candidate files can see that they came from two runs rather than
+        # inferring it from the filenames.
+        report["run_id"] = RUN_ID
+        try:
+            # Written whole and then moved into place: a reader that arrives
+            # mid-write must never see half a report and take it for the run's
+            # answer. `os.replace` is atomic within a directory.
+            staging = path + ".partial"
+            handle = open(staging, "w")
+            try:
+                handle.write(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
+                handle.flush()
+                os.fsync(handle.fileno())
+            finally:
+                handle.close()
+            os.replace(staging, path)
+        except Exception as error:
+            # Never fatal: losing the tee must not lose the transaction.
+            report["report_tee_error"] = str(error)
+    elif isinstance(report, dict):
+        report["report_tee_path"] = None
+        report["report_tee_unavailable_reason"] = (
+            "this transaction declares no output directory, so its report is only on stdout"
+        )
     print(REPORT_BEGIN)
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
     print(REPORT_END)

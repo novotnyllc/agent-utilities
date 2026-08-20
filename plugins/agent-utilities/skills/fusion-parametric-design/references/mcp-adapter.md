@@ -165,6 +165,82 @@ exact sentinel is absent, stop and report the transport failure. Do not encode
 exceptions as successful reports or treat an empty success response as proof
 that a transaction ran.
 
+### The 180-second transport ceiling, and the tee that survives it
+
+**Measured:** `AccurateGenerateFaceGroupsType` on a 524,614-triangle scan ran
+330 seconds. The MCP transport gives up at **180 seconds**. The grouping was
+applied to the document and the successful report was discarded, so the pipeline
+was stuck on an operation that had already done its work, with no way to learn
+what it had produced. Any mesh transaction on a real capture — grouping,
+extraction, rebuild — can exceed the ceiling.
+
+**Recovery path:** every generated transaction's `_emit` also writes the report
+JSON to a file beside the transaction's own inputs, and names that file in the
+stdout report as `report_tee_path`. The name is
+`fusion-design-report-<kind>-<manifest-sha12>-<run-id>.json`, where the run id
+is bound at run time from the process id and the clock — **one file per run**,
+not one per kind. Two agents driving the same transaction kind against the same
+manifest into the same directory is a hazard this adapter treats as supported,
+and a name without the run id resolved both of them to one path: their writes
+interleaved, and a recovery read could return the other run's report as if it
+were yours. The report is written whole to a `.partial` file and moved into
+place with `os.replace`, so a reader arriving mid-write sees either the previous
+report or the new one and never half of either. When a call times out:
+
+1. do not re-run the transaction — it may have mutated the document already;
+2. read the **newest** file in the declared directory matching
+   `fusion-design-report-<kind>-<manifest-sha12>-*.json`;
+3. validate it as below before using it — including that it describes the work
+   you asked for, since a concurrent run leaves its own file beside yours.
+
+**A unique name stops clobbering; it does not establish ownership.** The run id
+is bound inside the transaction and travels back on stdout, which is the channel
+a timeout loses — so after a timeout the caller cannot say which of two files
+its own run wrote, and two concurrent runs of the same kind against the same
+manifest produce two reports that both satisfy every binding check. The way a
+caller gets an exact file is the one it already controls: **give each concurrent
+run its own `report_dir`**. Every transaction takes that directory from its own
+declaration, so two agents that pass two directories never share a candidate
+set. Where they do share one and two files match your bindings, the honest
+outcome is that you cannot tell them apart: re-establish state from the document
+rather than pick one. The report carries `run_id` so that ambiguity is visible
+rather than silent.
+
+The directory comes from the transaction's own declaration: `dump_dir` for
+extraction and the capability probe, the dump's own directory for a rebuild, and
+`report_dir` for face-group generation, which writes no file of its own and
+therefore has nothing to sit beside unless the caller names a directory. A
+transaction with no declared directory reports `report_tee_path: null` with
+`report_tee_unavailable_reason`, which is a statement rather than a silence. The
+export transaction deliberately does not tee: its contract is that the export
+directory holds nothing of ours before it runs, and a report written into it
+would break its own preflight.
+
+A tee that cannot be written is never fatal — the report carries
+`report_tee_error` and stdout is unchanged. Losing the tee must not lose the
+transaction.
+
+### Reports are per-stdout, so validate every block you parse
+
+**Measured hazard:** two agents driving one Fusion session **interleave report
+blocks**. The `FUSION_DESIGN_REPORT_BEGIN` / `..._END` delimiter contract is per
+*stdout stream*, not per caller, and Fusion has one. A block appearing in your
+response may have been printed by somebody else's transaction.
+
+Therefore, before acting on any parsed block:
+
+- check `kind` against the transaction you ran, and
+- check `manifest_sha256` (and, where the report carries them, `dump_sha256` and
+  the document name) against the document you are working on.
+
+A block that does not match is **foreign: reject it, do not parse it further,
+and do not treat it as your transaction's answer**. Do not merge two blocks of
+the same kind. A concurrent-agent run must expect foreign blocks and say in its
+notes that it did — "the last block wins" is only true on a stdout with one
+writer, and a foreign block that happens to be last is the failure this rule
+exists to prevent. If no block matches, the transaction's own answer is in the
+tee file, which is per-directory and per-kind and therefore not shared.
+
 ## Permission policy
 
 The local Fusion MCP has access to the live design session. Ask for the minimum persistent permissions that avoid repetitive prompts, typically documentation read, active-document read, Python execution, view capture, save/version, and undo. Keep file-system and network permissions separate from Fusion permissions.

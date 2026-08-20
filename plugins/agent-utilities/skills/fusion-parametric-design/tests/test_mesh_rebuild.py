@@ -529,7 +529,11 @@ class EmittedSourceTests(unittest.TestCase):
             fx.rebuild_spec(cls.dump_path),
             NONCE,
         )
-        cls.transaction = cls.source[len(_script_prelude(cls.manifest)) :]
+        # The prelude is parameterised by where the transaction tees its report,
+        # so strip the one this emitter actually produced rather than the default.
+        cls.transaction = cls.source[
+            len(_script_prelude(cls.manifest, report_dir=str(Path(cls.dump_path).parent))) :
+        ]
 
     @classmethod
     def tearDownClass(cls):

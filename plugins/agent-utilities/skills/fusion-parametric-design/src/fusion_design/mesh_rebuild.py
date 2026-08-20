@@ -1712,7 +1712,10 @@ def emit_mesh_rebuild_script(
     plan["nonce"] = nonce
     plan["classification"] = classification.to_dict()
     plan["mesh_source"] = _source_evidence(source_record)
-    return _script_prelude(manifest) + _REBUILD_TRANSACTION.replace(
+    # Beside the dump the rebuild was planned from.
+    return _script_prelude(
+        manifest, report_dir=str(Path(str(spec["dump_path"])).parent)
+    ) + _REBUILD_TRANSACTION.replace(
         "__REBUILD_PLAN__", _json_literal(plan)
     )
 

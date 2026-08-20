@@ -674,6 +674,11 @@ def run(context):
         raise
 '''
     transaction = transaction.replace("__BINDING_RESIDUAL__", EXPORT_BINDING_RESIDUAL)
+    # Deliberately no report tee. This transaction's contract is that the export
+    # directory contains nothing of ours before it runs and exactly the exported
+    # set afterwards, and it refuses a rerun on any pre-existing file -- so a
+    # report written into it would be the transaction breaking its own preflight.
+    # Export is also seconds of work, not the minutes that made the tee necessary.
     return _script_prelude(manifest) + transaction.replace("__EXPORT_SPECS__", _json_literal(specs))
 
 
