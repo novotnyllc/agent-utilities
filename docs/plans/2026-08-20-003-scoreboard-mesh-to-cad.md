@@ -260,7 +260,6 @@ original triangle carries exactly one primary disposition per stage —
 ```text
 stage:        fit | decompose | plan | emit | build | verify
 disposition:  claimed(owner, claim-id) | refused(token, gate-evidence)
-              | inferred-supported (derived-geometry ledger, never counted here)
               | invalidated-by-partition(version)
 ```
 
@@ -270,8 +269,12 @@ be re-dispositioned under the new version before the stage record closes).
 Every refusal token cites the executed gate's evidence; the generic
 `residual` bucket is **not** a permitted disposition — reason-laundering
 through an unnamed residual is exactly the silence H exists to catch.
-Inferred geometry is counted in the derived-geometry ledger, never in
-original-area conservation. Target: **silently-unclaimed triangle count = 0**,
+Inferred geometry (virtual caps, inferred base footprints) has no immutable
+source-triangle IDs and is therefore **not a disposition of any original
+triangle**: it lives only in the derived-geometry ledger with its own
+identities (002 §A.2 rule 7) and never enters original-area conservation —
+every original triangle is claimed, refused, or invalidated pending
+re-disposition, with no third escape. Target: **silently-unclaimed triangle count = 0**,
 exact, by immutable triangle ID. Run D remains the audit script; this is the
 substrate that makes its identities checkable rather than approximate.
 

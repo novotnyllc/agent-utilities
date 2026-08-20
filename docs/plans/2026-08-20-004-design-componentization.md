@@ -869,8 +869,13 @@ blocked PRs name their gate.
   sub-mesh extractor is C-4's, per §4.1; this stage consumes the sub-meshes
   and their recorded digests rather than producing them.)
 - **Size:** ~150–250 added.
-- **Measured claim (Dig-Next-2):** C cell moves 0 → 1 base + ≥ 8 placed
-  occurrences (§7 C2 row); every component's mesh slice re-hashes to its
+- **Measured claim (Dig-Next-2):** the C cell's **raw counts and
+  `C-geometric`** move 0 → 1 base + ≥ 8 placed occurrences (§7 C2 row) —
+  these are C1-licensed geometric subobjects, so headline (physical) C
+  stays 0 or `unmeasured` until `physical-thing-evidenced` detections are
+  matched to the reviewed evident-things table (003 §1.4; C-4 as amended),
+  and this run claims no positive physical score; every component's mesh
+  slice re-hashes to its
   recorded digest; occurrence-move check passes on ≥ 1 real thing; H: every
   non-thing square millimetre named (residual + below-support + interface
   band areas sum with the claimed areas to total mesh area — the
@@ -1086,9 +1091,12 @@ field's set is rejected in this one:
 
 - `claim_level` (§0's ontology rung): `componentized-geometric` |
   `physical-thing-evidenced`.
-- `fidelity_status` (what was actually delivered — §4.1's C2/C3 ladder):
-  `recognized-reference` keeps its meaning as the C2 floor, upgraded by the
-  C3 reconstruction licence.
+- `fidelity_status` (what was actually delivered — §4.1's C2/C3 ladder),
+  complete closed set: `recognized-reference` (the C2 floor) |
+  `recognized-primitive` | `recognized-parametric` — the reference →
+  primitive → parametric upgrade rungs of the C3 reconstruction licence,
+  enumerated in full so a validly upgraded component record is never
+  rejected by the validator or mislabeled as a reference.
 - `evidence_class`: + `inferred-by-continuation` (R5).
 - `refusal`: + `capture-boundary-unclosed` (§4.6).
 - `delivery_semantics`: + `pose-locked-for-delivery` (§4.7).
