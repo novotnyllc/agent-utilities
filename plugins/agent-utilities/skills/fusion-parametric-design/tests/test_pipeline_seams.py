@@ -1252,7 +1252,15 @@ class MotionEvidenceSeamTests(unittest.TestCase):
         )
         self.assertEqual(direct["verdict"], grouped["verdict"])
         self.assertEqual(direct["refusal"], grouped["refusal"])
-        self.assertAlmostEqual(direct["eigengap"], grouped["eigengap"], places=9)
+        # The additivity is exact *in the algebra* and float-exact only to
+        # rounding: the two paths accumulate the same terms in different orders
+        # and through a congruence, so the honest claim is a relative one.
+        # Measured here at 2.0e-16 -- about one ulp -- and asserted as such,
+        # because `places=9` on a number of size 0.017 is an absolute tolerance
+        # seven orders looser than the agreement it is meant to pin.
+        self.assertLessEqual(
+            abs(direct["eigengap"] - grouped["eigengap"]) / abs(direct["eigengap"]), 1e-12
+        )
 
     def test_the_old_rule_would_have_revolved_most_of_this_plate(self) -> None:
         # Without this the test below only shows that the plate is an extrude,

@@ -2436,9 +2436,12 @@ def _route_from_moments(
 # The router reads facets; the archetype planner has only the fit record, which
 # carries no triangles. What crosses the seam is the *sufficient statistic*:
 # ``M_raw = sum over facets of area * b b^T`` with ``b = [x x n, n]`` in the
-# mesh's own frame. It is 21 numbers per region, it is exactly additive across
-# regions, and it re-centres and re-scales by an exact congruence, so a group's
-# 6x6 is recoverable from its members' blocks without keeping a single triangle.
+# mesh's own frame. It is 21 numbers per region, additive across regions, and it
+# re-centres and re-scales by a congruence, so a group's 6x6 is recoverable from
+# its members' blocks without keeping a single triangle. "Exact" there is a
+# statement about the algebra, not about the floats: the two paths sum the same
+# terms in different orders, so they agree to *relative* rounding -- measured at
+# 2.0e-16 on the seam test's own group, which is about one ulp.
 # --------------------------------------------------------------------------
 
 #: Row-major upper triangle of a symmetric 6x6, in the order the record stores it.
