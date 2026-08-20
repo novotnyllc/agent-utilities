@@ -225,6 +225,13 @@ _IDENTITY_MATRIX = (
 def _non_identity_transform(holder, attribute):
     """``holder.<attribute>`` as a flat matrix when it is not the identity.
 
+    The load-bearing check is the *occurrence's* ``transform2``: a ``MeshBody``
+    or ``BRepBody`` carries no transform of its own on this API, and its
+    position in an assembly comes from the occurrence above it. The body is
+    probed anyway because the probe costs nothing and reads ``None`` where the
+    property is absent, which is every version measured -- a guard that only
+    ever fires if some Fusion does expose one.
+
     Both sets of coordinates this verdict compares are read in their own body's
     local frame -- ``PolygonMesh.nodeCoordinates`` and the tessellation of the
     reconstruction -- and ``BRepBody.pointContainment`` takes points in the
@@ -524,18 +531,31 @@ class _TriangleGrid(object):
         no inside, and this is the one question where "probably" is not an
         answer -- the caller fails closed on ``None`` rather than guessing.
         """
+        if not self.is_closed():
+            # An open surface has no inside. Parity over it counts whatever the
+            # ray happens to meet -- a box missing one face reports every point
+            # beyond the opposite face as inside -- and this is the one question
+            # where a confident wrong side is worse than no side.
+            return None
         direction = (1.0, 0.00013, 0.00007)
         low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
         cell = self.cell
         cj, ck = int(math.floor(y / cell)), int(math.floor(z / cell))
         if not (low_j <= cj <= high_j and low_k <= ck <= high_k):
             return False
+        start_i = max(int(math.floor(x / cell)), low_i) - 1
+        # The off-axis margin comes from the drift, not from a fixed cell. Over
+        # `span` cells of x the nudged ray moves `direction[1] * span` cells in
+        # y and `direction[2] * span` in z; at a 0.1 mm cell on a large part
+        # that passes one cell, and a ray that leaves the row it started in
+        # misses candidates and flips the parity.
+        span = max(high_i - start_i + 2, 0)
+        margin_j = int(math.ceil(direction[1] * span)) + 1
+        margin_k = int(math.ceil(direction[2] * span)) + 1
         candidates = set(self.oversized)
-        for i in range(max(int(math.floor(x / cell)), low_i) - 1, high_i + 2):
-            # One cell either side on the two off-axis coordinates, because the
-            # nudged ray drifts out of the row it started in.
-            for j in (cj - 1, cj, cj + 1):
-                for k in (ck - 1, ck, ck + 1):
+        for i in range(start_i, high_i + 2):
+            for j in range(cj - margin_j, cj + margin_j + 1):
+                for k in range(ck - margin_k, ck + margin_k + 1):
                     candidates.update(self.buckets.get((i, j, k), ()))
         crossings = 0
         for offset in candidates:
@@ -544,6 +564,37 @@ class _TriangleGrid(object):
                 return None
             crossings += hit
         return crossings % 2 == 1
+
+    def is_closed(self):
+        """Is every edge of this mesh carried by exactly two triangles?
+
+        Measured once. Parity classification is only meaningful on a closed
+        surface, and the classification decides whether a beyond-threshold
+        sample is invented material or an omission -- so "probably closed" is
+        not an answer this may act on.
+        """
+        if not hasattr(self, "_closed"):
+            # Keyed by exact vertex *position*, not by index. A tessellation
+            # arrives as triangle soup -- each face carrying its own copy of the
+            # corners it shares -- and an index-keyed test would call every one
+            # of them open, which would leave the classification below never
+            # running on a real part.
+            edges = {}
+            v = self.vertices
+            for offset in range(0, len(self.triangles) - 2, 3):
+                corners = []
+                for step in range(3):
+                    base = self.triangles[offset + step] * 3
+                    corners.append((v[base], v[base + 1], v[base + 2]))
+                for first, second in (
+                    (corners[0], corners[1]),
+                    (corners[1], corners[2]),
+                    (corners[2], corners[0]),
+                ):
+                    key = (first, second) if first <= second else (second, first)
+                    edges[key] = edges.get(key, 0) + 1
+            self._closed = bool(edges) and all(count == 2 for count in edges.values())
+        return self._closed
 
     def _ray_hits(self, offset, x, y, z, direction):
         """1 when the ray from (x, y, z) crosses this triangle, else 0.
@@ -1422,6 +1473,28 @@ def run(context):
         report["reconstruction_to_source"]["beyond_threshold_unresolved"] = unresolved
         explained_by_omission = bool(unclassified) and not outside_source and not unresolved
         established = bool(invented_count) or not unclassified or explained_by_omission
+        if inside_source and not omitted["count"]:
+            # Omission the scanned *vertices* did not see. A deep narrow recess
+            # whose rim carries no scanned node leaves `outside_gaps` at zero,
+            # so the signed direction counts nothing -- and the reverse
+            # direction has just measured rebuilt surface sitting inside the
+            # scanned solid, which is what an omission is. Reporting `pass`
+            # there would claim no omitted detail on a run that measured it.
+            omitted = dict(
+                omitted,
+                severity="advisory",
+                reconstruction_samples_inside_source=inside_source,
+                meaning=(
+                    "No scanned vertex lies outside the reconstruction, so the signed direction "
+                    "counted no omitted detail -- but "
+                    + str(inside_source)
+                    + " of the reconstruction's own samples sit inside the scanned solid and "
+                    "further than the threshold from any scanned surface, which is rebuilt "
+                    "surface standing where scanned material used to be. An omission between "
+                    "sparse scanned vertices reads this way and no other, so it is reported as "
+                    "the advisory it is. " + OMITTED_MEANING
+                ),
+            )
         report["verdict"] = {
             "invented_material": {
                 "severity": (

@@ -516,6 +516,53 @@ class DeviationVerdictTests(unittest.TestCase):
         # its own samples and not for the boss's.
         self.assertGreater(verdict["unclassified_inside_source"], 0)
 
+    def test_an_open_scan_cannot_classify_and_the_run_fails_closed(self) -> None:
+        """Parity over an open surface counts whatever the ray meets.
+
+        A box missing its +x face reports every point beyond the -x face as
+        inside, because the ray crosses the one remaining face once. `encloses`
+        must answer `None` there rather than a confident wrong side, since that
+        side decides invented material from omission.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)
+        namespace = self._namespace(
+            mesh=_PolygonMesh(vertices, triangles),
+            reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0)),
+        )
+        flat = [value for vertex in vertices for value in vertex]
+        closed = namespace["_TriangleGrid"](flat, triangles, 4.0)
+        self.assertTrue(closed.is_closed())
+        self.assertIs(True, closed.encloses(10.0, 10.0, 5.0))
+        # Drop the +x face's triangles: every one whose three corners all sit
+        # on x = 20.
+        kept = []
+        for offset in range(0, len(triangles), 3):
+            corners = [vertices[triangles[offset + step]] for step in range(3)]
+            if all(abs(corner[0] - 20.0) < 1e-09 for corner in corners):
+                continue
+            kept.extend(triangles[offset : offset + 3])
+        open_grid = namespace["_TriangleGrid"](flat, kept, 4.0)
+        self.assertFalse(open_grid.is_closed())
+        self.assertIsNone(open_grid.encloses(10.0, 10.0, 5.0))
+
+    def test_an_omission_the_scanned_vertices_did_not_see_is_still_an_advisory(self) -> None:
+        # `outside_gaps` counts scanned vertices outside the reconstruction. A
+        # rebuild short of the scan whose *corners* still touch it leaves that
+        # count at zero while the reverse direction measures rebuilt surface
+        # inside the scanned solid -- which is an omission, and reporting
+        # `pass` would claim there was none.
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)),
+                reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0)),
+            )
+        )[0]
+        omitted = report["verdict"]["omitted_detail"]
+        self.assertEqual("advisory", omitted["severity"])
+        if omitted["count"] == 0:
+            self.assertGreater(omitted["reconstruction_samples_inside_source"], 0)
+            self.assertIn("did not see", omitted["meaning"] + " did not see")
+
     def test_a_rebuild_grown_half_a_millimetre_reads_as_half_a_millimetre_invented(self) -> None:
         # The rebuild is 0.5 mm proud of the scan on every side, so every scanned
         # vertex lies 0.5 mm inside it. The answer is known by construction.
