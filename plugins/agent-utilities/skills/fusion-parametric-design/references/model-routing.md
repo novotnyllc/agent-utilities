@@ -2,7 +2,15 @@
 
 Which model tier should drive which of this skill's task classes. Classify by the shape of the work, never by model IDs: tiers are **frontier** (deep design reasoning), **mid** (bounded iteration), and **economy** (mechanical driving of fail-closed tooling).
 
-This reference owns no routing or dispatch semantics — those belong to whatever routing skill or policy the session has (an org router such as railyard's model-routing doctrine, or a harness-level rule), and that policy is always the authority. This file only classifies the skill's own work shapes so a router, or a human choosing a model by hand, knows which shape each task is.
+This reference is the skill's **standalone doctrine**. The skill is used in harnesses with no org router or session routing policy present, so the dispatcher operating shape and the tier/effort guidance below must be self-sufficient here and travel with the skill. The one exception: when a session-level routing policy *is* present (an org router such as railyard's model-routing doctrine, or a harness-level rule), it takes precedence over the example table — the skill classifies, the router selects.
+
+## The dispatcher operating shape
+
+The thread that uses this skill is a **dispatcher, not a worker**. It stays responsive to the user, classifies each piece of work by the work-shape table below, and hands every substantial piece — Fusion MCP mutations, long CLI runs, exports, verification passes — to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
+
+Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
+
+The dispatcher also arbitrates the single live Fusion writer: at most one mutating worker at a time; read-only workers may run concurrently. Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
 
 ## Why economy is safe here at all
 
