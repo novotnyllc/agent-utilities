@@ -329,11 +329,23 @@ needed (§3.1 logic; same escalation discipline).
 ### 4.4 Gates in the same cycle: the Moran correlated-noise null (B §6.3)
 
 F7 makes this non-optional: the residual-structure gate already rejects at
-83 mm² on this part, and board faces are 66× larger. Fix: estimate the waviness
-correlation length from the σ_form lane's estimator, **block-bootstrap the
-Moran null** at that length, and add an n-aware practical-significance floor
-(structure must exceed a declared multiple of σ_form, not merely be
-statistically nonzero at n = 10⁵). Never by raising `moran_z_max`. Bootstrap
+83 mm² on this part, and board faces are 66× larger. Fix: **block-bootstrap the
+Moran null** at the waviness correlation length, and add an n-aware
+practical-significance floor (structure must exceed a declared multiple of
+σ_form, not merely be statistically nonzero at n = 10⁵).
+
+**The correlation length is new code, and PR 4 owns it.** The σ_form lane
+supplies amplitudes, not lengths: `_local_scale_estimates` returns the scalar
+pair `(surface_scale, sigma_quadric)` and `_sigma_form` returns a ladder of
+amplitudes against patch radius. Neither is a spatial correlation length, and
+the repo has no estimator that is. So PR 4 scopes one explicitly — the
+empirical semivariogram range of a region's own plane residuals over its mesh
+graph, the length at which the variogram reaches its sill — with its own tests
+against a synthetic correlated field of known length, and it declares that
+length on the record beside the block size derived from it. Reading the σ_form
+ladder as if it were a length is exactly the substitution this design refuses
+elsewhere; taking a block size that nothing measured would put an undeclared
+constant under the one gate the plan is loosening. Never by raising `moran_z_max`. Bootstrap
 block size and replicate count are declared numbers with rationales. Held-out
 and parsimony gates still run unchanged — the bootstrap loosens exactly one
 null, in exactly the direction the physics says the iid assumption is false.
@@ -488,10 +500,12 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
   A surprise in either cancels or reshapes this PR — that is the point.
 - **Files:** `src/fusion_design/mesh_segmentation.py` (cross-cut
   `split(node)`: dual-graph CC at derived ε, argmax families with lateral
-  super-cell, station KDE reusing event machinery, cell×CC intersect, peel
-  driver; datum-bootstrap ladder incl. `datum-unavailable`), spec block with
-  every derivation, tests.
-- **Size:** ~300–400 added.
+  super-cell, **a new 1-D KDE station peak finder** (§4.2 — the existing event
+  helpers merge stations from accepted fits' offsets and answer a different
+  question, so nothing here is a reuse), cell×CC intersect, peel driver;
+  datum-bootstrap ladder incl. `datum-unavailable`), spec block with every
+  derivation, tests including the peak finder's own.
+- **Size:** ~360–460 added (~60 of it the station detector).
 - **Measured claim (gate-independent by design):** the 448,122-triangle group
   splits; board top and bottom emerge as two ~180k-triangle regions, each
   attracting a plane fit whose *offset difference recovers 1.6 ± 0.1 mm*
@@ -506,12 +520,16 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
 
 ### PR 4 — Moran correlated-noise null (block bootstrap)
 
-- **Files:** `src/fusion_design/mesh_fitting.py` (residual-structure gate:
-  block-bootstrap null at the measured waviness correlation length from the
-  σ_form lane; n-aware practical-significance floor; declared
-  `bootstrap_block_length` / `bootstrap_replicates` with rationales), tests
-  with a synthetic correlated-noise fixture.
-- **Size:** ~200–300 added.
+- **Files:** `src/fusion_design/mesh_segmentation.py` — **not**
+  `mesh_fitting.py`: `_moran_i`, the `moran_z_max` declaration and every
+  residual-structure call site are in `mesh_segmentation.py`, and the bootstrap
+  needs that module's topology and stage state (`topo`, `point_indices`,
+  `_Topology.point_neighbours`) besides. Adds the semivariogram correlation-length
+  estimator (§4.4), the block-bootstrap null over the mesh graph, the n-aware
+  practical-significance floor, and declared `bootstrap_block_length` /
+  `bootstrap_replicates` with rationales; `tests/test_mesh_segmentation.py`
+  with a synthetic correlated-noise fixture of known correlation length.
+- **Size:** ~250–350 added (the estimator is ~60 of it).
 - **Sequencing switch:** lands after PR 3 by default; **merges into PR 3's
   cycle if shipment 1's readout shows the 83/31 mm² planes still failing**
   (§5). Never resolves by raising `moran_z_max`.
