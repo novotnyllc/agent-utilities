@@ -70,12 +70,15 @@ RC-built        a live Fusion transaction created the geometry; non-vacuity
 RC-verified     built + deviation accepted + editability proof
 ```
 
-`delivered_area_fraction` is **RC-built's** coverage artifact — a coverage
-number carrying no deviation or editability verdict of its own.
-`RC-verified` is computed only when all three of its gates (built geometry,
-accepted deviation, editability proof) are on the record, and `delivered`
-stays `unmeasured` until §4 Run A's live rebuild — no host-side lane can
-produce it. Corpus
+`delivered` is bound to **one rung: RC-verified** — the goal metric's own
+words ("standing as editable Fusion features") already require the
+editability proof, so `delivered_area_fraction` is RC-verified's artifact
+name and is published only when all three gates (built geometry, accepted
+deviation, editability proof) are on the record. RC-built's coverage-only
+artifact is named **`built_area_fraction`** — a build census with no
+deviation or editability verdict, never published under the `delivered`
+name. `delivered` stays `unmeasured` until §4 Run A's live rebuild — no
+host-side lane can produce either live rung. Corpus
 reporting carries the area-weighted aggregate **and** the macro-average per
 part, the median, and the zero-count — one large easy surface must not hide
 a population of failed parts.

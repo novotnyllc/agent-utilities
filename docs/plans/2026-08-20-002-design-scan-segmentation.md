@@ -997,13 +997,24 @@ length; large bootstrap blocks then normalize away the structure Moran exists
 to reject. PR 4 is respecified:
 
 - **One frozen, candidate-independent correlation record per scan (or per
-  regime).** Estimated from high-confidence evidence only: the high-passed
-  residuals of gate-accepted small regions (the 443-plane population on this
-  part — accepted noise samples regardless of how they were found, the §2.1
-  self-correction argument, now load-bearing here). Directional empirical
-  variograms; under anisotropy the **conservative maximum** range is used.
-  The record `{range(s), sill, source-region ids, estimator params, hash}` is
-  **frozen before any candidate acceptance** and cited by every consumer.
+  regime), from a preliminary calibration phase.** The calibration
+  population is selected **without any correlation-sensitive gate**: small
+  regions passing support floors and a raw residual-magnitude cut only —
+  Moran, held-out and every other consumer of the record play no part in
+  selecting it, so the record never conditions on the null it defines. (The
+  443-plane population on this part is the measured face of what that
+  selection yields — locally flat patches whose high-passed residuals are
+  noise samples, the §2.1 self-correction argument, now load-bearing here.
+  Their small extent bounds the *observable* range; where the sill is not
+  reached within it, the record refuses rather than extrapolates — the
+  `correlation-model-unidentified` outcome below — so small-patch selection
+  can under-observe long-range structure but never silently understate it.)
+  Directional empirical variograms; under anisotropy the **conservative
+  maximum** range is used. The record `{range(s), sill, source-region ids,
+  estimator params, hash}` is **frozen at the end of the calibration phase,
+  before any candidate acceptance**, and cited by every consumer — the
+  phase ordering is what makes PR 4 implementable on a new scan with no
+  prior accepted population.
 - **All four correlation-sensitive consumers read the same record** (decision
   6: yes, one length): (1) Moran bootstrap block size; (2) held-out block
   separation — the fixed ≈ 8 ℓ_med scale of 007 §10.3 is replaced by the

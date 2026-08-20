@@ -843,12 +843,18 @@ blocked PRs name their gate.
 - **Fusion surface:** still none. Extraction and the license's reconstruction
   passes are host-side; the stage ends at the existing pause with a record.
 - **Measured claim (Dig-Next-2, merged head):** assignment record with
-  ≥ 8 things (§7 C1 row); assignment coverage ≥ 0.80; every residual island
-  itemized; **the detection census published** (numerator side; the C
-  denominator comes from the independent human-reviewed evident-things
-  table, per R4 as amended — the acceptance run is scored against that
-  table, not against its own census). 11-part corpus: geometry
-  byte-identical; census lines additive (`things: 0,
+  ≥ 8 **licensed geometric subobjects** — the C-4 floor is geometric-only
+  (`componentized-geometric` candidates under the C1 partition licence, per
+  §0; "things" in this PR's prose means exactly that and nothing stronger);
+  assignment coverage ≥ 0.80; every residual island itemized; **the
+  detection census published** (numerator side; the C denominator comes
+  from the independent human-reviewed evident-things table, per R4 as
+  amended). The **physical C score** is computed separately and
+  status-aware: only detections carrying `physical-thing-evidenced` count,
+  each matched one-to-one to an annotation in the table (unmatched
+  detections and unmatched annotations both enumerated) — a run may pass
+  the geometric floor while headline C is honestly 0. 11-part corpus:
+  geometry byte-identical; census lines additive (`things: 0,
   decomposition-not-triggered` + witness numbers).
 - **Risk:** δ mis-estimation (A4 — visible as band-area growth, a census
   number); detection under-count (the floor-8 acceptance fails → the run's
