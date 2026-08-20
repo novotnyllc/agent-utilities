@@ -66,6 +66,7 @@ scripts/fusion-design plan <manifest>
 scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]
+scripts/fusion-design emit-document-save <manifest> [--document-id <recorded dataFile id>] [-o file.py]
 scripts/fusion-design emit-verification <manifest> [-o file.py]
 scripts/fusion-design emit-capability-probe <manifest> [--probe-spec <probe.json>] [-o file.py]
 scripts/fusion-design emit-mesh-capture <manifest> [-o file.py]

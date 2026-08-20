@@ -356,72 +356,303 @@ def _timeline_health(design):
         "informational": informational,
     }
 
-EXPECTED_COMPONENT_PATHS = json.loads('["00_REFERENCES","00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__USB_C_INSERTION","00_REFERENCES/REF__EKYLIN__PARAMETRIC","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","10_PRODUCT","10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","20_FIXTURES","90_VALIDATION","90_VALIDATION/VAL__PD_FIT_COUPON"]')
+DOCUMENT_ID = json.loads('null')
+DOCUMENT_FOLDER = json.loads('""')
+SAVE_DESCRIPTION = "fusion-parametric-design checkpoint (" + MANIFEST_SHA256[:12] + ")"
+
+
+class DocumentSaveRefused(RuntimeError):
+    """A named refusal: the transaction cannot save safely, and says why."""
+
+    def __init__(self, refusal, detail):
+        self.refusal = refusal
+        self.detail = detail
+        super().__init__(refusal + ": " + json.dumps(detail, sort_keys=True, default=str))
+
+
+def _open_document_by_data_file_id(app, document_id):
+    documents = app.documents
+    for index in range(documents.count):
+        document = documents.item(index)
+        try:
+            data_file = document.dataFile
+        except Exception:
+            # An unsaved open document has no dataFile and cannot be the
+            # recorded one; other people's documents are never touched.
+            continue
+        if data_file and str(getattr(data_file, "id", "")) == document_id:
+            return document
+    return None
+
+
+def _name_match_hints(app):
+    """Open documents whose name matches the manifest target.
+
+    Reported inside a refusal as a hint only, never adopted: names are
+    user-mutable, so a name match is not an identity.
+    """
+    hints = []
+    documents = app.documents
+    for index in range(documents.count):
+        try:
+            name = str(documents.item(index).name)
+        except Exception:
+            continue
+        if _is_target_name(name):
+            hints.append(name)
+    return sorted(hints)
+
+
+def _probe(owner, attribute):
+    """Read a data-API property that may not exist or may itself raise.
+
+    Fusion's data properties raise RuntimeError (not AttributeError) when the
+    backing state is absent -- `Data.activeProject` was measured raising
+    `InternalValidationError` on a live session with three healthy projects --
+    so a bare getattr default is not a probe. Returns (value, error_text).
+    """
+    try:
+        return getattr(owner, attribute), None
+    except Exception as error:
+        return None, str(error)
+
+
+def _resolve_target_folder(app):
+    """The folder a first save writes into.
+
+    The active project's root folder; when Fusion cannot report an active
+    project, the data panel's current folder (`Data.activeFolder`) -- the same
+    default Fusion's own save dialog uses. The manifest's optional
+    ``project.document_folder`` is a "/"-separated path under the project root.
+    Every hop fails closed with a named refusal -- an offline or projectless
+    Fusion must refuse, never silently keep the document Untitled.
+    """
+    data, data_error = _probe(app, "data")
+    if not data:
+        raise DocumentSaveRefused(
+            "data-api-unavailable",
+            {"detail": "app.data is not available; Fusion may be offline.", "error": data_error},
+        )
+    project, project_error = _probe(data, "activeProject")
+    root = None
+    root_error = None
+    if project:
+        root, root_error = _probe(project, "rootFolder")
+    if not root:
+        active_folder, active_folder_error = _probe(data, "activeFolder")
+        if active_folder and not DOCUMENT_FOLDER:
+            return active_folder
+        if active_folder:
+            # A declared folder path is anchored at a project root, so recover
+            # the root through the panel folder's own project.
+            parent_project, parent_error = _probe(active_folder, "parentProject")
+            if parent_project:
+                root, root_error = _probe(parent_project, "rootFolder")
+            else:
+                root_error = parent_error
+        else:
+            root_error = root_error or active_folder_error
+    if not root:
+        raise DocumentSaveRefused(
+            "no-active-project",
+            {
+                "detail": "Fusion reports no active project and no data-panel folder to save into; select a project in the Data panel.",
+                "active_project_error": project_error,
+                "resolution_error": root_error,
+            },
+        )
+    folder = root
+    for segment in [part for part in DOCUMENT_FOLDER.split("/") if part]:
+        try:
+            child = folder.dataFolders.itemByName(segment)
+        except Exception as error:
+            raise DocumentSaveRefused(
+                "folder-not-found",
+                {"segment": segment, "declared_path": DOCUMENT_FOLDER, "error": str(error)},
+            )
+        if not child:
+            raise DocumentSaveRefused(
+                "folder-not-found",
+                {
+                    "segment": segment,
+                    "declared_path": DOCUMENT_FOLDER,
+                    "detail": "Declared project.document_folder segment does not exist; create it in Fusion or correct the manifest.",
+                },
+            )
+        folder = child
+    return folder
+
+
+def _adopt_recorded_document(app):
+    """Reconnect to the recorded document by dataFile id: open wins, then the data API."""
+    document = _open_document_by_data_file_id(app, DOCUMENT_ID)
+    if document is not None:
+        adoption = "adopted-open-document"
+    else:
+        data, _data_error = _probe(app, "data")
+        find_file = getattr(data, "findFileById", None) if data else None
+        if not find_file:
+            raise DocumentSaveRefused(
+                "data-api-unavailable",
+                {
+                    "recorded_data_file_id": DOCUMENT_ID,
+                    "detail": "The recorded document is not open and app.data.findFileById is not available; Fusion may be offline.",
+                },
+            )
+        # Measured live: findFileById raises for a missing id ("3 : file not
+        # found") rather than returning None, and raises the same way when the
+        # data service is unreachable -- so the raw error text is carried in
+        # the refusal, where a deleted document and an offline service read
+        # differently even though the token is one.
+        find_error = None
+        try:
+            data_file = find_file(DOCUMENT_ID)
+        except Exception as error:
+            find_error = str(error)
+            data_file = None
+        if not data_file:
+            raise DocumentSaveRefused(
+                "recorded-document-not-found",
+                {
+                    "recorded_data_file_id": DOCUMENT_ID,
+                    "name_match_hints": _name_match_hints(app),
+                    "error": find_error,
+                    "detail": "No open document and no data item carries the recorded id; read `error` to tell a deleted or moved document from an unreachable data service. Refusing to adopt by name: names are user-mutable.",
+                },
+            )
+        try:
+            document = app.documents.open(data_file, True)
+        except Exception as error:
+            raise DocumentSaveRefused(
+                "open-failed", {"recorded_data_file_id": DOCUMENT_ID, "error": str(error)}
+            )
+        if not document:
+            raise DocumentSaveRefused("open-failed", {"recorded_data_file_id": DOCUMENT_ID})
+        adoption = "opened-recorded-document"
+    if app.activeDocument != document:
+        activate = getattr(document, "activate", None)
+        if not activate:
+            raise DocumentSaveRefused(
+                "activate-unavailable", {"recorded_data_file_id": DOCUMENT_ID}
+            )
+        activate()
+    adsk.doEvents()
+    if app.activeDocument != document:
+        raise DocumentSaveRefused("activate-failed", {"recorded_data_file_id": DOCUMENT_ID})
+    return document, adoption
 
 
 def run(context):
     report_attempted = False
     try:
-        app, design = _active_design()
-        target_document = _require_target_document(app)
-        user_parameters = design.userParameters
-        for index in range(user_parameters.count):
-            _pump_events_periodically(app, design, target_document, index)
-        _pump_events(app, design, target_document)
+        app = adsk.core.Application.get()
+        if DOCUMENT_ID:
+            document, adoption = _adopt_recorded_document(app)
+        else:
+            document = app.activeDocument
+            if not document:
+                raise DocumentSaveRefused("no-active-document", {})
+            adoption = "adopted-active-document"
 
-        # The report snapshot intentionally follows the last event pump.  Do not
-        # retain observations made before a yield: same-document UI edits are valid.
-        parameters = {}
-        for index in range(user_parameters.count):
-            parameter = user_parameters.item(index)
-            parameters[parameter.name] = {
-                "expression": parameter.expression,
-                "units": parameter.unit,
-                "comment": parameter.comment,
-            }
-        component_paths, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(
-            design.rootComponent
-        )
-        bounding_boxes = {}
-        brep_bounding_boxes = {}
-        geometry = {}
-        for path, occurrence in occurrence_map.items():
-            geometry[path] = _body_summary(occurrence)
-            try:
-                bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
-            except Exception as error:
-                bounding_boxes[path] = {"error": str(error)}
-            try:
-                brep_bounding_boxes[path] = _bbox_mm(occurrence)
-            except Exception as error:
-                brep_bounding_boxes[path] = {"error": str(error)}
+        before = _document_saved_state(document)
+        if not DOCUMENT_ID and before.get("is_saved") and not _is_target_name(before.get("name")):
+            raise DocumentSaveRefused(
+                "active-document-not-target",
+                {
+                    "active_document": before.get("name"),
+                    "manifest_target": FUSION_DOCUMENT_NAME,
+                    "detail": "The active document is a different saved document; refusing to adopt or save it. Activate the target document, or pass the recorded document id.",
+                },
+            )
+        if before.get("is_saved") is None:
+            # Fail closed: with isSaved unreadable there is no way to know
+            # whether save or saveAs is the safe operation.
+            raise DocumentSaveRefused("saved-state-unreadable", before)
+        if not before.get("is_saved"):
+            folder = _resolve_target_folder(app)
+            if not document.saveAs(FUSION_DOCUMENT_NAME, folder, SAVE_DESCRIPTION, ""):
+                raise DocumentSaveRefused(
+                    "save-as-failed",
+                    {"name": FUSION_DOCUMENT_NAME, "folder": getattr(folder, "name", None)},
+                )
+            save_action = "saved-as"
+        else:
+            # An unreadable isModified counts as modified: saving a clean
+            # document costs a version, skipping a dirty one costs the work.
+            if getattr(document, "isModified", True):
+                if not document.save(SAVE_DESCRIPTION):
+                    raise DocumentSaveRefused("save-failed", {"name": before.get("name")})
+                save_action = "saved-version"
+            else:
+                save_action = "already-saved"
+        adsk.doEvents()
 
-        # Inventory is a survey, not a gate: it deliberately carries no "ok".
-        # A descriptive snapshot that always said ok:true read as a verdict.
+        # The durable identity is assigned asynchronously: measured live, the
+        # dataFile id immediately after a first save was a local staging path
+        # and became the stable dm.lineage urn only after cloud sync. Wait
+        # briefly for the stable id; a transient one is recorded and flagged,
+        # never silently treated as durable.
+        after = _document_saved_state(document)
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            candidate = after.get("data_file") if isinstance(after.get("data_file"), dict) else None
+            if candidate and str(candidate.get("id") or "").startswith("urn:"):
+                break
+            adsk.doEvents()
+            time.sleep(0.25)
+            after = _document_saved_state(document)
+
+        identity = after.get("data_file") if isinstance(after.get("data_file"), dict) else None
+        failures = []
+        if after.get("is_saved") is not True:
+            failures.append("still-unsaved")
+        if not identity or not identity.get("id"):
+            failures.append("data-file-identity-unreadable")
         report = {
-            "kind": "inventory",
+            "kind": "document-save",
             "project": PROJECT_NAME,
             "manifest_sha256": MANIFEST_SHA256,
-            "document_name": app.activeDocument.name if app.activeDocument else None,
-            "document_saved_state": _document_saved_state(app.activeDocument),
-            "design_type": str(design.designType),
-            "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
-            "parameters": parameters,
-            "component_paths": component_paths,
-            "duplicate_semantic_paths": duplicate_semantic_paths,
-            "missing_expected_components": sorted(set(EXPECTED_COMPONENT_PATHS) - set(component_paths)),
-            "ambiguous_expected_components": sorted(
-                set(EXPECTED_COMPONENT_PATHS).intersection(duplicate_semantic_paths)
+            "recorded_data_file_id": DOCUMENT_ID,
+            "adoption": adoption,
+            "save_action": save_action,
+            "document_name": after.get("name"),
+            "manifest_target_name": FUSION_DOCUMENT_NAME,
+            # A rename is not a failure: the document's identity is its dataFile
+            # id. The mismatch is surfaced so project.fusion_document can be
+            # reconciled before name-bound transactions run.
+            "name_matches_manifest": _is_target_name(after.get("name")),
+            "document_saved_state": after,
+            "data_file": identity,
+            # False means the id is still Fusion's local staging identity (the
+            # save is durable on disk, the *cloud* id is not assigned yet).
+            # Record it provisionally and refresh it from the next checkpoint
+            # save's report; reconnection by a transient id can fail.
+            "data_file_id_stable": bool(
+                identity and str(identity.get("id") or "").startswith("urn:")
             ),
-            "bounding_boxes_mm": bounding_boxes,
-            "brep_bounding_boxes_mm": brep_bounding_boxes,
-            "geometry": geometry,
-            "timeline": _timeline_health(design),
+            "failures": failures,
+            "ok": not failures,
         }
         report_attempted = True
         _emit(report)
+        if failures:
+            raise RuntimeError("Document save did not verify: " + ", ".join(failures))
+    except DocumentSaveRefused as refused:
+        if not report_attempted:
+            report_attempted = True
+            _emit({
+                "kind": "document-save",
+                "project": PROJECT_NAME,
+                "manifest_sha256": MANIFEST_SHA256,
+                "recorded_data_file_id": DOCUMENT_ID,
+                "manifest_target_name": FUSION_DOCUMENT_NAME,
+                "ok": False,
+                "refusal": refused.refusal,
+                "detail": refused.detail,
+            })
+        raise
     except Exception as error:
         if not report_attempted:
             report_attempted = True
-            _emit({"kind": "inventory", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
+            _emit({"kind": "document-save", "ok": False, "error": str(error), "traceback": traceback.format_exc()})
         raise

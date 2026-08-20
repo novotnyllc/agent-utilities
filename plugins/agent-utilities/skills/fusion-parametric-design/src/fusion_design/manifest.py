@@ -152,6 +152,13 @@ class Manifest:
         return str(self.data.get("project", {}).get("fusion_document", ""))
 
     @property
+    def document_folder(self) -> str:
+        """Optional "/"-separated folder path under the active project's root
+        that the document-save transaction saves a new document into. Empty
+        means the project root folder itself."""
+        return str(self.data.get("project", {}).get("document_folder", ""))
+
+    @property
     def parameters(self) -> list[dict[str, Any]]:
         return list(self.data.get("parameters", []))
 
@@ -353,7 +360,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
         _reject_unknown_fields(
             issues,
             project,
-            {"name", "units", "process", "material", "fusion_document"},
+            {"name", "units", "process", "material", "fusion_document", "document_folder"},
             "project",
         )
     for field in ("name", "units", "process", "material", "fusion_document"):
@@ -364,6 +371,23 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                     "project-field-required",
                     f"project.{field}",
                     f"Project field {field!r} must be a non-empty string.",
+                )
+            )
+    if "document_folder" in project:
+        document_folder = project.get("document_folder")
+        # Segments are validated here rather than silently dropped later: the
+        # emitter walks exactly what the manifest declares, so "/Designs/" or
+        # "Designs//Pods" would save somewhere other than what was written.
+        if (
+            not isinstance(document_folder, str)
+            or not document_folder.strip()
+            or any(not segment.strip() for segment in document_folder.split("/"))
+        ):
+            issues.append(
+                ValidationIssue(
+                    "project-field-invalid",
+                    "project.document_folder",
+                    "Project field 'document_folder' must be a '/'-separated folder path with non-empty segments.",
                 )
             )
 

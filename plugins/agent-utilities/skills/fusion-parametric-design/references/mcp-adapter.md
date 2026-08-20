@@ -12,7 +12,7 @@ At session start, discover and record the current tool/resource schemas. Bind to
 | `READ_ACTIVE_DOCUMENT` | Inspect active document/product/design state | Execute the read-only inventory script |
 | `EXECUTE_FUSION_PYTHON` | Run Python in the active Fusion session and return output/errors | No safe modeling fallback; provide script for manual run |
 | `CAPTURE_VIEW` | Return current or requested canvas image | Ask user for a Fusion screenshot |
-| `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | User saves manually before mutation |
+| `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | Run the generated `emit-document-save` transaction through `EXECUTE_FUSION_PYTHON`; only when that too is unavailable, the user saves manually before mutation |
 | `UNDO_REDO` | Undo/redo recent document operations | Restore saved version/checkpoint |
 | `IMPORT_EXPORT` | Import reference data or export manufacturing files | User performs the documented Fusion command |
 | `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | User opens the intended document manually |

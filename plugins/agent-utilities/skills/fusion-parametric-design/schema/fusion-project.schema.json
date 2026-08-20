@@ -47,6 +47,11 @@
         "fusion_document": {
           "type": "string",
           "minLength": 1
+        },
+        "document_folder": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^/]*\\S[^/]*(/[^/]*\\S[^/]*)*$"
         }
       }
     },

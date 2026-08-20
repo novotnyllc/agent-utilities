@@ -42,6 +42,7 @@ from .prusaslicer_project import build_project, resolve_presets
 from .prusaslicer_slice import slice_project
 from .report_diff import diff_reports
 from .scripts import (
+    emit_document_save_script,
     emit_inventory_script,
     emit_parameter_sync_script,
     emit_scaffold_script,
@@ -124,6 +125,13 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     plan = build_plan(load_manifest(args.manifest))
     print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
     return 2 if plan.blocked else 0
+
+
+def _cmd_emit_document_save(args: argparse.Namespace) -> int:
+    _validate_emit_paths(args)
+    manifest = load_manifest(args.manifest)
+    _write_output(emit_document_save_script(manifest, args.document_id), args.output)
+    return 0
 
 
 def _cmd_emit_verification(args: argparse.Namespace) -> int:
@@ -631,6 +639,27 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("manifest")
         command.add_argument("-o", "--output")
         command.set_defaults(handler=lambda args, fn=emitter: _manifest_command(args, fn))
+
+    document_save = subparsers.add_parser(
+        "emit-document-save",
+        help=(
+            "Emit the document save/adopt Fusion Python script: name an unsaved active document "
+            "from the manifest and save it into the resolved project folder, version-checkpoint "
+            "one already saved, or — with --document-id — reconnect to the recorded document by "
+            "dataFile id (open documents first, then the data API), never by name."
+        ),
+    )
+    document_save.add_argument("manifest")
+    document_save.add_argument(
+        "--document-id",
+        help=(
+            "The dataFile id a previous document-save report recorded. With it the transaction "
+            "adopts the open document carrying that id, or locates and opens it through the data "
+            "API; a missing id is a named refusal, and a name match is only ever reported as a hint."
+        ),
+    )
+    document_save.add_argument("-o", "--output")
+    document_save.set_defaults(handler=_cmd_emit_document_save)
 
     emit_verification = subparsers.add_parser(
         "emit-verification",

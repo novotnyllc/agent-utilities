@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from fusion_design.manifest import ManifestValidationError, load_manifest, validate_manifest_data
+from fusion_design.manifest import Manifest, ManifestValidationError, load_manifest, validate_manifest_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +31,18 @@ class ManifestValidationTests(unittest.TestCase):
         data["parameters"][0].pop("source_id")
         issues = validate_manifest_data(data)
         self.assertIn("critical-parameter-missing-source", {issue.code for issue in issues})
+
+    def test_document_folder_is_optional_but_never_blank(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["project"]["document_folder"] = "Designs/Pods"
+        self.assertEqual([], validate_manifest_data(data))
+        self.assertEqual("Designs/Pods", Manifest.from_data(data).document_folder)
+        self.assertEqual("", load_manifest(EXAMPLE).document_folder)
+
+        for invalid in ("", "   ", "/Designs/", "Designs//Pods", "Designs/ /Pods"):
+            data["project"]["document_folder"] = invalid
+            issues = validate_manifest_data(data)
+            self.assertIn("project-field-invalid", {issue.code for issue in issues}, repr(invalid))
 
     def test_parameter_role_requires_prefix(self) -> None:
         data = copy.deepcopy(self.data)
