@@ -873,13 +873,16 @@ partitions and then grade the winner on the evidence that chose it:
    (1 − `split_min_loss_improvement`);
 2. children whose own validation loss improves on the parent's carry ≥
    `split_min_improved_fraction` of the parent's area;
-3. the improvement in (1) exceeds `split_boundary_cost` × (new boundary
-   length / the parent's boundary scale), where the boundary scale is the
-   parent's boundary length or, when that length is zero, **sqrt(parent
-   area)** — a closed connected surface has no boundary, sqrt(area) is its
-   natural perimeter scale, and the root split of a watertight capture must
-   be licensable — so the ratio is always finite; new boundaries are a
-   model cost, paid for in measured improvement, never free;
+3. the **fractional** improvement in (1) — (parent validation loss −
+   area-weighted mean child validation loss) / parent validation loss,
+   dimensionless — exceeds `split_boundary_cost` × (new boundary length /
+   the parent's boundary scale), where the boundary scale is the parent's
+   boundary length or, when that length is zero, **sqrt(parent area)** — a
+   closed connected surface has no boundary, sqrt(area) is its natural
+   perimeter scale, and the root split of a watertight capture must be
+   licensable. Both sides are dimensionless, so mesh units and part scale
+   cannot flip the verdict; new boundaries are a model cost, paid for in
+   measured improvement, never free;
 4. the area-weighted mean in (1) is computed over **all** children — no
    child's loss may be dropped — but only **T1 `terminal-accepted`**
    children count toward the improved fraction in (2) and toward the
@@ -889,6 +892,13 @@ partitions and then grade the winner on the evidence that chose it:
    in a named terminal class" — was vacuous, since every completed child
    lands in one; counting unaccepted children as explanation is the
    confetti mechanism relicensed.)
+
+A proposed child that receives **zero reserved validation triangles** —
+possible because blocks are reserved before the partition and assigned only
+after its boundary is fixed — is **ungradable, by name**: it enters (1) at
+the parent's validation loss and counts as not-improved in (2), the
+conservative substitution under which an ungradable child can never help
+license a split, and the ungradable set is recorded on the split attempt.
 
 New declared thresholds, each `{value, rationale}` through
 `_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,
