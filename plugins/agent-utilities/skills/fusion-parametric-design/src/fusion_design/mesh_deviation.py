@@ -18,6 +18,24 @@ DEVIATION_SPEC_FIELDS = {"source", "reconstruction", "thresholds_mm", "rationale
 
 DEVIATION_THRESHOLD_FIELDS = {"invented_material", "omitted_detail", "percentile_sample_limit"}
 
+# The closed refusal vocabulary for a deviation run.  A run that invents a
+# reason is a run nobody can write a handler for, and the verdict this transaction
+# produces is the one a person quotes when they say the rebuild is faithful.
+DEVIATION_FAILURES = frozenset(
+    {
+        "body-not-found",
+        "deviation-capability",
+        "deviation-comparison-empty",
+        "containment-query-failed",
+        "tessellation-failed",
+        "sign-convention-unestablished",
+        "invented-material",
+        "invented-material-unclassified",
+        "omitted-detail-unclassified",
+        "deviation-frames-differ",
+    }
+)
+
 
 def validate_deviation_spec(spec: Any) -> list[ValidationIssue]:
     """Validate the deviation spec: the two bodies, and the declared thresholds."""
@@ -93,8 +111,15 @@ def emit_mesh_deviation_script(
     """Emit the deviation transaction and its asymmetric, two-directional verdict.
 
     The two directions answer different questions and are never collapsed into
-    one number.  ``PolygonMesh.compareWith`` is preview and API-only; its absence
-    is a fail-closed unsupported result naming the API and the Fusion version.
+    one number.  Both are measured with released, non-preview APIs: the
+    reconstruction's own boundary comes from ``MeshManager.createMeshCalculator``
+    at a declared surface tolerance, the side comes from
+    ``BRepBody.pointContainment``, and the distances are computed here, because
+    Fusion has no point-to-mesh distance query and its point-to-*face* query is
+    untrimmed.  ``PolygonMesh.compareWith`` -- preview, and unavailable to a
+    B-Rep reconstruction because a ``BRepBody``'s mesh is a ``TriangleMesh``,
+    which has no ``compareWith`` -- is kept only as a corroboration path and is
+    never preferred over the native measurement.
     """
     from .scripts import _json_literal, _script_prelude
 
@@ -117,20 +142,59 @@ def emit_mesh_deviation_script(
         "rationale": str(spec["rationale"]).strip(),
     }
 
-    transaction = '''DEVIATION_SPECS = json.loads(__DEVIATION_SPECS__)
+    transaction = '''import math
+
+DEVIATION_SPECS = json.loads(__DEVIATION_SPECS__)
 
 RECONSTRUCTION_TO_SOURCE_QUESTION = (
     "How far does the reconstructed surface sit from the nearest scanned surface? This answers whether "
     "the rebuild stayed on the scan. It says nothing about scanned detail the rebuild never modelled."
 )
 SOURCE_TO_RECONSTRUCTION_QUESTION = (
-    "How far does each scanned point sit from the reconstruction, and is it inside the reconstructed "
-    "solid? This answers whether the rebuild captured what was scanned. It says nothing about material "
-    "the rebuild added where the scan has no points."
+    "How far does each scanned point sit from the reconstruction's boundary, and is it inside or "
+    "outside the reconstructed solid? This answers whether the rebuild captured what was scanned, and "
+    "whether it put material where the scan says the part ends. It says nothing about rebuilt surface "
+    "standing where the scan has no points at all."
+)
+# The convention, stated once and verified in the transaction before it is used.
+CONTAINMENT_CONVENTION = (
+    "A scanned vertex that BRepBody.pointContainment reports INSIDE the reconstruction is a point where "
+    "the reconstruction's material extends past the scanned surface: the rebuild put solid where the "
+    "scan says the part ends. That is invented material. A scanned vertex reported OUTSIDE is a point "
+    "the scan carries and the reconstruction does not reach: omitted detail. PointOnPointContainment is "
+    "neither, and measures zero."
 )
 INVENTED_MEANING = (
     "Rebuilt material outside the source solid is invented geometry, and that is categorically worse "
     "than omitted detail."
+)
+OMITTED_MEANING = (
+    "Scanned detail the rebuild did not model. Advisory: a rebuild models only the geometry the edit "
+    "requires."
+)
+UNSIGNED_DIRECTION_MEANING = (
+    "This direction is unsigned. A rebuilt surface sample far from every scanned surface may be "
+    "invented material or a region the rebuild deliberately simplified, and this measurement does not "
+    "decide which. The invented-material verdict rests on the signed source_to_reconstruction "
+    "measurement, whose sign is verified against this body before it is read."
+)
+UNCLASSIFIED_MEANING = (
+    "No scanned vertex lies inside the reconstruction beyond the threshold, but the reconstruction's "
+    "own tessellation does reach past it from every scanned surface. A scan carries only the vertices "
+    "it captured: material invented *between* two of them leaves each one on the reconstruction's "
+    "boundary, so the signed direction measures zero while the unsigned one does not. That direction "
+    "cannot say whether this is invented material or deliberate simplification, so it does not fail "
+    "the run for invented material -- but it does disprove the absence of it, and the absence is what "
+    "a pass would claim. Classify these samples against a closed source mesh to settle it."
+)
+OMISSION_EXPLAINS_MEANING = (
+    "The reconstruction's own tessellation reaches past the threshold from every scanned surface, "
+    "and no scanned vertex lies inside the reconstruction -- and every one of those samples was "
+    "classified against the source solid by ray parity and lies INSIDE it. A rebuilt surface "
+    "standing where an omitted feature used to be is exactly that, so the omission this run also "
+    "measured accounts for all of them and none of them is invented material. Had one fallen "
+    "outside the source solid the run would have failed closed, which is what stops a large "
+    "omission masking a smaller invention beside it."
 )
 VERDICT_NOTE = (
     "These two numbers answer different questions and neither certifies the other. A small maximum "
@@ -141,14 +205,63 @@ VERDICT_NOTE = (
 
 def _target_component(design, component_path):
     if not component_path:
-        return design.rootComponent, None
+        return design.rootComponent, None, None
     _, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
     if component_path in duplicate_semantic_paths:
-        return None, "duplicate-semantic-path"
+        return None, "duplicate-semantic-path", None
     occurrence = occurrence_map.get(component_path)
     if occurrence is None:
-        return None, "component-path-missing"
-    return occurrence.component, None
+        return None, "component-path-missing", None
+    return occurrence.component, None, occurrence
+
+
+_IDENTITY_MATRIX = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+)
+
+
+def _non_identity_transform(holder, attribute):
+    """``holder.<attribute>`` as a flat matrix when it is not the identity.
+
+    The load-bearing check is the *occurrence's* ``transform2``: a ``MeshBody``
+    or ``BRepBody`` carries no transform of its own on this API, and its
+    position in an assembly comes from the occurrence above it. The body is
+    probed anyway because the probe costs nothing and reads ``None`` where the
+    property is absent, which is every version measured -- a guard that only
+    ever fires if some Fusion does expose one.
+
+    Both sets of coordinates this verdict compares are read in their own body's
+    local frame -- ``PolygonMesh.nodeCoordinates`` and the tessellation of the
+    reconstruction -- and ``BRepBody.pointContainment`` takes points in the
+    body's own frame too. An occurrence transform or a mesh body's own transform
+    puts those frames somewhere else, and nothing here composes them: two
+    occurrences with identical local geometry and different assembly positions
+    would compare as a perfect match, and two physically aligned bodies in
+    different local frames would fail. So a transform that is not the identity
+    is *detected* and refused rather than silently ignored.
+    """
+    matrix = getattr(holder, attribute, None)
+    if matrix is None:
+        return None
+    values = getattr(matrix, "asArray", None)
+    if values is None:
+        return None
+    try:
+        flat = [float(value) for value in values()]
+    except Exception:
+        return None
+    if len(flat) != 16:
+        return flat
+    # A tenth of a micron on the translation terms and 1e-9 on the rest: this
+    # is guarding float noise in a matrix Fusion built, not admitting a shift.
+    for index, (measured, expected) in enumerate(zip(flat, _IDENTITY_MATRIX)):
+        tolerance = 1e-05 if index in (3, 7, 11) else 1e-09
+        if abs(measured - expected) > tolerance:
+            return flat
+    return None
 
 
 def _named_body(component, body_name):
@@ -163,18 +276,14 @@ def _named_body(component, body_name):
     return None, None
 
 
-def _polygon_mesh(body, kind, missing):
-    """The PolygonMesh for a body, or None with the missing API named."""
-    mesh = getattr(body, "mesh", None)
-    if mesh is not None:
-        return mesh
-    manager = getattr(body, "meshManager", None)
-    display = getattr(manager, "displayMeshes", None) if manager is not None else None
-    best = getattr(display, "bestMesh", None) if display is not None else None
-    if best is None:
-        missing.append(kind + ": MeshBody.mesh or BRepBody.meshManager.displayMeshes.bestMesh")
-        return None
-    return best
+def _polygon_mesh(body):
+    """The PolygonMesh for a body, or None.
+
+    Only MeshBody.mesh is a PolygonMesh. Everything a BRepBody offers through its
+    meshManager is a TriangleMesh, which carries no compareWith, which is why the
+    preview comparison can never be the mechanism for a B-Rep reconstruction.
+    """
+    return getattr(body, "mesh", None)
 
 
 def _percentiles(values, limit):
@@ -193,48 +302,6 @@ def _percentiles(values, limit):
     return result, sampled, stride
 
 
-def _node_points_mm(mesh):
-    coordinates = getattr(mesh, "nodeCoordinates", None)
-    if not coordinates:
-        return []
-    return [[point.x * 10.0, point.y * 10.0, point.z * 10.0] for point in coordinates]
-
-
-def _probe_sign_convention(containment_values, distances, floor, outside_enum, inside_enum):
-    """Read compareWith's sign convention off the native containment query.
-
-    Nothing documents which sign means outside, and assuming it is how an
-    inverted convention turns invented material into a pass.  Every source node
-    whose distance clears the floor has an independent inside/outside answer
-    from ``BRepBody.pointContainment``, so the convention is measured, not
-    guessed.  Disagreement -- which is also what unsigned magnitudes look like
-    -- yields ``None`` and no verdict.
-    """
-    tally = {"outside_positive": 0, "outside_negative": 0, "inside_positive": 0, "inside_negative": 0}
-    for index, containment in enumerate(containment_values):
-        if index >= len(distances):
-            break
-        distance = distances[index]
-        if abs(distance) <= floor:
-            continue
-        if containment == outside_enum:
-            side = "outside"
-        elif containment == inside_enum:
-            side = "inside"
-        else:
-            continue
-        tally[side + ("_positive" if distance > 0.0 else "_negative")] += 1
-    positive_outside = tally["outside_positive"] + tally["inside_negative"]
-    negative_outside = tally["outside_negative"] + tally["inside_positive"]
-    tally["samples"] = positive_outside + negative_outside
-    tally["floor_mm"] = floor
-    if positive_outside and not negative_outside:
-        return "positive-is-outside", tally
-    if negative_outside and not positive_outside:
-        return "negative-is-outside", tally
-    return None, tally
-
-
 def _worst(points, distances, threshold, count):
     ranked = sorted(range(len(distances)), key=lambda index: -distances[index])
     worst = []
@@ -246,6 +313,958 @@ def _worst(points, distances, threshold, count):
             entry["point_mm"] = points[index]
         worst.append(entry)
     return worst
+
+
+def _mesh_triangles_mm(mesh):
+    """The source mesh as flat millimetre vertices and flat triangle indices."""
+    coordinates = getattr(mesh, "nodeCoordinates", None) or []
+    indices = getattr(mesh, "triangleNodeIndices", None) or []
+    vertices = []
+    for node in coordinates:
+        vertices.append(node.x * 10.0)
+        vertices.append(node.y * 10.0)
+        vertices.append(node.z * 10.0)
+    return vertices, [int(value) for value in indices]
+
+
+def _median_edge_mm(vertices, triangles):
+    """The median triangle edge of the source mesh, in millimetres.
+
+    This is the scan's own resolution: the reconstruction is sampled at this
+    spacing so the sampling cannot step over a feature the mesh was able to
+    express in the first place.
+    """
+    lengths = []
+    for offset in range(0, len(triangles) - 2, 3):
+        a = triangles[offset] * 3
+        b = triangles[offset + 1] * 3
+        c = triangles[offset + 2] * 3
+        for first, second in ((a, b), (b, c), (c, a)):
+            dx = vertices[first] - vertices[second]
+            dy = vertices[first + 1] - vertices[second + 1]
+            dz = vertices[first + 2] - vertices[second + 2]
+            lengths.append(math.sqrt(dx * dx + dy * dy + dz * dz))
+    if not lengths:
+        return None
+    lengths.sort()
+    return lengths[len(lengths) // 2]
+
+
+def _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
+    """Squared distance from a point to the three edges of a triangle."""
+    best = None
+    for sx, sy, sz, ex, ey, ez in (
+        (ax, ay, az, bx, by, bz),
+        (bx, by, bz, cx, cy, cz),
+        (cx, cy, cz, ax, ay, az),
+    ):
+        ux, uy, uz = ex - sx, ey - sy, ez - sz
+        length_sq = ux * ux + uy * uy + uz * uz
+        if length_sq <= 0.0:
+            t = 0.0
+        else:
+            t = ((px - sx) * ux + (py - sy) * uy + (pz - sz) * uz) / length_sq
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        qx = px - (sx + ux * t)
+        qy = py - (sy + uy * t)
+        qz = pz - (sz + uz * t)
+        value = qx * qx + qy * qy + qz * qz
+        if best is None or value < best:
+            best = value
+    return best
+
+
+def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
+    """Squared distance from a point to a triangle, closed form.
+
+    Ericson's region test: the closest point on a triangle is in its interior, on
+    one of three edges, or at one of three vertices, and each case is decided by
+    the barycentric sign pattern. The degenerate branches are kept because a
+    scanned mesh does carry slivers, and a version that only handled the interior
+    case would silently return the distance to the plane of a sliver instead of
+    to the sliver.
+    """
+    abx = bx - ax
+    aby = by - ay
+    abz = bz - az
+    acx = cx - ax
+    acy = cy - ay
+    acz = cz - az
+    # A zero-area facet is a *segment*, not a vertex, and a scan does carry
+    # them: two coincident corners, or three collinear ones. The region tests
+    # below decide on barycentric signs that a degenerate triangle does not
+    # have, and land on a corner -- for (0,0,0), (0,0,0), (2,0,0) queried at
+    # (1, 0.1, 0) that reports 1.005 where the answer is 0.1, which inflates a
+    # deviation into a false failure. Answered against the three edges instead,
+    # before any of that runs.
+    nx = aby * acz - abz * acy
+    ny = abz * acx - abx * acz
+    nz = abx * acy - aby * acx
+    if nx * nx + ny * ny + nz * nz <= 0.0:
+        return _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz)
+    apx = px - ax
+    apy = py - ay
+    apz = pz - az
+    d1 = abx * apx + aby * apy + abz * apz
+    d2 = acx * apx + acy * apy + acz * apz
+    if d1 <= 0.0 and d2 <= 0.0:
+        return apx * apx + apy * apy + apz * apz
+    bpx = px - bx
+    bpy = py - by
+    bpz = pz - bz
+    d3 = abx * bpx + aby * bpy + abz * bpz
+    d4 = acx * bpx + acy * bpy + acz * bpz
+    if d3 >= 0.0 and d4 <= d3:
+        return bpx * bpx + bpy * bpy + bpz * bpz
+    cpx = px - cx
+    cpy = py - cy
+    cpz = pz - cz
+    d5 = abx * cpx + aby * cpy + abz * cpz
+    d6 = acx * cpx + acy * cpy + acz * cpz
+    if d6 >= 0.0 and d5 <= d6:
+        return cpx * cpx + cpy * cpy + cpz * cpz
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+        denominator = d1 - d3
+        v = d1 / denominator if denominator != 0.0 else 0.0
+        qx = px - (ax + v * abx)
+        qy = py - (ay + v * aby)
+        qz = pz - (az + v * abz)
+        return qx * qx + qy * qy + qz * qz
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+        denominator = d2 - d6
+        w = d2 / denominator if denominator != 0.0 else 0.0
+        qx = px - (ax + w * acx)
+        qy = py - (ay + w * acy)
+        qz = pz - (az + w * acz)
+        return qx * qx + qy * qy + qz * qz
+    va = d3 * d6 - d5 * d4
+    if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+        denominator = (d4 - d3) + (d5 - d6)
+        w = (d4 - d3) / denominator if denominator != 0.0 else 0.0
+        qx = px - (bx + w * (cx - bx))
+        qy = py - (by + w * (cy - by))
+        qz = pz - (bz + w * (cz - bz))
+        return qx * qx + qy * qy + qz * qz
+    denominator = va + vb + vc
+    if denominator == 0.0:
+        return _point_edges_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz)
+    v = vb / denominator
+    w = vc / denominator
+    qx = px - (ax + abx * v + acx * w)
+    qy = py - (ay + aby * v + acy * w)
+    qz = pz - (az + abz * v + acz * w)
+    return qx * qx + qy * qy + qz * qz
+
+
+#: How many fine cells a coarse occupancy cell spans on each axis. Eight is one
+#: byte's worth per axis and a 512x reduction in cells to scan; nothing measured
+#: chose it over four or sixteen, and nothing downstream reads it.
+_COARSE = 8
+
+
+_SAMPLE_DEPTH_CAP = 6
+_SAMPLE_BUDGET = 40000
+#: How many coarse cells one oversized facet may be indexed into before it is
+#: cheaper to measure it on every query than to carry it in the index.
+_OVERSIZED_CELL_CAP = 64
+
+
+def _interior_samples(vertices, triangles, spacing):
+    """Points on these triangles' interiors, and the worst spacing achieved.
+
+    Vertices alone are not a sample of a surface. Two triangulations of the
+    same four points -- a non-coplanar quad split along opposite diagonals --
+    share every vertex and separate in the middle, so a vertex-only comparison
+    measures zero against surfaces that differ by however far the quad is from
+    flat. Each triangle is subdivided at its edge midpoints until its longest
+    edge is within ``spacing``, and the new points are measured beside the
+    vertices.
+
+    Returns ``(points, worst_edge_mm)``. ``worst_edge_mm`` is the longest edge
+    of any sub-triangle the subdivision stopped on: at or below ``spacing`` the
+    sampling met its request, and above it the caller is told by how much
+    rather than left to assume a request it did not get.
+
+    ponytail: midpoint subdivision with a depth cap and a global point budget,
+    not an adaptive triangle-to-triangle bound. Both limits are reported, and a
+    run that hits either says so in its own record instead of quietly measuring
+    coarser than it claims.
+    """
+    out = []
+    worst = 0.0
+    for offset in range(0, len(triangles) - 2, 3):
+        a = triangles[offset] * 3
+        b = triangles[offset + 1] * 3
+        c = triangles[offset + 2] * 3
+        corners = (
+            (vertices[a], vertices[a + 1], vertices[a + 2]),
+            (vertices[b], vertices[b + 1], vertices[b + 2]),
+            (vertices[c], vertices[c + 1], vertices[c + 2]),
+        )
+        stack = [(corners, 0)]
+        while stack:
+            (p0, p1, p2), depth = stack.pop()
+            longest = max(_distance(p0, p1), _distance(p1, p2), _distance(p2, p0))
+            if longest <= spacing:
+                continue
+            if depth >= _SAMPLE_DEPTH_CAP or len(out) >= _SAMPLE_BUDGET:
+                worst = max(worst, longest)
+                continue
+            m01 = _midpoint(p0, p1)
+            m12 = _midpoint(p1, p2)
+            m20 = _midpoint(p2, p0)
+            out.extend((m01, m12, m20))
+            stack.append(((p0, m01, m20), depth + 1))
+            stack.append(((m01, p1, m12), depth + 1))
+            stack.append(((m20, m12, p2), depth + 1))
+            stack.append(((m01, m12, m20), depth + 1))
+    return out, worst
+
+
+def _distance(first, second):
+    return (
+        (first[0] - second[0]) ** 2
+        + (first[1] - second[1]) ** 2
+        + (first[2] - second[2]) ** 2
+    ) ** 0.5
+
+
+def _midpoint(first, second):
+    return (
+        (first[0] + second[0]) / 2.0,
+        (first[1] + second[1]) / 2.0,
+        (first[2] + second[2]) / 2.0,
+    )
+
+
+def _triangle_area_ratio(a, b, c):
+    """Twice this triangle's area over its longest edge squared, or 0.
+
+    A scale-free degeneracy test: zero for a repeated corner and for three
+    distinct collinear ones alike, and unchanged when the whole part is scaled.
+    """
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    longest = max(
+        ux * ux + uy * uy + uz * uz,
+        vx * vx + vy * vy + vz * vz,
+        (b[0] - c[0]) ** 2 + (b[1] - c[1]) ** 2 + (b[2] - c[2]) ** 2,
+    )
+    if longest <= 0.0:
+        return 0.0
+    return (nx * nx + ny * ny + nz * nz) ** 0.5 / longest
+
+
+def _box_distance_sq(box, x, y, z):
+    """Squared distance from a point to an axis-aligned box, zero inside it."""
+    dx = box[0] - x if x < box[0] else (x - box[3] if x > box[3] else 0.0)
+    dy = box[1] - y if y < box[1] else (y - box[4] if y > box[4] else 0.0)
+    dz = box[2] - z if z < box[2] else (z - box[5] if z > box[5] else 0.0)
+    return dx * dx + dy * dy + dz * dz
+
+
+class _TriangleGrid(object):
+    """A uniform grid over the source mesh's triangles, for point-to-mesh distance.
+
+    Fusion has no point-to-mesh distance query at all: measureMinimumDistance
+    rejects a MeshBody ("measurement failed") and a PolygonMesh ("invalid
+    argument"), on a closed mesh as well as an open one, measured on this Fusion.
+    So both directions are computed here, from the same nodeCoordinates and
+    triangleNodeIndices the hash-bound dump is written from, with the stdlib
+    alone -- numpy inside Fusion is a probed capability, and a verdict must not
+    rest on a dependency that can be absent.
+
+    ponytail: uniform grid, not a BVH. Cells are sized off the mesh's own median
+    edge, which is what makes the occupancy even; a BVH only pays for itself on a
+    mesh whose triangle sizes span orders of magnitude, and then only if the grid
+    is measured to be the bottleneck.
+    """
+
+    def __init__(self, vertices, triangles, cell_mm):
+        self.vertices = vertices
+        self.triangles = triangles
+        self.cell = cell_mm
+        self.buckets = {}
+        self.oversized = []
+        self.oversized_boxes = []
+        self.oversized_cells = {}
+        self.oversized_wide = []
+        for offset in range(0, len(triangles) - 2, 3):
+            a = triangles[offset] * 3
+            b = triangles[offset + 1] * 3
+            c = triangles[offset + 2] * 3
+            low_x = min(vertices[a], vertices[b], vertices[c])
+            low_y = min(vertices[a + 1], vertices[b + 1], vertices[c + 1])
+            low_z = min(vertices[a + 2], vertices[b + 2], vertices[c + 2])
+            high_x = max(vertices[a], vertices[b], vertices[c])
+            high_y = max(vertices[a + 1], vertices[b + 1], vertices[c + 1])
+            high_z = max(vertices[a + 2], vertices[b + 2], vertices[c + 2])
+            i0 = int(math.floor(low_x / cell_mm))
+            j0 = int(math.floor(low_y / cell_mm))
+            k0 = int(math.floor(low_z / cell_mm))
+            i1 = int(math.floor(high_x / cell_mm))
+            j1 = int(math.floor(high_y / cell_mm))
+            k1 = int(math.floor(high_z / cell_mm))
+            span = (i1 - i0 + 1) * (j1 - j0 + 1) * (k1 - k0 + 1)
+            # A triangle far larger than the median edge would be copied into
+            # hundreds of cells; those few are checked on every query instead,
+            # which costs a constant and keeps the grid from exploding.
+            if span > 27:
+                self.oversized.append(offset)
+                # Its box, kept beside it -- the ray query prunes against this
+                # -- and its coarse cells, so the distance query can find it
+                # without walking the whole set. A facet spanning more coarse
+                # cells than the cap would cost more to index than to measure,
+                # so those few go in `oversized_wide` and are measured always.
+                self.oversized_boxes.append(
+                    (low_x, low_y, low_z, high_x, high_y, high_z)
+                )
+                ci0, cj0, ck0 = i0 // _COARSE, j0 // _COARSE, k0 // _COARSE
+                ci1, cj1, ck1 = i1 // _COARSE, j1 // _COARSE, k1 // _COARSE
+                spread = (ci1 - ci0 + 1) * (cj1 - cj0 + 1) * (ck1 - ck0 + 1)
+                if spread > _OVERSIZED_CELL_CAP:
+                    self.oversized_wide.append(offset)
+                    continue
+                for ci in range(ci0, ci1 + 1):
+                    for cj in range(cj0, cj1 + 1):
+                        for ck in range(ck0, ck1 + 1):
+                            self.oversized_cells.setdefault((ci, cj, ck), []).append(
+                                offset
+                            )
+                continue
+            for i in range(i0, i1 + 1):
+                for j in range(j0, j1 + 1):
+                    for k in range(k0, k1 + 1):
+                        key = (i, j, k)
+                        if key in self.buckets:
+                            self.buckets[key].append(offset)
+                        else:
+                            self.buckets[key] = [offset]
+
+    def encloses(self, x, y, z):
+        """Is this point inside the closed surface these triangles describe?
+
+        Ray parity along +x, over the grid's own cells so only the triangles in
+        the row are tested rather than every triangle in the mesh. The direction
+        is nudged off the axes because a ray through a shared edge or vertex is
+        counted twice or not at all, and a deterministic nudge makes that
+        vanishingly unlikely instead of merely rare.
+
+        Returns ``None`` when the answer cannot be trusted: an open surface has
+        no inside, and this is the one question where "probably" is not an
+        answer -- the caller fails closed on ``None`` rather than guessing.
+        """
+        if not self.is_closed():
+            # An open surface has no inside. Parity over it counts whatever the
+            # ray happens to meet -- a box missing one face reports every point
+            # beyond the opposite face as inside -- and this is the one question
+            # where a confident wrong side is worse than no side.
+            return None
+        direction = (1.0, 0.00013, 0.00007)
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
+        cell = self.cell
+        cj, ck = int(math.floor(y / cell)), int(math.floor(z / cell))
+        if not (low_j <= cj <= high_j and low_k <= ck <= high_k):
+            return False
+        start_i = max(int(math.floor(x / cell)), low_i) - 1
+        # The off-axis margin comes from the drift, not from a fixed cell. Over
+        # `span` cells of x the nudged ray moves `direction[1] * span` cells in
+        # y and `direction[2] * span` in z; at a 0.1 mm cell on a large part
+        # that passes one cell, and a ray that leaves the row it started in
+        # misses candidates and flips the parity.
+        span = max(high_i - start_i + 2, 0)
+        margin_j = int(math.ceil(direction[1] * span)) + 1
+        margin_k = int(math.ceil(direction[2] * span)) + 1
+        # Only the oversized facets whose box the ray's row can reach. A ray
+        # travelling +x from this cell stays inside the y/z band the margins
+        # above describe, so a facet outside that band cannot be crossed and
+        # does not need a Moller-Trumbore test per query.
+        band_lo_y = (cj - margin_j) * self.cell
+        band_hi_y = (cj + margin_j + 1) * self.cell
+        band_lo_z = (ck - margin_k) * self.cell
+        band_hi_z = (ck + margin_k + 1) * self.cell
+        candidates = {
+            offset
+            for offset, box in zip(self.oversized, self.oversized_boxes)
+            if box[3] >= x
+            and box[1] <= band_hi_y
+            and box[4] >= band_lo_y
+            and box[2] <= band_hi_z
+            and box[5] >= band_lo_z
+        }
+        for i in range(start_i, high_i + 2):
+            for j in range(cj - margin_j, cj + margin_j + 1):
+                for k in range(ck - margin_k, ck + margin_k + 1):
+                    candidates.update(self.buckets.get((i, j, k), ()))
+        crossings = 0
+        for offset in candidates:
+            hit = self._ray_hits(offset, x, y, z, direction)
+            if hit is None:
+                return None
+            crossings += hit
+        return crossings % 2 == 1
+
+    def is_closed(self):
+        """Is every edge of this mesh carried by exactly two triangles?
+
+        Measured once. Parity classification is only meaningful on a closed
+        surface, and the classification decides whether a beyond-threshold
+        sample is invented material or an omission -- so "probably closed" is
+        not an answer this may act on.
+        """
+        if not hasattr(self, "_closed"):
+            # Keyed by exact vertex *position*, not by index. A tessellation
+            # arrives as triangle soup -- each face carrying its own copy of the
+            # corners it shares -- and an index-keyed test would call every one
+            # of them open, which would leave the classification below never
+            # running on a real part.
+            edges = {}
+            v = self.vertices
+            for offset in range(0, len(self.triangles) - 2, 3):
+                corners = []
+                for step in range(3):
+                    base = self.triangles[offset + step] * 3
+                    corners.append((v[base], v[base + 1], v[base + 2]))
+                # A facet with no *area* carries no surface and no adjacency
+                # worth counting -- whether its corners repeat or merely lie on
+                # one line. Either way it contributes one-sided edges, which
+                # called an otherwise closed scan open and sent every reverse
+                # deviation to `unclassified`. The distance and ray paths both
+                # already recognise the collinear case; this one only saw the
+                # repeated one. Scaled by the facet's own size, so the test
+                # means the same thing on a 1 mm part and a 1 m one.
+                if _triangle_area_ratio(*corners) <= 1e-12:
+                    continue
+                for first, second in (
+                    (corners[0], corners[1]),
+                    (corners[1], corners[2]),
+                    (corners[2], corners[0]),
+                ):
+                    key = (first, second) if first <= second else (second, first)
+                    edges[key] = edges.get(key, 0) + 1
+            self._closed = bool(edges) and all(count == 2 for count in edges.values())
+        return self._closed
+
+    def _ray_hits(self, offset, x, y, z, direction):
+        """1 when the ray from (x, y, z) crosses this triangle, else 0.
+
+        Moller-Trumbore. ``None`` when the ray grazes the triangle's plane or
+        passes within float noise of an edge, where the parity count would be
+        arbitrary.
+        """
+        a = self.triangles[offset] * 3
+        b = self.triangles[offset + 1] * 3
+        c = self.triangles[offset + 2] * 3
+        v = self.vertices
+        e1 = (v[b] - v[a], v[b + 1] - v[a + 1], v[b + 2] - v[a + 2])
+        e2 = (v[c] - v[a], v[c + 1] - v[a + 1], v[c + 2] - v[a + 2])
+        px = direction[1] * e2[2] - direction[2] * e2[1]
+        py = direction[2] * e2[0] - direction[0] * e2[2]
+        pz = direction[0] * e2[1] - direction[1] * e2[0]
+        det = e1[0] * px + e1[1] * py + e1[2] * pz
+        scale = max(abs(e1[0]), abs(e1[1]), abs(e1[2]), abs(e2[0]), abs(e2[1]), abs(e2[2]), 1.0)
+        # A facet with no area is crossed by nothing. Told apart from a ray
+        # grazing a real triangle's plane, which is the `None` below: that one
+        # is a question this cannot answer, and a sliver is a facet with no
+        # answer to give -- reading it as unanswerable would make a scan
+        # carrying one unclassifiable, which is what the closure test above
+        # stopped doing for the same reason.
+        nx = e1[1] * e2[2] - e1[2] * e2[1]
+        ny = e1[2] * e2[0] - e1[0] * e2[2]
+        nz = e1[0] * e2[1] - e1[1] * e2[0]
+        if abs(nx) + abs(ny) + abs(nz) <= 1e-12 * scale * scale:
+            return 0
+        if abs(det) <= 1e-12 * scale * scale:
+            return None
+        inverse = 1.0 / det
+        t0 = (x - v[a], y - v[a + 1], z - v[a + 2])
+        u = (t0[0] * px + t0[1] * py + t0[2] * pz) * inverse
+        qx = t0[1] * e1[2] - t0[2] * e1[1]
+        qy = t0[2] * e1[0] - t0[0] * e1[2]
+        qz = t0[0] * e1[1] - t0[1] * e1[0]
+        w = (direction[0] * qx + direction[1] * qy + direction[2] * qz) * inverse
+        if min(u, w, 1.0 - u - w) < -1e-09:
+            return 0
+        if min(abs(u), abs(w), abs(1.0 - u - w)) <= 1e-09:
+            # On an edge: the parity of a ray through a shared edge depends on
+            # which of the two triangles rounds it in, so there is no answer.
+            return None
+        distance = (e2[0] * qx + e2[1] * qy + e2[2] * qz) * inverse
+        return 1 if distance > 1e-09 else 0
+
+    def _coarse_occupancy(self):
+        if not hasattr(self, "_coarse"):
+            self._coarse = {
+                (i // _COARSE, j // _COARSE, k // _COARSE) for (i, j, k) in self.buckets
+            }
+            self._coarse_floors = {}
+        return self._coarse
+
+    def _triangle_distance_sq(self, offset, x, y, z):
+        a = self.triangles[offset] * 3
+        b = self.triangles[offset + 1] * 3
+        c = self.triangles[offset + 2] * 3
+        vertices = self.vertices
+        return _point_triangle_distance_sq(
+            x,
+            y,
+            z,
+            vertices[a],
+            vertices[a + 1],
+            vertices[a + 2],
+            vertices[b],
+            vertices[b + 1],
+            vertices[b + 2],
+            vertices[c],
+            vertices[c + 1],
+            vertices[c + 2],
+        )
+
+    def _oversized_reach(self, ci, cj, ck):
+        """How many coarse rings out the oversized index can still hold anything."""
+        if not hasattr(self, "_oversized_box"):
+            keys = list(self.oversized_cells)
+            self._oversized_box = (
+                min(key[0] for key in keys),
+                min(key[1] for key in keys),
+                min(key[2] for key in keys),
+                max(key[0] for key in keys),
+                max(key[1] for key in keys),
+                max(key[2] for key in keys),
+            )
+        low_i, low_j, low_k, high_i, high_j, high_k = self._oversized_box
+        return max(
+            abs(ci - low_i), abs(ci - high_i),
+            abs(cj - low_j), abs(cj - high_j),
+            abs(ck - low_k), abs(ck - high_k),
+        )
+
+    def nearest_mm(self, x, y, z):
+        """Distance from a point to the nearest triangle, or None on an empty mesh."""
+        best = None
+        # Oversized facets, from the coarse index rather than by scanning them
+        # all: they are bucketed once at construction over the same coarse grid
+        # the ring floor uses, so a query walks outward from its own coarse cell
+        # and stops as soon as the shell's own lower bound cannot beat the best
+        # exact distance found. Sorting the whole set per sample -- which is
+        # what the first prune did -- is O(K log K) on every one of Q samples,
+        # and a nonuniform production mesh makes K a large fraction of the
+        # facets. The few that span more coarse cells than the index will hold
+        # are kept in `oversized_wide` and measured every time, which is the
+        # constant this trades for.
+        for offset in self.oversized_wide:
+            value = self._triangle_distance_sq(offset, x, y, z)
+            if best is None or value < best:
+                best = value
+        if self.oversized_cells:
+            coarse = self.cell * _COARSE
+            ci = int(math.floor(x / coarse))
+            cj = int(math.floor(y / coarse))
+            ck = int(math.floor(z / coarse))
+            seen: set[int] = set()
+            ring = 0
+            while ring <= self._oversized_reach(ci, cj, ck):
+                if ring > 0 and best is not None:
+                    lower = (ring - 1) * coarse
+                    if lower > 0.0 and best <= lower * lower:
+                        break
+                for i in range(ci - ring, ci + ring + 1):
+                    for j in range(cj - ring, cj + ring + 1):
+                        for k in range(ck - ring, ck + ring + 1):
+                            if (
+                                ring > 0
+                                and abs(i - ci) != ring
+                                and abs(j - cj) != ring
+                                and abs(k - ck) != ring
+                            ):
+                                continue
+                            for offset in self.oversized_cells.get((i, j, k), ()):
+                                if offset in seen:
+                                    continue
+                                seen.add(offset)
+                                value = self._triangle_distance_sq(offset, x, y, z)
+                                if best is None or value < best:
+                                    best = value
+                ring += 1
+        if not self.buckets:
+            return None if best is None else math.sqrt(best)
+        cell = self.cell
+        ci = int(math.floor(x / cell))
+        cj = int(math.floor(y / cell))
+        ck = int(math.floor(z / cell))
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
+        # Every occupied cell lies in this box, so a ring below the box's own
+        # Chebyshev distance is empty by construction and a ring above it meets
+        # the box only where the two overlap. Without both, one query on a
+        # displaced reconstruction walks the empty space between the bodies cell
+        # by cell: at a 0.1 mm cell and 100 mm of displacement that is a
+        # thousand shells of up to 24 million lookups each, inside a transaction
+        # Fusion runs this for every node.
+        ring = max(
+            0, low_i - ci, ci - high_i, low_j - cj, cj - high_j, low_k - ck, ck - high_k
+        )
+        # The box bounds the *outside*. A point deep inside a hollow body is
+        # inside the box and still far from every surface bucket -- a smaller
+        # reconstruction enclosed by a dense scan is the case -- and the walk
+        # would enumerate the empty interior shell by shell just the same. The
+        # coarse occupancy below gives a lower bound on where anything can be.
+        ring = max(ring, self._coarse_floor(ci, cj, ck))
+        # Everything in the grid is inside this many rings of the query cell, so
+        # the loop terminates even for a point far outside the mesh.
+        limit = self._ring_limit(ci, cj, ck)
+        while True:
+            # A cell in ring r is at least (r - 1) cells away from the query
+            # point, which sits somewhere inside ring 0. Stop as soon as that
+            # lower bound cannot beat the best triangle already found.
+            if ring > 0 and best is not None:
+                lower = (ring - 1) * cell
+                if lower > 0.0 and best <= lower * lower:
+                    break
+            if ring > limit:
+                break
+            for i in range(max(ci - ring, low_i), min(ci + ring, high_i) + 1):
+                for j in range(max(cj - ring, low_j), min(cj + ring, high_j) + 1):
+                    for k in range(max(ck - ring, low_k), min(ck + ring, high_k) + 1):
+                        if ring > 0 and abs(i - ci) != ring and abs(j - cj) != ring and abs(k - ck) != ring:
+                            continue
+                        bucket = self.buckets.get((i, j, k))
+                        if not bucket:
+                            continue
+                        for offset in bucket:
+                            value = self._triangle_distance_sq(offset, x, y, z)
+                            if best is None or value < best:
+                                best = value
+            ring += 1
+        return None if best is None else math.sqrt(best)
+
+    def _coarse_floor(self, ci, cj, ck):
+        """A fine-ring lower bound from a coarse occupancy map, memoized.
+
+        Occupied fine cells are collapsed onto a grid _COARSE times wider, so
+        the nearest occupied coarse cell is found by scanning a set some
+        hundreds of entries long rather than by walking shells. A coarse cell at
+        Chebyshev distance D holds nothing nearer than (D - 1) * _COARSE fine
+        cells, which is the bound returned.
+
+        ponytail: a one-level overlay and a linear scan of it, not a BVH. The
+        scan is memoized per coarse query cell, and queries on a tessellation
+        cluster; if a mesh ever makes this the measured bottleneck, the upgrade
+        is a second overlay level rather than a different structure.
+        """
+        coarse = self._coarse_occupancy()
+        key = (ci // _COARSE, cj // _COARSE, ck // _COARSE)
+        cached = self._coarse_floors.get(key)
+        if cached is not None:
+            return cached
+        # A query whose own coarse neighbourhood is occupied bounds nothing
+        # away, and that is where a dense scan's samples are: on the surface.
+        # Twenty-seven set lookups settle it, where the scan below reaches the
+        # same answer by walking the coarse set in arbitrary order -- once per
+        # distinct query cell, which made it quadratic in the occupied coarse
+        # cells on exactly the meshes that have the most of them.
+        if any(
+            (key[0] + di, key[1] + dj, key[2] + dk) in coarse
+            for di in (-1, 0, 1)
+            for dj in (-1, 0, 1)
+            for dk in (-1, 0, 1)
+        ):
+            self._coarse_floors[key] = 0
+            return 0
+        nearest = None
+        for i, j, k in coarse:
+            distance = max(abs(i - key[0]), abs(j - key[1]), abs(k - key[2]))
+            if nearest is None or distance < nearest:
+                nearest = distance
+                if nearest <= 1:
+                    break
+        floor = 0 if nearest is None or nearest <= 1 else (nearest - 1) * _COARSE
+        self._coarse_floors[key] = floor
+        return floor
+
+    def _extent_box(self):
+        """The occupied cells' bounding box, measured once."""
+        if not hasattr(self, "_extent"):
+            keys = list(self.buckets)
+            self._extent = (
+                min(key[0] for key in keys),
+                min(key[1] for key in keys),
+                min(key[2] for key in keys),
+                max(key[0] for key in keys),
+                max(key[1] for key in keys),
+                max(key[2] for key in keys),
+            )
+        return self._extent
+
+    def _ring_limit(self, ci, cj, ck):
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
+        return max(
+            abs(ci - low_i), abs(ci - high_i),
+            abs(cj - low_j), abs(cj - high_j),
+            abs(ck - low_k), abs(ck - high_k),
+        ) + 1
+
+
+def _tessellate(body, max_side_mm, surface_tolerance_mm, record):
+    """The reconstruction's own boundary, as triangles, at a declared tolerance.
+
+    Fusion answers no distance question this verdict can use. measureMinimumDistance
+    against a *body* returns zero for every interior point -- which is exactly the
+    invented-material case -- and against a *face* it measures the underlying
+    untrimmed surface: on this Fusion, a point 3 mm inside the hole of an annular
+    top face measures 0.0 mm to that face. Both were measured, not assumed. Against
+    a MeshBody or a PolygonMesh it refuses outright.
+
+    So the reconstruction is tessellated instead, at a surface tolerance derived
+    from the invented-material threshold and recorded, and every distance below is
+    computed against those triangles. The tessellation is an approximation of the
+    exact B-Rep and is bounded by that tolerance; the achieved tolerance Fusion
+    reports back is recorded beside the requested one so the reader knows what the
+    numbers stand for.
+    """
+    manager = body.meshManager
+    calculator = manager.createMeshCalculator()
+    calculator.surfaceTolerance = surface_tolerance_mm / 10.0
+    calculator.maxSideLength = max_side_mm / 10.0
+    mesh = calculator.calculate()
+    flat = getattr(mesh, "nodeCoordinatesAsDouble", None)
+    if flat:
+        vertices = [value * 10.0 for value in flat]
+    else:
+        vertices = []
+        for node in mesh.nodeCoordinates:
+            vertices.append(node.x * 10.0)
+            vertices.append(node.y * 10.0)
+            vertices.append(node.z * 10.0)
+    triangles = [int(value) for value in mesh.nodeIndices]
+    # TriangleMesh.surfaceTolerance raises InternalValidationError on this Fusion
+    # rather than answering, so the achieved tolerance is recorded as unreported
+    # rather than as the requested value. A cap we asked for is not a cap we saw
+    # honoured, and writing the request into the "achieved" slot would say it was.
+    achieved = None
+    achieved_error = None
+    try:
+        reported = mesh.surfaceTolerance
+    except Exception as error:
+        achieved_error = str(error)
+    else:
+        achieved = None if reported is None else reported * 10.0
+    record.update(
+        {
+            "api": "MeshManager.createMeshCalculator",
+            "requested_surface_tolerance_mm": surface_tolerance_mm,
+            "surface_tolerance_source": (
+                "one tenth of the declared invented_material threshold: the tessellation "
+                "must not contribute a tenth of the deviation it is used to measure"
+            ),
+            "achieved_surface_tolerance_mm": achieved,
+            "achieved_surface_tolerance_error": achieved_error,
+            "max_side_length_mm": max_side_mm,
+            "max_side_length_source": "median triangle edge of the source mesh",
+            "triangle_count": len(triangles) // 3,
+            "node_count": len(vertices) // 3,
+            "meaning": (
+                "The reconstruction's boundary is measured through this tessellation, not "
+                "through its exact surfaces. Every number in both directions carries the "
+                "surface tolerance as its floor -- the achieved one where Fusion reports it, "
+                "and otherwise the requested one, which is a cap asked for rather than a cap "
+                "seen honoured."
+            ),
+        }
+    )
+    return vertices, triangles
+
+
+def _largest_triangle(vertices, triangles):
+    """The biggest non-degenerate tessellation facet, with its inradius.
+
+    The straddle probe steps off this facet's centroid, and the inradius is how
+    far it can step before a neighbouring facet becomes the nearer boundary. The
+    step is chosen from that inradius by the caller rather than from the
+    declared threshold: the probe proves which enum means *inside*, which is a
+    question about sign and not about magnitude. Tying it to the threshold made
+    verification impossible on exactly the captures this is for -- ``_tessellate``
+    caps each side at the source's median edge, a triangle's inradius is at most
+    about 0.289 of its longest side, so demanding twice the threshold refused
+    every facet as soon as the declared threshold reached about 14.5% of the
+    median edge, and every such run failed `sign-convention-unestablished`.
+    """
+    best = None
+    for offset in range(0, len(triangles) - 2, 3):
+        a = triangles[offset] * 3
+        b = triangles[offset + 1] * 3
+        c = triangles[offset + 2] * 3
+        ux = vertices[b] - vertices[a]
+        uy = vertices[b + 1] - vertices[a + 1]
+        uz = vertices[b + 2] - vertices[a + 2]
+        vx = vertices[c] - vertices[a]
+        vy = vertices[c + 1] - vertices[a + 1]
+        vz = vertices[c + 2] - vertices[a + 2]
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if length <= 0.0:
+            continue
+        area = length / 2.0
+        perimeter = 0.0
+        for first, second in ((a, b), (b, c), (c, a)):
+            dx = vertices[first] - vertices[second]
+            dy = vertices[first + 1] - vertices[second + 1]
+            dz = vertices[first + 2] - vertices[second + 2]
+            perimeter += math.sqrt(dx * dx + dy * dy + dz * dz)
+        if perimeter <= 0.0:
+            continue
+        inradius = 2.0 * area / perimeter
+        if inradius <= 0.0:
+            continue
+        if best is None or area > best[0]:
+            centroid = [
+                (vertices[a] + vertices[b] + vertices[c]) / 3.0,
+                (vertices[a + 1] + vertices[b + 1] + vertices[c + 1]) / 3.0,
+                (vertices[a + 2] + vertices[b + 2] + vertices[c + 2]) / 3.0,
+            ]
+            best = (area, centroid, [nx / length, ny / length, nz / length], inradius)
+    return best
+
+
+def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, enums):
+    """Verify inside/outside end to end on this body before any verdict reads it.
+
+    Nothing in the API documentation ties PointInsidePointContainment to the side
+    of the surface a person means by "inside", and the whole asymmetric verdict --
+    invented material a failure, omitted detail advisory -- turns on that mapping.
+    An inverted convention would report invented material as omitted detail and
+    pass. So it is measured, on the actual reconstruction, against two answers
+    known by construction:
+
+    * a point pushed a full bounding-box diagonal beyond the body's own bounding
+      box is outside any solid, whatever the enum happens to be named;
+    * a point stepped epsilon along a tessellation facet's normal and a point
+      stepped epsilon against it straddle that facet, so one must read inside and
+      the other outside -- and both must measure epsilon from the boundary by the
+      same point-to-triangle code the verdict itself uses.
+
+    Only when all of that reproduces does the verdict read a side.
+    """
+    inside_enum, outside_enum, on_enum = enums
+    # One percent of the step, with an absolute floor a thousand times below any
+    # geometric meaning: the identity being checked is exact for a planar facet,
+    # so the tolerance is only guarding float noise, not admitting a wrong answer.
+    evidence = {
+        "epsilon_mm": epsilon_mm,
+        "convention": CONTAINMENT_CONVENTION,
+    }
+    box = body.boundingBox
+    low = box.minPoint
+    high = box.maxPoint
+    diagonal = math.sqrt(
+        (high.x - low.x) ** 2 + (high.y - low.y) ** 2 + (high.z - low.z) ** 2
+    )
+    far = adsk.core.Point3D.create(
+        high.x + diagonal + 1.0, high.y + diagonal + 1.0, high.z + diagonal + 1.0
+    )
+    evidence["far_point_mm"] = [far.x * 10.0, far.y * 10.0, far.z * 10.0]
+    evidence["far_point_reads_outside"] = body.pointContainment(far) == outside_enum
+    evidence["on_boundary_enum_present"] = on_enum is not None
+    facet = _largest_triangle(vertices, triangles)
+    if facet is None:
+        evidence["rejected"] = (
+            "The reconstruction's tessellation carries no facet with a positive inradius, so the "
+            "probe has nothing to straddle."
+        )
+        return False, evidence
+    _, centroid, normal, inradius = facet
+    # Half the inradius, and never more than the declared threshold: far enough
+    # inside the facet that no neighbour is the nearer boundary, and no further
+    # out than the distance the verdict itself cares about. The probe is a
+    # question about *sign*, so this is a facet-derived step rather than a
+    # threshold-sized one -- see `_largest_triangle`.
+    step_mm = min(epsilon_mm, inradius / 2.0)
+    # Halved until the two points straddle, or until there is nothing left to
+    # halve. A body thinner than the step has its far wall crossed by the
+    # inward point, which lands outside again -- both points read outside and a
+    # faithful reconstruction is refused for a step nobody chose against its
+    # wall thickness. The step is bounded above by the facet and the declared
+    # threshold and below by the point at which it stops meaning anything.
+    attempts = []
+    for _halving in range(20):
+        step = step_mm / 10.0
+        forward = adsk.core.Point3D.create(
+            centroid[0] / 10.0 + normal[0] * step,
+            centroid[1] / 10.0 + normal[1] * step,
+            centroid[2] / 10.0 + normal[2] * step,
+        )
+        backward = adsk.core.Point3D.create(
+            centroid[0] / 10.0 - normal[0] * step,
+            centroid[1] / 10.0 - normal[1] * step,
+            centroid[2] / 10.0 - normal[2] * step,
+        )
+        forward_containment = body.pointContainment(forward)
+        backward_containment = body.pointContainment(backward)
+        attempts.append(step_mm)
+        if sorted([forward_containment, backward_containment]) == sorted(
+            [inside_enum, outside_enum]
+        ):
+            break
+        if step_mm <= 1e-06:
+            break
+        step_mm /= 2.0
+    evidence["probe_step_mm"] = step_mm
+    evidence["probe_steps_tried_mm"] = attempts
+    evidence["tolerance_mm"] = max(0.01 * step_mm, 1e-6)
+    probe = {
+        "facet_centroid_mm": centroid,
+        "facet_normal": normal,
+        "facet_inradius_mm": inradius,
+        "forward_reads_inside": forward_containment == inside_enum,
+        "backward_reads_inside": backward_containment == inside_enum,
+    }
+    evidence["straddle_probe"] = probe
+    if sorted([forward_containment, backward_containment]) != sorted([inside_enum, outside_enum]):
+        probe["rejected"] = (
+            "the two offset points did not straddle the facet at any step down to "
+            + str(step_mm)
+            + " mm"
+        )
+        return False, evidence
+    if forward_containment == inside_enum:
+        inside_point, outside_point = forward, backward
+    else:
+        inside_point, outside_point = backward, forward
+    inside_distance = grid.nearest_mm(
+        inside_point.x * 10.0, inside_point.y * 10.0, inside_point.z * 10.0
+    )
+    outside_distance = grid.nearest_mm(
+        outside_point.x * 10.0, outside_point.y * 10.0, outside_point.z * 10.0
+    )
+    probe["inside_point_mm"] = [
+        inside_point.x * 10.0, inside_point.y * 10.0, inside_point.z * 10.0
+    ]
+    probe["outside_point_mm"] = [
+        outside_point.x * 10.0, outside_point.y * 10.0, outside_point.z * 10.0
+    ]
+    probe["inside_measured_mm"] = inside_distance
+    probe["outside_measured_mm"] = outside_distance
+    tolerance = evidence["tolerance_mm"]
+    if inside_distance is None or outside_distance is None:
+        probe["rejected"] = "the point-to-triangle measurement returned nothing"
+        return False, evidence
+    if (
+        abs(inside_distance - step_mm) > tolerance
+        or abs(outside_distance - step_mm) > tolerance
+    ):
+        probe["rejected"] = "a point stepped off the boundary did not measure that step back to it"
+        return False, evidence
+    if not evidence["far_point_reads_outside"]:
+        probe["rejected"] = "a point far beyond the bounding box did not read outside"
+        return False, evidence
+    probe["accepted"] = True
+    return True, evidence
 
 
 def run(context):
@@ -267,13 +1286,20 @@ def run(context):
             "mesh_source": DEVIATION_SPECS["mesh_source"],
             "declared_thresholds_mm": thresholds,
             "threshold_rationale": DEVIATION_SPECS["rationale"],
-            "preview_apis": ["PolygonMesh.compareWith"],
+            "measurement_apis": [
+                "BRepBody.pointContainment",
+                "MeshManager.createMeshCalculator (TriangleMeshCalculator)",
+                "PolygonMesh.nodeCoordinates / triangleNodeIndices",
+            ],
+            "preview_apis": [],
             "failures": [],
             "verdict_note": VERDICT_NOTE,
         }
 
-        source_component, source_error = _target_component(design, DEVIATION_SPECS["source"]["component_path"])
-        recon_component, recon_error = _target_component(
+        source_component, source_error, source_occurrence = _target_component(
+            design, DEVIATION_SPECS["source"]["component_path"]
+        )
+        recon_component, recon_error, recon_occurrence = _target_component(
             design, DEVIATION_SPECS["reconstruction"]["component_path"]
         )
         if source_component is None or recon_component is None:
@@ -297,38 +1323,80 @@ def run(context):
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: body-not-found")
 
+        # Both sides are read in their own body's local frame and the
+        # containment query takes points in the reconstruction's. Nothing here
+        # composes an occurrence transform or a mesh body's own transform, so a
+        # non-identity one is named and refused rather than quietly measured
+        # across two unrelated coordinate systems.
+        frames = {
+            "source_occurrence_transform": _non_identity_transform(source_occurrence, "transform2"),
+            "source_body_transform": _non_identity_transform(source_body, "transform"),
+            "reconstruction_occurrence_transform": _non_identity_transform(
+                recon_occurrence, "transform2"
+            ),
+            "reconstruction_body_transform": _non_identity_transform(recon_body, "transform"),
+        }
+        if any(value is not None for value in frames.values()):
+            report["failures"] = ["deviation-frames-differ"]
+            report["frames"] = frames
+            report["unsupported"] = (
+                "One of the two bindings resolves through a transform this transaction does not "
+                "compose: node coordinates, the reconstruction's tessellation and "
+                "BRepBody.pointContainment are each read in their own body's local frame, so a "
+                "non-identity occurrence or body transform would have them compared across "
+                "unrelated coordinate systems -- two identical parts in different assembly "
+                "positions reading as a perfect match. The matrices are recorded above. Bind both "
+                "bodies in a frame where they are already coincident, or ground the occurrence."
+            )
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError("Deviation verdict failed closed: deviation-frames-differ")
+
+        # Every capability below is hard. A missing one that read as a default
+        # would turn "we could not look" into "we looked and found nothing", and
+        # the verdict this transaction emits is the one a person quotes.
         missing = []
-        source_mesh = _polygon_mesh(source_body, "source", missing)
-        recon_mesh = _polygon_mesh(recon_body, "reconstruction", missing)
-        for label, mesh in (("source", source_mesh), ("reconstruction", recon_mesh)):
-            if mesh is not None and not hasattr(mesh, "compareWith"):
-                missing.append("PolygonMesh.compareWith (" + label + ")")
-        # Containment is the only evidence here that does not rest on compareWith's
-        # sign, and it is what establishes that sign. It is a hard capability, never
-        # a conditional: a missing enum must not read as "nothing was outside".
+        source_mesh = _polygon_mesh(source_body)
+        if source_mesh is None:
+            missing.append("MeshBody.mesh (source must be a MeshBody carrying a PolygonMesh)")
+        else:
+            if not (getattr(source_mesh, "nodeCoordinates", None) or []):
+                missing.append("PolygonMesh.nodeCoordinates (source)")
+            if not (getattr(source_mesh, "triangleNodeIndices", None) or []):
+                missing.append("PolygonMesh.triangleNodeIndices (source)")
         if recon_kind != "bRepBodies":
             missing.append("reconstruction must be a BRepBody for BRepBody.pointContainment")
         elif getattr(recon_body, "pointContainment", None) is None:
             missing.append("BRepBody.pointContainment")
-        if not (getattr(source_mesh, "nodeCoordinates", None) or []):
-            missing.append("PolygonMesh.nodeCoordinates (source)")
-        if not fusion_version:
-            missing.append("Application.version")
         containment_enum = getattr(adsk.fusion, "PointContainment", None)
-        for name in ("PointOutsidePointContainment", "PointInsidePointContainment"):
+        for name in (
+            "PointOutsidePointContainment",
+            "PointInsidePointContainment",
+            "PointOnPointContainment",
+        ):
             if getattr(containment_enum, name, None) is None:
                 missing.append("adsk.fusion.PointContainment." + name)
+        mesh_manager = getattr(recon_body, "meshManager", None)
+        if recon_kind == "bRepBodies":
+            if mesh_manager is None:
+                missing.append("BRepBody.meshManager")
+            elif getattr(mesh_manager, "createMeshCalculator", None) is None:
+                missing.append("MeshManager.createMeshCalculator")
+        if not fusion_version:
+            missing.append("Application.version")
         if missing:
             report["failures"] = ["deviation-capability"]
             report["missing_capabilities"] = missing
             report["unsupported"] = (
-                "PolygonMesh.compareWith is the only API-level deviation mechanism in Fusion; Mesh "
-                "Section Sketch and Fit Curves are UI-only and cannot be scripted. compareWith is a "
-                "preview API (July 2026), and BRepBody.pointContainment is what establishes its sign "
-                "convention. Fusion version "
+                "This verdict is measured with released APIs: MeshManager.createMeshCalculator for "
+                "the reconstruction's boundary at a declared surface tolerance, and "
+                "BRepBody.pointContainment for the side. Mesh Section Sketch and Fit Curves are "
+                "UI-only and cannot be scripted, and PolygonMesh.compareWith -- the preview "
+                "comparison -- cannot grade a B-Rep reconstruction at all, because a BRepBody's mesh "
+                "is a TriangleMesh and TriangleMesh has no compareWith. Fusion version "
                 + str(fusion_version)
-                + " as connected does not expose all of them, so no deviation verdict is available "
-                "and none is invented."
+                + " as connected does not expose all of the required APIs, so no deviation verdict is "
+                "available and none is invented."
             )
             report_attempted = True
             _emit(report)
@@ -336,185 +1404,543 @@ def run(context):
                 "Deviation verdict unsupported on this Fusion: missing " + ", ".join(missing)
             )
 
-        try:
-            recon_to_source = [value * 10.0 for value in recon_mesh.compareWith(source_mesh, None, None)]
-            source_to_recon = [value * 10.0 for value in source_mesh.compareWith(recon_mesh, None, None)]
-        except Exception as error:
-            report["failures"] = ["deviation-comparison-failed"]
-            report["error"] = str(error)
-            report["unsupported"] = (
-                "compareWith is preview and rejected these two meshes; no deviation number is available."
-            )
-            report_attempted = True
-            _emit(report)
-            raise
+        inside_enum = adsk.fusion.PointContainment.PointInsidePointContainment
+        outside_enum = adsk.fusion.PointContainment.PointOutsidePointContainment
+        on_enum = adsk.fusion.PointContainment.PointOnPointContainment
+        invented_threshold = float(thresholds["invented_material"])
+        omitted_threshold = float(thresholds["omitted_detail"])
+        percentile_limit = int(thresholds["percentile_sample_limit"])
 
-        if not recon_to_source or not source_to_recon:
+        source_nodes = list(getattr(source_mesh, "nodeCoordinates", None) or [])
+        source_vertices, source_triangles = _mesh_triangles_mm(source_mesh)
+        median_edge = _median_edge_mm(source_vertices, source_triangles)
+        if not source_nodes or not source_triangles or not median_edge:
             report["failures"] = ["deviation-comparison-empty"]
+            report["resolution_errors"] = {
+                "source_node_count": len(source_nodes),
+                "source_triangle_count": len(source_triangles) // 3,
+                "source_median_edge_mm": median_edge,
+            }
             report_attempted = True
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: deviation-comparison-empty")
 
-        signed = any(value < 0.0 for value in recon_to_source) or any(
-            value < 0.0 for value in source_to_recon
-        )
-        recon_points = _node_points_mm(recon_mesh)
-        source_points = _node_points_mm(source_mesh)
-        invented_threshold = float(thresholds["invented_material"])
-        omitted_threshold = float(thresholds["omitted_detail"])
-
-        # Direction 1: reconstruction to source. Exact per-node values decide the
-        # threshold comparison; only the percentiles may be sampled.
-        percentiles_1, sampled_1, stride_1 = _percentiles(
-            [abs(value) for value in recon_to_source], int(thresholds["percentile_sample_limit"])
-        )
-        report["reconstruction_to_source"] = {
-            "question": RECONSTRUCTION_TO_SOURCE_QUESTION,
-            "node_count": len(recon_to_source),
-            "max_abs_mm": max(abs(value) for value in recon_to_source),
-            "signed": signed,
-            "percentiles_mm": percentiles_1,
-            "percentiles_sampled": sampled_1,
-            "percentile_stride": stride_1,
+        # The reconstruction's boundary, at the scan's own resolution: a rebuilt
+        # surface sampled coarser than the scan could step over a feature the scan
+        # was able to express, and that is the one way this verdict could report a
+        # clean number over a bad rebuild.
+        # Both thresholds are declared independently and the validator permits
+        # `omitted_detail` below `invented_material`. Everything sampled here is
+        # compared against *both*, so the resolution has to serve the smaller of
+        # them: a tessellation tolerance derived from the larger can exceed the
+        # smaller limit it is later judged against, and interiors sampled at the
+        # larger spacing can step over a reverse-only omission.
+        finest_threshold = min(invented_threshold, omitted_threshold)
+        tessellation = {
+            "target_step_mm": median_edge,
+            "threshold_basis_mm": finest_threshold,
         }
-
-        # Direction 2: source to reconstruction, with containment answered by the
-        # native B-Rep query. The capability check above guarantees it is present,
-        # so a failure here is a failure, never a zero.
-        outside_enum = adsk.fusion.PointContainment.PointOutsidePointContainment
-        inside_enum = adsk.fusion.PointContainment.PointInsidePointContainment
         try:
-            containment_values = [
-                recon_body.pointContainment(node)
-                for node in (getattr(source_mesh, "nodeCoordinates", None) or [])
-            ]
+            recon_vertices, recon_triangles = _tessellate(
+                recon_body, median_edge, finest_threshold / 10.0, tessellation
+            )
+        except Exception as error:
+            report["failures"] = ["tessellation-failed"]
+            report["surface_sampling"] = tessellation
+            report["error"] = str(error)
+            report_attempted = True
+            _emit(report)
+            raise
+        report["surface_sampling"] = tessellation
+        if not recon_triangles:
+            report["failures"] = ["tessellation-failed"]
+            report["error"] = (
+                "The reconstruction tessellated to no triangles, so it has no boundary to measure "
+                "against and nothing here is a zero."
+            )
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError("Deviation verdict failed closed: tessellation-failed")
+
+        recon_grid = _TriangleGrid(recon_vertices, recon_triangles, median_edge * 2.0)
+        source_grid = _TriangleGrid(source_vertices, source_triangles, median_edge * 2.0)
+
+        # The premise before the measurement. An unverified convention must never
+        # produce a passing severity, so this runs first and gates the verdict.
+        try:
+            verified, convention_evidence = _verify_containment_convention(
+                recon_body,
+                recon_grid,
+                recon_vertices,
+                recon_triangles,
+                invented_threshold,
+                (inside_enum, outside_enum, on_enum),
+            )
+        except Exception as error:
+            report["failures"] = ["sign-convention-unestablished"]
+            report["error"] = str(error)
+            report_attempted = True
+            _emit(report)
+            raise
+        convention_evidence["sign_convention_verified"] = verified
+        report["containment_convention"] = convention_evidence
+
+        # Direction 1: every scanned vertex against the reconstruction's boundary,
+        # signed by the native containment query. Every vertex, not a sample: the
+        # comparison against a threshold is never strided.
+        try:
+            containment_values = [recon_body.pointContainment(node) for node in source_nodes]
         except Exception as error:
             report["failures"] = ["containment-query-failed"]
             report["error"] = str(error)
             report_attempted = True
             _emit(report)
             raise
-        outside_solid = sum(1 for value in containment_values if value == outside_enum)
-        percentiles_2, sampled_2, stride_2 = _percentiles(
-            [abs(value) for value in source_to_recon], int(thresholds["percentile_sample_limit"])
-        )
-        omitted_points = _worst(
-            source_points, [abs(value) for value in source_to_recon], omitted_threshold, 5
-        )
+        source_points = []
+        boundary_distances = []
+        for node in source_nodes:
+            point = [node.x * 10.0, node.y * 10.0, node.z * 10.0]
+            source_points.append(point)
+            value = recon_grid.nearest_mm(point[0], point[1], point[2])
+            boundary_distances.append(0.0 if value is None else value)
+        inside_depths = [0.0] * len(source_nodes)
+        outside_gaps = [0.0] * len(source_nodes)
+        inside_count = 0
+        outside_count = 0
+        on_count = 0
+        neither_count = 0
+        for index in range(len(source_nodes)):
+            containment = containment_values[index]
+            if containment == inside_enum:
+                inside_count += 1
+                inside_depths[index] = boundary_distances[index]
+            elif containment == outside_enum:
+                outside_count += 1
+                outside_gaps[index] = boundary_distances[index]
+            elif containment == on_enum:
+                on_count += 1
+            else:
+                neither_count += 1
+        percentiles_1, sampled_1, stride_1 = _percentiles(boundary_distances, percentile_limit)
         report["source_to_reconstruction"] = {
             "question": SOURCE_TO_RECONSTRUCTION_QUESTION,
-            "node_count": len(source_to_recon),
-            "max_abs_mm": max(abs(value) for value in source_to_recon),
-            "beyond_omitted_threshold": sum(
-                1 for value in source_to_recon if abs(value) > omitted_threshold
+            "measured_by": (
+                "point-to-triangle distance against the reconstruction's own tessellation, signed by "
+                "BRepBody.pointContainment"
             ),
+            "containment_query": "BRepBody.pointContainment",
+            "containment_convention": CONTAINMENT_CONVENTION,
+            "node_count": len(source_nodes),
+            "max_abs_mm": max(boundary_distances),
+            "max_inside_mm": max(inside_depths),
+            "max_outside_mm": max(outside_gaps),
+            "nodes_inside_reconstruction_solid": inside_count,
+            "nodes_outside_reconstruction_solid": outside_count,
+            "nodes_on_reconstruction_boundary": on_count,
+            "nodes_containment_unknown": neither_count,
+            "percentiles_mm": percentiles_1,
+            "percentiles_sampled": sampled_1,
+            "percentile_stride": stride_1,
+        }
+
+        # Direction 2: the rebuilt surface itself against the scanned triangles.
+        # Its samples are the tessellation's own nodes, which is why the
+        # tessellation was asked for a maximum side of the scan's median edge.
+        sample_points = []
+        sample_distances = []
+        interior, interior_worst = _interior_samples(
+            recon_vertices, recon_triangles, max(finest_threshold, 1e-06)
+        )
+        for offset in range(0, len(recon_vertices) - 2, 3):
+            point = [recon_vertices[offset], recon_vertices[offset + 1], recon_vertices[offset + 2]]
+            sample_points.append(point)
+            value = source_grid.nearest_mm(point[0], point[1], point[2])
+            sample_distances.append(0.0 if value is None else value)
+        # And the interiors between them: two triangulations of one quad share
+        # every vertex and separate in the middle, so nodes alone report zero
+        # against a surface that differs by however far that quad is from flat.
+        for point in interior:
+            sample_points.append(list(point))
+            value = source_grid.nearest_mm(point[0], point[1], point[2])
+            sample_distances.append(0.0 if value is None else value)
+        percentiles_2, sampled_2, stride_2 = _percentiles(sample_distances, percentile_limit)
+        report["reconstruction_to_source"] = {
+            "question": RECONSTRUCTION_TO_SOURCE_QUESTION,
+            "measured_by": (
+                "every node of the reconstruction's tessellation, and its triangle interiors "
+                "subdivided to the invented-material threshold, against the source mesh's own "
+                "triangles, by point-to-triangle distance"
+            ),
+            "sample_count": len(sample_distances),
+            # What the interior sampling actually achieved, against what it was
+            # asked for. Equal or below means every point of every rebuilt
+            # triangle is within the requested spacing of a measured sample;
+            # above means the depth cap or the point budget bound first, and
+            # a discrepancy narrower than `interior_spacing_worst_mm` could sit
+            # between samples. Recorded rather than assumed either way.
+            "interior_spacing_requested_mm": max(finest_threshold, 1e-06),
+            "interior_spacing_worst_mm": interior_worst,
+            "interior_sampling_complete": interior_worst <= 0.0,
+            # Half the worst sub-triangle edge: distance to a fixed surface is
+            # 1-Lipschitz, so no point of a rebuilt triangle can be further
+            # from the source than the nearest interior sample by more than
+            # this. It is the honest width of what sampling could still hide.
+            "interior_covering_mm": interior_worst / 2.0,
+            "max_mm": max(sample_distances) if sample_distances else 0.0,
+            "beyond_invented_material_threshold": sum(
+                1 for value in sample_distances if value > invented_threshold
+            ),
+            "worst_points": _worst(sample_points, sample_distances, invented_threshold, 5),
             "percentiles_mm": percentiles_2,
             "percentiles_sampled": sampled_2,
             "percentile_stride": stride_2,
-            "containment_query": "BRepBody.pointContainment",
-            "nodes_outside_reconstruction_solid": outside_solid,
+            "attribution": "not-established",
+            "meaning": UNSIGNED_DIRECTION_MEANING,
         }
 
-        omitted_count = report["source_to_reconstruction"]["beyond_omitted_threshold"]
+        # compareWith stays available as corroboration and is never preferred. For
+        # a B-Rep reconstruction it is structurally unavailable, and the report
+        # says so by name rather than leaving a reader to wonder.
+        recon_polygon_mesh = _polygon_mesh(recon_body)
+        source_can_compare = hasattr(source_mesh, "compareWith")
+        if recon_polygon_mesh is None or not source_can_compare:
+            report["corroboration"] = {
+                "api": "PolygonMesh.compareWith",
+                "available": False,
+                # Two different causes reach this branch and they are not the
+                # same news: one is structural and permanent, the other is this
+                # Fusion. Blaming the reconstruction for a member the source
+                # mesh does not expose would send a reader to the wrong place.
+                "cause": (
+                    "reconstruction-is-not-a-polygon-mesh"
+                    if recon_polygon_mesh is None
+                    else "source-polygon-mesh-has-no-comparewith"
+                ),
+                "reason": (
+                    (
+                        "compareWith is defined on PolygonMesh. A BRepBody exposes only "
+                        "meshManager.displayMeshes.bestMesh, which is a TriangleMesh and carries "
+                        "no compareWith, so the preview comparison cannot grade a B-Rep "
+                        "reconstruction."
+                    )
+                    if recon_polygon_mesh is None
+                    else (
+                        "The source body's PolygonMesh does not expose compareWith on Fusion "
+                        + str(fusion_version)
+                        + ". compareWith is a preview API and this connected version does not "
+                        "carry it, so the corroboration cannot run."
+                    )
+                )
+                + " The verdict above does not depend on it.",
+            }
+        else:
+            report["preview_apis"] = ["PolygonMesh.compareWith"]
+            try:
+                corroborating = [
+                    abs(value) * 10.0 for value in source_mesh.compareWith(recon_polygon_mesh, None, None)
+                ]
+            except Exception as error:
+                report["corroboration"] = {
+                    "api": "PolygonMesh.compareWith",
+                    "available": True,
+                    "ran": False,
+                    "error": str(error),
+                }
+            else:
+                native_max = report["source_to_reconstruction"]["max_abs_mm"]
+                preview_max = max(corroborating) if corroborating else None
+                disagreement = (
+                    preview_max is not None
+                    and abs(preview_max - native_max) > max(invented_threshold, 0.01 * native_max)
+                )
+                report["corroboration"] = {
+                    "api": "PolygonMesh.compareWith",
+                    "available": True,
+                    "ran": True,
+                    "node_count": len(corroborating),
+                    "max_abs_mm": preview_max,
+                    "native_max_abs_mm": native_max,
+                    "disagrees_with_native": disagreement,
+                    "meaning": (
+                        "Corroboration only. compareWith is a preview API with no documented sign "
+                        "convention; where it disagrees with the native measurement the native "
+                        "measurement stands and the disagreement is flagged, never resolved in "
+                        "compareWith's favour."
+                    ),
+                }
+
+        omitted_count = sum(1 for value in outside_gaps if value > omitted_threshold)
         omitted = {
             "severity": "advisory" if omitted_count else "pass",
             "threshold_mm": omitted_threshold,
             "count": omitted_count,
-            "worst_points": omitted_points,
-            "meaning": "Scanned detail the rebuild did not model. Advisory: a rebuild models only the "
-                       "geometry the edit requires.",
+            "direction": "source_to_reconstruction",
+            "worst_points": _worst(source_points, outside_gaps, omitted_threshold, 5),
+            "meaning": OMITTED_MEANING,
         }
 
-        if not signed:
-            # Unsigned magnitudes cannot separate invented material from omitted
-            # detail, and guessing which is which is exactly the dishonest answer.
-            report["failures"] = ["deviation-unsigned-comparison"]
-            report["verdict"] = {
-                "invented_material": {
-                    "severity": "not-established",
-                    "threshold_mm": invented_threshold,
-                    "meaning": "The connected Fusion returned only unsigned distances, so material "
-                               "outside the source cannot be distinguished from detail inside it. The "
-                               "absence of invented material is NOT established by this run.",
-                },
-                "omitted_detail": omitted,
-            }
-            report_attempted = True
-            _emit(report)
-            raise RuntimeError("Deviation verdict failed closed: deviation-unsigned-comparison")
-
-        # No reconstructed node lies further than the threshold from the source in
-        # *either* direction, so the verdict holds whichever way the sign runs and
-        # the convention does not need establishing.
-        candidates = [value for value in recon_to_source if abs(value) > invented_threshold]
-        if not candidates:
-            report["verdict"] = {
-                "invented_material": {
-                    "severity": "pass",
-                    "threshold_mm": invented_threshold,
-                    "count": 0,
-                    "max_mm": 0.0,
-                    "worst_points": [],
-                    "sign_convention": "not required: no reconstructed node lies further than the "
-                                       "threshold from the source in either direction, so no sign "
-                                       "reading could change this verdict.",
-                    "meaning": INVENTED_MEANING,
-                },
-                "omitted_detail": omitted,
-            }
-            report["ok"] = True
-            report_attempted = True
-            _emit(report)
-            return
-
-        convention, evidence = _probe_sign_convention(
-            containment_values, source_to_recon, invented_threshold, outside_enum, inside_enum
-        )
-        if convention is None:
-            # The sign is what separates invented material from omitted detail, and
-            # an unverified premise must never produce a passing severity.
+        if not verified:
+            # The sign is what separates invented material from omitted detail,
+            # and an unverified premise must never produce a passing severity.
             report["failures"] = ["sign-convention-unestablished"]
             report["verdict"] = {
                 "invented_material": {
                     "severity": "not-established",
                     "threshold_mm": invented_threshold,
-                    "sign_convention": "unestablished",
-                    "sign_probe": evidence,
-                    "meaning": "Reconstructed nodes lie beyond the threshold, but probing "
-                               "BRepBody.pointContainment against compareWith's own signs did not "
-                               "agree on which sign means outside. Whether that material is invented "
-                               "is NOT established by this run.",
+                    "direction": "source_to_reconstruction",
+                    "sign_convention_verified": False,
+                    "sign_probe": convention_evidence,
+                    "meaning": "Probing BRepBody.pointContainment against points whose side is known "
+                               "by construction did not reproduce the expected answers on this body, "
+                               "so inside and outside are not established here and neither is whether "
+                               "any material was invented. The absence of invented material is NOT "
+                               "established by this run.",
                 },
-                "omitted_detail": omitted,
+                # `outside_gaps` is populated only where pointContainment
+                # answered `outside`, so on this path the classification behind
+                # every one of these counts is the premise that was just
+                # rejected. A green severity derived from a rejected premise is
+                # the same defect as a passing invented-material verdict, one
+                # field over.
+                "omitted_detail": dict(
+                    omitted,
+                    severity="not-established",
+                    meaning=(
+                        "Not established: omitted detail is counted from the scanned vertices that "
+                        "read OUTSIDE the reconstruction, and this run did not establish which "
+                        "enum means outside. The count and the worst points are reported as the "
+                        "measurement they are, and neither is a verdict."
+                    ),
+                ),
             }
             report_attempted = True
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: sign-convention-unestablished")
 
-        outward = 1.0 if convention == "positive-is-outside" else -1.0
-        outside_mm = [value * outward for value in recon_to_source]
-        beyond = [value for value in outside_mm if value > invented_threshold]
-        invented_points = _worst(recon_points, outside_mm, invented_threshold, 5)
-        report["verdict"] = {
-            "invented_material": {
-                "severity": "failure" if beyond else "pass",
-                "threshold_mm": invented_threshold,
-                "count": len(beyond),
-                "max_mm": max(beyond) if beyond else 0.0,
-                "worst_points": invented_points,
-                "sign_convention": convention,
-                "sign_probe": evidence,
-                "meaning": INVENTED_MEANING,
-            },
-            "omitted_detail": omitted,
-        }
-        if beyond:
-            report["failures"] = ["invented-material"]
+        invented_count = sum(1 for value in inside_depths if value > invented_threshold)
+        # The signed direction reads scanned *vertices*, and a scan carries only
+        # the ones it captured. Material invented between two of them leaves
+        # each on the reconstruction's boundary, so `inside_depths` stays at
+        # zero while the reconstruction's own nodes sit millimetres from any
+        # scanned surface -- and that direction is measured here, recorded, and
+        # was then read by nothing. It is unsigned, so it cannot establish
+        # invented material; it can and does disprove the absence of it, which
+        # is what a pass claims.
+        unclassified = report["reconstruction_to_source"]["beyond_invented_material_threshold"]
+        # And omission explains some of them. When the rebuild leaves out an
+        # outward feature the scan carries, the surface it leaves in that
+        # feature's place is a *rebuilt* surface far from any scanned triangle
+        # -- on a manifold scan there are no base-face triangles under a fused
+        # boss for it to be near -- so the reverse direction reads exactly what
+        # invented material reads. The two are told apart by the signed
+        # direction, which already saw the omission: a scanned vertex outside
+        # the reconstruction. So the unexplained case is the one where the
+        # reverse direction reaches further than the omission does.
+        if neither_count:
+            # `pointContainment` gave an answer this transaction's vocabulary
+            # does not carry -- neither inside, nor outside, nor on. Those
+            # vertices are evidence of nothing, and a verdict that ignores them
+            # is a pass over material nobody classified. Failed closed under
+            # the query's own token, because the query is what did not answer.
+            report["failures"] = ["containment-query-failed"]
+            report["containment_unknown"] = {
+                "nodes": neither_count,
+                "of": len(source_nodes),
+                "meaning": (
+                    "BRepBody.pointContainment returned a value outside the three-member "
+                    "PointContainment vocabulary for these scanned vertices. They carry no "
+                    "evidence about invented or omitted material, and neither severity can be "
+                    "reported without them."
+                ),
+            }
             report_attempted = True
             _emit(report)
             raise RuntimeError(
-                "Deviation verdict failed: invented material at "
-                + json.dumps(invented_points[:1])
+                "Deviation verdict failed closed: containment-query-failed, "
+                + str(neither_count)
+                + " scanned vertices got an answer outside the PointContainment vocabulary"
+            )
+
+        omitted_reach = max(outside_gaps) if outside_gaps else 0.0
+        recon_reach = report["reconstruction_to_source"]["max_mm"]
+        # Each of those samples is classified against the source *solid*, one
+        # by one. A comparison of global maxima cannot separate the two cases
+        # -- a 3 mm omitted boss would account for a 2 mm invented one beside
+        # it -- because a maximum carries no spatial attribution. Ray parity
+        # against the source's own triangles does: a rebuilt surface standing
+        # where an omitted feature used to be lies INSIDE the scanned solid,
+        # and invented material lies outside it.
+        #
+        # `None` from `encloses` is an open surface, where inside has no
+        # meaning; that sample stays unaccounted for and the run fails closed,
+        # which is the answer this module gives everywhere it cannot see.
+        outside_source = 0
+        inside_source = 0
+        unresolved = 0
+        for point, distance in zip(sample_points, sample_distances):
+            if distance <= invented_threshold:
+                continue
+            verdict = source_grid.encloses(point[0], point[1], point[2])
+            if verdict is None:
+                unresolved += 1
+            elif verdict:
+                inside_source += 1
+            else:
+                outside_source += 1
+        report["reconstruction_to_source"]["beyond_threshold_inside_source"] = inside_source
+        report["reconstruction_to_source"]["beyond_threshold_outside_source"] = outside_source
+        report["reconstruction_to_source"]["beyond_threshold_unresolved"] = unresolved
+        explained_by_omission = bool(unclassified) and not outside_source and not unresolved
+        # The other side of the same classification, and it settles the case
+        # rather than leaving it open: samples past the threshold that the
+        # source solid's own parity puts *outside* it are invented material, by
+        # the definition this stage uses everywhere else. The signed direction
+        # cannot see them -- an invented boss between sparse scanned vertices
+        # leaves every one of those vertices on the boundary -- which is why
+        # `invented_count` is zero here and why this used to report
+        # `not-established` over a question that had just been answered.
+        classified_invented = bool(unclassified) and bool(outside_source) and not unresolved
+        established = (
+            bool(invented_count)
+            or not unclassified
+            or explained_by_omission
+            or classified_invented
+        )
+        # And they have to clear the *omitted* threshold to be omitted detail:
+        # the classification above uses the invented threshold, because that is
+        # the question it was answering, and the two are declared separately for
+        # a reason. A 0.1 mm recess is not an omitted-detail advisory under a
+        # 0.25 mm declaration just because it cleared the 0.05 mm one.
+        omitted_established = True
+        omitted_inside_source = 0
+        omitted_unresolved = 0
+        for point, distance in zip(sample_points, sample_distances):
+            if distance <= omitted_threshold:
+                continue
+            verdict = source_grid.encloses(point[0], point[1], point[2])
+            if verdict is None:
+                omitted_unresolved += 1
+            elif verdict:
+                omitted_inside_source += 1
+        if omitted_unresolved:
+            # The two thresholds are declared independently and the validator
+            # permits `omitted_detail` below `invented_material`. A sample
+            # between them is not seen by the classification above, so a `None`
+            # here -- an open source mesh, or a ray the parity cannot answer --
+            # would have gone by as "not omitted" and the run would have passed
+            # over a deviation past the omitted-detail threshold that nothing
+            # classified. It is the *omitted* verdict that could not be
+            # established, and the invented one may be perfectly established
+            # alongside it, so this carries its own token rather than borrowing
+            # the invention's and telling a handler the wrong thing.
+            omitted_established = False
+            omitted = dict(
+                omitted,
+                severity="not-established",
+                unresolved_reconstruction_samples=omitted_unresolved,
+                meaning=(
+                    str(omitted_unresolved)
+                    + " reconstruction samples past the omitted-detail threshold could not be "
+                    "classified against the source solid -- an open source mesh has no inside -- "
+                    "so whether they are omitted detail is not established, and neither is the "
+                    "absence of it."
+                ),
+            )
+        elif omitted_inside_source and not omitted["count"]:
+            # Omission the scanned *vertices* did not see. A deep narrow recess
+            # whose rim carries no scanned node leaves `outside_gaps` at zero,
+            # so the signed direction counts nothing -- and the reverse
+            # direction has just measured rebuilt surface sitting inside the
+            # scanned solid, which is what an omission is. Reporting `pass`
+            # there would claim no omitted detail on a run that measured it.
+            omitted = dict(
+                omitted,
+                severity="advisory",
+                reconstruction_samples_inside_source=omitted_inside_source,
+                meaning=(
+                    "No scanned vertex lies outside the reconstruction, so the signed direction "
+                    "counted no omitted detail -- but "
+                    + str(omitted_inside_source)
+                    + " of the reconstruction's own samples sit inside the scanned solid and "
+                    "further than the *omitted-detail* threshold from any scanned surface, which "
+                    "is rebuilt "
+                    "surface standing where scanned material used to be. An omission between "
+                    "sparse scanned vertices reads this way and no other, so it is reported as "
+                    "the advisory it is. " + OMITTED_MEANING
+                ),
+            )
+        report["verdict"] = {
+            "invented_material": {
+                "severity": (
+                    "failure"
+                    if invented_count or classified_invented
+                    else "pass"
+                    if established
+                    else "not-established"
+                ),
+                "threshold_mm": invented_threshold,
+                "count": invented_count,
+                "max_mm": max(inside_depths),
+                "direction": "source_to_reconstruction",
+                "worst_points": _worst(source_points, inside_depths, invented_threshold, 5),
+                "sign_convention_verified": True,
+                "sign_probe": convention_evidence,
+                "unclassified_reconstruction_samples": unclassified,
+                "unclassified_explained_by_omission": explained_by_omission,
+                "unclassified_inside_source": inside_source,
+                "unclassified_outside_source": outside_source,
+                "unclassified_unresolved": unresolved,
+                "unclassified_reach_mm": recon_reach,
+                "omitted_reach_mm": omitted_reach,
+                "meaning": (
+                    UNCLASSIFIED_MEANING
+                    if not established
+                    else (
+                        str(outside_source)
+                        + " reconstruction samples past the invented-material threshold lie "
+                        "outside the scanned solid by the source mesh's own ray parity. No "
+                        "scanned vertex is inside the reconstruction -- material invented "
+                        "between sparse scanned vertices reads that way -- but outside the "
+                        "source is what invented material *is*, so this is the ordinary "
+                        "failure and not an open question. " + INVENTED_MEANING
+                    )
+                    if classified_invented
+                    else OMISSION_EXPLAINS_MEANING
+                    if explained_by_omission
+                    else INVENTED_MEANING
+                ),
+            },
+            "omitted_detail": omitted,
+        }
+        if invented_count or classified_invented:
+            report["failures"] = ["invented-material"]
+            report_attempted = True
+            _emit(report)
+            worst_of = report["verdict"]["invented_material"]["worst_points"][:1] or (
+                report["reconstruction_to_source"]["worst_points"][:1]
+            )
+            raise RuntimeError(
+                "Deviation verdict failed: invented material at " + json.dumps(worst_of)
+            )
+        if not omitted_established:
+            report["failures"] = ["omitted-detail-unclassified"]
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError(
+                "Deviation verdict failed closed: omitted-detail-unclassified, "
+                + str(omitted_unresolved)
+                + " samples past the omitted-detail threshold could not be classified"
+            )
+        if not established:
+            report["failures"] = ["invented-material-unclassified"]
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError(
+                "Deviation verdict failed closed: invented-material-unclassified, "
+                "{0} reconstruction samples beyond {1:g} mm from any scanned surface while no "
+                "scanned vertex lies inside the reconstruction".format(
+                    unclassified, invented_threshold
+                )
             )
 
         report["ok"] = True

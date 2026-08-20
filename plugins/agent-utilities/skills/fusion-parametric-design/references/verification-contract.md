@@ -53,8 +53,9 @@ Rules that make the numbers mean something:
 
 - Thresholds are declared per reconstruction with a rationale and recorded with the verdict; they are never module constants.
 - Percentiles may use a strided sample; **any distance compared against a threshold is measured exactly**.
-- `PolygonMesh.compareWith` is preview and API-only. When it is absent, when the connected Fusion returns only unsigned magnitudes, or when its sign convention cannot be established, the run fails closed and the invented-material verdict is reported `not-established` — never a pass, never a fabricated number.
-- Containment uses a native B-Rep query (`BRepBody.pointContainment`), not a mesh-only occurrence, so this stays consistent with the clearance/interference rule above. It is a hard capability: it is the only evidence in the run that does not rest on `compareWith`'s sign, and it is what measures that sign.
+- Both directions are measured with released APIs. `PolygonMesh.compareWith` is preview and, for a B-Rep reconstruction, structurally unavailable — a `BRepBody`'s mesh is a `TriangleMesh`, which has no `compareWith`. It is corroboration only: recorded beside the native measurement, flagged when it disagrees, never preferred.
+- Containment uses a native B-Rep query (`BRepBody.pointContainment`), not a mesh-only occurrence, so this stays consistent with the clearance/interference rule above. Inside means invented material and outside means omitted detail, and that mapping is **verified on the body itself** — a point far beyond the bounding box must read outside, and a pair straddling a tessellation facet must read one side each and both measure the step. When it does not reproduce, the run fails closed and the invented-material verdict is `not-established` — never a pass, never a fabricated number.
+- The reconstruction's boundary is read through a tessellation whose `surfaceTolerance` is one tenth of the declared `invented_material` threshold and whose `maxSideLength` is the source mesh's median edge. Both are recorded, and so is the fact that Fusion does not report the tolerance it achieved.
 - A small deviation in either direction is not a fitness claim. A fit coupon is still required before any claim of physical mating.
 
 ## Parametric robustness

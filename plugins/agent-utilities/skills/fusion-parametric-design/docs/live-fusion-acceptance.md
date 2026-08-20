@@ -642,25 +642,59 @@ does, and only for the release it ran against.
     with thresholds declared for *this* part and a stated rationale. Execute it.
     **Pass, in one of three honest forms:**
     - `ok: true` with **both** directions reported separately, each carrying the
-      question it answers, the declared thresholds echoed, and the omitted-detail
-      finding advisory rather than fatal;
+      question it answers, the declared thresholds echoed, the second direction
+      carrying `attribution: "not-established"`, and the omitted-detail finding
+      advisory rather than fatal;
     - `ok: false` with `invented-material` and the coordinates of the offending
       points;
-    - `ok: false` with `deviation-capability` (naming `PolygonMesh.compareWith`,
-      `BRepBody.pointContainment` or a `PointContainment` member, plus the Fusion
-      version), `deviation-unsigned-comparison`, or
-      `sign-convention-unestablished` — each with the invented-material verdict
-      reported `not-established` and carrying no `count` or `max_mm`.
+    - `ok: false` with `deviation-capability` (naming `BRepBody.pointContainment`,
+      a `PointContainment` member, `BRepBody.meshManager` or
+      `MeshManager.createMeshCalculator`, plus the Fusion version),
+      `body-not-found`, `deviation-frames-differ`, `tessellation-failed`,
+      `deviation-comparison-empty` or `containment-query-failed` — these stop
+      before anything is measured and carry **no `verdict` key at all**, which
+      is the point: an absent verdict cannot be misread as a zero;
+    - `ok: false` with `sign-convention-unestablished` — this one *does* emit a
+      `verdict`, with both `invented_material` and `omitted_detail` reported
+      `not-established` and no `count` or `max_mm` on the invented side;
+    - `ok: false` with `invented-material-unclassified` — no scanned vertex is
+      inside the reconstruction, but the reconstruction's own tessellation
+      reaches past the threshold from every scanned surface, so the *absence*
+      of invented material is not established; the verdict carries
+      `severity: "not-established"` and `unclassified_reconstruction_samples`.
 
-    When the verdict passes, record the `sign_convention` it observed and its
-    `sign_probe` tally. **This is the reading to sanity-check by hand once per
-    Fusion version:** the polarity is measured against `BRepBody.pointContainment`
-    rather than assumed, so confirm it matches a case you can see.
+    Read `containment_convention` on every run. It carries
+    `sign_convention_verified` and the probe's own numbers: a point a bounding-box
+    diagonal away reading outside, and a pair straddling a tessellation facet
+    reading one side each and both measuring the step. **This is the reading to
+    sanity-check by hand once per Fusion version.** Read `surface_sampling` too:
+    it states the tessellation's requested surface tolerance, that Fusion does not
+    report the achieved one, and the max side length taken from the scan's median
+    edge.
 
     **Fail** if any report states a single combined deviation number, if a missing
-    `compareWith` or `PointContainment` is silently skipped, if an unsigned
-    comparison is reported as a pass, or if `severity: "pass"` appears alongside
-    an unestablished sign convention.
+    `PointContainment` member or mesh calculator is silently skipped, if the
+    unsigned direction is presented as an invented-material finding, or if
+    `severity: "pass"` appears alongside an unverified containment convention.
+
+    **Known-answer check, worth running once per Fusion version.** Build a
+    20 x 20 x 10 mm block, mesh it, and grade four reconstructions of it whose
+    answers you know before you start:
+
+    - the same block — both directions ~0, `ok: true`;
+    - the block grown 0.5 mm on every side — every scanned vertex is 0.5 mm
+      inside the solid, so this is **invented material at 0.5 mm**. Growing the
+      whole body is what produces that answer: a *boss* added between scanned
+      vertices leaves each of them on the boundary and every signed depth at
+      zero, so it reports `invented-material-unclassified` with
+      `severity: "not-established"` instead;
+    - the block with a 0.5 mm boss the scan does not have — that
+      `invented-material-unclassified` case, worth running for itself;
+    - the plain block against a scan carrying a 3 mm boss — omitted detail,
+      3 mm.
+
+    A verdict that cannot reproduce those numbers is not measuring what it says
+    it measures.
 
 14. Compose the one account a person reads at the end. Host-side; no Fusion:
 

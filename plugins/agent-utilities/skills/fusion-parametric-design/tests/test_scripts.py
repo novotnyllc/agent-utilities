@@ -74,6 +74,7 @@ def load_generated_script(source: str) -> dict:
         create=lambda: SimpleNamespace(asArray=lambda: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
     )
     core.Point3D = SimpleNamespace(create=lambda x, y, z: SimpleNamespace(x=x, y=y, z=z))
+    core.Point2D = SimpleNamespace(create=lambda x, y: SimpleNamespace(x=x, y=y))
     core.Vector3D = SimpleNamespace(create=lambda x, y, z: SimpleNamespace(x=x, y=y, z=z))
     core.OrientedBoundingBox3D = SimpleNamespace(
         create=lambda center, x_axis, y_axis, length, width, height: SimpleNamespace(
