@@ -29,7 +29,14 @@ import math
 from typing import Any, Mapping, Sequence
 
 from .mesh_datum import DatumFrame, RegionFit
-from .mesh_fitting import Vec3, _dot, _sub, loop_material_evidence, section_mesh
+from .mesh_fitting import (
+    LOOP_EVIDENCE_GATES,
+    Vec3,
+    _dot,
+    _sub,
+    loop_material_evidence,
+    section_mesh,
+)
 
 #: Every gate this stage can record.  Closed for the same reason every other
 #: vocabulary in this package is: a token nobody declared is a token nobody can
@@ -43,7 +50,12 @@ SLAB_GATES = {
     # slabs on both sides leaves the stack in two pieces, and a join across the
     # gap fuses nothing.  The single-extrude plan stands instead.
     "slab-stack-discontinuous",
-}
+# A slab also carries whatever its own loops' evidence recorded -- a loop can
+# reach a verdict *and* say how far that verdict can be trusted -- so those
+# tokens are part of this stage's closed set rather than arriving from outside
+# it. They are declared once, in `mesh_fitting`, and imported rather than
+# restated so the two cannot drift.
+} | set(LOOP_EVIDENCE_GATES)
 
 #: How a slab's outline compares with the slab below it.  Recorded, never acted
 #: on: slabs are join-only, so this drives no operation choice (see the design's
@@ -569,6 +581,13 @@ def decompose(
                 # material verdict is one this stage cannot tell a bore from a
                 # cavity, and building the slab anyway would count its regions
                 # as reconstructed on a question nobody answered.
+                #
+                # A loop that *did* reach a verdict can still carry its own gate
+                # -- `slab-wall-unattributed` is the case: enough of the walls
+                # voted to name a role, and more of the length than the caller
+                # declared tolerable was attributed to nothing. The role is a
+                # verdict; the gate is the evidence saying how far it can be
+                # trusted, and reading only the role throws that away.
                 "gates": (
                     []
                     if constant
@@ -579,7 +598,8 @@ def decompose(
                     if outer is not None
                     and not any(loop["role"] == "unclassified" for loop in loops)
                     else ["slab-loops-unclassified"]
-                ),
+                )
+                + sorted({gate for loop in loops for gate in loop["gates"] or ()}),
                 "relation_to_below": "first",
                 "_projected": projected,
                 "_outer": outer,

@@ -851,6 +851,87 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         decomposition = program["slab_decomposition"]
         self.assertIsNotNone(decomposition)
 
+    def test_a_loop_that_named_a_role_and_a_gate_still_gates_its_slab(self) -> None:
+        """A role is a verdict; a gate says how far the verdict can be trusted.
+
+        `loop_material_evidence` can hand back both: enough of the walls voted
+        to call a loop `outer`, and more of its length went unattributed than
+        the caller declared tolerable, so it also records
+        `slab-wall-unattributed`. Reading only the role accepted the slab and
+        counted its regions as reconstructed while the recorded attribution
+        failure said the evidence was thin.
+        """
+        from unittest.mock import patch
+
+        from fusion_design import mesh_slabs as ms
+
+        honest = ms.classify_loops
+        calls = []
+
+        def with_one_gated(loops, projected, bore_regions):
+            rows = honest(loops, projected, bore_regions)
+            calls.append(1)
+            if rows and len(calls) == 1:
+                rows = [dict(rows[0], gates=["slab-wall-unattributed"])] + list(rows[1:])
+            return rows
+
+        with patch.object(ms, "classify_loops", with_one_gated):
+            program = self._plan(fx.stepped_block_dump())
+        gates = [
+            entry["gate"]
+            for entry in program["unreconstructed"]
+            if entry["gate"].startswith("slab-wall-unattributed")
+        ]
+        self.assertTrue(gates, program["unreconstructed"])
+        # And the token is in this stage's own closed set, not arriving from
+        # outside it.
+        self.assertIn("slab-wall-unattributed", ms.SLAB_GATES)
+
+    def test_a_triangle_two_regions_both_claim_is_refused_not_resolved_by_order(self) -> None:
+        """Region ownership decides bore-or-cavity, so it cannot depend on order.
+
+        The map from triangle to region is what `classify_loops` reads to tell
+        a wall of a bore this program already cuts from a wall of a cavity. A
+        triangle listed by two regions used to let the later record win
+        silently, so *reordering* two records could change which feature the
+        planner planned. An index outside the dump names a triangle of some
+        other mesh entirely.
+        """
+        dump = fx.stepped_block_dump()
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        digest = _manifest_hash(build_manifest())
+
+        def plan(mutate):
+            edited = json.loads(json.dumps(record))
+            mutate(edited)
+            return build_reconstruction_program(
+                parse_fit_record(edited),
+                fxr.spec(slabs=True),
+                manifest_sha256=digest,
+                dump=dump,
+            )
+
+        def double_claim(edited):
+            regions = [r for r in edited["regions"] if r.get("triangle_indices")]
+            regions[1]["triangle_indices"] = list(regions[1]["triangle_indices"]) + [
+                regions[0]["triangle_indices"][0]
+            ]
+
+        def out_of_range(edited):
+            region = next(r for r in edited["regions"] if r.get("triangle_indices"))
+            region["triangle_indices"] = list(region["triangle_indices"]) + [10 ** 9]
+
+        for mutate, needle in (
+            (double_claim, "claimed by both region"),
+            (out_of_range, "names a triangle of some other mesh"),
+        ):
+            with self.subTest(needle=needle):
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    plan(mutate)
+                self.assertEqual("fit-record-malformed", caught.exception.reason)
+                self.assertIn(needle, caught.exception.message)
+
     def test_dirt_on_one_face_does_not_cost_the_loops_that_do_not_touch_it(self) -> None:
         # One duplicated triangle on the bottom face: three edges now carry three
         # incident triangles, so the mesh is not closed in the whole-mesh sense.

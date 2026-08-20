@@ -2779,9 +2779,42 @@ def build_reconstruction_program(
             [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)],
             [tuple(index[i : i + 3]) for i in range(0, len(index), 3)],
         )
+        # Bounds and single ownership, before anything reads this map. A
+        # triangle is one region's or it is nobody's: two regions claiming one
+        # triangle used to let the later record silently win, so *reordering*
+        # two region records could turn a section wall from a cavity into a
+        # known bore and make `classify_loops` plan a different feature. An
+        # out-of-range index would index the wrong triangle entirely.
+        triangle_count = len(index) // 3
         for region in fit_record.regions:
-            for triangle in region.triangle_indices or ():
-                triangle_regions[int(triangle)] = region.region_hash
+            for raw in region.triangle_indices or ():
+                triangle = int(raw)
+                if not 0 <= triangle < triangle_count:
+                    raise _refuse(
+                        "fit-record-malformed",
+                        f"region {region.region_hash[:12]} claims triangle {triangle}, and the "
+                        f"dump it is bound to carries {triangle_count}. An index outside the dump "
+                        "names a triangle of some other mesh.",
+                        {
+                            "region_hash": region.region_hash,
+                            "triangle_index": triangle,
+                            "dump_triangle_count": triangle_count,
+                        },
+                    )
+                owner = triangle_regions.get(triangle)
+                if owner is not None and owner != region.region_hash:
+                    raise _refuse(
+                        "fit-record-malformed",
+                        f"triangle {triangle} is claimed by both region {owner[:12]} and region "
+                        f"{region.region_hash[:12]}. Region ownership is what decides whether a "
+                        "section wall belongs to a bore this program already cuts, so a triangle "
+                        "with two owners makes that answer depend on record order.",
+                        {
+                            "triangle_index": triangle,
+                            "region_hashes": sorted([owner, region.region_hash]),
+                        },
+                    )
+                triangle_regions[triangle] = region.region_hash
     groups, unreconstructed, decomposition = plan_archetypes(
         all_regions,
         frame,
