@@ -355,7 +355,20 @@ def congruence(
         if not remaining:
             break
         centre = _centroid(loop)
-        nearest = min(remaining, key=lambda other: math.dist(centre, _centroid(second[other])))
+        # Nearest centroid, and where centroids tie the geometry decides.
+        # Concentric loops share a centroid exactly, so a centroid-only greedy
+        # pairs the outer boundary with whichever inner loop happens to be
+        # first in a list `section_mesh` orders by the triangles it intersected
+        # -- and the Hausdorff that follows is then large, marking a constant
+        # slab `slab-section-inconstant` on ordering alone.
+        nearest = min(
+            remaining,
+            key=lambda other: (
+                round(math.dist(centre, _centroid(second[other])), 9),
+                hausdorff(loop, second[other]),
+                other,
+            ),
+        )
         remaining.remove(nearest)
         distance = hausdorff(loop, second[nearest])
         pairs.append((index, nearest, distance))

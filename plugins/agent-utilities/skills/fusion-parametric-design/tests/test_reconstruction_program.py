@@ -1119,6 +1119,22 @@ class EventLinkageTests(unittest.TestCase):
         self.assertEqual(1, len(events))
         self.assertEqual(3, len(events[0]["members"]))
 
+    def test_concentric_loops_are_paired_by_geometry_not_by_list_order(self) -> None:
+        """Concentric loops share a centroid exactly, so the centroid decides nothing.
+
+        `section_mesh` orders its polylines by the triangles it intersected, and
+        that order is not the same at two stations. A centroid-only greedy then
+        paired the outer boundary with the inner one, the Hausdorff that
+        followed was large, and a constant slab was marked
+        `slab-section-inconstant` on ordering alone.
+        """
+        outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0)]
+        verdict = ms.congruence([outer, inner], [inner, outer], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+        self.assertAlmostEqual(0.0, verdict["worst_hausdorff"])
+
     def test_congruence_reports_the_pairing_it_matched_on(self) -> None:
         # Anything else compared between two sections has to go through this,
         # because `section_mesh` does not emit loops in the same order twice.
