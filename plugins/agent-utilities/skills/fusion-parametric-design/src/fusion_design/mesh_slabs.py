@@ -480,7 +480,11 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
     regions: list[dict[str, Any]] = []
     for index, points in enumerate(loops):
         area = abs(_signed_area(points))
-        moment = [value * area for value in polygon_centroid(points)]
+        # Once, not once per point: `polygon_centroid` is O(n), and a sampled
+        # arc carries 256 points per arc, so recomputing it inside the extent
+        # scan made region measurement O(n^2) on the densest loops.
+        centre = polygon_centroid(points)
+        moment = [value * area for value in centre]
         children = sorted(other for other, parent in enumerate(parents) if parent == index)
         for child in children:
             child_area = abs(_signed_area(loops[child]))
@@ -507,7 +511,7 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
                 # displacement does not bound it -- on a long thin region a
                 # 0.05 mm move of half one edge shifts the centroid by tenths.
                 "extent_mm": max(
-                    (math.dist(point, polygon_centroid(points)) for point in points),
+                    (math.dist(point, centre) for point in points),
                     default=0.0,
                 ),
                 "centroid_mm": (
