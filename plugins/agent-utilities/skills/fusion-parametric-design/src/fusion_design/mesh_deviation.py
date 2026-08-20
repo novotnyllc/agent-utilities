@@ -464,6 +464,73 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
 _COARSE = 8
 
 
+_SAMPLE_DEPTH_CAP = 1
+
+
+def _interior_samples(vertices, triangles, spacing):
+    """Points on these triangles' interiors, no farther apart than ``spacing``.
+
+    Vertices alone are not a sample of a surface. Two triangulations of the
+    same four points -- a non-coplanar quad split along opposite diagonals --
+    share every vertex and separate in the middle, so a vertex-only comparison
+    measures zero against surfaces that differ by however far the quad is from
+    flat. Each triangle is therefore subdivided at its edge midpoints until its
+    longest edge is within ``spacing``, and the new points are measured beside
+    the vertices.
+
+    ponytail: one level of midpoint subdivision, not an adaptive
+    triangle-to-triangle bound. Three extra points per oversized facet catches
+    the disagreement a shared-vertex pair can hide -- the two diagonals cross
+    at a midpoint, and that midpoint is one of these -- and costs a constant
+    multiple of the node pass. A patch that curves *inside* a sub-triangle
+    still needs the real bound; raise `_SAMPLE_DEPTH_CAP` when a case shows
+    one, knowing each level multiplies the queries by four.
+    """
+    out = []
+    for offset in range(0, len(triangles) - 2, 3):
+        a = triangles[offset] * 3
+        b = triangles[offset + 1] * 3
+        c = triangles[offset + 2] * 3
+        corners = (
+            (vertices[a], vertices[a + 1], vertices[a + 2]),
+            (vertices[b], vertices[b + 1], vertices[b + 2]),
+            (vertices[c], vertices[c + 1], vertices[c + 2]),
+        )
+        stack = [(corners, 0)]
+        while stack:
+            (p0, p1, p2), depth = stack.pop()
+            longest = max(
+                _distance(p0, p1), _distance(p1, p2), _distance(p2, p0)
+            )
+            if longest <= spacing or depth >= _SAMPLE_DEPTH_CAP:
+                continue
+            m01 = _midpoint(p0, p1)
+            m12 = _midpoint(p1, p2)
+            m20 = _midpoint(p2, p0)
+            out.extend((m01, m12, m20))
+            stack.append(((p0, m01, m20), depth + 1))
+            stack.append(((m01, p1, m12), depth + 1))
+            stack.append(((m20, m12, p2), depth + 1))
+            stack.append(((m01, m12, m20), depth + 1))
+    return out
+
+
+def _distance(first, second):
+    return (
+        (first[0] - second[0]) ** 2
+        + (first[1] - second[1]) ** 2
+        + (first[2] - second[2]) ** 2
+    ) ** 0.5
+
+
+def _midpoint(first, second):
+    return (
+        (first[0] + second[0]) / 2.0,
+        (first[1] + second[1]) / 2.0,
+        (first[2] + second[2]) / 2.0,
+    )
+
+
 def _box_distance_sq(box, x, y, z):
     """Squared distance from a point to an axis-aligned box, zero inside it."""
     dx = box[0] - x if x < box[0] else (x - box[3] if x > box[3] else 0.0)
@@ -618,6 +685,14 @@ class _TriangleGrid(object):
                 for step in range(3):
                     base = self.triangles[offset + step] * 3
                     corners.append((v[base], v[base + 1], v[base + 2]))
+                # A facet with two corners in the same place carries no surface
+                # and no adjacency worth counting: it contributes one self-edge
+                # and doubles a real one, which called an otherwise closed scan
+                # open and sent every reverse deviation to `unclassified`. The
+                # distance path deliberately supports these slivers, so the
+                # closure test has to as well.
+                if len(set(corners)) != 3:
+                    continue
                 for first, second in (
                     (corners[0], corners[1]),
                     (corners[1], corners[2]),
@@ -646,6 +721,17 @@ class _TriangleGrid(object):
         pz = direction[0] * e2[1] - direction[1] * e2[0]
         det = e1[0] * px + e1[1] * py + e1[2] * pz
         scale = max(abs(e1[0]), abs(e1[1]), abs(e1[2]), abs(e2[0]), abs(e2[1]), abs(e2[2]), 1.0)
+        # A facet with no area is crossed by nothing. Told apart from a ray
+        # grazing a real triangle's plane, which is the `None` below: that one
+        # is a question this cannot answer, and a sliver is a facet with no
+        # answer to give -- reading it as unanswerable would make a scan
+        # carrying one unclassifiable, which is what the closure test above
+        # stopped doing for the same reason.
+        nx = e1[1] * e2[2] - e1[2] * e2[1]
+        ny = e1[2] * e2[0] - e1[0] * e2[2]
+        nz = e1[0] * e2[1] - e1[1] * e2[0]
+        if abs(nx) + abs(ny) + abs(nz) <= 1e-12 * scale * scale:
+            return 0
         if abs(det) <= 1e-12 * scale * scale:
             return None
         inverse = 1.0 / det
@@ -1364,16 +1450,27 @@ def run(context):
         # tessellation was asked for a maximum side of the scan's median edge.
         sample_points = []
         sample_distances = []
+        interior = _interior_samples(
+            recon_vertices, recon_triangles, max(invented_threshold, 1e-06)
+        )
         for offset in range(0, len(recon_vertices) - 2, 3):
             point = [recon_vertices[offset], recon_vertices[offset + 1], recon_vertices[offset + 2]]
             sample_points.append(point)
+            value = source_grid.nearest_mm(point[0], point[1], point[2])
+            sample_distances.append(0.0 if value is None else value)
+        # And the interiors between them: two triangulations of one quad share
+        # every vertex and separate in the middle, so nodes alone report zero
+        # against a surface that differs by however far that quad is from flat.
+        for point in interior:
+            sample_points.append(list(point))
             value = source_grid.nearest_mm(point[0], point[1], point[2])
             sample_distances.append(0.0 if value is None else value)
         percentiles_2, sampled_2, stride_2 = _percentiles(sample_distances, percentile_limit)
         report["reconstruction_to_source"] = {
             "question": RECONSTRUCTION_TO_SOURCE_QUESTION,
             "measured_by": (
-                "every node of the reconstruction's tessellation against the source mesh's own "
+                "every node of the reconstruction's tessellation, and its triangle interiors "
+                "subdivided to the invented-material threshold, against the source mesh's own "
                 "triangles, by point-to-triangle distance"
             ),
             "sample_count": len(sample_distances),

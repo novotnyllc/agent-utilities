@@ -1322,6 +1322,26 @@ class PointToTriangleTests(unittest.TestCase):
         self.assertGreater(grid._coarse_floor(-1000, -1000, -1000), 0)
         self.assertEqual(1, _CountingSet.walked)
 
+    def test_a_degenerate_sliver_does_not_make_a_closed_scan_open(self) -> None:
+        """A zero-area facet carries no surface, and it was carrying a verdict.
+
+        Indices `(A, A, B)` add one self-edge and a second copy of `A-B`, so a
+        scan that encloses a perfectly good solid read as open -- and an open
+        surface has no inside, which sends every reverse deviation to
+        `unclassified`. The distance path supports these slivers on purpose,
+        because scans carry them.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (10.0, 10.0, 10.0), 5.0)
+        flat = [value for vertex in vertices for value in vertex]
+        grid = self.namespace["_TriangleGrid"](flat, triangles, 4.0)
+        self.assertTrue(grid.is_closed())
+        sliver = list(triangles) + [triangles[0], triangles[0], triangles[1]]
+        slivered = self.namespace["_TriangleGrid"](flat, sliver, 4.0)
+        self.assertTrue(slivered.is_closed())
+        # And the inside is still the inside.
+        self.assertTrue(slivered.encloses(5.0, 5.0, 5.0))
+        self.assertFalse(slivered.encloses(50.0, 5.0, 5.0))
+
     def test_oversized_facets_are_pruned_by_their_boxes_not_all_measured(self) -> None:
         """Every query paid the full point-triangle test on every long facet.
 
