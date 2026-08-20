@@ -323,6 +323,8 @@ def rebuild_spec(dump_path: str, **overrides: Any) -> dict[str, Any]:
             "constraint_displacement_tolerance_mm": threshold(0.05),
             "constraint_rejection_budget": {"value": 2, "rationale": "fixture budget"},
             "entity_match_tolerance_mm": threshold(0.1),
+            "loop_material_consensus_fraction": threshold(0.95),
+            "loop_attribution_min_fraction": threshold(0.05),
         },
     }
     thresholds = overrides.pop("thresholds", None)

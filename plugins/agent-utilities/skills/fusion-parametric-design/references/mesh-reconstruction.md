@@ -278,6 +278,33 @@ The archetype vocabulary is closed and all four kinds now emit:
 
 The same fail-closed rule runs the other way, which is the half that is easy to get wrong. A cylinder of *unknown* side is treated exactly as it was before this evidence existed — it can still join a revolve or an extrude group — because "unknown" is not "inward", and changing behaviour on absent evidence is the same defect wearing the opposite sign.
 
+### Section provenance, and what a loop's own walls say (diagnosis only)
+
+`section_mesh` records **which triangle produced each segment**. `SectionPolyline` gains `segment_triangles`: one entry per segment, in the same order as the segments the points imply — `len(points)` of them on a closed loop, one fewer on an open run — and each entry is the tuple of dump triangle indices behind that segment. It is a tuple and not a single index because a segment lying on an edge two triangles share genuinely has two producers, and picking one would be choosing which evidence to throw away. An empty tuple means nothing was attributed, which is a measurement and not a zero. `classify_polyline` passes it through on request so each `SketchEntity` can report the `triangles` behind the run it covers; a caller that does not pass it gets byte-identical output to before.
+
+On that wire, `loop_material_evidence` measures, per closed loop of a section:
+
+| Field | What it is |
+| --- | --- |
+| `verdict` | `material-inside` (the solid fills the loop), `material-outside` (the loop is a hole in material), `contradictory` (the walls disagreed past the declared floor), `unavailable` (nothing licensed the question) |
+| `consensus_fraction` | the share of *attributed* length agreeing with the verdict; `null` when nothing was attributed |
+| `depth` | even-odd nesting depth among the station's own loops, 0 outermost |
+| `parity_expected`, `parity_agrees` | the verdict nesting parity implies, and whether the winding agreed with it |
+| `material_inside_length_mm`, `material_outside_length_mm`, `unattributed_length_mm`, `unattributed_fraction` | the length-weighted vote itself |
+| `signed_area_mm2`, `perimeter_mm`, `point_count`, `segment_count` | the loop as measured |
+| `wall_regions` | the fit record's region hashes for this loop's walls, **identity only** |
+| `gates` | which of the tokens below this loop tripped |
+
+and, per section: `winding` (`closed`, `consistently_wound`, `signed_volume`, `winding`, `boundary_edges`, `non_manifold_edges`, `reversed_edges`, `degenerate_triangles`, `welded_positions`, `node_count`), `declared`, `closed_loop_count`, `open_polyline_count`, `junction_count`, `coplanar_triangles`, `loops`, `gates`.
+
+**The verdict comes from the mesh's own winding, never from the fitted regions.** Every triangle of a closed oriented mesh has an outward normal whether or not a fitter ever accepted the surface it belongs to, so this measurement does not inherit the fitters' coverage ceiling — a hexagonal nut pocket whose walls are correctly refused as a cylinder still classifies. Regions are consulted for identity and nothing else. The licence is the same one `material_side` rests on: closed, with a non-zero signed volume. Adjacency is keyed by exact vertex *position*, so an unwelded triangle-soup dump is not mistaken for an open mesh. A facet parallel to the section plane *abstains* rather than dissenting — it bounds material along the axis, not across the loop — and a segment counts as unattributed only when none of its producers could vote.
+
+Two caller-declared thresholds gate it, both fractions of a loop's own length and both rejected above 1.0: `loop_material_consensus_fraction` (how much of the attributed length must agree before a verdict is a verdict) and `loop_attribution_min_fraction` (how much of it may go unattributed before the walls stop being evidence).
+
+Four tokens are declared in the rebuild's closed refusal vocabulary and **raised by nothing**: `loop-orientation-unavailable`, `slab-wall-unattributed`, `loop-material-contradictory`, `loop-parity-contradiction`. They are recorded on the evidence table, which now rides on the `profile-ambiguous` refusal detail, so a station that stops this emitter says which loops, on which walls, with material on which side, instead of reporting a loop count. The stage that refuses on them is the slab planner, which does not exist yet: the measurement is landed deliberately ahead of the behaviour that will depend on it.
+
+The licence is currently **whole-mesh**: two non-manifold edges anywhere make every loop at every station `unavailable`. That is honest — a mesh whose winding is inconsistent somewhere has no globally trustworthy outward direction — but it is coarser than the per-edge locality the 2.5D design assumes, and one production part is refused by exactly two bad edges in fifteen thousand.
+
 ### Partial reconstruction is a first-class outcome
 
 `reconstruction-coverage` composes the four stages that each know a different part of the answer, and returns one of a closed label set:

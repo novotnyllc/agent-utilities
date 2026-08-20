@@ -601,6 +601,126 @@ class PrismAcrossTheDumpSeamTests(NormalsAcrossTheDumpSeamTests):
         self.assertIn(pocket["region_hash"], {r.region_hash for r in parsed.regions})
 
 
+class LoopEvidenceSeamTests(unittest.TestCase):
+    """The loop verdict, traced from a real dump's triangles to a real fit record.
+
+    Nothing here is hand-built: the dump is the one `fit-regions` fitted, the
+    region hashes on the loop's walls are that record's own, and the station is
+    the program's own mid-station. The reason it belongs across the seam rather
+    than in the fitting module's synthetic tests is that the verdict rests on the
+    dump's *winding* -- a winding the extraction reordered, or a weld that
+    collapsed the wrong node, would produce a confidently wrong answer that no
+    synthetic mesh built alongside the classifier could ever catch.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = build_manifest()
+        cls.dump = brick_dump()
+        cls.record = fitted(cls.dump)
+        cls.program = planned(cls.record, cls.manifest)
+
+    def _mesh(self):
+        flat, index = self.dump.vertices_mm, self.dump.triangles
+        return (
+            [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)],
+            [tuple(index[i : i + 3]) for i in range(0, len(index), 3)],
+        )
+
+    def _station(self):
+        group = self.program["archetypes"][0]
+        axis = {"XY": "z_axis", "YZ": "x_axis", "XZ": "y_axis"}[group["plane"]["datum_plane"]]
+        normal = tuple(float(v) for v in self.program["datum"][axis])
+        origin = tuple(float(v) for v in self.program["datum"]["origin"])
+        station = float(group["plane"]["offset"]) + float(group["extent"]["value"]) / 2.0
+        return mf._add(origin, mf._scale(normal, station)), normal
+
+    def _evidence(self, verts, tris, regions=None):
+        point, normal = self._station()
+        section = mf.section_mesh(verts, tris, point, normal, tolerance=1e-9)
+        return mf.loop_material_evidence(
+            section,
+            verts,
+            tris,
+            normal,
+            consensus_fraction=0.95,
+            attribution_min_fraction=0.05,
+            triangle_regions=regions,
+        )
+
+    def _regions(self):
+        return {
+            int(index): region["region_hash"]
+            for region in self.record["regions"]
+            for index in region["triangle_indices"]
+        }
+
+    def test_the_brick_reads_as_material_inside_its_own_outline(self) -> None:
+        verts, tris = self._mesh()
+        evidence = self._evidence(verts, tris, self._regions())
+        self.assertTrue(evidence["winding"]["closed"])
+        self.assertTrue(evidence["winding"]["consistently_wound"])
+        self.assertEqual("outward", evidence["winding"]["winding"])
+        self.assertEqual(1, evidence["closed_loop_count"])
+        loop = evidence["loops"][0]
+        self.assertEqual("material-inside", loop["verdict"])
+        self.assertEqual(1.0, loop["consensus_fraction"])
+        self.assertEqual(0, loop["depth"])
+        self.assertTrue(loop["parity_agrees"])
+        self.assertEqual([], evidence["gates"])
+
+    def test_the_walls_it_names_are_this_records_own_regions(self) -> None:
+        verts, tris = self._mesh()
+        loop = self._evidence(verts, tris, self._regions())["loops"][0]
+        hashes = {region["region_hash"] for region in self.record["regions"]}
+        self.assertTrue(loop["wall_regions"])
+        self.assertTrue(set(loop["wall_regions"]) <= hashes)
+        # Four walls: a mid-station section of a box crosses its four sides and
+        # neither of its caps.
+        self.assertEqual(4, len(loop["wall_regions"]))
+
+    def test_the_same_dump_wound_the_other_way_gives_the_same_verdict(self) -> None:
+        # The verdict is about the material, not about the exporter's winding
+        # convention, so reversing every triangle of the real dump must not move
+        # it -- only the licence's own reported direction.
+        verts, tris = self._mesh()
+        flipped = [(c, b, a) for a, b, c in tris]
+        outward = self._evidence(verts, tris)["loops"][0]
+        inward = self._evidence(verts, flipped)["loops"][0]
+        self.assertEqual("inward", mf.mesh_winding_evidence(verts, flipped)["winding"])
+        self.assertEqual(outward["verdict"], inward["verdict"])
+        self.assertEqual(outward["consensus_fraction"], inward["consensus_fraction"])
+        self.assertEqual(outward["parity_agrees"], inward["parity_agrees"])
+
+    def test_one_wall_inverted_in_the_real_dump_reaches_contradictory(self) -> None:
+        verts, tris = self._mesh()
+        point, normal = self._station()
+        # The triangles this station's own loop was cut from, named by the
+        # section itself rather than re-derived: whichever way the brick's
+        # tessellation happens to meet the plane, these are its walls.
+        loop = mf.section_mesh(verts, tris, point, normal, tolerance=1e-9).polylines[0]
+        producers = sorted({t for entry in loop.segment_triangles for t in entry})
+        self.assertGreater(len(producers), 4)
+        broken = list(tris)
+        for index in producers[: max(1, len(producers) // 4)]:
+            broken[index] = tuple(reversed(broken[index]))
+        evidence = self._evidence(verts, broken)
+        self.assertTrue(evidence["winding"]["closed"])
+        self.assertFalse(evidence["winding"]["consistently_wound"])
+        loop = evidence["loops"][0]
+        self.assertEqual("contradictory", loop["verdict"])
+        self.assertLess(loop["consensus_fraction"], 0.95)
+        self.assertIn("loop-material-contradictory", evidence["gates"])
+
+    def test_a_torn_dump_stops_at_the_orientation_gate_before_any_verdict(self) -> None:
+        verts, tris = self._mesh()
+        evidence = self._evidence(verts, tris[:-2])
+        self.assertFalse(evidence["winding"]["closed"])
+        self.assertEqual(["loop-orientation-unavailable"], evidence["gates"])
+        for loop in evidence["loops"]:
+            self.assertEqual("unavailable", loop["verdict"])
+
+
 class PlanToRebuildSeamTests(unittest.TestCase):
     """A real program, emitted and run: the cap ordering has to survive the frame."""
 
