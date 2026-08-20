@@ -698,8 +698,17 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
         # And this part is a live instance of the case: the old rank-then-id
         # sort disagrees with the dependency order on it.
         rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
+        # By each archetype's *own* operation. Keying every identifier on
+        # `rank["join"]` made the first element constant and the assertion a
+        # plain lexical comparison, which passed for the wrong reason: the five
+        # slabs are one `new-body` and four `join`, and the sort this is meant
+        # to reproduce puts the `new-body` first.
+        operation = {group["id"]: group["operation"] for group in program["archetypes"]}
         self.assertNotEqual(
-            sorted(identifiers, key=lambda identifier: (rank["join"], identifier)),
+            sorted(
+                identifiers,
+                key=lambda identifier: (rank[operation[identifier]], identifier),
+            ),
             program["order"],
         )
         # The datum is untouched by the decomposition: still this part's own

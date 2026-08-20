@@ -1138,6 +1138,36 @@ class EventLinkageTests(unittest.TestCase):
         self.assertTrue(verdict["agrees"], verdict)
         self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
 
+    def test_congruence_pairs_to_minimise_the_worst_pair_not_the_first(self) -> None:
+        """Greedy over the sorted pairs consumes a partner another loop needed.
+
+        Two equal squares at x = 0 and x = 3 against two at x = 1 and x = -2:
+        the cheapest single pair is 0-1, and taking it forces 3--2 five units
+        apart, while pairing 0--2 with 3-1 costs two for both. Any tolerance
+        between them then reports a slab that is constant as
+        `slab-section-inconstant`.
+        """
+
+        def square(x: float):
+            return [(x, 0.0), (x + 1.0, 0.0), (x + 1.0, 1.0), (x, 1.0)]
+
+        verdict = ms.congruence(
+            [square(0.0), square(3.0)], [square(1.0), square(-2.0)], tolerance=3.0
+        )
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+        self.assertAlmostEqual(2.0, verdict["worst_hausdorff"])
+        self.assertTrue(verdict["agrees"], verdict)
+        # And the same sections under a tolerance that no pairing can meet
+        # still disagree -- the rule minimises the worst pair, it does not
+        # excuse it.
+        self.assertFalse(
+            ms.congruence(
+                [square(0.0), square(3.0)],
+                [square(1.0), square(-2.0)],
+                tolerance=1.5,
+            )["agrees"]
+        )
+
     def test_concentric_loops_are_paired_by_geometry_not_by_list_order(self) -> None:
         """Concentric loops share a centroid exactly, so the centroid decides nothing.
 

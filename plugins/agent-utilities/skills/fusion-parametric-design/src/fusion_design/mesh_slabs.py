@@ -378,6 +378,55 @@ def roles_agree(
     )
 
 
+def _minimax_assignment(cost: Sequence[Sequence[float]]) -> dict[int, int]:
+    """The one-to-one pairing whose worst pair is as cheap as possible.
+
+    Bottleneck assignment, because that is the question the caller asks: is
+    there a pairing in which *every* pair is plausible? Feasibility at a given
+    ceiling is a bipartite matching, and the smallest workable ceiling is one
+    of the costs -- so binary search the sorted costs and keep the last
+    matching that was perfect. Sections carry loops in the tens, so O(n^3 log n)
+    on numbers already computed is nothing beside the Hausdorff pass that
+    follows.
+
+    ponytail: minimises the worst pair, not the sum. The verdict is a maximum,
+    so a total-cost assignment (Hungarian) would optimise the wrong number;
+    swap it in only if some consumer ever needs the sum.
+    """
+    size = len(cost)
+    if size == 0:
+        return {}
+
+    def perfect_within(ceiling: float) -> list[int] | None:
+        owner = [-1] * size
+        def augment(row: int, seen: set[int]) -> bool:
+            for column in range(size):
+                if cost[row][column] > ceiling or column in seen:
+                    continue
+                seen.add(column)
+                if owner[column] == -1 or augment(owner[column], seen):
+                    owner[column] = row
+                    return True
+            return False
+        for row in range(size):
+            if not augment(row, set()):
+                return None
+        return owner
+
+    ceilings = sorted({value for row in cost for value in row})
+    low, high, best = 0, len(ceilings) - 1, None
+    while low <= high:
+        middle = (low + high) // 2
+        owner = perfect_within(ceilings[middle])
+        if owner is None:
+            low = middle + 1
+        else:
+            best, high = owner, middle - 1
+    # The largest cost admits every pair, so a perfect matching always exists.
+    assert best is not None
+    return {row: column for column, row in enumerate(best)}
+
+
 def congruence(
     first: Sequence[Sequence[tuple[float, float]]],
     second: Sequence[Sequence[tuple[float, float]]],
@@ -398,13 +447,14 @@ def congruence(
             "worst_hausdorff": None,
             "loop_counts": [len(first), len(second)],
         }
-    # A *global* assignment, not a per-loop greedy. Taking each loop's own
-    # nearest partner in turn lets an earlier loop consume a partner a later one
-    # needed -- two nearby loops sampled differently at the two stations have
-    # centroids that cross -- and the later loop is then paired with whatever is
-    # left, and the Hausdorff that follows gates a constant slab. Every pair is
-    # scored, the cheapest over the whole set is taken first, and the loops it
-    # used leave the pool.
+    # A *global* assignment, not a per-loop greedy and not a greedy over the
+    # sorted pairs either. Taking the cheapest available pair in turn
+    # still lets one pair consume the only viable partner another needed: with
+    # centres at 0 and 3 against 1 and -2, the cheapest pair is 0-1 at a cost of
+    # 1, which forces 3--2 at 5, while pairing 0--2 with 3-1 costs 2 for both.
+    # A tolerance between the two then gates a constant slab. So the assignment
+    # minimises the *worst* pair rather than accepting the best one first, which
+    # is the quantity the verdict below is about.
     #
     # The cost is the *area* centroid's distance plus the normalised area
     # difference, and both terms are needed. The vertex mean drifts with the
@@ -425,26 +475,16 @@ def congruence(
     # per-slab loop, and centroid-plus-relative-area separates the cases that
     # were measured to go wrong. The Hausdorff still decides *agreement* on the
     # pairing this produces.
-    costs = sorted(
-        (
+    cost = [
+        [
             math.dist(centres_first[i], centres_second[j])
             + abs(areas_first[i] - areas_second[j])
-            / max(areas_first[i], areas_second[j], 1e-09),
-            i,
-            j,
-        )
+            / max(areas_first[i], areas_second[j], 1e-09)
+            for j in range(len(second))
+        ]
         for i in range(len(first))
-        for j in range(len(second))
-    )
-    taken_first: set[int] = set()
-    taken_second: set[int] = set()
-    matched: dict[int, int] = {}
-    for _cost, i, j in costs:
-        if i in taken_first or j in taken_second:
-            continue
-        taken_first.add(i)
-        taken_second.add(j)
-        matched[i] = j
+    ]
+    matched = _minimax_assignment(cost)
     worst = 0.0
     pairs: list[tuple[int, int, float]] = []
     for index in sorted(matched):

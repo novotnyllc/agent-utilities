@@ -579,6 +579,29 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         self.assertFalse(touching["shells_agree"])
         self.assertIsNone(touching["winding"])
 
+    def test_a_duplicated_facet_away_from_the_origin_keeps_the_winding(self) -> None:
+        """A component that encloses nothing must not vote on the sign.
+
+        Two coincident triangles wound the same way share every edge, so the
+        mesh is neither open nor non-manifold -- and their doubled tetrahedron
+        term carries a sign of its own, which away from the origin disagrees
+        with the solid's and withdrew the whole mesh's winding. At the origin
+        the term is zero, which is why this went unseen. The duplicate is
+        still counted where it belongs: the mesh is not consistently wound.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        stray = [(x + 5.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (stray, [BOX_TRIS[0], BOX_TRIS[0]]))
+        evidence = mesh_winding_evidence(verts, tris)
+        self.assertEqual(0, evidence["boundary_edges"])
+        self.assertEqual(0, evidence["non_manifold_edges"])
+        self.assertTrue(evidence["shells_agree"])
+        self.assertEqual("outward", evidence["winding"])
+        # And the duplicate is not swept under the rug.
+        self.assertGreater(evidence["reversed_edges"], 0)
+        self.assertFalse(evidence["consistently_wound"])
+
     def test_a_cavity_reads_as_material_outside_its_own_loop(self) -> None:
         # A closed shell with a void: the outer box wound outward, an inner box
         # wound inward. That is what a solid with an internal cavity *is* as a

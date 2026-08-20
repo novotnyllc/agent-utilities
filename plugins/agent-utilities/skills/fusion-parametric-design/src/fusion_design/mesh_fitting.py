@@ -775,6 +775,14 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
 
     boundary = non_manifold = reversed_edges = 0
     dirty: set[int] = set()
+    # Clean manifold seams: two faces, traversing the edge opposite ways. A
+    # component with none of them at all is not a surface enclosing anything --
+    # coincident duplicated facets are the case -- and its signed volume is an
+    # artifact rather than a volume, so it may not vote on the winding below.
+    # One dirty edge does not disqualify a component: a box with a single
+    # inverted wall is still a box, and calling its winding unavailable throws
+    # away the very contradiction the caller is meant to see.
+    clean_seams: set[tuple[int, int]] = set()
     seen: set[tuple[int, int]] = set()
     for (i, j), forward in directed.items():
         key = (i, j) if i < j else (j, i)
@@ -790,6 +798,8 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
             boundary += 1
         elif forward == 2 or backward == 2:
             reversed_edges += 1
+        else:
+            clean_seams.add(key)
 
     closed = boundary == 0 and non_manifold == 0
     # A hole in the surface is what makes the sign meaningless; a self-touch is
@@ -824,15 +834,39 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
             continue
         root = _root(index)
         shells[root] = shells.get(root, 0.0) + _dot(pa, _cross(pb, pc)) / 6.0
-    signs = {value > 0.0 for value in shells.values() if value != 0.0}
+    # Only closed, consistently wound components vote. A duplicated facet is
+    # the case that made this necessary: two coincident triangles wound the
+    # same way share every edge, so nothing is open or non-manifold, and away
+    # from the origin their doubled tetrahedron term carries a sign of its own
+    # -- disagreeing with the solid's and withdrawing the whole mesh's winding
+    # over a component that encloses nothing. Its edges are all `reversed`, so
+    # it is excluded here and still counted in `reversed_edges` and
+    # `consistently_wound`, where it belongs.
+    encloses = {
+        _root(member) for key in clean_seams for member in incident.get(key, ())
+    }
+    tainted = {root for root in shells if root not in encloses}
+    signs = {
+        value > 0.0
+        for root, value in shells.items()
+        if value != 0.0 and root not in tainted
+    }
     # Disagreement is only evidence of *two solids* when the shells are joined
     # by a non-manifold edge. A solid with an internal void is two disjoint
     # shells whose signs disagree by construction -- the void's is inward --
     # and that is one solid, correctly wound, which this must not withhold.
     shells_agree = len(signs) <= 1 or non_manifold == 0
+    # And the direction comes from the same components that voted on it. The
+    # reported `signed_volume` stays the whole mesh's, because that is the
+    # census; the winding is a claim about the solid, and a component enclosing
+    # nothing has no business setting its sign -- a duplicated facet far enough
+    # from the origin outweighs the body it was duplicated from.
+    enclosed = sum(
+        value for root, value in shells.items() if root not in tainted
+    )
     winding = (
-        ("outward" if volume > 0.0 else "inward")
-        if boundary == 0 and volume != 0.0 and shells_agree
+        ("outward" if enclosed > 0.0 else "inward")
+        if boundary == 0 and enclosed != 0.0 and shells_agree
         else None
     )
     return {
