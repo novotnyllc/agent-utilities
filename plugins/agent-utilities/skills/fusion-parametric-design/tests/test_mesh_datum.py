@@ -438,6 +438,45 @@ class DatumFrameTests(unittest.TestCase):
                 derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
             )
 
+    def test_a_second_axis_carries_its_own_anchor_key_and_the_primary_s_lever_arm(self) -> None:
+        # Two propagations, both first-order, both from numbers the record
+        # states. A cone's positional sigma lives under `apex`, not
+        # `axis_point`, so reading one key for both kinds gave every cone no
+        # sigma at all -- which reads as "carries none" and refuses a tie the
+        # record could settle. And the direction *to* an axis is produced by
+        # projecting out the primary axis, so tilting that axis by delta turns
+        # this direction by about `axial / radial * delta`: an anchor 4 mm up
+        # the axis and 9 mm out from it levers 0.05 deg into 0.0222.
+        def as_cone(region):
+            fit = region["fit"]
+            fit["kind"] = "cone"
+            parameters = fit["parameters"]
+            parameters["apex"] = parameters.pop("axis_point")
+            parameters["half_angle_deg"] = 12.0
+            parameters.pop("radius")
+            fit["uncertainty"] = dict(fx.CONE_SIGMAS)
+            fit.pop("support", None)
+            region.pop("motion_moments", None)
+            region.pop("triangle_count", None)
+            return region
+
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                as_cone(fx.cylinder("pin", (0.0, 0.0, 1.0), (9.0, 0.0, 4.0), 1.0, 40.0, 6.0)),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        secondary = frame.evidence["secondary"]
+        self.assertEqual("cone", secondary["kind"])
+        self.assertEqual("propagated", secondary["direction_sigma_basis"])
+        self.assertAlmostEqual(
+            math.hypot(math.degrees(math.atan2(0.01, 9.0)), 0.05 * 4.0 / 9.0),
+            secondary["direction_sigma_deg"],
+            places=12,
+        )
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [

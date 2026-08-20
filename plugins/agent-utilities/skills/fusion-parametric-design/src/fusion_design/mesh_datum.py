@@ -1207,18 +1207,27 @@ def _secondary_candidates(
     return _merge_parallel(out, angle_tolerance_deg)
 
 
+#: Where each kind's fit record keeps the positional sigma of its own anchor.
+#: A cone's anchor is its apex and a cylinder's is a point on its axis, and the
+#: record names them accordingly (``FIT_UNCERTAINTY_KEYS``) -- reading one key
+#: for both silently gives every cone no sigma at all, which reads as "carries
+#: no measured uncertainty" and refuses a tie the record could have settled.
+_ANCHOR_SIGMA_KEY = {"cylinder": "axis_point", "cone": "apex"}
+
+
 def _secondary_from_second_axis(
     regions: Sequence[RegionFit],
     z: Vec3,
     origin: Vec3,
     primary_region_hash: str,
     offset_tolerance: float,
+    z_sigma_deg: float | None,
 ) -> list[AxisCandidate]:
     """A bolt pattern gives a natural X: the direction to the second axis."""
     out: list[AxisCandidate] = []
     for region in regions:
         fit = region.fit
-        if fit is None or fit.kind not in ("cylinder", "cone"):
+        if fit is None or fit.kind not in _ANCHOR_SIGMA_KEY:
             continue
         if region.region_hash == primary_region_hash:
             continue
@@ -1227,28 +1236,41 @@ def _secondary_from_second_axis(
             continue
         offset = _sub(anchor, origin)
         perpendicular = _sub(offset, _scale(z, _dot(offset, z)))
-        if _length(perpendicular) <= offset_tolerance:
+        radial = _length(perpendicular)
+        if radial <= offset_tolerance:
             continue
         x = _unit(perpendicular)
         if x is None:
             continue
+        # This direction is not a fitted axis: it is the direction *to* one, so
+        # two measured numbers move it and both are propagated first-order.
+        #
+        # The anchor's own positional sigma, spread over the lever arm -- and
+        # read under the key this kind's record actually uses.
+        anchor_sigma = region.sigma(_ANCHOR_SIGMA_KEY[fit.kind])
+        # And the primary axis's angular sigma, because the projection that
+        # produces this direction subtracts that axis. Tilting z by delta moves
+        # the subtracted component by roughly `axial * delta`, which lands on a
+        # perpendicular of length `radial`, so the direction turns by about
+        # `axial / radial * delta`. An anchor far up the axis and close to it is
+        # where that lever is worst, and it is exactly where a tie is likeliest.
+        axial = abs(_dot(offset, z))
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
                 kind=fit.kind,
-                score=_length(perpendicular),
+                score=radial,
                 area=region.area,
                 direction=_canonical_direction(x),
                 anchor=anchor,
                 basis="perpendicular offset from the origin to a second axis",
-                # This direction is not a fitted axis: it is the direction *to*
-                # one, so its uncertainty is the axis point's own, spread over
-                # the lever arm.  First-order, and the only propagation here --
-                # the sigma itself is still read from the record.
                 direction_sigma_deg=(
                     None
-                    if region.sigma("axis_point") is None
-                    else math.degrees(math.atan2(region.sigma("axis_point"), _length(perpendicular)))
+                    if anchor_sigma is None or z_sigma_deg is None
+                    else math.hypot(
+                        math.degrees(math.atan2(anchor_sigma, radial)),
+                        z_sigma_deg * axial / radial,
+                    )
                 ),
                 direction_sigma_basis="propagated",
             )
@@ -1318,7 +1340,12 @@ def derive_datum_frame(
     secondary_basis = "plane parallel to the primary axis"
     if not secondary:
         secondary = _secondary_from_second_axis(
-            accepted, z, origin, winner.region_hash, offset_tolerance
+            accepted,
+            z,
+            origin,
+            winner.region_hash,
+            offset_tolerance,
+            winner.direction_sigma_deg,
         )
         secondary_basis = "second axis off the primary axis"
     if not secondary:
