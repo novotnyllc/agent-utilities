@@ -398,11 +398,20 @@ afterwards.
 four).** Procedure: live Fusion session, version recorded; per part:
 `emit-mesh-capture` → `emit-mesh-face-groups` → `emit-mesh-extract` (fresh
 hash-bound dumps — the PR-era dumps are not committed); host-side `fit-regions`
-→ `plan-reconstruction --dump` with declared `slab_evidence`; `emit-mesh-rebuild`
+→ `plan-reconstruction <manifest> --fit-record <fit.json> --program-spec <spec.json>
+--dump <mesh.bin>` with declared `slab_evidence` (all three options are
+required; `--dump` is what the slab decomposition reads and arrives with the
+2.5D lane — PR #51/#53 — which these runs are scheduled after in any case);
+`emit-mesh-rebuild`
 into a clean document; author per-part editability specs (observable +
 perturbation + rationale per parameter, design 006 D7 arithmetic rules);
-`emit-mesh-editability`; `emit-mesh-deviation` against the immutable source;
-`reconstruction-coverage` last. **Three artifacts, three cells — not one
+`emit-mesh-editability`; **`check-editability --rebuild-record
+--editability-report --editability-nonce`**, which is the gate that turns a
+saved report into a verdict and is the only thing that makes the phrase
+"validated editability report" below mean anything — `emit-mesh-editability`
+emits a script and mints a nonce and validates nothing; `emit-mesh-deviation`
+against the immutable source; `reconstruction-coverage` last, with
+`--editability-verdict` pointing at what `check-editability` produced. **Three artifacts, three cells — not one
 command.** `reconstruction-coverage` yields `delivered_area_fraction` and
 nothing else on this list: it takes no deviation verdict, and its editability
 stage carries `checked`/`not_exercised` without an emitted-parameter
@@ -418,7 +427,8 @@ size; the human cost is authoring ~15 editability specs. Estimate half a day of
 wall-clock, dominated by spec authorship and the first-failure loop.
 
 **Run B — benchmark slab-path re-measure (host-side, no Fusion).** The four
-dumps are committed; run `fit-regions` → `plan-reconstruction --dump` →
+dumps are committed; run `fit-regions` → `plan-reconstruction <manifest>
+--fit-record --program-spec --dump` →
 emission per part on the 2.5D head and record RC-emitted per part into the
 manifest with `re_measured` notes. This is 2.5D PR 6's declared job; as a
 measurement it is runnable today. Cost: minutes of compute, an hour of
@@ -443,8 +453,14 @@ failure: a region whose fit was rejected is named twice, once by
 `unreconstructed` under its rejection text. So: **fit stage** — Σ(area of
 regions with an accepted fit) + Σ(`unfitted_regions`) + Σ(`unclaimed_components`)
 = total mesh area (this is the only stage that can close against the whole
-mesh, because it is the only one that sees the unclaimed surface); **plan stage** — Σ(area claimed by emitted archetypes) +
-Σ(`unreconstructed`) = **the total area of the regions the fit stage offered**,
+mesh, because it is the only one that sees the unclaimed surface); **plan stage** — Σ(area claimed by **planned** archetypes) +
+Σ(`unreconstructed`) = **the total area of the regions the fit stage offered**.
+*Planned*, not emitted: `_plan_stage` exposes every archetype the program
+carries whether or not emission later refused it, while `unreconstructed` holds
+only what the *planner* declined — so subtracting an emission refusal from the
+claimed side without adding it to any named list invents missing area. Emission
+loss is a stage of its own and is accounted there (§1.1's all-or-nothing rule),
+never inside this identity. The offered total is
 *not* total mesh area: `plan_archetypes` partitions `fit_record.regions` and
 nothing else, so the `unclaimed_components` — surface that never became a
 region at all, 1,041 of them on Dig-Next-2 — exist only in `_fit_stage` and
@@ -453,7 +469,14 @@ other instead: offered-region area + Σ(`unclaimed_components`) = total mesh
 area is the fit stage's identity, and the plan stage's is against the offered
 area it was actually handed. Both sums are taken over a set keyed by
 `region_id`, so a region named by two lists is counted once and a region named
-by none is the finding. Cross-stage roll-ups state which stage each
+by none is the finding — **which is why this script reads the program and the
+fit record, not the coverage account**: `_plan_stage` reduces each archetype to
+`id`, `kind` and an aggregate `area_fraction` and drops the `regions` list, so
+nothing keyed by region identity can be recomputed from the account alone. Run
+D takes the raw `program.json` (each archetype's `regions`) and the raw
+`fit.json` (each region's area) and reports *against* the account rather than
+from it. Retaining region ids in the account would work too and is the larger
+change; the audit does not need it. Cross-stage roll-ups state which stage each
 term came from. First targets: Dig-Next-2 and the honeycomb; explicitly audit
 the <4-point face groups (§1.5). Cost: an hour. Turns H from "by construction"
 into a measured row.
