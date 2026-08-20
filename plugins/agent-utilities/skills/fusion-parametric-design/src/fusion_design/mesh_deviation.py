@@ -186,6 +186,16 @@ UNCLASSIFIED_MEANING = (
     "the run for invented material -- but it does disprove the absence of it, and the absence is what "
     "a pass would claim. Classify these samples against a closed source mesh to settle it."
 )
+OMISSION_EXPLAINS_MEANING = (
+    "The reconstruction's own tessellation reaches past the threshold from every scanned surface, "
+    "and no scanned vertex lies inside the reconstruction -- but it reaches no further than the "
+    "omitted detail this run also measured, and a rebuilt surface standing where an omitted "
+    "feature used to be reads exactly like that. The unsigned direction cannot separate the two, "
+    "so the omission is taken as the account of it and the numbers for both are recorded above. "
+    "What this does NOT establish is that there is no invented material *as well*: a part carrying "
+    "both, with the invention lying between scanned vertices, would look like this. Classifying "
+    "these samples against a closed source solid is what would settle it."
+)
 VERDICT_NOTE = (
     "These two numbers answer different questions and neither certifies the other. A small maximum "
     "deviation from the reconstruction to the scan does not establish that the reconstruction captured "
@@ -405,6 +415,12 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
     return qx * qx + qy * qy + qz * qz
 
 
+#: How many fine cells a coarse occupancy cell spans on each axis. Eight is one
+#: byte's worth per axis and a 512x reduction in cells to scan; nothing measured
+#: chose it over four or sixteen, and nothing downstream reads it.
+_COARSE = 8
+
+
 class _TriangleGrid(object):
     """A uniform grid over the source mesh's triangles, for point-to-mesh distance.
 
@@ -460,6 +476,14 @@ class _TriangleGrid(object):
                         else:
                             self.buckets[key] = [offset]
 
+    def _coarse_occupancy(self):
+        if not hasattr(self, "_coarse"):
+            self._coarse = {
+                (i // _COARSE, j // _COARSE, k // _COARSE) for (i, j, k) in self.buckets
+            }
+            self._coarse_floors = {}
+        return self._coarse
+
     def _triangle_distance_sq(self, offset, x, y, z):
         a = self.triangles[offset] * 3
         b = self.triangles[offset + 1] * 3
@@ -504,6 +528,12 @@ class _TriangleGrid(object):
         ring = max(
             0, low_i - ci, ci - high_i, low_j - cj, cj - high_j, low_k - ck, ck - high_k
         )
+        # The box bounds the *outside*. A point deep inside a hollow body is
+        # inside the box and still far from every surface bucket -- a smaller
+        # reconstruction enclosed by a dense scan is the case -- and the walk
+        # would enumerate the empty interior shell by shell just the same. The
+        # coarse occupancy below gives a lower bound on where anything can be.
+        ring = max(ring, self._coarse_floor(ci, cj, ck))
         # Everything in the grid is inside this many rings of the query cell, so
         # the loop terminates even for a point far outside the mesh.
         limit = self._ring_limit(ci, cj, ck)
@@ -531,6 +561,36 @@ class _TriangleGrid(object):
                                 best = value
             ring += 1
         return None if best is None else math.sqrt(best)
+
+    def _coarse_floor(self, ci, cj, ck):
+        """A fine-ring lower bound from a coarse occupancy map, memoized.
+
+        Occupied fine cells are collapsed onto a grid _COARSE times wider, so
+        the nearest occupied coarse cell is found by scanning a set some
+        hundreds of entries long rather than by walking shells. A coarse cell at
+        Chebyshev distance D holds nothing nearer than (D - 1) * _COARSE fine
+        cells, which is the bound returned.
+
+        ponytail: a one-level overlay and a linear scan of it, not a BVH. The
+        scan is memoized per coarse query cell, and queries on a tessellation
+        cluster; if a mesh ever makes this the measured bottleneck, the upgrade
+        is a second overlay level rather than a different structure.
+        """
+        coarse = self._coarse_occupancy()
+        key = (ci // _COARSE, cj // _COARSE, ck // _COARSE)
+        cached = self._coarse_floors.get(key)
+        if cached is not None:
+            return cached
+        nearest = None
+        for i, j, k in coarse:
+            distance = max(abs(i - key[0]), abs(j - key[1]), abs(k - key[2]))
+            if nearest is None or distance < nearest:
+                nearest = distance
+                if nearest <= 1:
+                    break
+        floor = 0 if nearest is None or nearest <= 1 else (nearest - 1) * _COARSE
+        self._coarse_floors[key] = floor
+        return floor
 
     def _extent_box(self):
         """The occupied cells' bounding box, measured once."""
@@ -1217,7 +1277,19 @@ def run(context):
         # invented material; it can and does disprove the absence of it, which
         # is what a pass claims.
         unclassified = report["reconstruction_to_source"]["beyond_invented_material_threshold"]
-        established = bool(invented_count) or not unclassified
+        # And omission explains some of them. When the rebuild leaves out an
+        # outward feature the scan carries, the surface it leaves in that
+        # feature's place is a *rebuilt* surface far from any scanned triangle
+        # -- on a manifold scan there are no base-face triangles under a fused
+        # boss for it to be near -- so the reverse direction reads exactly what
+        # invented material reads. The two are told apart by the signed
+        # direction, which already saw the omission: a scanned vertex outside
+        # the reconstruction. So the unexplained case is the one where the
+        # reverse direction reaches further than the omission does.
+        omitted_reach = max(outside_gaps) if outside_gaps else 0.0
+        recon_reach = report["reconstruction_to_source"]["max_mm"]
+        explained_by_omission = bool(unclassified) and recon_reach <= omitted_reach
+        established = bool(invented_count) or not unclassified or explained_by_omission
         report["verdict"] = {
             "invented_material": {
                 "severity": (
@@ -1231,7 +1303,16 @@ def run(context):
                 "sign_convention_verified": True,
                 "sign_probe": convention_evidence,
                 "unclassified_reconstruction_samples": unclassified,
-                "meaning": INVENTED_MEANING if established else UNCLASSIFIED_MEANING,
+                "unclassified_explained_by_omission": explained_by_omission,
+                "unclassified_reach_mm": recon_reach,
+                "omitted_reach_mm": omitted_reach,
+                "meaning": (
+                    UNCLASSIFIED_MEANING
+                    if not established
+                    else OMISSION_EXPLAINS_MEANING
+                    if explained_by_omission
+                    else INVENTED_MEANING
+                ),
             },
             "omitted_detail": omitted,
         }

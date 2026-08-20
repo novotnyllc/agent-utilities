@@ -1066,6 +1066,38 @@ class PointToTriangleTests(unittest.TestCase):
         # more than 68,000 lookups just to reach the first occupied cell.
         self.assertLess(_CountingBuckets.lookups, 200)
 
+    def test_a_query_deep_inside_a_hollow_body_does_not_walk_the_interior(self) -> None:
+        """The occupied box bounds the outside; the interior needed its own bound.
+
+        A smaller reconstruction enclosed by a dense scan puts query points
+        inside the source's bounding box and far from every surface bucket, so
+        the box clamp does nothing and the walk enumerates the empty interior
+        shell by shell -- the same cost, one direction in.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (200.0, 200.0, 200.0), 5.0)
+        flat = [value for vertex in vertices for value in vertex]
+        grid = self.namespace["_TriangleGrid"](flat, triangles, 1.0)
+
+        budget = 200000
+
+        class _CountingBuckets(dict):
+            lookups = 0
+
+            def get(self, key, default=None):
+                _CountingBuckets.lookups += 1
+                if _CountingBuckets.lookups > budget:
+                    # Raise rather than let the assertion below wait for the
+                    # interior walk to finish: without the bound it does not,
+                    # in any time a test suite should spend.
+                    raise AssertionError("the interior walk is enumerating empty cells")
+                return dict.get(self, key, default)
+
+        grid.buckets = _CountingBuckets(grid.buckets)
+        # Dead centre: 100 mm from every face, 100 cells of empty interior.
+        self.assertAlmostEqual(100.0, grid.nearest_mm(100.0, 100.0, 100.0), places=6)
+        # Shells 0..99 are empty by construction and are never enumerated.
+        self.assertLess(_CountingBuckets.lookups, budget)
+
     def test_a_triangle_far_larger_than_the_cell_is_still_found(self) -> None:
         # One triangle spanning many cells goes to the oversized list rather than
         # into hundreds of buckets; it must still answer.
