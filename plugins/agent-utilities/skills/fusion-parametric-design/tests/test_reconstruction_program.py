@@ -1119,6 +1119,25 @@ class EventLinkageTests(unittest.TestCase):
         self.assertEqual(1, len(events))
         self.assertEqual(3, len(events[0]["members"]))
 
+    def test_the_assignment_is_global_and_not_a_per_loop_greedy(self) -> None:
+        """An earlier loop must not consume the partner a later one needed.
+
+        Two nearby loops sampled differently at the two stations have centroids
+        that cross. A per-loop greedy takes the first loop's own nearest
+        partner, which is the *second* loop's, and pairs what is left -- the
+        Hausdorff that follows then gates a constant slab. Scoring every pair
+        and taking the cheapest first does not.
+        """
+        # A and B are 1 apart; at the second station their centroids have
+        # crossed by a hair, so A's nearest is B' and B's nearest is also B'.
+        a = [(0.0, 0.0), (0.9, 0.0), (0.9, 0.9), (0.0, 0.9)]
+        b = [(1.0, 0.0), (1.9, 0.0), (1.9, 0.9), (1.0, 0.9)]
+        a_again = [(0.02, 0.0), (0.92, 0.0), (0.92, 0.9), (0.02, 0.9)]
+        b_again = [(0.98, 0.0), (1.88, 0.0), (1.88, 0.9), (0.98, 0.9)]
+        verdict = ms.congruence([a, b], [b_again, a_again], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+
     def test_concentric_loops_are_paired_by_geometry_not_by_list_order(self) -> None:
         """Concentric loops share a centroid exactly, so the centroid decides nothing.
 
@@ -1183,6 +1202,28 @@ class LoopRoleTests(unittest.TestCase):
         )
         # The island's parent is the cavity it stands in, not the outer boundary.
         self.assertEqual(1, roles[2]["parent"])
+
+    def test_slabs_that_agree_on_geometry_and_not_on_roles_do_not_coalesce(self) -> None:
+        """Congruent loops are not the same section.
+
+        Two slabs can close the same loops in the same places and disagree
+        about what those loops *are* -- a same-radius inner loop that is a
+        bore's wall below and an unclaimed cavity above. Merging keeps only the
+        lower slab's `loops`, so the upper slab's roles would be dropped and
+        the program would describe that cavity as the bore. Compared through
+        the pairing `congruence` matched on, because the two stations do not
+        emit their loops in the same order.
+        """
+        below = [{"role": "outer"}, {"role": "bore"}]
+        above_same = [{"role": "outer"}, {"role": "bore"}]
+        above_differs = [{"role": "outer"}, {"role": "cavity"}]
+        self.assertTrue(ms.roles_agree(below, above_same, [(0, 0), (1, 1)]))
+        self.assertFalse(ms.roles_agree(below, above_differs, [(0, 0), (1, 1)]))
+        # And through the pairing, not by position: the same two sections with
+        # their loops emitted the other way round still agree.
+        self.assertTrue(
+            ms.roles_agree(below, list(reversed(above_same)), [(0, 1), (1, 0)])
+        )
 
     def test_a_loop_whose_walls_nobody_owns_is_not_called_a_cavity(self) -> None:
         """`cavity` means "these walls belong to no bore", and that needs walls.

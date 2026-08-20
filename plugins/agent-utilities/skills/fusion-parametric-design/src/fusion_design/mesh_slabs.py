@@ -328,6 +328,52 @@ def _contains(polygon: Sequence[tuple[float, float]], point: tuple[float, float]
     return inside
 
 
+def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float]:
+    """The *area* centroid of a closed polygon, not the mean of its vertices.
+
+    A vertex mean drifts toward wherever the tessellation happened to put more
+    samples.  This centroid is what a planned profile is matched to Fusion's own
+    enumeration by, so it has to be the property Fusion computes -- which is the
+    area one.  Falls back to the vertex mean on a zero-area loop, which has no
+    area centroid to have.
+    """
+    n = len(points)
+    twice = sum(
+        points[k][0] * points[(k + 1) % n][1] - points[(k + 1) % n][0] * points[k][1]
+        for k in range(n)
+    )
+    if twice == 0.0:
+        return _centroid(points)
+    cross = [
+        points[k][0] * points[(k + 1) % n][1] - points[(k + 1) % n][0] * points[k][1]
+        for k in range(n)
+    ]
+    return (
+        sum((points[k][0] + points[(k + 1) % n][0]) * cross[k] for k in range(n)) / (3.0 * twice),
+        sum((points[k][1] + points[(k + 1) % n][1]) * cross[k] for k in range(n)) / (3.0 * twice),
+    )
+
+
+def roles_agree(
+    here: Sequence[Mapping[str, Any]],
+    there: Sequence[Mapping[str, Any]],
+    pairs: Sequence[tuple[int, int]],
+) -> bool:
+    """Do two sections' loops carry the same roles, through their own pairing?
+
+    Compared through the pairing ``congruence`` matched on, because
+    ``section_mesh`` orders its polylines by the triangles it intersected and
+    that order is not the same at two stations.
+    """
+    here_roles = [loop["role"] for loop in here]
+    there_roles = [loop["role"] for loop in there]
+    return all(
+        here_roles[first] == there_roles[second]
+        for first, second in pairs
+        if first < len(here_roles) and second < len(there_roles)
+    )
+
+
 def congruence(
     first: Sequence[Sequence[tuple[float, float]]],
     second: Sequence[Sequence[tuple[float, float]]],
@@ -348,30 +394,50 @@ def congruence(
             "worst_hausdorff": None,
             "loop_counts": [len(first), len(second)],
         }
-    remaining = list(range(len(second)))
+    # A *global* assignment, not a per-loop greedy. Taking each loop's own
+    # nearest partner in turn lets an earlier loop consume a partner a later one
+    # needed -- two nearby loops sampled differently at the two stations have
+    # centroids that cross -- and the later loop is then paired with whatever is
+    # left, and the Hausdorff that follows gates a constant slab. Every pair is
+    # scored, the cheapest over the whole set is taken first, and the loops it
+    # used leave the pool.
+    #
+    # The cost is the *area* centroid's distance plus the normalised area
+    # difference, and both terms are needed. The vertex mean drifts with the
+    # tessellation, and concentric loops share a centre exactly -- an outer
+    # wall, its cavity and the island in it are indistinguishable by centroid
+    # alone, which paired an outer loop with an island and reported a perfectly
+    # prismatic slab as inconstant.
+    centres_first = [polygon_centroid(loop) for loop in first]
+    centres_second = [polygon_centroid(loop) for loop in second]
+    areas_first = [abs(_signed_area(loop)) for loop in first]
+    areas_second = [abs(_signed_area(loop)) for loop in second]
+    scale = max(areas_first + areas_second + [1.0])
+    costs = sorted(
+        (
+            math.dist(centres_first[i], centres_second[j])
+            + abs(areas_first[i] - areas_second[j]) / scale,
+            i,
+            j,
+        )
+        for i in range(len(first))
+        for j in range(len(second))
+    )
+    taken_first: set[int] = set()
+    taken_second: set[int] = set()
+    matched: dict[int, int] = {}
+    for _cost, i, j in costs:
+        if i in taken_first or j in taken_second:
+            continue
+        taken_first.add(i)
+        taken_second.add(j)
+        matched[i] = j
     worst = 0.0
     pairs: list[tuple[int, int, float]] = []
-    for index, loop in enumerate(first):
-        if not remaining:
-            break
-        centre = _centroid(loop)
-        # Nearest centroid, and where centroids tie the geometry decides.
-        # Concentric loops share a centroid exactly, so a centroid-only greedy
-        # pairs the outer boundary with whichever inner loop happens to be
-        # first in a list `section_mesh` orders by the triangles it intersected
-        # -- and the Hausdorff that follows is then large, marking a constant
-        # slab `slab-section-inconstant` on ordering alone.
-        nearest = min(
-            remaining,
-            key=lambda other: (
-                round(math.dist(centre, _centroid(second[other])), 9),
-                hausdorff(loop, second[other]),
-                other,
-            ),
-        )
-        remaining.remove(nearest)
-        distance = hausdorff(loop, second[nearest])
-        pairs.append((index, nearest, distance))
+    for index in sorted(matched):
+        partner = matched[index]
+        distance = hausdorff(first[index], second[partner])
+        pairs.append((index, partner, distance))
         worst = max(worst, distance)
     agrees = bool(pairs) and worst <= tolerance
     return {
@@ -663,6 +729,17 @@ def decompose(
             here["_projected"], below["_projected"], tolerance=constancy_tolerance
         )
         if verdict["agrees"]:
+            # Congruent geometry is not the same section. Two slabs can close
+            # the same loops in the same places and disagree about what those
+            # loops *are* -- a same-radius inner loop that is a planned bore's
+            # wall below and an unclaimed cavity above. Merging keeps only the
+            # lower slab's `loops`, so the upper slab's roles would be dropped
+            # and the program would describe that cavity as the bore. Compared
+            # through the pairing `congruence` matched on, for the same reason
+            # the constancy check compares its verdicts through it.
+            if not roles_agree(here["loops"], below["loops"], verdict["pairs"]):
+                index += 1
+                continue
             coalesced.append(here["upper_event"])
             events[here["upper_event"]]["coalesced"] = {
                 "into": [here["index"], below["index"]],
