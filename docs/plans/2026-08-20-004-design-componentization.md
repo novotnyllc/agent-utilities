@@ -627,7 +627,7 @@ what it does not permit is recorded, not worked around silently.
 
 | Stage | Ships | Fusion surface | Gated by |
 | --- | --- | --- | --- |
-| C1 | assignment record, evident-things census, complexity witness, **thing sub-mesh extraction** (the license is evaluated on the sub-meshes, §4.1) | none (extraction and the license's reconstruction passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
+| C1 | assignment record, evident-things census, complexity witness, **thing sub-mesh extraction** (the partition licence is evaluated on the sub-meshes, §4.1: extraction, stability, ownership, closure accounting — **no reconstruction**; that gate is C3's) | none (all C1 passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
 | C2 | grounded base + N placed reference-mesh components + ≤1 residual component | components, occurrences, `transform2`, mesh bodies | C1 + PC-1/2/7 (PC-9/10 for its report) |
 | C3 | per-thing status upgrades reference → primitive → parametric; two-level coverage; R3 layers 2–3 | geometry inside existing components; structure untouched | C2 + PC-11; parametric prisms also on 2.5D lane PRs 4–6 |
 | C4 | instancing verdicts + occurrences; lattice-gated patterns | `addExistingComponent`, pattern features | C3 + PC-3/8 |
@@ -648,7 +648,14 @@ scan fit coverage can rise while RC stays zero. The contract:
   source mesh**, never serialized as triangles into any dump.
 - Evidence class **`inferred-by-contact`** (bottom caps against an observed
   base face) or **`inferred-by-continuation`** (R5's uniquely determined
-  lateral completions); the class rides every derived quantity.
+  lateral completions); the class rides every derived quantity. **v1
+  representation limit:** this contract represents closures generated from
+  a licensed plane and recorded cut loop, so `inferred-by-continuation` is
+  licensed in v1 only for **planar** completions; a uniquely determined
+  *nonplanar* completion has no closure surface this contract can generate
+  — it refuses (the R5 merged-pseudo-thing default stands) and a
+  continuation-derived surface representation is a registered follow-up
+  (owner: PR C-6), not smuggled in here.
 - **Used for**: topology (manifold check passes with the cap in place),
   winding inheritance, section closure, event creation at the cap's station,
   and volume. **Excluded from**: scan-deviation grading and original-area
@@ -846,8 +853,10 @@ blocked PRs name their gate.
   property check (dropped region, double-assigned region, cluster with no
   chain, chain with no component).
 - **Size:** ~600–700 added (the extractor is ~150–200 of it).
-- **Fusion surface:** still none. Extraction and the license's reconstruction
-  passes are host-side; the stage ends at the existing pause with a record.
+- **Fusion surface:** still none. Extraction and the partition licence's
+  stability/ownership/closure passes are host-side (no reconstruction runs
+  here — that gate is C3's, per §4.1 as amended); the stage ends at the
+  existing pause with a record.
 - **Measured claim (Dig-Next-2, merged head):** assignment record with
   ≥ 8 **licensed geometric subobjects** — the C-4 floor is geometric-only
   (`componentized-geometric` candidates under the C1 partition licence, per
@@ -1131,9 +1140,9 @@ in 010's stage order. The global frame and every relationship proposal are
 computed against the **post-decomposition partition version**; anything
 computed against an earlier version is invalidated by 002 §A.2 rule 5, so an
 implementation that runs frame-relate early pays a recompute, never a
-correctness bug. C1's host-side reconstruction passes are an accepted
-transitional state under 010's migration (010 M2–M3 move them in-Fusion;
-same records either way) — the review's "undecided" row is decided as:
+correctness bug. C3's host-side reconstruction passes (the upgrade gate —
+C1 runs none, per §4.1 as amended) are an accepted transitional state under
+010's migration (010 M2–M3 move them in-Fusion; same records either way) — the review's "undecided" row is decided as:
 order fixed here, host/Fusion placement follows 010's migration schedule.
 
 ### A.3 Interface mechanics (missing decisions 11, 12, 13 — decided)

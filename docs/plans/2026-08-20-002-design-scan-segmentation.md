@@ -907,11 +907,14 @@ surface boundary is created, and coplanar components can show no residual
 improvement at all — grading that split on (1)–(3) would make the table's
 own licence unreachable (T4 by construction, and an exact fit puts a zero
 in condition 3's denominator). For that reason-class only, (1)–(3) are
-replaced by: every child is a connected component of the parent's support
-(or lands in a named terminal class), the children partition the parent
-exactly, and each claimed child passes its own gates — the split's
-productivity *is* the evidenced separation, and the record names the
-reason-class that licensed it.
+replaced by: **every** child — terminal children included — corresponds to
+an evidenced connected component of the parent's support (terminal status
+affects only whether a child is claimed, never whether it must be a
+component), the children partition the parent exactly, and each claimed
+child passes its own gates — the split's productivity *is* the evidenced
+separation, and the record names the reason-class that licensed it. A
+fragmentation whose pieces are not the support's connected components is
+not this split and takes the ordinary predicate.
 
 New declared thresholds, each `{value, rationale}` through
 `_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,
