@@ -2032,6 +2032,24 @@ def plan_emission(
 
         offset = float(plane["offset"])
         offset_parameter = plane.get("offset_parameter")
+        # A parameter name, checked as one before it is used as one. The program
+        # validator checks the plane's datum and not this field, so a serialized
+        # program carrying anything unhashable here -- a JSON array is the easy
+        # one -- reached the membership test below and raised `TypeError:
+        # unhashable type`, escaping the named refusal this emitter promises for
+        # a malformed program. Absent and null both mean "this plane names no
+        # station", which is the ordinary case; anything else present has to be
+        # a name.
+        if offset_parameter is not None and (
+            not isinstance(offset_parameter, str) or not offset_parameter.strip()
+        ):
+            raise _refuse(
+                "program-schema-violation",
+                f"{identifier}'s sketch plane declares offset_parameter as "
+                f"{type(offset_parameter).__name__} {offset_parameter!r}; it names a user "
+                "parameter, so it is a non-empty string or it is absent.",
+                {"archetype_id": identifier, "offset_parameter": repr(offset_parameter)},
+            )
         if offset_parameter:
             # A slab names its own lower event's station parameter, which the
             # program already declared and which its neighbour below names too.

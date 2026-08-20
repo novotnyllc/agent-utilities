@@ -395,6 +395,24 @@ class PlannerTests(unittest.TestCase):
             plan_emission(program, self.dump, self.spec)
         self.assertEqual("program-parameter-unbound", caught.exception.reason)
 
+    def test_a_plane_naming_a_non_string_offset_parameter_refuses_by_name(self):
+        """A JSON array here used to raise `TypeError: unhashable type`.
+
+        The program validator checks the plane's datum and not this field, so a
+        serialized program carrying anything unhashable reached the `in seen`
+        membership test and crashed planning, escaping the named refusal this
+        emitter promises for a malformed program. Absent and null still mean
+        "this plane names no station"; anything else present has to be a name.
+        """
+        for value in ([], ["recon_station_1"], {"name": "recon_station_1"}, 3, "", "   "):
+            with self.subTest(offset_parameter=value):
+                archetype = fx.extrude_archetype()
+                archetype["plane"]["offset_parameter"] = value
+                program = fx.program(self.dump.sha256, archetypes=[archetype])
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    plan_emission(program, self.dump, self.spec)
+                self.assertEqual("program-schema-violation", caught.exception.reason)
+
     def test_a_collision_with_an_existing_manifest_parameter_refuses(self):
         with self.assertRaises(ReconstructionRefused) as caught:
             self.plan(manifest_parameter_names=["recon_base_1_depth"])
