@@ -2194,6 +2194,33 @@ class FormErrorEstimatorTests(unittest.TestCase):
         self.assertEqual(0.0, form["sigma"])
         self.assertIn("face grouping", form["unavailable_reason"])
 
+    def test_a_collapsed_sliver_does_not_take_the_face_groups_out_of_step(self) -> None:
+        """`face_groups` is compressed by the weld; `dump_triangles` is not.
+
+        `weld_dump` drops triangles that collapse and rebuilds `face_groups`
+        over the ones it kept, so the array is addressed by the *welded* index
+        like every other per-triangle array. Indexing it by
+        `dump_triangles[index]` -- the original index -- reads the wrong group
+        as soon as anything earlier in the dump collapsed, and runs off the end
+        on the last kept triangle, which the stage turns into
+        `fit-record-stage-failed` for the whole part.
+        """
+        vertices, triangles, groups = wavy_plate_mesh()
+        # A degenerate triangle near the front of the dump: two of its corners
+        # are the same vertex, so the weld collapses it and every later
+        # triangle's welded index sits one below its original.
+        first = triangles[0]
+        triangles = [(first[0], first[0], first[1])] + list(triangles)
+        groups = [groups[0]] + list(groups)
+        dump = make_dump(vertices, triangles, face_groups=groups)
+        mesh = seg.weld_dump(dump, 0.0)
+        self.assertEqual(1, mesh.weld["triangles_collapsed"])
+        self.assertEqual(len(mesh.triangles), len(mesh.face_groups))
+        self.assertLess(len(mesh.face_groups), max(mesh.dump_triangles) + 1)
+        # The estimator runs rather than raising, and still measures.
+        form = seg._sigma_form(mesh, seg._build_topology(mesh), spec(min_feature_size=1.6))
+        self.assertTrue(form["scale_table"], form)
+
     def test_a_curved_surface_s_own_sagitta_is_geometry_and_never_a_form_error(self) -> None:
         """A plane residual over a curved patch measures the surface, not its error.
 
@@ -2279,6 +2306,42 @@ class LocalWindingLicenceTests(unittest.TestCase):
         self.assertIsNotNone(assumption)
         self.assertIn("arbitrarily greater area", assumption)
         self.assertIn("capture dirt", assumption)
+
+    def test_a_boundary_chain_that_does_not_close_is_not_a_loop(self) -> None:
+        """A dead-ending chain would be capped by a fan that closes it silently.
+
+        Three triangles sharing one edge make it non-manifold, so it is dirt
+        and never enters the directed boundary graph -- which leaves the
+        remaining boundary as an open path rather than a loop. Recording it as
+        a loop let the caller's centroid fan close it, and `cap_volume_bound`
+        then bounded a filling of a boundary this mesh does not have.
+        """
+        vertices = [
+            (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+            (-1.0, 0.5, 0.0), (1.0, 1.0, 0.5),
+        ]
+        triangles = [(0, 1, 2), (1, 2, 3), (1, 2, 4)]
+        mesh = seg.weld_dump(make_dump(vertices, triangles), 0.0)
+        topo = seg._build_topology(mesh)
+        boundary = seg._open_boundary(mesh, topo)
+        self.assertGreater(boundary["open_boundary_chains"], 0)
+        self.assertEqual([], boundary["loops"])
+        # And the licence that rests on those loops is withheld: this fixture
+        # is inconsistently wound as well, so it names that first, but the
+        # chain count is on the record and `oriented-and-bounded` is now
+        # conditioned on it.
+        orientation = seg._mesh_orientation(mesh, topo)
+        self.assertIsNone(orientation["licence"])
+        self.assertGreater(orientation["open_boundary_chains"], 0)
+        # The clean case still reports zero, so the field is a measurement
+        # rather than a flag that is always set.
+        clean = seg._mesh_orientation(*self._welded(*torus_mesh()))
+        self.assertEqual(0, clean["open_boundary_chains"])
+        self.assertEqual("closed", clean["licence"])
+
+    def _welded(self, vertices, triangles, groups=None):
+        mesh = seg.weld_dump(make_dump(vertices, triangles, face_groups=groups), 0.0)
+        return mesh, seg._build_topology(mesh)
 
     def test_a_closed_mesh_asserts_no_such_assumption(self) -> None:
         # Closure needs no filling at all, so there is nothing to assume and the

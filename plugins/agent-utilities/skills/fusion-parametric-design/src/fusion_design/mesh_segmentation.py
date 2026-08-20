@@ -1011,7 +1011,14 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
     surfaces: list[tuple[list[int], float]] = []
     by_group: dict[int, list[int]] = {}
     for index in topo.valid:
-        by_group.setdefault(mesh.face_groups[mesh.dump_triangles[index]], []).append(index)
+        # `face_groups` is compressed to the *kept* triangles by `weld_dump`, so
+        # it is addressed by the welded index like every other per-triangle
+        # array here. `dump_triangles[index]` is the original index, which is
+        # larger whenever welding collapsed anything earlier in the dump: it
+        # reads the wrong group, and on the last kept triangle of a mesh with
+        # any collapsed sliver it raises IndexError -- which the stage turns
+        # into `fit-record-stage-failed` for the whole part.
+        by_group.setdefault(mesh.face_groups[index], []).append(index)
     for label in sorted(by_group):
         triangles = by_group[label]
         if len(triangles) < _MIN_REGION_TRIANGLES:
@@ -2857,6 +2864,7 @@ def _open_boundary(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
         directed.setdefault(head, []).append(tail)
 
     loops: list[list[int]] = []
+    open_chains = 0
     remaining = {head: list(tails) for head, tails in directed.items()}
     for start in sorted(remaining):
         while remaining.get(start):
@@ -2867,8 +2875,17 @@ def _open_boundary(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
                 loop.append(node)
                 node = remaining[node].pop()
                 guard += 1
+            if node != start:
+                # The chain dead-ended or branched at a non-manifold vertex, so
+                # it is not a loop. Recording it as one made the caller's
+                # centroid fan close it implicitly, and `cap_volume_bound` then
+                # bounded a filling of a boundary that is not the mesh's --
+                # granting `oriented-and-bounded` on a winding nothing licenses.
+                open_chains += 1
+                continue
             loops.append(loop)
     return {
+        "open_boundary_chains": open_chains,
         "boundary_edges": topo.boundary_edges,
         "non_manifold_edges": non_manifold,
         "loops": loops,
@@ -2978,7 +2995,12 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
     # on precedent rather than on measurement. And `bounded` is a bound over
     # fan-sized fillings, not a proof over every filling: see the docstring, and
     # `licence_assumption` on the record.
-    bounded = consistent and abs(volume) > cap_volume_bound
+    # An open or branching boundary chain is not a loop, so nothing computed
+    # from the loops bounds a filling of *this* mesh's boundary. The licence
+    # that rests on that bound is therefore unavailable, whatever the numbers
+    # say.
+    open_chains = boundary["open_boundary_chains"]
+    bounded = consistent and not open_chains and abs(volume) > cap_volume_bound
     licensed = (closed or bounded) and volume != 0.0
     return {
         "closed": closed,
@@ -2986,6 +3008,7 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
         "inconsistent_edges": inconsistent,
         "signed_volume": volume,
         "boundary_loop_count": len(boundary["loops"]),
+        "open_boundary_chains": open_chains,
         "open_cap_area": cap_area,
         "open_cap_area_fraction": cap_area / topo.total_area if topo.total_area > 0.0 else None,
         "cap_volume_bound": cap_volume_bound,
@@ -3012,6 +3035,10 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
                 "triangles, so this mesh is neither closed nor consistently wound and its signed "
                 "volume carries no inside/outside information"
                 if not consistent
+                else f"{open_chains} of this mesh's boundary chains do not close -- they branch at "
+                "a non-manifold vertex or dead-end -- so nothing computed from its boundary loops "
+                "bounds a filling of the boundary it actually has"
+                if open_chains
                 else f"the surface integral {volume:.6g} does not exceed the "
                 f"{cap_volume_bound:.6g} that fan-sized fillings of this mesh's "
                 f"{len(boundary['loops'])} open boundary loops could contribute, so the sign is "
