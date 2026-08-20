@@ -2538,10 +2538,17 @@ def _profile_set(sketch, step, planned):
             # allowance above does not cover this and a large-radius arc under
             # a tight declared tolerance was refused on arithmetic rather than
             # on geometry.
-            if area > 0.0:
-                centroid_window += (
-                    float(region.get("area_sampling_cm2") or 0.0) * extent / area
-                )
+            shortfall = float(region.get("area_sampling_cm2") or 0.0)
+            # Over the area that *remains*: Fusion builds the exact arc, so the
+            # shortfall is area the planned region does not have, and dividing
+            # the moment by the sampled area understates the shift it can cause.
+            # Floored at a tenth of the sampled area rather than allowed to
+            # collapse -- a region whose shortfall approaches its whole area is
+            # not a region this window can speak about, and an unbounded number
+            # here would match every profile instead of the right one.
+            reduced = max(area - shortfall, area * 0.1)
+            if reduced > 0.0:
+                centroid_window += shortfall * extent / reduced
             if gap <= centroid_window and (
                 abs(entry["area"] - region["area_cm2"]) <= area_window
             ):
