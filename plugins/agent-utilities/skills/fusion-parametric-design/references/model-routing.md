@@ -1,16 +1,8 @@
 # Model-tier task routing
 
-Which model tier should drive which of this skill's task classes. Classify by the shape of the work, never by model IDs: tiers are **frontier** (deep design reasoning), **mid** (bounded iteration), and **economy** (mechanical driving of fail-closed tooling). If the session has a routing skill or policy (an org router, a harness-level routing rule), that policy is the authority; this reference only classifies the skill's own work shapes.
+Which model tier should drive which of this skill's task classes. Classify by the shape of the work, never by model IDs: tiers are **frontier** (deep design reasoning), **mid** (bounded iteration), and **economy** (mechanical driving of fail-closed tooling).
 
-## The orchestrator pattern
-
-The session thread that receives the user's request is a **dispatcher, not a worker**. It holds the conversation, classifies each piece of work against the tier table below, spawns a subagent (Claude Code subagent, Codex spawned agent/thread) with an explicitly named model and effort for it, and stays responsive to the user while the work runs in the background. It never executes Fusion MCP transactions, long CLI runs, exports, or verification passes inline. This is the skill's required operating shape, not a suggestion.
-
-The one bounded exception: cheap read-only lookups needed to answer the user or to classify the work — reading a manifest, listing available presets, checking MCP connectivity — may run inline. Anything that mutates the Fusion document, takes more than a few seconds, or produces evidence artifacts goes to a subagent.
-
-The orchestrator is also the enforcement point for the single live Fusion writer: at most one spawned worker holds Fusion-mutation rights at a time. The orchestrator sequences writers and may run read-only workers concurrently.
-
-Results flow back through the orchestrator, which relays outcomes to the user in plain language. Workers return raw results — reports, refusals, artifact paths — not user-facing prose.
+This reference owns no routing or dispatch semantics — those belong to whatever routing skill or policy the session has (an org router such as railyard's model-routing doctrine, or a harness-level rule), and that policy is always the authority. This file only classifies the skill's own work shapes so a router, or a human choosing a model by hand, knows which shape each task is.
 
 ## Why economy is safe here at all
 
