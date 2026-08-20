@@ -2194,6 +2194,51 @@ class FormErrorEstimatorTests(unittest.TestCase):
         self.assertEqual(0.0, form["sigma"])
         self.assertIn("face grouping", form["unavailable_reason"])
 
+    def test_a_curved_surface_s_own_sagitta_is_geometry_and_never_a_form_error(self) -> None:
+        """A plane residual over a curved patch measures the surface, not its error.
+
+        This module already says so for a tessellated part -- and the same
+        holds per surface on a scan. Four cylinders of radius 8, sampled at
+        half a micron of noise: over a 3 mm patch the sagitta is 0.13 mm and
+        over a 12 mm one it is 2.35 mm, so the estimator used to report a form
+        error 264x and 4,700x the noise actually on the part. Pooled into the
+        floor, that is licence for a wrong primitive to skip the Moran check
+        and clear the held-out ratio on a part whose eligible surfaces happen
+        to be curved.
+
+        The admission test is the declared `normal_alpha_deg` -- the angle at
+        which this package calls two normals the same normal -- over the
+        surface's own fitted patch normals, per rung, because a surface can be
+        flat at one scale and curved at the next.
+        """
+        vertices, triangles, groups = [], [], []
+        for label, offset in enumerate((0.0, 40.0, 80.0, 120.0)):
+            block, faces, _ = cylinder_mesh(
+                radius=8.0, height=30.0, sides=96, stacks=40, noise=0.0005, seed=3 + label
+            )
+            base = len(vertices)
+            vertices += [(x + offset, y, z) for x, y, z in block]
+            triangles += [tuple(index + base for index in face) for face in faces]
+            groups += [label] * len(faces)
+        form, _mesh, _topo = self._noise_block(
+            vertices, triangles, groups, min_feature_size=6.0
+        )
+        self.assertEqual(0.0, form["sigma"])
+        self.assertEqual([], form["scale_table"])
+        self.assertIn("normal_alpha_deg", form["unavailable_reason"])
+        self.assertIn("about its curvature", form["unavailable_reason"])
+
+    def test_a_flat_surface_is_still_admitted_next_to_curved_ones(self) -> None:
+        # The gate must reject curvature, not the estimator: the wavy plate's
+        # four groups are flat at the rung and every one of them still counts,
+        # with nothing excluded.
+        vertices, triangles, groups = wavy_plate_mesh()
+        form, _mesh, _topo = self._noise_block(vertices, triangles, groups, min_feature_size=1.6)
+        self.assertTrue(form["scale_table"])
+        for rung in form["scale_table"]:
+            self.assertEqual(0, rung["curved_surfaces_excluded"])
+            self.assertGreaterEqual(rung["surfaces"], seg._SIGMA_FORM_MIN_SURFACES)
+
 
 class LocalWindingLicenceTests(unittest.TestCase):
     """A closed mesh is not the only mesh whose winding says which side is material."""
@@ -2219,11 +2264,29 @@ class LocalWindingLicenceTests(unittest.TestCase):
         orientation = record["mesh_orientation"]
         self.assertFalse(orientation["closed"])
         self.assertTrue(orientation["consistently_oriented"])
-        # The new licence: not closed, and the winding is still proved.
+        # The new licence: not closed, and the winding is still usable.
         self.assertEqual("oriented-and-bounded", orientation["licence"])
         self.assertIn(orientation["winding"], ("outward", "inward"))
         self.assertGreater(orientation["open_cap_area"], 0.0)
         self.assertLess(orientation["cap_volume_bound"], abs(orientation["signed_volume"]))
+        # And it says what it rests on. `cap_volume_bound` bounds a fan-sized
+        # filling, not every surface that spans the loop -- a tube out and back
+        # through the hole has arbitrary area and is bounded by nothing computed
+        # from the loop. The licence assumes these boundaries are capture dirt,
+        # and a reader must be able to see that assumption rather than read
+        # "bounded" as "proved against any filling".
+        assumption = orientation["licence_assumption"]
+        self.assertIsNotNone(assumption)
+        self.assertIn("arbitrarily greater area", assumption)
+        self.assertIn("capture dirt", assumption)
+
+    def test_a_closed_mesh_asserts_no_such_assumption(self) -> None:
+        # Closure needs no filling at all, so there is nothing to assume and the
+        # field must be absent rather than repeat an assumption that is not made.
+        record = seg.fit_regions(make_dump(*torus_mesh()), spec())
+        orientation = record["mesh_orientation"]
+        self.assertEqual("closed", orientation["licence"])
+        self.assertIsNone(orientation["licence_assumption"])
 
     def test_a_region_on_the_dirt_stays_null_and_names_its_distance(self) -> None:
         vertices, triangles, groups = torus_mesh(major_steps=64, minor_steps=24)

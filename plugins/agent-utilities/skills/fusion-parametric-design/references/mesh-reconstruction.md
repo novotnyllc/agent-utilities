@@ -221,6 +221,21 @@ and two things about it are forced by measurement rather than chosen:
   report the form error at 3.2 mm. The capture's honest ladder is 0.0032 mm over
   1000 surfaces at 0.8 mm, 0.0043 over 288 at 1.6 and 0.0106 over 17 at 3.2, and
   it stops there because fewer than four surfaces span the next rung.
+- **and only on the surfaces that are flat across it.** This is a *plane*
+  residual, so on a curved surface it measures the sagitta — that surface's own
+  nominal shape, not its departure from it. The module already refuses to read a
+  form error on a tessellated part for exactly this reason, and the same holds
+  one surface at a time on a scan. A surface enters a rung only when its own
+  fitted patch normals stay within the declared `normal_alpha_deg` of each other
+  at that radius: patch normals rather than facet normals because a patch normal
+  is fitted over sixteen points and averages the sampling noise down, and per
+  rung because a surface can be flat at one scale and curved at the next. Four
+  cylinders of radius 8 sampled at half a micron of noise reported 0.13 mm of
+  "form error" over a 3 mm patch and 2.35 mm over a 12 mm one before this
+  restriction — 264× and 4,700× the noise actually on them — and pooled into the
+  floor that is licence for a wrong primitive to skip the Moran check and clear
+  the held-out ratio. `scale_table` records `curved_surfaces_excluded` per rung,
+  and a ladder with no rung left says so rather than reporting curvature.
 
 **The prediction that this would be 0.03–0.08 mm on that capture is refuted, and
 the refutation is the useful part.** The 0.033–0.076 mm the large flat board
@@ -339,7 +354,7 @@ The archetype vocabulary is closed and all four kinds now emit:
 **Globally**, the winding is licensed by either of two things, and the record's `mesh_orientation.licence` says which held:
 
 - **`closed`** — the mesh has no boundary and no non-manifold edge. This is the licence the module has always used and every verdict measured over the eleven production parts rests on it; it is unchanged.
-- **`oriented-and-bounded`** — the mesh is *consistently oriented* (no directed edge is used twice, which on a manifold mesh is exactly "every interior edge is traversed in opposite directions by its two triangles") **and** the open boundary is too small to flip the surface integral's sign. That second half is a proof, not a tolerance: the integral is taken about the mesh centroid, each boundary loop is capped by the fan from its own centroid, and the cap can shift the integral by at most `R·A/3` per loop. When the integral exceeds the sum of those bounds, no filling of those holes can change the sign.
+- **`oriented-and-bounded`** — the mesh is *consistently oriented* (no directed edge is used twice, which on a manifold mesh is exactly "every interior edge is traversed in opposite directions by its two triangles") **and** the open boundary is too small for a fan-sized filling to flip the surface integral's sign. That second half is a bound rather than a tolerance, and its scope is stated rather than left implied: the integral is taken about the mesh centroid, a cap surface `C` shifts it by at most `R·area(C)/3`, and each loop's own centroid fan is the concrete surface whose `R·A/3` is summed. When the integral exceeds that sum, no filling **whose area does not exceed that fan's and which stays inside the loop's own radius** can change the sign. A surface spanning the same loop with arbitrarily greater area — a tube running out and back through a small hole — is not covered by it, and no bound computed from the loop alone covers one. So this licence carries an assumption about the *capture*: that these boundaries are dirt, a missed patch of the surface the loop lies in, which is therefore fan-sized and fan-located. The record names it under `mesh_orientation.licence_assumption`, and a caller who cannot make that assumption should require `closed`.
 
 **Locally**, a region carries usable winding only when its own triangles — and everything within one declared `min_feature_size` of them — touch no boundary and no non-manifold edge. Near dirt the mesh does not describe a solid, and which side of the surface the material is on is not a question its winding can answer. The margin is derived from `min_feature_size` rather than separately declared, because `material_side` is a claim about which side of *this* surface the solid is on and a surface is only a side of a solid over the feature it belongs to. A region refused for it stays `null` and its `orientation.local_winding` names the distance to the nearest dirty edge beside the margin it missed, so "near a hole" is never the whole answer.
 

@@ -72,6 +72,7 @@ from .mesh_fitting import (
     PrimitiveFit,
     Vec3,
     _add,
+    _angle_deg,
     _centroid,
     _covariance,
     _cross,
@@ -1029,10 +1030,12 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
         detail["unavailable_reason"] = "no face group carries enough points for a plane residual"
         return detail
 
+    alpha = float(spec.value("normal_alpha_deg"))
     radius = _SIGMA_FORM_PATCH_FRACTION * feature
     table: list[dict[str, Any]] = []
     while radius <= topo.extent:
         per_surface: list[float] = []
+        curved = 0
         for points, extent in surfaces:
             # A surface that does not span the rung cannot report it. Without
             # this every rung above the median surface's own size reports that
@@ -1042,6 +1045,7 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
             grid = _Grid(mesh.vertices, points, radius)
             step = max(1, len(points) // _SIGMA_FORM_CENTRES_PER_SURFACE)
             estimates: list[float] = []
+            normals: list[Vec3] = []
             for offset in range(0, len(points), step):
                 centre_point = mesh.vertices[points[offset]]
                 near = grid.near(mesh.vertices, centre_point, radius)
@@ -1051,10 +1055,36 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
                 centre = _centroid(patch)
                 _values, vectors = _symmetric_eigen(_covariance(patch, centre))
                 normal = vectors[0]
+                normals.append(normal)
                 residuals = [_dot(_sub(p, centre), normal) for p in patch]
                 estimates.append(math.sqrt(sum(r * r for r in residuals) / (len(patch) - 3)))
-            if estimates:
-                per_surface.append(_median(estimates))
+            if not estimates:
+                continue
+            # This is a *plane* residual, so on a curved surface it measures the
+            # sagitta -- which is that surface's nominal shape, not its
+            # departure from it. The module already says so for a tessellated
+            # part; the same holds one level down, per surface, on a scan: a
+            # scanned cylinder's own curvature is geometry, and pooling it into
+            # a form-error floor would let a wrong primitive pass a gate this
+            # floor inflates. A surface is admitted at this rung only when its
+            # own patch normals stay inside the declared `normal_alpha_deg` --
+            # the same angle at which this package calls two normals the same
+            # normal. Patch normals rather than facet normals because a patch
+            # normal is fitted over `_SIGMA_A_NEIGHBOURS` points and averages
+            # the sampling noise down, and per rung rather than once because a
+            # surface can be flat at one scale and curved at the next. The
+            # comparison is over every *pair*, not against one reference: PCA
+            # fixes a normal only up to sign, and `_angle_deg` is unoriented, so
+            # a half-cylinder's far side would read as agreeing with its near
+            # side against a single reference while some pair on it is at 90.
+            if any(
+                _angle_deg(normals[i], normals[j]) > alpha
+                for i in range(len(normals))
+                for j in range(i + 1, len(normals))
+            ):
+                curved += 1
+                continue
+            per_surface.append(_median(estimates))
         if len(per_surface) < _SIGMA_FORM_MIN_SURFACES:
             break
         table.append(
@@ -1062,15 +1092,17 @@ def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[
                 "radius": radius,
                 "form_error": _median(per_surface),
                 "surfaces": len(per_surface),
+                "curved_surfaces_excluded": curved,
             }
         )
         radius *= _SIGMA_FORM_LADDER_FACTOR
     detail["scale_table"] = table
     if not table:
         detail["unavailable_reason"] = (
-            f"fewer than {_SIGMA_FORM_MIN_SURFACES} face groups span twice the smallest rung "
-            f"({_SIGMA_FORM_PATCH_FRACTION * feature:.6g}), so no rung is measured on enough "
-            "surfaces to be a statement about the part"
+            f"fewer than {_SIGMA_FORM_MIN_SURFACES} face groups both span twice the smallest rung "
+            f"({_SIGMA_FORM_PATCH_FRACTION * feature:.6g}) and stay flat across it to within the "
+            f"declared normal_alpha_deg ({alpha:g}), so no rung is measured on enough surfaces to "
+            "be a statement about the part rather than about its curvature"
         )
         return detail
     detail["sigma"] = _form_error_at(table, feature)
@@ -2851,19 +2883,31 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
     unemittable three stages later. Those loops are dirt on a part whose winding
     is otherwise perfectly well defined.
 
-    So the global licence is *consistent orientation plus a proof*, not closure:
+    So the global licence is *consistent orientation plus a bound*, not closure:
 
     * **consistent orientation** -- every interior edge is traversed in opposite
       directions by its two triangles. This is a topological fact, measured, with
       no threshold in it. Without it no signed volume means anything.
-    * **a sign the open boundary cannot flip.** The surface integral is taken
-      about the mesh centroid, where it is origin-dependent only through the caps
-      the boundary loops are missing. Filling each loop with the fan from its own
-      centroid gives a concrete closed surface whose extra volume is at most
-      ``R * A / 3`` per loop -- ``A`` the fan's area, ``R`` its greatest radius
-      from the frame origin. When the integral exceeds the sum of those bounds,
-      *no* filling of those holes can change the sign, and the winding is a
-      proved statement rather than a hope about small holes.
+    * **a sign the open boundary cannot flip, over the fillings this bound
+      covers.** The surface integral is taken about the mesh centroid, where it
+      is origin-dependent only through the caps the boundary loops are missing.
+      A cap surface ``C`` contributes at most ``R * area(C) / 3``, ``R`` its
+      greatest radius from the frame origin. Filling each loop with the fan from
+      its own centroid gives one concrete such surface, and its ``R * A / 3`` is
+      what is summed here. When the integral exceeds that sum, no filling
+      **whose own area does not exceed that fan's, and which stays inside the
+      loop's own radius from the origin**, can change the sign.
+
+      That scope is narrower than "no filling", and saying so is the point: a
+      surface spanning the same loop may have arbitrarily greater area -- a tube
+      running out and back through a small hole is one -- and no bound computed
+      from the loop alone covers it. What licenses reading this as a licence is
+      what these boundaries *are*: dirt, where the scanner missed a patch of the
+      surface the loop lies in. That missing patch is a piece of that surface,
+      so it is fan-sized and fan-located. It is an assumption about the capture,
+      it is named on the record as ``licence_assumption``, and the token is
+      ``oriented-and-bounded`` rather than proved. A caller who cannot make that
+      assumption about its own capture should require ``closed``.
 
     Closure is still reported, because a consumer may want to know; it is no
     longer what licenses the answer. What the caps cannot license is the answer
@@ -2916,13 +2960,15 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
     # tightening it here would be a different change, with its own measurement to
     # make, smuggled into this one. What is new is the second disjunct, which is
     # the one that unlocks a scan: a mesh with dirt on it is not closed and can
-    # still carry a proved winding.
+    # still carry a usable winding.
     #
-    # It is the stronger of the two, and the record says which one held --
-    # `consistently_oriented` false with `licence` "closed" is a mesh whose
-    # signed volume this module is trusting on precedent rather than on proof.
-    proved = consistent and abs(volume) > cap_volume_bound
-    licensed = (closed or proved) and volume != 0.0
+    # The record says which one held -- `consistently_oriented` false with
+    # `licence` "closed" is a mesh whose signed volume this module is trusting
+    # on precedent rather than on measurement. And `bounded` is a bound over
+    # fan-sized fillings, not a proof over every filling: see the docstring, and
+    # `licence_assumption` on the record.
+    bounded = consistent and abs(volume) > cap_volume_bound
+    licensed = (closed or bounded) and volume != 0.0
     return {
         "closed": closed,
         "consistently_oriented": consistent,
@@ -2932,6 +2978,19 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
         "open_cap_area": cap_area,
         "open_cap_area_fraction": cap_area / topo.total_area if topo.total_area > 0.0 else None,
         "cap_volume_bound": cap_volume_bound,
+        "licence_assumption": (
+            None
+            if closed or not licensed
+            else (
+                "cap_volume_bound bounds the volume a cap can contribute only for a filling whose "
+                "own area does not exceed the centroid fan's and which stays inside the loop's own "
+                "radius from the frame origin. A surface spanning the same loop with arbitrarily "
+                "greater area is not bounded by it, and no bound computed from the loop alone "
+                "covers one. This licence therefore assumes the open boundaries are capture dirt "
+                "-- a missed patch of the surface the loop lies in, which is fan-sized and "
+                "fan-located. A capture where that does not hold should require licence 'closed'."
+            )
+        ),
         "licence": ("closed" if closed else "oriented-and-bounded") if licensed else None,
         "winding": ("outward" if volume > 0.0 else "inward") if licensed else None,
         "unavailable_reason": (
@@ -2943,14 +3002,16 @@ def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
                 "volume carries no inside/outside information"
                 if not consistent
                 else f"the surface integral {volume:.6g} does not exceed the "
-                f"{cap_volume_bound:.6g} that filling this mesh's {len(boundary['loops'])} open "
-                "boundary loops could contribute, so the sign is not proved"
+                f"{cap_volume_bound:.6g} that fan-sized fillings of this mesh's "
+                f"{len(boundary['loops'])} open boundary loops could contribute, so the sign is "
+                "not bounded"
             )
         ),
         "note": (
             "The winding is licensed either by closure, which is what this module has always used, "
             "or -- for a mesh with dirt on it -- by consistent orientation together with an open "
-            "boundary too small to flip the surface integral's sign. `licence` says which held. "
+            "boundary too small for a fan-sized filling to flip the surface integral's sign. "
+            "`licence` says which held, and `licence_assumption` says what the second rests on. "
             "Whether the answer holds near a particular boundary loop is a separate, local "
             "question, answered per region in orientation.local_winding."
         ),
