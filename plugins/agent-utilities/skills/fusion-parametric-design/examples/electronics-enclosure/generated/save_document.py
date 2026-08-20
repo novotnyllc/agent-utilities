@@ -7,7 +7,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
+MANIFEST_SHA256 = '40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 # Where _emit tees its report so a transport timeout loses nothing. None when

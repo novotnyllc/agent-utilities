@@ -17,7 +17,7 @@ It demonstrates:
 
 ## The material decision, and what it changes
 
-The manifest decides **PETG, family only** — no formulation, `confidence: provisional`, bound to `90_VALIDATION/VAL__PD_FIT_COUPON`. The reason is the lid: its snap rim deflects at every opening and has to recover. PETG has the toughness and strain recovery for that. All three parts' `material.assumption` name PETG, which the validator cross-checks against the decision.
+The manifest decides **PETG, family only** — no formulation, `confidence: provisional`, bound to `Validation/PD Fit Coupon`. The reason is the lid: its snap rim deflects at every opening and has to recover. PETG has the toughness and strain recovery for that. All three parts' `material.assumption` name PETG, which the validator cross-checks against the decision.
 
 The decision is family-only on purpose. No product is named, so no data-sheet number backs `fab_fit_clearance` — it is a hypothesis until the coupon is printed and measured, which is exactly what the recorded risks say.
 

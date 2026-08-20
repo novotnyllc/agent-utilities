@@ -1,5 +1,5 @@
 {
-  "component_name": "PROD__BENCHMARK_REBUILD",
+  "component_name": "Benchmark Rebuild",
   "dump_path": "dumps/REPLACED_WITH_THE_PARTS_OWN_DUMP",
   "rationale": "These four parts span 82 to 250 mm and every one of their meshes is a designed export rather than a scan, so the screening windows below are sized to the storage precision of the vertices and not to a measurement error nobody made. dump_path is written relative to this directory and the runner resolves it: the emitter sections the dump host-side, and it re-hashes those bytes against the program's dump_sha256 before reading any of them. The rejection budget is zero because a constraint this program cannot place is a reconstruction it cannot claim.",
   "thresholds": {

@@ -7,7 +7,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
+MANIFEST_SHA256 = '40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 # Where _emit tees its report so a transport timeout loses nothing. None when
@@ -356,7 +356,43 @@ def _timeline_health(design):
         "informational": informational,
     }
 
-EXPECTED_COMPONENT_PATHS = json.loads('["00_REFERENCES","00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__USB_C_INSERTION","00_REFERENCES/REF__EKYLIN__PARAMETRIC","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","10_PRODUCT","10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","20_FIXTURES","90_VALIDATION","90_VALIDATION/VAL__PD_FIT_COUPON"]')
+EXPECTED_COMPONENT_PATHS = json.loads('["References","References/PD Trigger Reference","References/PD Trigger Envelope","References/USB-C Insertion Keep-Out","References/EKYLIN Converter Reference","References/EKYLIN Converter Envelope","References/EKYLIN Wire Bend Keep-Out","Product","Product/Base","Product/Lid","Fixtures","Validation","Validation/PD Fit Coupon"]')
+ATTRIBUTE_GROUP = "fusion_parametric_design"
+
+# Adoption fallback for designs built before roles rode on attributes: the old
+# convention encoded the role in a shouty name prefix. An attribute always wins
+# over a name; the prefix is only read when no role attribute is present, and
+# the provenance says which one answered.
+LEGACY_ROLE_PREFIXES = {
+    "REF__": "reference",
+    "PACK__": "packing",
+    "KEEP__": "keepout",
+    "PROD__": "product",
+    "FIX__": "fixture",
+    "VAL__": "validation",
+}
+
+
+def _component_role(occurrence, path):
+    attribute_error = None
+    try:
+        attribute = occurrence.component.attributes.itemByName(ATTRIBUTE_GROUP, "role")
+        if attribute and attribute.value:
+            return {"role": attribute.value, "provenance": "attribute"}
+    except Exception as error:
+        # Fail closed: an unreadable probe is disclosed, never silently blank.
+        attribute_error = str(error)
+    name = path.rsplit("/", 1)[-1]
+    for prefix, role in LEGACY_ROLE_PREFIXES.items():
+        if name.startswith(prefix):
+            row = {"role": role, "provenance": "legacy-name"}
+            if attribute_error:
+                row["attribute_error"] = attribute_error
+            return row
+    row = {"role": None, "provenance": "attribute-unreadable" if attribute_error else "undeclared"}
+    if attribute_error:
+        row["attribute_error"] = attribute_error
+    return row
 
 
 def run(context):
@@ -385,7 +421,9 @@ def run(context):
         bounding_boxes = {}
         brep_bounding_boxes = {}
         geometry = {}
+        roles = {}
         for path, occurrence in occurrence_map.items():
+            roles[path] = _component_role(occurrence, path)
             geometry[path] = _body_summary(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
@@ -408,6 +446,7 @@ def run(context):
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "parameters": parameters,
             "component_paths": component_paths,
+            "component_roles": roles,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "missing_expected_components": sorted(set(EXPECTED_COMPONENT_PATHS) - set(component_paths)),
             "ambiguous_expected_components": sorted(

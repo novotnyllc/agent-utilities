@@ -166,7 +166,7 @@ class _FakeFusion:
             report["export_dir"] = f"/exports/{step.variant_id}"
             report["artifacts"] = [
                 {
-                    "part_path": "10_PRODUCT/PROD__BASE",
+                    "part_path": "Product/Base",
                     "filename": f"pod__{step.variant_id}.step",
                     "sha256": "0" * 64,
                     "byte_size": 1234,

@@ -318,7 +318,7 @@ Facet ceilings are likewise never hardcoded: the widely-cited 10,000/50,000 numb
 
 **Status:** Unsupported in the sense users usually mean.
 
-Mesh conversion may produce a faceted B-Rep and does not recover sketches, constraints, or design intent. Keep the mesh as `PACK__` evidence or rebuild a native model. Prefer STEP/B-Rep from the manufacturer.
+Mesh conversion may produce a faceted B-Rep and does not recover sketches, constraints, or design intent. Keep the mesh as packing evidence or rebuild a native model. Prefer STEP/B-Rep from the manufacturer.
 
 ## Mesh-only automated clearance and interference
 

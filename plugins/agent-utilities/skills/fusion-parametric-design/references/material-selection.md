@@ -99,7 +99,7 @@ Each entry states what the family does to geometry. Numbers come from the formul
 - `formulation` — the specific product, or null when only the family is settled. Never a guess.
 - `source_id` — the declared source the decision rests on: the data sheet, the standard, the coupon record, or the user's stated requirement.
 - `confidence` — from the same vocabulary as every other source. `provisional` until something measured supports it, and never stronger than the cited source's own confidence unless the decision is bound by both a coupon and a recorded risk.
-- `coupon_component` — the declared printable part that will settle the material-dependent fits; by convention a `VAL__` article. A component that is never printed cannot settle anything, so the validator requires a printable part.
+- `coupon_component` — the declared printable part that will settle the material-dependent fits; by convention a validation article under `Validation/`. A component that is never printed cannot settle anything, so the validator requires a printable part.
 - `rationale` — why this family, in terms of the requirement it satisfies. For TPU, this must state the hardness as a Shore or durometer figure, or the flex behavior the part needs.
 - `unresolved_risks` — what is still unproven. Advisory to the filled-material gate: a risk does not stand in for a declared nozzle.
 - `nozzle` — closed enum: brass, hardened steel, ruby, or tungsten carbide. Filled and hygroscopic families require an abrasion-resistant value here.

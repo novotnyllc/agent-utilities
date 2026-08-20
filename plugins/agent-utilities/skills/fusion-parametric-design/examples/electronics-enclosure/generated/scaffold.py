@@ -7,7 +7,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
+MANIFEST_SHA256 = '40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 # Where _emit tees its report so a transport timeout loses nothing. None when
@@ -356,7 +356,8 @@ def _timeline_health(design):
         "informational": informational,
     }
 
-COMPONENT_PATHS = json.loads('["00_REFERENCES","00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__USB_C_INSERTION","00_REFERENCES/REF__EKYLIN__PARAMETRIC","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE","00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","10_PRODUCT","10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","20_FIXTURES","90_VALIDATION","90_VALIDATION/VAL__PD_FIT_COUPON"]')
+COMPONENT_PATHS = json.loads('["References","References/PD Trigger Reference","References/PD Trigger Envelope","References/USB-C Insertion Keep-Out","References/EKYLIN Converter Reference","References/EKYLIN Converter Envelope","References/EKYLIN Wire Bend Keep-Out","Product","Product/Base","Product/Lid","Fixtures","Validation","Validation/PD Fit Coupon"]')
+COMPONENT_ROLES = json.loads('{"Product/Base":"product","Product/Lid":"product","References/EKYLIN Converter Envelope":"packing","References/EKYLIN Converter Reference":"reference","References/EKYLIN Wire Bend Keep-Out":"keepout","References/PD Trigger Envelope":"packing","References/PD Trigger Reference":"reference","References/USB-C Insertion Keep-Out":"keepout","Validation/PD Fit Coupon":"validation"}')
 ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
@@ -397,6 +398,9 @@ def _ensure_component_path(root_component, path):
             changed_attributes.append("managed")
         if _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256):
             changed_attributes.append("manifest_sha256")
+        role = COMPONENT_ROLES.get("/".join(current_parts))
+        if role and _ensure_component_attribute(occurrence.component, "role", role):
+            changed_attributes.append("role")
         if changed_attributes:
             attribute_updates.append({
                 "component_path": "/".join(current_parts),

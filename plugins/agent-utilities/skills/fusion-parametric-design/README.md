@@ -39,7 +39,7 @@ docs/
 - User parameters and feature expressions replace Python keyword defaults.
 - The Fusion timeline and component tree replace regenerated part functions.
 - Fusion attributes retain source and managed-entity metadata.
-- `REF__`, `PACK__`, and `KEEP__` components separate editable reference geometry, physical occupancy, and functional space.
+- Reference, packing, and keep-out components separate editable reference geometry, physical occupancy, and functional space; the browser names stay human and the role rides on a Fusion attribute.
 - Fusion's measurement and interference APIs provide packing evidence.
 - MCP scripts are discovered dynamically and used as short transactions.
 - Print analysis remains external where Fusion does not provide an equivalent; slicing is delegated to PrusaSlicer through an opt-in adapter that reports the G-code's own statistics.
@@ -208,9 +208,9 @@ The example verification script will initially fail because the scaffold compone
 
 Each installed object has both:
 
-- an **editable authoring model** (`REF__...`) for dimensions, datums, mounting holes, and connector centers;
-- an **exact or conservative packing model** (`PACK__...`) for occupancy, including a checkable B-Rep envelope for automated clash checks even when an exact mesh is also retained;
-- one or more **functional keep-outs** (`KEEP__...`) for cable departure, insertion, service, thermal, RF, acoustic, or tool space. A genuinely keep-out-free datum/reference must carry an explicit rationale instead of an empty omission.
+- an **editable authoring model** (role `reference`) for dimensions, datums, mounting holes, and connector centers;
+- an **exact or conservative packing model** (role `packing`) for occupancy, including a checkable B-Rep envelope for automated clash checks even when an exact mesh is also retained;
+- one or more **functional keep-outs** (role `keepout`) for cable departure, insertion, service, thermal, RF, acoustic, or tool space. A genuinely keep-out-free datum/reference must carry an explicit rationale instead of an empty omission.
 
 This directly addresses the common enclosure failure where a board fits but its plugs, wires, levers, fasteners, or removal path do not.
 

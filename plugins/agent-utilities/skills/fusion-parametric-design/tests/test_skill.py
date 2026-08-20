@@ -61,9 +61,15 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("The Fusion document is the product", text)
         self.assertIn("Research before asking for measurements", text)
         self.assertIn("Do not start fit-dependent geometry", text)
-        self.assertIn("REF__", text)
-        self.assertIn("PACK__", text)
-        self.assertIn("KEEP__", text)
+        # Browser names are humane; machine roles ride on attributes, with the
+        # legacy shouty prefixes recognized only as an adoption fallback.
+        self.assertIn("References/", text)
+        self.assertIn("PD Trigger Envelope:1", text)
+        self.assertIn("role `reference`", text)
+        self.assertIn("role `packing`", text)
+        self.assertIn("role `keepout`", text)
+        self.assertIn("adoption fallback", text)
+        self.assertNotIn("00_REFERENCES", text)
 
     def test_mcp_onboarding_delegates_to_roundhouse_shim(self) -> None:
         text = SKILL.read_text(encoding="utf-8")

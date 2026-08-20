@@ -52,15 +52,15 @@
     }
   ],
   "component_tree": [
-    "00_REFERENCES",
-    "00_REFERENCES/REF__HONEYCOMB__MESH",
-    "10_PRODUCT",
-    "10_PRODUCT/PROD__HONEYCOMB_REBUILD"
+    "References",
+    "References/Honeycomb Mesh Reference",
+    "Product",
+    "Product/Honeycomb Rebuild"
   ],
   "references": [],
   "verification": {
     "required_components": [
-      "10_PRODUCT/PROD__HONEYCOMB_REBUILD"
+      "Product/Honeycomb Rebuild"
     ],
     "clearance_checks": [],
     "interference_checks": [],

@@ -136,11 +136,11 @@ Run `verify.py` immediately after scaffolding.
 
 Run `examples/electronics-enclosure/generated/positive_control.py` through the discovered Fusion Python capability. It creates simple native, positive-volume test solids in these components, using root-coordinate placements that make the example contract pass:
 
-- `PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE`: a 35 × 13 × 5 mm box;
-- `PACK__EKYLIN__EXACT_OR_CONSERVATIVE`: a 62 × 31 × 27 mm box, far from the PD box;
-- `KEEP__USB_C_INSERTION`: a solid keep-out separated from `PROD__BASE`;
-- `KEEP__EKYLIN_WIRE_BENDS`: a solid keep-out separated from `PROD__LID`;
-- `PROD__BASE`, `PROD__LID`, and `VAL__PD_FIT_COUPON`: one solid each.
+- `PD Trigger Envelope`: a 35 × 13 × 5 mm box;
+- `EKYLIN Converter Envelope`: a 62 × 31 × 27 mm box, far from the PD box;
+- `USB-C Insertion Keep-Out`: a solid keep-out separated from `Base`;
+- `EKYLIN Wire Bend Keep-Out`: a solid keep-out separated from `Lid`;
+- `Base`, `Lid`, and `PD Fit Coupon`: one solid each.
 
 The script places the lid so its nearest point is at least 1.0 mm from the PD packing solid and keeps both forbidden keep-outs disjoint from their paired product component. These boxes are acceptance geometry, not a product design.
 

@@ -93,7 +93,7 @@ class GoldenPathTests(unittest.TestCase):
         changed_spec = next(
             spec
             for spec in _box_specs(changed_manifest)
-            if spec["path"] == "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+            if spec["path"] == "References/PD Trigger Envelope"
         )
         self.assertEqual([36.0, 13.0, 5.0], changed_spec["size_mm"])
         self.assertNotEqual(emit_positive_control_script(manifest), emit_positive_control_script(changed_manifest))
@@ -132,7 +132,7 @@ class GoldenPathTests(unittest.TestCase):
         # The lid box is 35 x 13 x 2 = 910 mm3 -- only 1.8x its declared floor.
         unreachable_floor = manifest.to_dict()
         lid = next(
-            part for part in unreachable_floor["printable_parts"] if part["path"] == "10_PRODUCT/PROD__LID"
+            part for part in unreachable_floor["printable_parts"] if part["path"] == "Product/Lid"
         )
         lid["minimum_volume_mm3"] = 911.0
         with self.assertRaisesRegex(ValueError, "below the declared minimum_volume_mm3"):
@@ -140,7 +140,7 @@ class GoldenPathTests(unittest.TestCase):
 
         absent_floor = manifest.to_dict()
         next(
-            part for part in absent_floor["printable_parts"] if part["path"] == "10_PRODUCT/PROD__LID"
+            part for part in absent_floor["printable_parts"] if part["path"] == "Product/Lid"
         ).pop("minimum_volume_mm3")
         with self.assertRaisesRegex(ValueError, "no usable minimum_volume_mm3"):
             emit_positive_control_script(type(manifest).from_data(absent_floor, validate=False))
@@ -149,8 +149,8 @@ class GoldenPathTests(unittest.TestCase):
         missing_allowed_interference["verification"]["interference_checks"].append(
             {
                 "id": "missing-allowed-body",
-                "one": "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC",
-                "two": "10_PRODUCT/PROD__BASE",
+                "one": "References/PD Trigger Reference",
+                "two": "Product/Base",
                 "allow_interference": True,
             }
         )

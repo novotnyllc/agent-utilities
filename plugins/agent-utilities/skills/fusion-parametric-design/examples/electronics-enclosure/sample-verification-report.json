@@ -1,6 +1,6 @@
 {
   "brep_bounding_boxes_mm": {
-    "10_PRODUCT/PROD__BASE": {
+    "Product/Base": {
       "max": [
         100.0,
         110.0,
@@ -12,7 +12,7 @@
         0.0
       ]
     },
-    "10_PRODUCT/PROD__LID": {
+    "Product/Lid": {
       "max": [
         35.0,
         13.0,
@@ -24,7 +24,7 @@
         10.0
       ]
     },
-    "90_VALIDATION/VAL__PD_FIT_COUPON": {
+    "Validation/PD Fit Coupon": {
       "max": [
         10.0,
         110.0,
@@ -38,21 +38,21 @@
     }
   },
   "geometry": {
-    "10_PRODUCT/PROD__BASE": {
+    "Product/Base": {
       "total_solid_volume_mm3": 12000.0
     },
-    "10_PRODUCT/PROD__LID": {
+    "Product/Lid": {
       "total_solid_volume_mm3": 910.0
     },
-    "90_VALIDATION/VAL__PD_FIT_COUPON": {
+    "Validation/PD Fit Coupon": {
       "total_solid_volume_mm3": 200.0
     }
   },
   "kind": "verification",
-  "manifest_sha256": "dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642",
+  "manifest_sha256": "40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1",
   "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
   "occurrence_transforms": {
-    "10_PRODUCT/PROD__BASE": [
+    "Product/Base": [
       1.0,
       0.0,
       0.0,
@@ -70,7 +70,7 @@
       0.0,
       1.0
     ],
-    "10_PRODUCT/PROD__LID": [
+    "Product/Lid": [
       1.0,
       0.0,
       0.0,
@@ -88,7 +88,7 @@
       0.0,
       1.0
     ],
-    "90_VALIDATION/VAL__PD_FIT_COUPON": [
+    "Validation/PD Fit Coupon": [
       1.0,
       0.0,
       0.0,

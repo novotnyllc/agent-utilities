@@ -48,6 +48,57 @@ establishing the document, not an afterthought:
   silently kept Untitled;
 - read-only inspection of an unsaved document stays allowed.
 
+## Naming
+
+The browser is a user interface, not a database. Names are for the person
+reading the tree; classification the tooling needs rides on Fusion attributes.
+
+What the sourced practice says:
+
+- Name components, bodies, and sketches meaningfully the moment they are
+  created; `Component1` is the anti-pattern. Keep names short but descriptive
+  and use one consistent convention. (Product Design Online, "Understanding
+  Bodies and Components — Fusion 360 Rule #1"; Autodesk Fusion community and
+  support articles on renaming browser items; cadin360, "How to name
+  components properly in Fusion 360".)
+- Spaces are legal and idiomatic in component, body, sketch, and feature
+  names — "Left Wheel", "Main Frame" — so write plain words, not slugs.
+- Fusion appends an immutable `:N` instance suffix to every occurrence, and
+  `+`/`:digits` inside a name collides with occurrence-path syntax, so names
+  must read well in front of `:1` and never imitate it. (Autodesk Fusion API
+  documentation, "Documents, Products, Components, Occurrences, Proxies".)
+- User parameters cannot contain spaces and cannot be unit tokens; snake_case
+  and camelCase are both accepted. (Product Design Online, "User Parameters";
+  Autodesk forum, "Name Syntax for Change Parameters".) This skill's `src_`,
+  `clr_`, `fab_`, `pack_`, `des_`, `calc_` snake_case prefixes stay: parameter
+  identifiers live under identifier rules, not display-name rules, and the
+  prefix is the ownership convention above.
+- Machine metadata belongs in the Attributes API under an add-in-specific
+  group, not in display names. (Autodesk Fusion API documentation,
+  "Attributes".) This skill's group is `fusion_parametric_design`.
+- Component names and Part Number/Description properties flow into BOM and
+  parts-list exports, so a shouty machine name leaks into every downstream
+  document. (Autodesk support articles on BOM/parts lists; OpenBOM Fusion
+  best practices.)
+
+Synthesis, applied by this skill:
+
+- Group components read like a product tree: `References`, `Product`,
+  `Fixtures`, `Validation`. No numeric prefixes — the Fusion browser preserves
+  authoring order and does not alphabetize, so `00_`/`90_` sorts nothing and
+  only shouts.
+- Children are plain named: `PD Trigger Reference`, `PD Trigger Envelope`,
+  `USB-C Insertion Keep-Out`, `Base`, `Lid`, `PD Fit Coupon`.
+- Roles (`reference`, `packing`, `keepout`, `product`, `validation`) are
+  derived from the manifest blocks that already own the classification and
+  written by the scaffold as the `role` attribute in
+  `fusion_parametric_design`. A name never encodes a role.
+- Adoption is by attribute or legacy name: an existing design keeps resolving
+  because every lookup is by the manifest's own component paths, and inventory
+  reads the `role` attribute first, recognizing the legacy
+  `REF__`/`PACK__`/`KEEP__`/`PROD__`/`FIX__`/`VAL__` prefixes only when no
+  attribute answers — reported with `legacy-name` provenance, never silently.
+
 ## Parametric integrity
 
 A healthy Fusion model has:

@@ -7,7 +7,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
+MANIFEST_SHA256 = '40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 # Where _emit tees its report so a transport timeout loses nothing. None when
@@ -356,7 +356,7 @@ def _timeline_health(design):
         "informational": informational,
     }
 
-BOX_SPECS = json.loads('[{"body_name":"POSITIVE_CONTROL__PACK_PD_TRIGGER","origin_mm":[0.0,0.0,0.0],"path":"00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","size_mm":[35.0,13.0,5.0]},{"body_name":"POSITIVE_CONTROL__PACK_EKYLIN","origin_mm":[120.0,0.0,0.0],"path":"00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE","size_mm":[62.0,31.0,27.0]},{"body_name":"POSITIVE_CONTROL__KEEP_USB_C_INSERTION","origin_mm":[0.0,0.0,0.0],"path":"00_REFERENCES/KEEP__USB_C_INSERTION","size_mm":[20.0,20.0,5.0]},{"body_name":"POSITIVE_CONTROL__KEEP_EKYLIN_WIRE_BENDS","origin_mm":[120.0,0.0,0.0],"path":"00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","size_mm":[20.0,20.0,5.0]},{"body_name":"POSITIVE_CONTROL__PROD_BASE","origin_mm":[0.0,50.0,0.0],"path":"10_PRODUCT/PROD__BASE","size_mm":[100.0,60.0,2.0]},{"body_name":"POSITIVE_CONTROL__PROD_LID","origin_mm":[0.0,0.0,10.0],"path":"10_PRODUCT/PROD__LID","size_mm":[35.0,13.0,2.0]},{"body_name":"POSITIVE_CONTROL__VAL_PD_FIT_COUPON","origin_mm":[0.0,100.0,0.0],"path":"90_VALIDATION/VAL__PD_FIT_COUPON","size_mm":[10.0,10.0,2.0]}]')
+BOX_SPECS = json.loads('[{"body_name":"Positive Control PD Trigger Envelope","origin_mm":[0.0,0.0,0.0],"path":"References/PD Trigger Envelope","size_mm":[35.0,13.0,5.0]},{"body_name":"Positive Control EKYLIN Envelope","origin_mm":[120.0,0.0,0.0],"path":"References/EKYLIN Converter Envelope","size_mm":[62.0,31.0,27.0]},{"body_name":"Positive Control USB-C Insertion Keep-Out","origin_mm":[0.0,0.0,0.0],"path":"References/USB-C Insertion Keep-Out","size_mm":[20.0,20.0,5.0]},{"body_name":"Positive Control EKYLIN Wire Bend Keep-Out","origin_mm":[120.0,0.0,0.0],"path":"References/EKYLIN Wire Bend Keep-Out","size_mm":[20.0,20.0,5.0]},{"body_name":"Positive Control Base","origin_mm":[0.0,50.0,0.0],"path":"Product/Base","size_mm":[100.0,60.0,2.0]},{"body_name":"Positive Control Lid","origin_mm":[0.0,0.0,10.0],"path":"Product/Lid","size_mm":[35.0,13.0,2.0]},{"body_name":"Positive Control PD Fit Coupon","origin_mm":[0.0,100.0,0.0],"path":"Validation/PD Fit Coupon","size_mm":[10.0,10.0,2.0]}]')
 ATTRIBUTE_GROUP = "fusion_parametric_design"
 GEOMETRY_TOLERANCE_MM = 1e-6
 IDENTITY_MATRIX = tuple(adsk.core.Matrix3D.create().asArray())

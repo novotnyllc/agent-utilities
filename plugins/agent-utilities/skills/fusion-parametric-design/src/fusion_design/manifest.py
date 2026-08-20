@@ -187,6 +187,47 @@ class Manifest:
     def mesh_sources(self) -> list[dict[str, Any]]:
         return list(self.data.get("mesh_sources", []))
 
+    def component_roles(self) -> dict[str, str]:
+        """Component path -> semantic role, derived from the manifest blocks
+        that already own the classification: references (reference, packing,
+        keepout), material_decision (validation), printable_parts (product).
+
+        Browser names stay human; this derivation is what the scaffold writes
+        into the `fusion_parametric_design` `role` attribute. A path claimed by
+        two different specific roles is a manifest contradiction: fail closed.
+        A printable part may additionally be a validation coupon; the specific
+        role (validation) wins and printable "product" fills only unclaimed
+        paths.
+        """
+        roles: dict[str, str] = {}
+
+        def claim(raw_path: Any, role: str) -> None:
+            path = str(raw_path or "").strip()
+            if not path:
+                return
+            existing = roles.get(path)
+            if existing is not None and existing != role:
+                raise ValueError(
+                    f"Component {path!r} is classified as both {existing!r} and {role!r}; "
+                    "one component owns one role."
+                )
+            roles[path] = role
+
+        for reference in _as_list(self.data.get("references")):
+            if not isinstance(reference, dict):
+                continue
+            claim(reference.get("authoring_component"), "reference")
+            claim(reference.get("packing_component"), "packing")
+            for keepout in _as_list(reference.get("keepout_components")):
+                claim(keepout, "keepout")
+        claim(self.material_decision.get("coupon_component"), "validation")
+        for part in self.printable_parts:
+            if isinstance(part, dict):
+                path = str(part.get("path") or "").strip()
+                if path and path not in roles:
+                    roles[path] = "product"
+        return roles
+
     def to_dict(self) -> dict[str, Any]:
         return json.loads(json.dumps(self.data))
 

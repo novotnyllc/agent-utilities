@@ -38,7 +38,7 @@
       "locator": "design-brief://provisional-starting-assumptions",
       "revision": "2026-08-17 unvalidated starting point",
       "confidence": "provisional",
-      "notes": "Unvalidated conservative starting values for wall thickness, clearance, printed fit, and cable departure on this printer/material pair. Nothing here is measured evidence, so every parameter pointing at this source stays provisional; printing 90_VALIDATION/VAL__PD_FIT_COUPON and measuring it, or measuring the actual cable, is what replaces it."
+      "notes": "Unvalidated conservative starting values for wall thickness, clearance, printed fit, and cable departure on this printer/material pair. Nothing here is measured evidence, so every parameter pointing at this source stays provisional; printing Validation/PD Fit Coupon and measuring it, or measuring the actual cable, is what replaces it."
     }
   ],
   "material_decision": {
@@ -46,11 +46,11 @@
     "formulation": null,
     "source_id": "enclosure_material_requirements",
     "confidence": "provisional",
-    "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+    "coupon_component": "Validation/PD Fit Coupon",
     "rationale": "The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.",
     "unresolved_risks": [
       "No formulation is named, so no data-sheet number backs any material-dependent value.",
-      "fab_fit_clearance is a hypothesis until VAL__PD_FIT_COUPON is printed and measured on the machine that will make the parts.",
+      "fab_fit_clearance is a hypothesis until PD Fit Coupon is printed and measured on the machine that will make the parts.",
       "Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."
     ]
   },
@@ -153,7 +153,7 @@
       "source_id": "provisional_starting_assumptions",
       "critical": true,
       "provisional": true,
-      "description": "Per-side printed sliding-fit clearance. Printer- and material-specific; settle it by printing and measuring VAL__PD_FIT_COUPON, never by reusing this number."
+      "description": "Per-side printed sliding-fit clearance. Printer- and material-specific; settle it by printing and measuring PD Fit Coupon, never by reusing this number."
     },
     {
       "name": "des_corner_radius",
@@ -176,82 +176,82 @@
     }
   ],
   "component_tree": [
-    "00_REFERENCES",
-    "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC",
-    "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
-    "00_REFERENCES/KEEP__USB_C_INSERTION",
-    "00_REFERENCES/REF__EKYLIN__PARAMETRIC",
-    "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE",
-    "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS",
-    "10_PRODUCT",
-    "10_PRODUCT/PROD__BASE",
-    "10_PRODUCT/PROD__LID",
-    "20_FIXTURES",
-    "90_VALIDATION",
-    "90_VALIDATION/VAL__PD_FIT_COUPON"
+    "References",
+    "References/PD Trigger Reference",
+    "References/PD Trigger Envelope",
+    "References/USB-C Insertion Keep-Out",
+    "References/EKYLIN Converter Reference",
+    "References/EKYLIN Converter Envelope",
+    "References/EKYLIN Wire Bend Keep-Out",
+    "Product",
+    "Product/Base",
+    "Product/Lid",
+    "Fixtures",
+    "Validation",
+    "Validation/PD Fit Coupon"
   ],
   "references": [
     {
       "id": "pd_trigger",
       "source_id": "pd_trigger_board_measurement",
-      "authoring_component": "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC",
-      "packing_component": "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
+      "authoring_component": "References/PD Trigger Reference",
+      "packing_component": "References/PD Trigger Envelope",
       "representation": "parametric_proxy_plus_conservative_pack",
       "keepout_components": [
-        "00_REFERENCES/KEEP__USB_C_INSERTION"
+        "References/USB-C Insertion Keep-Out"
       ]
     },
     {
       "id": "ekylin_converter",
       "source_id": "ekylin_converter_measurement",
-      "authoring_component": "00_REFERENCES/REF__EKYLIN__PARAMETRIC",
-      "packing_component": "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE",
+      "authoring_component": "References/EKYLIN Converter Reference",
+      "packing_component": "References/EKYLIN Converter Envelope",
       "representation": "parametric_proxy_plus_conservative_pack",
       "keepout_components": [
-        "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS"
+        "References/EKYLIN Wire Bend Keep-Out"
       ]
     }
   ],
   "verification": {
     "required_components": [
-      "10_PRODUCT/PROD__BASE",
-      "10_PRODUCT/PROD__LID",
-      "90_VALIDATION/VAL__PD_FIT_COUPON",
-      "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
-      "00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"
+      "Product/Base",
+      "Product/Lid",
+      "Validation/PD Fit Coupon",
+      "References/PD Trigger Envelope",
+      "References/EKYLIN Converter Envelope"
     ],
     "clearance_checks": [
       {
         "id": "pd-to-lid-clearance",
-        "one": "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE",
-        "two": "10_PRODUCT/PROD__LID",
+        "one": "References/PD Trigger Envelope",
+        "two": "Product/Lid",
         "minimum_mm": 1.0
       }
     ],
     "interference_checks": [
       {
         "id": "usb-c-insertion-zone",
-        "one": "00_REFERENCES/KEEP__USB_C_INSERTION",
-        "two": "10_PRODUCT/PROD__BASE",
+        "one": "References/USB-C Insertion Keep-Out",
+        "two": "Product/Base",
         "allow_interference": false
       },
       {
         "id": "ekylin-wire-bend-zone",
-        "one": "00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS",
-        "two": "10_PRODUCT/PROD__LID",
+        "one": "References/EKYLIN Wire Bend Keep-Out",
+        "two": "Product/Lid",
         "allow_interference": false
       }
     ],
     "expected_print_parts": [
-      "10_PRODUCT/PROD__BASE",
-      "10_PRODUCT/PROD__LID",
-      "90_VALIDATION/VAL__PD_FIT_COUPON"
+      "Product/Base",
+      "Product/Lid",
+      "Validation/PD Fit Coupon"
     ]
   },
   "printable_parts": [
     {
       "id": "prod_base",
-      "path": "10_PRODUCT/PROD__BASE",
+      "path": "Product/Base",
       "minimum_volume_mm3": 1000,
       "quantity": 1,
       "print_as": "separate",
@@ -286,7 +286,7 @@
     },
     {
       "id": "prod_lid",
-      "path": "10_PRODUCT/PROD__LID",
+      "path": "Product/Lid",
       "minimum_volume_mm3": 500,
       "quantity": 1,
       "print_as": "separate",
@@ -317,7 +317,7 @@
     },
     {
       "id": "val_pd_fit_coupon",
-      "path": "90_VALIDATION/VAL__PD_FIT_COUPON",
+      "path": "Validation/PD Fit Coupon",
       "minimum_volume_mm3": 100,
       "quantity": 1,
       "print_as": "separate",

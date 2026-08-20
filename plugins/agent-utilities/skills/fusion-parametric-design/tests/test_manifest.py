@@ -26,6 +26,30 @@ class ManifestValidationTests(unittest.TestCase):
         manifest = load_manifest(EXAMPLE)
         self.assertEqual("wearable-controller-pod", manifest.project_name)
 
+    def test_component_roles_derive_from_the_owning_blocks(self) -> None:
+        roles = load_manifest(EXAMPLE).component_roles()
+        self.assertEqual(
+            {
+                "References/PD Trigger Reference": "reference",
+                "References/PD Trigger Envelope": "packing",
+                "References/USB-C Insertion Keep-Out": "keepout",
+                "References/EKYLIN Converter Reference": "reference",
+                "References/EKYLIN Converter Envelope": "packing",
+                "References/EKYLIN Wire Bend Keep-Out": "keepout",
+                "Product/Base": "product",
+                "Product/Lid": "product",
+                # Printable and a coupon: the specific role wins.
+                "Validation/PD Fit Coupon": "validation",
+            },
+            roles,
+        )
+
+    def test_component_roles_refuse_a_contradictory_classification(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["references"][0]["packing_component"] = data["references"][0]["authoring_component"]
+        with self.assertRaisesRegex(ValueError, "one component owns one role"):
+            Manifest(data).component_roles()
+
     def test_critical_source_parameter_requires_source(self) -> None:
         data = copy.deepcopy(self.data)
         data["parameters"][0].pop("source_id")
@@ -135,20 +159,20 @@ class ManifestValidationTests(unittest.TestCase):
         data["verification"]["clearance_checks"].append(
             {
                 "id": "pd-to-lid-clearance",
-                "one": "00_REFERENCES/DOES_NOT_EXIST",
-                "two": "10_PRODUCT/PROD__LID",
+                "one": "References/DOES_NOT_EXIST",
+                "two": "Product/Lid",
                 "minimum_mm": -0.1,
             }
         )
         data["verification"]["interference_checks"].append(
             {
                 "id": "pd-to-lid-clearance",
-                "one": "10_PRODUCT/PROD__BASE",
-                "two": "00_REFERENCES/ALSO_MISSING",
+                "one": "Product/Base",
+                "two": "References/ALSO_MISSING",
                 "allow_interference": False,
             }
         )
-        data["verification"]["expected_print_parts"].append("10_PRODUCT/PROD__MISSING")
+        data["verification"]["expected_print_parts"].append("Product/PROD__MISSING")
 
         issues = validate_manifest_data(data)
         codes = {issue.code for issue in issues}
@@ -194,8 +218,8 @@ class ManifestValidationTests(unittest.TestCase):
         data["component_tree"].extend(
             [
                 "MISSING_PARENT/CHILD",
-                "10_PRODUCT/BAD+NAME",
-                "10_PRODUCT/BAD:12",
+                "Product/BAD+NAME",
+                "Product/BAD:12",
             ]
         )
 
@@ -273,7 +297,7 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIn("invalid-printable-part-id", self._codes(data))
 
         data = copy.deepcopy(self.data)
-        data["printable_parts"][0]["path"] = "10_PRODUCT/DOES_NOT_EXIST"
+        data["printable_parts"][0]["path"] = "Product/DOES_NOT_EXIST"
         codes = self._codes(data)
         self.assertIn("printable-part-unknown-path", codes)
         self.assertIn("printable-parts-mismatch-expected", codes)
@@ -479,7 +503,7 @@ class ManifestValidationTests(unittest.TestCase):
             "formulation": "Prusament PETG",
             "source_id": "pd_trigger_board_measurement",
             "confidence": "measured",
-            "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+            "coupon_component": "Validation/PD Fit Coupon",
             "rationale": "The snap-fit lid needs PETG toughness; PLA would fail brittle at the snap.",
             "unresolved_risks": [],
         }
@@ -512,7 +536,7 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIsNone(decision["formulation"])
         self.assertEqual("provisional", decision["confidence"])
         # R5: a provisional decision must be bound to a coupon or a risk.
-        self.assertEqual("90_VALIDATION/VAL__PD_FIT_COUPON", decision["coupon_component"])
+        self.assertEqual("Validation/PD Fit Coupon", decision["coupon_component"])
         self.assertTrue(decision["unresolved_risks"])
         self.assertIn(decision["source_id"], {source["id"] for source in self.data["sources"]})
 
@@ -535,7 +559,7 @@ class ManifestValidationTests(unittest.TestCase):
             ("unknown confidence", {"confidence": "vibes"}, "material-decision-unknown-confidence"),
             (
                 "unknown coupon",
-                {"coupon_component": "90_VALIDATION/DOES_NOT_EXIST"},
+                {"coupon_component": "Validation/DOES_NOT_EXIST"},
                 "material-decision-unknown-coupon",
             ),
             ("blank rationale", {"rationale": "  "}, "material-decision-missing-rationale"),
@@ -799,7 +823,7 @@ class ManifestValidationTests(unittest.TestCase):
         bound = self._with_decision(
             source_id="enclosure_material_requirements",
             confidence="measured",
-            unresolved_risks=["VAL__PD_FIT_COUPON is not printed yet, so the fit is unproven."],
+            unresolved_risks=["PD Fit Coupon is not printed yet, so the fit is unproven."],
         )
         self.assertNotIn("material-decision-outranks-source", self._codes(bound))
 
@@ -820,7 +844,7 @@ class ManifestValidationTests(unittest.TestCase):
         unbridgeable = self._with_decision(
             source_id="enclosure_material_requirements",
             confidence="coupon_verified",
-            unresolved_risks=["VAL__PD_FIT_COUPON is not printed yet, so the fit is unproven."],
+            unresolved_risks=["PD Fit Coupon is not printed yet, so the fit is unproven."],
         )
         self.assertIn("material-decision-outranks-source", self._codes(unbridgeable))
 
@@ -871,14 +895,14 @@ class ManifestValidationTests(unittest.TestCase):
             formulation="Prusament PA11CF",
             source_id="enclosure_material_requirements",
             confidence="coupon_verified",
-            unresolved_risks=["Nozzle wear is unquantified until VAL__PD_FIT_COUPON is printed."],
+            unresolved_risks=["Nozzle wear is unquantified until PD Fit Coupon is printed."],
         )
         codes = self._codes(data)
         self.assertIn("material-decision-filled-material-unguarded", codes)
         self.assertIn("material-decision-outranks-source", codes)
 
     def test_coupon_component_must_be_a_printable_part(self) -> None:
-        for path in ("00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC", "20_FIXTURES", "10_PRODUCT"):
+        for path in ("References/PD Trigger Reference", "Fixtures", "Product"):
             with self.subTest(path=path):
                 data = self._with_decision(
                     confidence="provisional", coupon_component=path, unresolved_risks=[]
@@ -895,7 +919,7 @@ class ManifestValidationTests(unittest.TestCase):
             ("source_id", " pd_trigger_board_measurement ", "material-decision-unknown-source"),
             (
                 "coupon_component",
-                " 90_VALIDATION/VAL__PD_FIT_COUPON ",
+                " Validation/PD Fit Coupon ",
                 "material-decision-unknown-coupon",
             ),
         ):
@@ -921,7 +945,7 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertNotIn("printable-part-invalid-material", self._codes(data))
 
     def test_contradictory_clearance_and_interference_checks_are_reconciled(self) -> None:
-        pair = ("10_PRODUCT/PROD__BASE", "10_PRODUCT/PROD__LID")
+        pair = ("Product/Base", "Product/Lid")
 
         data = copy.deepcopy(self.data)
         data["verification"]["clearance_checks"].append(
@@ -953,14 +977,14 @@ class ManifestValidationTests(unittest.TestCase):
             [
                 {
                     "id": "base-lid-gap",
-                    "one": "10_PRODUCT/PROD__BASE",
-                    "two": "10_PRODUCT/PROD__LID",
+                    "one": "Product/Base",
+                    "two": "Product/Lid",
                     "minimum_mm": 2.0,
                 },
                 {
                     "id": "lid-base-gap",
-                    "one": "10_PRODUCT/PROD__LID",
-                    "two": "10_PRODUCT/PROD__BASE",
+                    "one": "Product/Lid",
+                    "two": "Product/Base",
                     "minimum_mm": 2.0,
                 },
             ]
@@ -970,27 +994,27 @@ class ManifestValidationTests(unittest.TestCase):
     def test_a_reference_may_not_stand_in_for_its_own_keepout_or_packing_model(self) -> None:
         data = copy.deepcopy(self.data)
         data["references"][0]["keepout_components"] = [
-            "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+            "References/PD Trigger Envelope"
         ]
         codes = self._codes(data)
         self.assertIn("keepout-is-own-model", codes)
         self.assertNotIn("reference-keepout-required", codes)
 
         data = copy.deepcopy(self.data)
-        data["references"][0]["packing_component"] = "00_REFERENCES/REF__PD_TRIGGER__PARAMETRIC"
+        data["references"][0]["packing_component"] = "References/PD Trigger Reference"
         self.assertIn("reference-authoring-equals-packing", self._codes(data))
 
         data = copy.deepcopy(self.data)
-        data["references"][1]["packing_component"] = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        data["references"][1]["packing_component"] = "References/PD Trigger Envelope"
         self.assertIn("duplicate-packing-component", self._codes(data))
 
     def test_expected_print_parts_are_reconciled_with_required_components(self) -> None:
         data = copy.deepcopy(self.data)
-        data["verification"]["required_components"] = ["10_PRODUCT/PROD__BASE"]
+        data["verification"]["required_components"] = ["Product/Base"]
         self.assertIn("expected-print-part-not-required", self._codes(data))
 
         # A packing proxy is somebody else's hardware, never printable output.
-        pack = "00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE"
+        pack = "References/PD Trigger Envelope"
         data = copy.deepcopy(self.data)
         data["verification"]["expected_print_parts"].append(pack)
         data["printable_parts"].append(copy.deepcopy(data["printable_parts"][0]))
@@ -1008,7 +1032,7 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertIn("invalid-parameter-name", codes)
 
     def test_component_path_segments_reject_whitespace(self) -> None:
-        for bad in ("   ", "10_PRODUCT/PROD__LID ", "10_PRODUCT/ PROD__X"):
+        for bad in ("   ", "Product/Lid ", "Product/ PROD__X"):
             with self.subTest(path=bad):
                 data = copy.deepcopy(self.data)
                 data["component_tree"].append(bad)

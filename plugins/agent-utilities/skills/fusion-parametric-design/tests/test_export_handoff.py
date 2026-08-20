@@ -35,7 +35,7 @@ MATERIAL_DECISION = {
     "formulation": "Prusament PETG",
     "source_id": "pd_trigger_board_measurement",
     "confidence": "provisional",
-    "coupon_component": "90_VALIDATION/VAL__PD_FIT_COUPON",
+    "coupon_component": "Validation/PD Fit Coupon",
     "rationale": "The snap-fit lid needs PETG toughness; PLA would fail brittle at the snap.",
     "unresolved_risks": ["Snap strain is unverified until the coupon prints."],
 }
@@ -304,9 +304,9 @@ class ExportHandoffEmitterTests(unittest.TestCase):
         colliding = json.loads(json.dumps(self.manifest.to_dict()))
         colliding.pop("printable_parts", None)
         # Two component paths whose slugs collide (lowercase folding).
-        colliding["component_tree"].extend(["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"])
-        colliding["verification"]["expected_print_parts"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
-        colliding["verification"]["required_components"] = ["10_PRODUCT/PROD__CASE", "10_PRODUCT/prod__case"]
+        colliding["component_tree"].extend(["Product/PROD__CASE", "Product/prod__case"])
+        colliding["verification"]["expected_print_parts"] = ["Product/PROD__CASE", "Product/prod__case"]
+        colliding["verification"]["required_components"] = ["Product/PROD__CASE", "Product/prod__case"]
         from fusion_design.manifest import Manifest
 
         manifest = Manifest.from_data(colliding)
@@ -316,8 +316,8 @@ class ExportHandoffEmitterTests(unittest.TestCase):
             "transform": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         }
         bounds = {
-            "10_PRODUCT/PROD__CASE": one_binding,
-            "10_PRODUCT/prod__case": one_binding,
+            "Product/PROD__CASE": one_binding,
+            "Product/prod__case": one_binding,
         }
         with self.assertRaisesRegex(ValueError, "filenames collide"):
             emit_export_script(

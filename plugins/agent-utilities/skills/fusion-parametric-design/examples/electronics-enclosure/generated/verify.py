@@ -7,7 +7,7 @@ import adsk.fusion
 
 PROJECT_NAME = 'wearable-controller-pod'
 FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
-MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
+MANIFEST_SHA256 = '40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
 # Where _emit tees its report so a transport timeout loses nothing. None when
@@ -356,10 +356,10 @@ def _timeline_health(design):
         "informational": informational,
     }
 
-VERIFICATION = json.loads('{"clearance_checks":[{"id":"pd-to-lid-clearance","minimum_mm":1.0,"one":"00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","two":"10_PRODUCT/PROD__LID"}],"expected_print_parts":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","90_VALIDATION/VAL__PD_FIT_COUPON"],"interference_checks":[{"allow_interference":false,"id":"usb-c-insertion-zone","one":"00_REFERENCES/KEEP__USB_C_INSERTION","two":"10_PRODUCT/PROD__BASE"},{"allow_interference":false,"id":"ekylin-wire-bend-zone","one":"00_REFERENCES/KEEP__EKYLIN_WIRE_BENDS","two":"10_PRODUCT/PROD__LID"}],"required_components":["10_PRODUCT/PROD__BASE","10_PRODUCT/PROD__LID","90_VALIDATION/VAL__PD_FIT_COUPON","00_REFERENCES/PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE","00_REFERENCES/PACK__EKYLIN__EXACT_OR_CONSERVATIVE"]}')
+VERIFICATION = json.loads('{"clearance_checks":[{"id":"pd-to-lid-clearance","minimum_mm":1.0,"one":"References/PD Trigger Envelope","two":"Product/Lid"}],"expected_print_parts":["Product/Base","Product/Lid","Validation/PD Fit Coupon"],"interference_checks":[{"allow_interference":false,"id":"usb-c-insertion-zone","one":"References/USB-C Insertion Keep-Out","two":"Product/Base"},{"allow_interference":false,"id":"ekylin-wire-bend-zone","one":"References/EKYLIN Wire Bend Keep-Out","two":"Product/Lid"}],"required_components":["Product/Base","Product/Lid","Validation/PD Fit Coupon","References/PD Trigger Envelope","References/EKYLIN Converter Envelope"]}')
 PARAMETER_SPECS = json.loads('[{"expression":"35 mm","name":"src_pd_board_length","units":"mm"},{"expression":"13 mm","name":"src_pd_board_width","units":"mm"},{"expression":"5 mm","name":"src_pd_board_height","units":"mm"},{"expression":"62 mm","name":"src_ekylin_length","units":"mm"},{"expression":"31 mm","name":"src_ekylin_width","units":"mm"},{"expression":"27 mm","name":"src_ekylin_height","units":"mm"},{"expression":"0.5 mm","name":"clr_rigid_xy","units":"mm"},{"expression":"1 mm","name":"clr_rigid_z","units":"mm"},{"expression":"2 mm","name":"fab_wall_thickness","units":"mm"},{"expression":"0.35 mm","name":"fab_fit_clearance","units":"mm"},{"expression":"5 mm","name":"des_corner_radius","units":"mm"},{"expression":"20 mm","name":"pack_usb_c_straight_departure","units":"mm"}]')
 VERIFICATION_NONCE = json.loads('""')
-PRINT_PART_EXPECTATIONS = json.loads('{"10_PRODUCT/PROD__BASE":{"minimum_volume_mm3":1000.0},"10_PRODUCT/PROD__LID":{"minimum_volume_mm3":500.0},"90_VALIDATION/VAL__PD_FIT_COUPON":{"minimum_volume_mm3":100.0}}')
+PRINT_PART_EXPECTATIONS = json.loads('{"Product/Base":{"minimum_volume_mm3":1000.0},"Product/Lid":{"minimum_volume_mm3":500.0},"Validation/PD Fit Coupon":{"minimum_volume_mm3":100.0}}')
 PRINT_PART_RULES = json.loads('{"minimum_volume_bounding_box_fraction":0.001,"solid_body_count":1}')
 
 
