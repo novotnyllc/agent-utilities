@@ -579,6 +579,27 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         self.assertFalse(touching["shells_agree"])
         self.assertIsNone(touching["winding"])
 
+    def test_dirt_on_one_shell_does_not_join_a_void_to_its_solid(self) -> None:
+        """Per-edge locality, at shell level: dirt joins what it touches.
+
+        A box with an internal void is two disjoint shells of opposite sign and
+        one correctly wound solid. Duplicating a facet of the *outer* box makes
+        that facet's edges non-manifold -- and a global "any dirt at all" test
+        then read the void's inward sign as a second solid, threw the winding
+        away, and left even the clean cavity loop `unavailable`. The dirty edge
+        joins nothing to the void, so the two shells are compared apart.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, reversed_tris(BOX_TRIS)))
+        clean = mesh_winding_evidence(verts, tris)
+        self.assertEqual("outward", clean["winding"])
+        dirty = mesh_winding_evidence(verts, list(tris) + [tris[0]])
+        self.assertGreater(dirty["non_manifold_edges"], 0)
+        self.assertTrue(dirty["shells_agree"])
+        self.assertEqual("outward", dirty["winding"])
+
     def test_a_duplicated_facet_away_from_the_origin_keeps_the_winding(self) -> None:
         """A component that encloses nothing must not vote on the sign.
 

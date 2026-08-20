@@ -1247,9 +1247,31 @@ def _same_feature_edge(
             f"{group['kind']}, whose faces this emitter cannot partition into named sets. "
             "An edge inside it is not nameable, so no fillet is claimed here."
         )
-    caps = list(group.get("cap_regions") or ())
+    # By position, not by list order: a slab whose boundary is a supported
+    # `span-end` event closes no claimable plane fit there, and the list of what
+    # exists cannot say which slot is empty. Read positionally, a slab with only
+    # an upper cap called that cap `start` and rounded the wrong edge, and a slab
+    # with neither indexed an empty list and crashed planning.
+    positions = group.get("cap_positions")
+    if isinstance(positions, dict):
+        start, end = positions.get("start"), positions.get("end")
+    else:
+        caps = list(group.get("cap_regions") or ())
+        start = caps[0] if caps else None
+        end = caps[-1] if caps else None
+    if start is None and end is None:
+        return None, (
+            f"neither boundary of {group['id']} closed a claimable cap plane, so this blend's "
+            "neighbours cannot be named as start, end or side faces of it and no edge can be "
+            "selected."
+        )
     roles = tuple(
-        "start" if h == caps[0] else "end" if h == caps[-1] else "side" for h in (first, second)
+        "start"
+        if h is not None and h == start
+        else "end"
+        if h is not None and h == end
+        else "side"
+        for h in (first, second)
     )
     if roles == ("side", "side"):
         return "side-side", None
@@ -1679,6 +1701,7 @@ def _plan_slabs(
                 },
                 "cap_selection": cap_selection,
                 "cap_regions": [h for h in caps if h is not None],
+                "cap_positions": {"start": caps[0], "end": caps[1]},
                 "profile": None,
                 "profile_source": "mesh-section",
                 "extent": {
@@ -1993,6 +2016,10 @@ def plan_archetypes(
                     # sketch sits on, which is the feature's `startFaces`, and a
                     # fillet on a cap-to-side edge has to name which cap.
                     "cap_regions": [low.region_hash, high.region_hash],
+                    "cap_positions": {
+                        "start": low.region_hash,
+                        "end": high.region_hash,
+                    },
                     "profile": None,
                     "profile_source": "mesh-section",
                     "extent": {
@@ -3020,6 +3047,13 @@ _ARCHETYPE_FIELDS = {
     "plane",
     "axis",
     "cap_regions",
+    # sketch-extrude only: the same caps by *position* -- which is the start of
+    # the extrude and which the end -- with `None` where a boundary closed no
+    # claimable plane fit. `cap_regions` is the list of what exists and cannot
+    # say which slot is empty; the fillet path needs the slot, because a blend
+    # against the one cap a slab does have is `end-side` or `start-side` and
+    # reading the wrong one rounds the wrong edge.
+    "cap_positions",
     # sketch-extrude only: which rule chose the caps -- the direction the group's
     # own turned walls measure it as swept along, or the most separated parallel
     # pair when no wall names a direction -- and the evidence behind it.

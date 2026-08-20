@@ -783,6 +783,9 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
     # inverted wall is still a box, and calling its winding unavailable throws
     # away the very contradiction the caller is meant to see.
     clean_seams: set[tuple[int, int]] = set()
+    # The non-manifold edges themselves, because *which* shells one of them
+    # joins is the question below -- not whether the mesh has any.
+    joins: set[tuple[int, int]] = set()
     seen: set[tuple[int, int]] = set()
     for (i, j), forward in directed.items():
         key = (i, j) if i < j else (j, i)
@@ -794,6 +797,7 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
         if total > 2:
             non_manifold += 1
             dirty.update(incident[key])
+            joins.add(key)
         elif total == 1:
             boundary += 1
         elif forward == 2 or backward == 2:
@@ -855,7 +859,35 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
     # by a non-manifold edge. A solid with an internal void is two disjoint
     # shells whose signs disagree by construction -- the void's is inward --
     # and that is one solid, correctly wound, which this must not withhold.
-    shells_agree = len(signs) <= 1 or non_manifold == 0
+    # Two shells disagreeing is evidence of two solids only when they are
+    # actually joined. A solid with an internal void is two disjoint shells
+    # whose signs disagree by construction -- the void's is inward -- and a
+    # non-manifold edge somewhere else on the part does not make those two into
+    # one; treating any dirt anywhere as joining every shell threw the whole
+    # part's winding away for a self-touch on the far side of it, which is the
+    # per-edge locality this stage is built on. So the comparison is per group
+    # of shells connected *through* non-manifold edges.
+    joined = {root: root for root in shells}
+
+    def _joined_root(index: int) -> int:
+        while joined[index] != index:
+            joined[index] = joined[joined[index]]
+            index = joined[index]
+        return index
+
+    for key in joins:
+        members = [_root(member) for member in incident.get(key, ())]
+        members = [member for member in members if member in joined]
+        for other in members[1:]:
+            first, second = _joined_root(members[0]), _joined_root(other)
+            if first != second:
+                joined[first] = second
+    grouped: dict[int, set[bool]] = {}
+    for root, value in shells.items():
+        if value == 0.0 or root in tainted:
+            continue
+        grouped.setdefault(_joined_root(root), set()).add(value > 0.0)
+    shells_agree = all(len(group) <= 1 for group in grouped.values())
     # And the direction comes from the same components that voted on it. The
     # reported `signed_volume` stays the whole mesh's, because that is the
     # census; the winding is a claim about the solid, and a component enclosing

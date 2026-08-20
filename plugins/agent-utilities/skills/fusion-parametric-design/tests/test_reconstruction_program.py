@@ -1138,6 +1138,37 @@ class EventLinkageTests(unittest.TestCase):
         self.assertTrue(verdict["agrees"], verdict)
         self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
 
+    def test_a_cap_slot_is_named_by_position_not_by_list_order(self) -> None:
+        """`cap_regions` says what exists; the fillet path needs which slot.
+
+        A slab boundary that is a supported `span-end` event closes no
+        claimable plane fit, so one slot is empty -- and read by list order the
+        surviving cap answered to `caps[0]`, which named an *upper* cap
+        `start` and selected the wrong edge to round. With neither, the list
+        was indexed empty and planning raised `IndexError`.
+        """
+        upper_only = {
+            "id": "sketch-extrude-x-s0",
+            "kind": "sketch-extrude",
+            "cap_regions": ["upper"],
+            "cap_positions": {"start": None, "end": "upper"},
+        }
+        self.assertEqual(
+            ("end-side", None), rp._same_feature_edge(upper_only, "upper", "wall")
+        )
+        neither = {
+            "id": "sketch-extrude-x-s1",
+            "kind": "sketch-extrude",
+            "cap_regions": [],
+            "cap_positions": {"start": None, "end": None},
+        }
+        selector, reason = rp._same_feature_edge(neither, "wall-a", "wall-b")
+        self.assertIsNone(selector)
+        self.assertIn("no edge can be selected", reason)
+        # A group from before this field still reads positionally.
+        legacy = {"id": "e", "kind": "sketch-extrude", "cap_regions": ["lo", "hi"]}
+        self.assertEqual(("start-side", None), rp._same_feature_edge(legacy, "lo", "wall"))
+
     def test_congruence_pairs_to_minimise_the_worst_pair_not_the_first(self) -> None:
         """Greedy over the sorted pairs consumes a partner another loop needed.
 
