@@ -1612,6 +1612,26 @@ def _station_names(kind: str) -> tuple[str, ...]:
     return ("axial", "azimuthal")
 
 
+def _blocked_halves(
+    indices: Sequence[int], grid: _Grid
+) -> dict[int, list[int]]:
+    """The checkerboard split this region's held-out refit uses.
+
+    Why a refit produced nothing is answered by `_blocked_heldout`'s own
+    ``underpowered`` string rather than by re-deriving the split here: halves too
+    small to fit at all is a sample-size fact, a half-fit that ran and was
+    refused is a fact about the split, and neither is evidence about the full
+    fit. They are named separately and they get the same answer -- no verdict.
+    """
+    parts: dict[int, list[int]] = {0: [], 1: []}
+    for index in indices:
+        key = grid.keys.get(index)
+        if key is None:
+            continue
+        parts[(key[0] + key[1] + key[2]) & 1].append(index)
+    return parts
+
+
 def _blocked_heldout(
     fit: PrimitiveFit,
     indices: Sequence[int],
@@ -1632,12 +1652,7 @@ def _blocked_heldout(
     an in-sample neighbour half a millimetre away, so the model has effectively
     seen it. Blocking by cell parity puts whole neighbourhoods on one side.
     """
-    parts: dict[int, list[int]] = {0: [], 1: []}
-    for index in indices:
-        key = grid.keys.get(index)
-        if key is None:
-            continue
-        parts[(key[0] + key[1] + key[2]) & 1].append(index)
+    parts = _blocked_halves(indices, grid)
     if min(len(parts[0]), len(parts[1])) < _MIN_REGION_POINTS:
         return {
             "underpowered": (
@@ -1656,6 +1671,7 @@ def _blocked_heldout(
     # part's form into a ratio of 15 and a verdict of "over-parameterized".
     floor = max(_BAND_FLOOR_RATIO * fit.extent, form_error)
     worst = 0.0
+    worst_abs = 0.0
     heldout_rms = 0.0
     in_sample_rms = 0.0
     for train_key, test_key in ((0, 1), (1, 0)):
@@ -1683,7 +1699,16 @@ def _blocked_heldout(
                     "property of the split, not evidence about the full fit"
                 )
             }
-        held = _rms(_residuals(trial.kind, trial.parameters, test))
+        held_residuals = _residuals(trial.kind, trial.parameters, test)
+        held = _rms(held_residuals)
+        # The largest single held-out residual over *both* halves, kept beside
+        # the RMS. An RMS is an average and averages hide corners: one per cent
+        # of held-out points at five times a floor still averages to half of
+        # it, so a caller asking "does this residual field lie inside the
+        # lattice" cannot answer it from the RMS.
+        worst_abs = max(
+            worst_abs, max((abs(value) for value in held_residuals), default=0.0)
+        )
         # Against *this* fit's own in-sample residual, not the full fit's. The
         # question is whether a model generalizes beyond the data that produced
         # it; comparing a half-data fit's held-out error against a full-data
@@ -1696,7 +1721,12 @@ def _blocked_heldout(
             worst = ratio
             heldout_rms = held
             in_sample_rms = trial.rms_residual
-    return {"heldout_rms": heldout_rms, "in_sample_rms": in_sample_rms, "ratio": worst}
+    return {
+        "heldout_rms": heldout_rms,
+        "heldout_max_abs": worst_abs,
+        "in_sample_rms": in_sample_rms,
+        "ratio": worst,
+    }
 
 
 def _betai(a: float, b: float, x: float) -> float:
@@ -2025,6 +2055,15 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         # The ladder, so the gates can read it at each region's own extent
         # rather than at the one scale this record reports.
         "form_error_table": form_table,
+        # `vertex_precision_floor` crosses into the disproof stage as well as
+        # into the record: it is the scale of the *file format's* quantization
+        # lattice, and the residual-structure gates need it as a precondition on
+        # their own input, not only as a floor under sigma. It is a different
+        # question from `structure_scale` above and neither replaces the other:
+        # the form error asks how far this surface departs from its nominal
+        # shape, the precision floor asks how finely the coordinates describing
+        # it were stored.
+        "vertex_precision_floor": precision_floor,
     }
     # The flag says the *noise model* is inconsistent, and that claim only means
     # something where both estimators are estimating noise. On an exact
@@ -2429,6 +2468,9 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
     groups: dict[int, list[int]] = state["regions_by_label"]
     surface_scale = state["noise"]["surface_scale"]
     form_table = state["noise"]["form_error_table"]
+    # The scale of the coordinates' own quantization lattice: see the
+    # precondition on the residual-structure and held-out gates below.
+    precision_floor = state["noise"]["vertex_precision_floor"]
     grid: _Grid = state["grid"]
     gates = spec.fit_gates()
     perpendicular = float(spec.value("cylinder_normal_perpendicular_deg"))
@@ -2538,6 +2580,25 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             support["form_error"] = form_error
             support["power_floor"] = power_floor
             support["power_floor_basis"] = floor_basis
+            # Bound here for the same reason `power_floor` is: three blocks
+            # below read it, and the last of them is guarded by an `and` whose
+            # short-circuit is an operand order rather than an invariant.
+            #
+            # A separate precondition from the floors above, and a narrower one:
+            # those ask whether a residual is inside the *surface's* own error,
+            # this asks whether it is inside the precision the coordinates were
+            # stored at. Both suppress a verdict; neither is the other.
+            #
+            # An RMS below the floor does not mean the field lies inside it: a
+            # localized bulge on 1% of the points at five times the floor still
+            # averages to half of it, and that is a structured bad fit, exactly
+            # what the gates below exist to catch. The claim these gates are
+            # skipped on is "every residual is lattice", so every residual is
+            # what gets bounded -- against the same declared floor, no new
+            # threshold and none moved.
+            below_precision = fit.rms_residual <= precision_floor and all(
+                abs(residual) <= precision_floor for residual in residuals
+            )
             passed, measured = _support_floors(fit, points, spec, topo.median_edge)
             support.update(measured)
             if not passed:
@@ -2554,23 +2615,54 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # synthetic fit it would be reading float noise. Say so rather
                 # than pass or fail on it -- and do not claim the check in
                 # `checked`, because it did not run. `power_floor` is bound above.
+                # And a second precondition, on the *quantization* scale rather
+                # than the noise scale. A residual field that lies entirely
+                # inside the precision the coordinates are stored at is the
+                # file format's lattice: a binary STL holds float32, so a
+                # perfectly round bore on a 100 mm part comes back with
+                # residuals of a couple of microns arranged in a pattern that
+                # is deterministic and therefore systematically signed -- which
+                # is the exact signature these gates test for. Measured over the
+                # eleven production STLs, 9 of the 85 genuine full-turn bores
+                # were refused on residual fields at that scale. This is a
+                # statement about what the gates *can* judge, not a change to
+                # what they judge it against: no declared threshold moves, and
+                # the skip is recorded under its own reason rather than passing.
+                # Measured whenever the statistic has power at all -- the
+                # *verdict* is what the precision floor suppresses, not the
+                # measurement. A lattice residual field is deterministic and
+                # therefore correlated, and `n_eff` is read downstream by
+                # `_parsimony` and by `parameter_uncertainty`: leaving it at the
+                # full point count treats those correlated samples as
+                # independent and understates every sigma derived from them,
+                # which is how a licence or a canonical datum cell gets granted
+                # on evidence the fit does not carry.
                 structure = (
                     _moran_i(residuals, point_indices, topo)
                     if fit.rms_residual > power_floor
                     else None
                 )
-                if structure is None:
+                judged = structure is not None and not below_precision
+                if structure is None or below_precision:
                     support["moran_z"] = None
                     support["moran_unavailable_reason"] = (
-                        f"residuals are below {floor_basis}, so a spatial-autocorrelation "
+                        "the residual field lies entirely inside the vertex precision floor "
+                        f"({precision_floor:.6g}), so its structure is the coordinates' own "
+                        "quantization lattice rather than the surface's"
+                        if below_precision
+                        else f"residuals are below {floor_basis}, so a spatial-autocorrelation "
                         "test has no power here"
                         if fit.rms_residual <= power_floor
                         else "too few connected inliers for the variance formula to mean anything"
                     )
                 n_eff = float(len(points))
                 if structure is not None:
-                    support["moran_z"] = structure["z"]
+                    # The correlation is kept even when the verdict is not: it
+                    # is what `n_eff` is for, and lattice residuals are the most
+                    # correlated samples on the part.
                     support["moran_i"] = structure["i"]
+                    if judged:
+                        support["moran_z"] = structure["z"]
                     # First-order n_eff inflation for correlated residuals: an
                     # AR(1)-style patch, not a derivation, and conservative
                     # defaults are what keep it honest (spec 7.3, 12.3).
@@ -2582,8 +2674,9 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     cap = float(spec.value("moran_z_max"))
                     if plane_baseline is not None:
                         cap = max(cap, plane_baseline + float(spec.value("moran_baseline_slack")))
-                    support["moran_z_cap"] = cap
-                    if structure["z"] > cap:
+                    if judged:
+                        support["moran_z_cap"] = cap
+                    if judged and structure["z"] > cap:
                         accepted, rejection = False, (
                             f"residual structure: Moran's I z = {structure['z']:.4g} on the mesh "
                             f"graph exceeds {cap:.4g}; the residuals agree with their neighbours in "
@@ -2591,7 +2684,15 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                             "RMS."
                         )
                 support["n_eff"] = n_eff
-                if accepted:
+                if accepted and below_precision:
+                    # The directional test is the other half of the same gate
+                    # and reads the same residuals, so the same precondition
+                    # binds it: a per-bin mean of two microns is a lattice, and
+                    # naming the coordinate it runs along would name the
+                    # coordinate the *file format* quantizes along.
+                    support["directional_structure"] = None
+                    support["directional_coordinate"] = None
+                elif accepted:
                     structured, coordinate, magnitude = _directional_bins(
                         fit,
                         points,
@@ -2615,7 +2716,56 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     elif structure is not None:
                         _passed(checked, "residual-structure")
 
-            if accepted and fit.rms_residual <= noise_floor:
+            if accepted and below_precision:
+                # Measured, then judged -- the same order the Moran block above
+                # settled on. In-sample residuals inside the lattice do not say
+                # the *held-out* ones are: an over-parameterized primitive can
+                # sit on the whole sample at quantization scale and come apart
+                # when it is refitted on half the points, which is exactly what
+                # this gate exists to catch. So the refit runs, and only its
+                # verdict is suppressed -- and only when the held-out residual
+                # is inside the floor too, where the ratio really is two
+                # quantization patterns divided by each other.
+                held = _blocked_heldout(fit, point_indices, mesh, grid, spec, form_error)
+                if "underpowered" in held:
+                    # No comparison was made at all, so there is no verdict for
+                    # the floor to suppress -- and the floor licenses suppressing
+                    # a *measured* ratio, never a missing one. `_blocked_heldout`
+                    # says which property of the split stopped it -- halves too
+                    # small to fit at all is a sample-size fact, a half-fit that
+                    # ran and was refused is one about the split -- and neither
+                    # is evidence about the full fit. The floor adds only that
+                    # there is no power on the in-sample side either.
+                    support["heldout_unavailable_reason"] = (
+                        f"{held['underpowered']}; in-sample residuals lie inside the vertex "
+                        f"precision floor ({precision_floor:.6g}), so there is no power on "
+                        "either side"
+                    )
+                # Every held-out residual, not their average: the floor is a
+                # claim about the whole field, and an RMS inside it is
+                # consistent with a corner well outside it.
+                elif held["heldout_max_abs"] > precision_floor:
+                    support.update(held)
+                    if held["ratio"] > float(spec.value("heldout_ratio_max")):
+                        accepted, rejection = False, (
+                            f"held-out residual {held['heldout_rms']:.6g} is "
+                            f"{held['ratio']:.4g}x the in-sample residual; the fit is "
+                            "over-parameterized for the evidence. In-sample residuals lie "
+                            f"inside the vertex precision floor ({precision_floor:.6g}) and "
+                            "the held-out ones do not, which is the instability this gate is "
+                            "for rather than a comparison of quantization patterns."
+                        )
+                    else:
+                        _passed(checked, "heldout-residual")
+                else:
+                    support.update(held)
+                    support["heldout_unavailable_reason"] = (
+                        "the residual field lies entirely inside the vertex precision floor "
+                        f"({precision_floor:.6g}), every held-out residual included (worst "
+                        f"{held['heldout_max_abs']:.6g}), so the ratio would compare two "
+                        "quantization patterns"
+                    )
+            elif accepted and fit.rms_residual <= noise_floor:
                 # The same rule the Moran block above already states, applied to
                 # its sibling: a test has no power against residuals an order of
                 # magnitude inside the measurement noise. Held-out residuals of
@@ -2625,8 +2775,8 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # as unavailable, and deliberately *not* appended to `checked`,
                 # because the check did not run.
                 support["heldout_unavailable_reason"] = (
-                    "residuals are below the measurement noise, so a held-out comparison has no "
-                    "power here"
+                    "residuals are below the measurement noise, so a held-out comparison has "
+                    "no power here"
                 )
             elif accepted:
                 # Unlike the two structure tests above, this one is *not* skipped

@@ -2268,6 +2268,7 @@ def build_reconstruction_program(
         frame_margin=_threshold(thresholds, "frame_margin"),
         angle_tolerance_deg=_threshold(thresholds, "angle_tolerance_deg"),
         offset_tolerance=_threshold(thresholds, "offset_tolerance"),
+        sigma_multiple=_threshold(thresholds, "sigma_multiple"),
     )
     all_regions = [
         reconciliation.regions.get(region.region_hash, region) for region in fit_record.regions

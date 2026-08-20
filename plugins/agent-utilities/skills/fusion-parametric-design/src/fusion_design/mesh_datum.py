@@ -8,9 +8,13 @@ jobs live here, and they are together because the second is built from the first
   missing field means *we cannot judge*, and turning that into *the condition
   was not met* is the exact defect this module is written to avoid.
 * **Deriving the datum frame** from the accepted fits under a total, stated
-  tie-break order, and refusing when the winning candidate does not beat its
-  runner-up by the caller's declared margin.  A datum chosen by an unstated rule
-  is not reproducible, and reproducibility is what makes the model reviewable.
+  tie-break order.  When the scores do not separate two candidates by the
+  caller's declared margin, the axis is settled by a canonical rule over their
+  *directions* and labelled ``arbitrary-canonical`` in the program, and it is
+  refused only when even that rule cannot be shown to be reproducible.  A datum
+  chosen by an unstated rule is not reproducible, and reproducibility is what
+  makes the model reviewable; a datum chosen by a stated arbitrary rule is
+  reproducible, and saying which of the two it was is the honest part.
 
 Uncertainty handling is deliberately a thin, replaceable layer: a fit's
 uncertainty is read from the record, never estimated here.  When the record
@@ -82,8 +86,10 @@ REFUSAL_ALTERNATIVES = {
         "disproof gates before asking for a frame."
     ),
     "frame-ambiguous": (
-        "Two candidates are within the declared margin. Either declare a smaller frame_margin with a "
-        "rationale that says why the winner is meaningfully better, or name the axis explicitly."
+        "Two candidates are within the declared margin and the canonical tie-break cannot separate "
+        "them reproducibly: their measured direction uncertainty reaches the quantization grid, so a "
+        "re-tessellation could hand back the other one. Either declare a smaller angle_tolerance_deg "
+        "with a rationale, re-fit so the directions carry a smaller sigma, or name the axis explicitly."
     ),
     "frame-x-underdetermined": (
         "No plane parallel to the primary axis and no second axis off it, so the rotation about the "
@@ -109,6 +115,14 @@ FIT_UNCERTAINTY_KEYS = {
 }
 
 TOLERANCE_BASES = {"uncertainty", "declared-absolute"}
+
+#: How a datum axis was settled.  ``evidence`` is the normal path: one candidate
+#: beat every differently-directed rival by the caller's declared margin.
+#: ``arbitrary-canonical`` is the tie: the scores did not separate the
+#: candidates, so the axis was picked by a reproducible rule over their
+#: directions and is a *convention*, not a measurement.  The program carries the
+#: token so a reader can tell the two apart without re-deriving anything.
+FRAME_CHOICES = {"evidence", "arbitrary-canonical"}
 
 #: The measurement regimes U2 can settle on, and what a caller may declare.
 #: Carried across this seam because the regime changes what the numbers on the
@@ -702,6 +716,25 @@ class AxisCandidate:
     direction: Vec3
     anchor: Vec3
     basis: str
+    #: The measured standard deviation of ``direction``, in degrees, read from
+    #: the fit record and never estimated here.  ``None`` when the record
+    #: carries none for this candidate's kind, which makes the candidate
+    #: ineligible for the canonical tie-break: a direction with no stated
+    #: uncertainty cannot be shown to survive a re-tessellation.
+    direction_sigma_deg: float | None = None
+    #: How ``direction_sigma_deg`` was arrived at, so a reader can tell a number
+    #: the record measured from one this module combined.  Closed set:
+    #: ``"measured"`` -- read from the fit record for this candidate's own
+    #: direction; ``"propagated"`` -- combined first-order from the record's
+    #: measured sigmas because this direction is derived from more than one fit.
+    direction_sigma_basis: str = "measured"
+    #: A *deterministic* angular spread this direction can jump by, in degrees,
+    #: kept apart from the sigma because it is not a measurement error: it is
+    #: the whole distance the direction moves if a different member of a merged
+    #: parallel group becomes its representative. A confidence multiple applies
+    #: to a standard deviation and not to a jump, so this is added after the
+    #: multiplication rather than before it.
+    direction_spread_deg: float = 0.0
 
     def sort_key(self) -> tuple[Any, ...]:
         # Total order: score, then supporting area, then the canonicalised
@@ -719,6 +752,9 @@ class AxisCandidate:
             "direction": list(self.direction),
             "anchor": list(self.anchor),
             "basis": self.basis,
+            "direction_sigma_deg": self.direction_sigma_deg,
+            "direction_sigma_basis": self.direction_sigma_basis,
+            "direction_spread_deg": self.direction_spread_deg,
         }
 
 
@@ -763,6 +799,378 @@ def _first_rival(
     return None
 
 
+def _canonical_cell(
+    direction: Vec3,
+    sigma_deg: float | None,
+    grid_deg: float,
+    sigma_multiple: float | None,
+    spread_deg: float = 0.0,
+) -> tuple[int, int, int] | None:
+    """``direction`` as integer cells on a ``grid_deg`` angular grid, or ``None``.
+
+    ``None`` means *this direction's cell is not reproducible*: the fit's own
+    measured uncertainty reaches a cell boundary, so a re-tessellation could
+    move it into the neighbouring cell and change the answer.  That is the case
+    the ambiguity refusal still exists for.
+
+    The grid is the caller's declared ``angle_tolerance_deg`` -- already this
+    module's width for "these two directions are the same direction", and
+    already declared with the rationale that it is wider than any fit's angular
+    sigma.  Quantising the *components* rather than two spherical angles keeps
+    the resolution the same in all three coordinates and leaves no pole to
+    special-case; the cell width is the chord a ``grid_deg`` arc subtends, and a
+    rotation by sigma moves any component of a unit vector by at most sin(sigma).
+    Cells are centred on zero, so an axis-aligned direction sits in the middle
+    of its cell rather than exactly on a boundary.
+
+    The sign of an unoriented direction is fixed by ``_canonical_direction``,
+    which flips on the sign of the largest-magnitude component.  That choice is
+    itself only reproducible when the largest component is unambiguously the
+    largest among those of a *different* sign -- two components of opposite sign
+    and equal magnitude flip the whole vector under jitter -- so it is checked
+    here on the same measured sigma.
+    """
+    if sigma_multiple is None:
+        # No declared confidence multiple, which is what a `declared-absolute`
+        # tolerance basis means: the caller has said their numbers are not
+        # sigmas. A sigma-based certification has nothing to certify with, so
+        # the tie is refused rather than settled on a multiple nobody declared.
+        return None
+    if sigma_deg is None or not isinstance(sigma_deg, (int, float)):
+        return None
+    if isinstance(sigma_deg, bool) or not math.isfinite(sigma_deg) or sigma_deg < 0.0:
+        return None
+    # `sigma_deg` is one standard deviation, read from the record -- not a hard
+    # bound. A cell whose boundary is 1.1 sigma away is one an ordinary
+    # re-tessellation crosses often enough to matter, and the record calls this
+    # choice reproducible. So the distance a cell has to clear is the caller's
+    # own declared `sigma_multiple`, the same confidence multiple the
+    # relationship licences already turn a sigma into a tolerance with.
+    # The multiple applies to the sigma and to nothing else. A deterministic
+    # spread is already the whole jump; multiplying it by a confidence factor
+    # would demand clearance for an excursion nothing can make.
+    slack = math.sin(
+        math.radians(min(float(sigma_deg) * sigma_multiple + float(spread_deg), 90.0))
+    )
+    half_cell = math.sin(math.radians(grid_deg) / 2.0)
+    if slack >= half_cell:
+        # The grid is not coarse compared with the uncertainty, which is the
+        # whole premise: a tie between directions known to +-sigma needs cells
+        # much wider than sigma or the quantization decides nothing.
+        return None
+    dominant = max(range(3), key=lambda i: (abs(direction[i]), -i))
+    for other in range(3):
+        if other == dominant:
+            continue
+        if (direction[other] < 0.0) == (direction[dominant] < 0.0):
+            continue
+        if abs(direction[other]) + 2.0 * slack > abs(direction[dominant]):
+            return None
+    cell: list[int] = []
+    for value in direction:
+        index = math.floor(value / (2.0 * half_cell) + 0.5)
+        if abs(value - 2.0 * half_cell * index) + slack > half_cell:
+            return None
+        cell.append(index)
+    return (cell[0], cell[1], cell[2])
+
+
+def _tied(
+    candidates: Sequence[AxisCandidate],
+    winner: AxisCandidate,
+    frame_margin: float,
+    angle_tolerance_deg: float,
+) -> list[AxisCandidate]:
+    """The winner and every differently-directed candidate inside the margin."""
+    return [winner] + [
+        candidate
+        for candidate in candidates
+        if candidate is not winner
+        and _angle_deg(candidate.direction, winner.direction) > angle_tolerance_deg
+        and _relative_margin(winner.score, candidate.score) < frame_margin
+    ]
+
+
+def _decide_axis(
+    candidates: Sequence[AxisCandidate],
+    winner: AxisCandidate,
+    rival: AxisCandidate | None,
+    margin: float | None,
+    *,
+    axis: str,
+    frame_margin: float,
+    angle_tolerance_deg: float,
+    sigma_multiple: float | None,
+) -> tuple[AxisCandidate, dict[str, Any]]:
+    """Settle one axis: by evidence when the scores separate, else canonically.
+
+    A reconstruction does not need the designer's preferred frame; it needs a
+    *deterministic* one.  Every archetype in the program is expressed relative
+    to the datum, so any reproducible choice rebuilds the same model, and the
+    ambiguity refusal was never protecting correctness -- it was protecting
+    reproducibility against a re-tessellation flipping two near-equal scores.
+    So when the scores tie, the axis is settled by a rule that reads the
+    *directions*, which a re-tessellation does not move, instead of the scores,
+    which it does: quantize each tied candidate's canonical direction onto the
+    declared angular grid and take the lexicographically smallest cell.
+
+    The refusal survives for the case it still protects.  A candidate whose
+    measured direction uncertainty reaches the grid could quantize either way,
+    and there the honest answer is still ``frame-ambiguous`` with its declared
+    margin and its name-the-axis recourse.  A candidate that carries no measured
+    uncertainty at all is in the same position: nothing licenses the claim that
+    its cell is stable.
+    """
+    record: dict[str, Any] = {
+        "basis": "evidence",
+        "axis": axis,
+        "winner": winner.to_dict(),
+        "runner_up": None if rival is None else rival.to_dict(),
+        "margin": margin,
+        "frame_margin": frame_margin,
+    }
+    def membership_refusal(candidate: AxisCandidate, tied_side: bool):
+        """Is this candidate's same-axis classification reproducible?
+
+        Whether a candidate is *in* the tie set is itself an angular
+        measurement against `angle_tolerance_deg`, and it decides the outcome.
+        A candidate 1.99 deg from the winner is read as a re-measurement of the
+        same axis and excluded, settling the axis on evidence; the same
+        candidate at 2.01 deg joins the set and can carry a lexicographically
+        smaller cell, selecting a different axis -- on a difference smaller
+        than the sigmas both directions state, and in either direction. The
+        cell test asks whether a tied candidate's *direction* is stable; this
+        asks whether its membership is, which is the same question one step
+        earlier.
+
+        ponytail: only a candidate whose separation is provably near the line
+        refuses. One whose direction states no sigma is left to the cell test,
+        which refuses if it reaches the tie set -- upgrade to refusing here too
+        if a record ever ships a scored candidate with no direction sigma.
+        """
+        if candidate is winner:
+            return None
+        if _relative_margin(winner.score, candidate.score) >= frame_margin:
+            return None
+        if (
+            sigma_multiple is None
+            or candidate.direction_sigma_deg is None
+            or winner.direction_sigma_deg is None
+        ):
+            return None
+        separation = _angle_deg(candidate.direction, winner.direction)
+        if (separation > angle_tolerance_deg) != tied_side:
+            return None
+        bound = (
+            sigma_multiple
+            * math.hypot(candidate.direction_sigma_deg, winner.direction_sigma_deg)
+            + candidate.direction_spread_deg
+            + winner.direction_spread_deg
+        )
+        if abs(separation - angle_tolerance_deg) > bound:
+            return None
+        return _refuse(
+            "frame-ambiguous",
+            f"the {axis}-axis winner is within the declared margin {frame_margin:g} of candidate "
+            f"{candidate.region_hash[:12]} in score, and the two are not reproducibly the same "
+            f"axis or different ones: that candidate sits {separation:.4g} deg from the winner, "
+            f"within {bound:.4g} deg of the {angle_tolerance_deg:g} deg line that decides whether "
+            "it is this axis re-measured or a rival in the tie, so a re-tessellation can move it "
+            "across and change the axis this rule selects.",
+            {
+                "axis": axis,
+                "winner": winner.to_dict(),
+                "runner_up": None if rival is None else rival.to_dict(),
+                "margin": margin,
+                "frame_margin": frame_margin,
+                "quantization_grid_deg": angle_tolerance_deg,
+                "unstable_membership": {
+                    "candidate": candidate.to_dict(),
+                    "separation_deg": separation,
+                    "bound_deg": bound,
+                    "side": "tied" if tied_side else "same-axis",
+                },
+            },
+        )
+
+    # The excluded side first, because it is reachable even when the scores
+    # never tie: a candidate read as this axis re-measured never becomes a
+    # rival, so nothing below would look at it.
+    for candidate in candidates:
+        refusal = membership_refusal(candidate, tied_side=False)
+        if refusal is not None:
+            raise refusal
+
+    if margin is None or margin >= frame_margin:
+        return winner, record
+
+    # Inside the winner's own same-axis cluster the scores do not separate
+    # either, and the highest of them was standing for the whole cluster. Two
+    # cylinders 0.4 deg and 1.6 deg off the same axis have stable, *different*
+    # cells; scoring 100 and 99.9 selects the first and 100 and 100.1 selects
+    # the second, so the frame moves 1.2 deg on a number a re-tessellation
+    # writes -- with nothing crossing the angular line or the margin, which is
+    # what the guards above watch. The cluster's representative is therefore
+    # chosen the way the tie between clusters is: smallest canonical cell.
+    #
+    # ponytail: only members whose own cell is stable can represent the
+    # cluster. If every one of them is unstable the score order stands and the
+    # cell test below refuses on it, which is the same answer by a longer road.
+    # The score ranking's own winner, kept before the cluster rule can rebind
+    # `winner`: `margin`, `highest_score_runner_up` and `margin_basis` below all
+    # describe the *score* ranking, and `highest_score` naming the canonical
+    # representative instead would make the record disagree with itself about
+    # which candidate the margin was measured on.
+    highest_scorer = winner
+    cluster = [
+        candidate
+        for candidate in candidates
+        if candidate is not winner
+        and _angle_deg(candidate.direction, winner.direction) <= angle_tolerance_deg
+        and _relative_margin(winner.score, candidate.score) < frame_margin
+    ]
+    if cluster:
+        ranked: list[tuple[tuple[int, int, int], tuple[Any, ...], AxisCandidate]] = []
+        for candidate in [winner] + cluster:
+            cell = _canonical_cell(
+                candidate.direction,
+                candidate.direction_sigma_deg,
+                angle_tolerance_deg,
+                sigma_multiple,
+                candidate.direction_spread_deg,
+            )
+            if cell is not None:
+                ranked.append((cell, candidate.sort_key(), candidate))
+        if ranked:
+            ranked.sort()
+            if ranked[0][2] is not winner:
+                record["same_axis_representative"] = {
+                    "replaced": winner.to_dict(),
+                    "reason": (
+                        "this candidate and the selected one are the same axis within "
+                        f"{angle_tolerance_deg:g} deg and their scores do not separate, so the "
+                        "higher score was standing for the cluster on a number a re-tessellation "
+                        "moves. The cluster is represented by its smallest canonical cell, the "
+                        "same rule that settles the tie between clusters."
+                    ),
+                }
+                winner = ranked[0][2]
+
+    tied = _tied(candidates, winner, frame_margin, angle_tolerance_deg)
+    celled: list[tuple[tuple[int, int, int], tuple[Any, ...], AxisCandidate]] = []
+    for candidate in tied:
+        cell = _canonical_cell(
+            candidate.direction,
+            candidate.direction_sigma_deg,
+            angle_tolerance_deg,
+            sigma_multiple,
+            candidate.direction_spread_deg,
+        )
+        if cell is None:
+            raise _refuse(
+                "frame-ambiguous",
+                f"the {axis}-axis winner beats its nearest differently-directed rival by "
+                f"{margin:.4g}, below the declared margin {frame_margin:g}, and the canonical "
+                "tie-break cannot separate the tied candidates reproducibly: candidate "
+                f"{candidate.region_hash[:12]} carries direction sigma "
+                f"{candidate.direction_sigma_deg} deg, which reaches the "
+                f"{angle_tolerance_deg:g} deg quantization grid.",
+                {
+                    "axis": axis,
+                    "winner": winner.to_dict(),
+                    "runner_up": None if rival is None else rival.to_dict(),
+                    "margin": margin,
+                    "frame_margin": frame_margin,
+                    "quantization_grid_deg": angle_tolerance_deg,
+                    "unstable_candidate": candidate.to_dict(),
+                    "tied": [entry.to_dict() for entry in tied],
+                },
+            )
+        celled.append((cell, candidate.sort_key(), candidate))
+    celled.sort()
+    if len({cell for cell, _key, _entry in celled}) != len(celled):
+        # Two directions further apart than `angle_tolerance_deg` can still land
+        # in one cell, because a cell spans that angle's chord in every
+        # component rather than the angle itself.  `celled.sort()` would then
+        # decide on `sort_key()`, whose first element is the score -- the number
+        # a re-tessellation moves, and the reason this rule exists.  A cell that
+        # does not separate the tied candidates is no better than an unstable
+        # one, and gets the same answer.
+        raise _refuse(
+            "frame-ambiguous",
+            f"the {axis}-axis winner beats its nearest differently-directed rival by "
+            f"{margin:.4g}, below the declared margin {frame_margin:g}, and two tied "
+            f"candidates quantize to the same {angle_tolerance_deg:g} deg cell, so the "
+            "canonical tie-break does not separate them.",
+            {
+                "axis": axis,
+                "winner": winner.to_dict(),
+                "runner_up": None if rival is None else rival.to_dict(),
+                "margin": margin,
+                "frame_margin": frame_margin,
+                "quantization_grid_deg": angle_tolerance_deg,
+                "tied": [
+                    dict(entry.to_dict(), canonical_cell=list(cell))
+                    for cell, _sort, entry in celled
+                ],
+            },
+        )
+    # And the other side of the same line: a tied candidate can move below the
+    # tolerance, leave the set, and hand the selection back to the score
+    # winner. Checked after the cell tests, so a tie the quantization genuinely
+    # cannot separate still reports as that.
+    for candidate in tied:
+        refusal = membership_refusal(candidate, tied_side=True)
+        if refusal is not None:
+            raise refusal
+    chosen_cell, _key, chosen = celled[0]
+    # `runner_up` so far is the highest scorer's rival, and the rule just
+    # overrode the score ranking -- when it promoted that rival, the record
+    # would name one candidate as both the winner and its own runner-up. Report
+    # the runner-up against the candidate actually selected, and keep the score
+    # ranking whole under `highest_score*`. `margin` stays the score-ranking
+    # number, because it is the one the `frame_margin` gate above read to get
+    # here; `margin_basis` says so rather than leaving it to be inferred.
+    chosen_rival = _first_rival(candidates, chosen, angle_tolerance_deg)
+    record.update(
+        {
+            "basis": "arbitrary-canonical",
+            "winner": chosen.to_dict(),
+            "runner_up": None if chosen_rival is None else chosen_rival.to_dict(),
+            "margin_basis": (
+                "score ranking: the highest scorer's lead over its nearest differently-directed "
+                "rival, which is the number compared against frame_margin. The selection below "
+                "was made on directions, not on this."
+            ),
+            "highest_score": highest_scorer.to_dict(),
+            "highest_score_runner_up": None if rival is None else rival.to_dict(),
+            "quantization_grid_deg": angle_tolerance_deg,
+            "sigma_multiple": sigma_multiple,
+            "quantization": (
+                "each tied candidate's canonical direction quantized to integer cells of "
+                f"{angle_tolerance_deg:g} deg (cells centred on zero, one cell width per component) "
+                "and the lexicographically smallest cell taken; every tied candidate's stated "
+                f"direction sigma times the declared sigma_multiple {sigma_multiple} is smaller than its "
+                "distance to the nearest cell boundary, and no "
+                "two of them share a cell, so the same candidate is chosen on any re-tessellation "
+                "that leaves this tie set unchanged. Membership in the tie set is still a score "
+                "comparison against the declared frame margin, so a re-tessellation that moves a "
+                "rival's score across that margin can change the set and with it the answer."
+            ),
+            "canonical_cell": list(chosen_cell),
+            "tied": [
+                dict(entry.to_dict(), canonical_cell=list(cell)) for cell, _sort, entry in celled
+            ],
+            "note": (
+                "the scores did not separate these candidates, so this axis is a convention rather "
+                "than a measurement: it is reproducible, and it is not evidence that the designer "
+                "would have chosen it."
+            ),
+        }
+    )
+    return chosen, record
+
+
 def _merge_parallel(
     candidates: Sequence[AxisCandidate], angle_tolerance_deg: float
 ) -> list[AxisCandidate]:
@@ -791,21 +1199,53 @@ def _merge_parallel(
     groups: list[list[Any]] = []
     for candidate in sorted(candidates, key=AxisCandidate.sort_key):
         for group in groups:
-            if _angle_deg(candidate.direction, group[0].direction) <= angle_tolerance_deg:
+            if _angle_deg(candidate.direction, group[0][0].direction) <= angle_tolerance_deg:
+                group[0].append(candidate)
                 group[1] += candidate.area
-                group[2] += 1
                 break
         else:
-            groups.append([candidate, candidate.area, 1])
-    merged = [
-        replace(
-            head,
-            score=total,
-            area=total,
-            basis=head.basis if count == 1 else f"{head.basis}, summed over {count} parallel fits",
+            groups.append([[candidate], candidate.area])
+    merged: list[AxisCandidate] = []
+    for members, total in groups:
+        head = members[0]
+        count = len(members)
+        sigma = head.direction_sigma_deg
+        basis = head.direction_sigma_basis
+        if count > 1:
+            # The representative is the largest single member, and *which*
+            # member that is rests on areas a re-tessellation moves. Two members
+            # each safely inside their own cell can put the merged direction on
+            # either of two cells depending on which one won the area, so the
+            # merged candidate's uncertainty has to cover the whole group's
+            # spread, not just the representative's own. A member with no stated
+            # sigma leaves the group with none, which is what makes it
+            # ineligible for the canonical tie-break rather than quietly stable.
+            # Carried *beside* the sigma, not folded into it. The
+            # representative changing is a discrete jump of the whole spread,
+            # not an independent random error that partly cancels, so the
+            # clearance a cell needs is `sigma * multiple + spread` -- and the
+            # confidence multiple belongs to the sigma alone. Folding it in
+            # multiplied the jump too, which demanded clearance for an
+            # excursion nothing can make.
+            spread = max(_angle_deg(head.direction, member.direction) for member in members)
+            sigmas = [member.direction_sigma_deg for member in members]
+            sigma = None if any(s is None for s in sigmas) else max(sigmas)
+            basis = "propagated"
+        merged.append(
+            replace(
+                head,
+                score=total,
+                area=total,
+                direction_sigma_deg=sigma,
+                direction_sigma_basis=basis,
+                direction_spread_deg=(spread if count > 1 else head.direction_spread_deg),
+                basis=(
+                    head.basis
+                    if count == 1
+                    else f"{head.basis}, summed over {count} parallel fits"
+                ),
+            )
         )
-        for head, total, count in groups
-    ]
     return sorted(merged, key=AxisCandidate.sort_key)
 
 
@@ -843,6 +1283,7 @@ def _primary_candidates(
                 direction=_canonical_direction(direction),
                 anchor=anchor,
                 basis="radius x axial span",
+                direction_sigma_deg=region.sigma("axis_direction_deg"),
             )
         )
     if cylinders:
@@ -865,6 +1306,7 @@ def _primary_candidates(
                 direction=_canonical_direction(direction),
                 anchor=anchor,
                 basis="supporting area",
+                direction_sigma_deg=region.sigma("normal_deg"),
             )
         )
     return _merge_parallel(planes, angle_tolerance_deg), "plane"
@@ -875,8 +1317,15 @@ def _origin_on_axis(
     z: Vec3,
     axis_anchor: Vec3,
     angle_tolerance_deg: float,
-) -> tuple[Vec3, str]:
-    """Where the primary axis meets the lowest plane perpendicular to it."""
+) -> tuple[Vec3, str, float | None]:
+    """Where the primary axis meets the lowest plane perpendicular to it.
+
+    Returns the origin, how it was found, and the positional sigma of the
+    region that placed it -- ``None`` where no single region did. The origin is
+    one end of every second-axis candidate's direction, so its own uncertainty
+    turns that direction just as the far anchor's does, and a canonical tie over
+    those directions cannot be called stable without it.
+    """
     caps: list[tuple[Any, ...]] = []
     for region in regions:
         fit = region.fit
@@ -891,7 +1340,16 @@ def _origin_on_axis(
     if caps:
         station, _area, _normal, _point, region_hash = sorted(caps)[0]
         origin = _add(axis_anchor, _scale(z, station - _dot(z, axis_anchor)))
-        return origin, f"primary axis meets plane {region_hash[:12]} at station {station:.6g}"
+        # The sigma of the region that placed it. The caller combines this with
+        # the primary axis anchor's own, which is what places the origin
+        # *across* the axis -- and the across-axis term is the one that turns a
+        # second-axis direction.
+        cap = next(r for r in regions if r.region_hash == region_hash)
+        return (
+            origin,
+            f"primary axis meets plane {region_hash[:12]} at station {station:.6g}",
+            cap.sigma("offset"),
+        )
 
     planes = sorted(
         (
@@ -902,7 +1360,20 @@ def _origin_on_axis(
     )
     if planes:
         _area, region_hash, point = planes[0]
-        return point, f"centroid of the largest plane {region_hash[:12]}; no plane is perpendicular to the primary axis"
+        # `None`, deliberately. This point is a plane's *vertex centroid*, and
+        # the only sigma the record carries for a plane is `offset`, which
+        # bounds displacement along the normal and says nothing about where on
+        # the plane the centroid sits. A re-tessellation moves that centroid
+        # tangentially -- and can swap which of two near-equal-area planes is
+        # picked at all -- by far more than `offset`. Returning `offset` here
+        # would let the canonical tie-break certify a cell that the origin can
+        # walk out of, so this fallback states no bound and the tie refuses.
+        return (
+            point,
+            f"centroid of the largest plane {region_hash[:12]}; no plane is perpendicular to the "
+            "primary axis",
+            None,
+        )
 
     anchors = sorted(
         (region.anchor(), region.region_hash) for region in regions if region.anchor() is not None
@@ -913,11 +1384,22 @@ def _origin_on_axis(
         sum(a[0][1] for a in anchors) / total,
         sum(a[0][2] for a in anchors) / total,
     )
-    return centroid, "centroid of every accepted fit's anchor point; the part has no fitted plane"
+    # No single region placed this one, so no single region's sigma bounds it.
+    # `None` here makes every second-axis candidate ineligible for the canonical
+    # tie-break, which is the honest answer for an origin nothing measured.
+    return (
+        centroid,
+        "centroid of every accepted fit's anchor point; the part has no fitted plane",
+        None,
+    )
 
 
 def _secondary_candidates(
-    regions: Sequence[RegionFit], z: Vec3, angle_tolerance_deg: float
+    regions: Sequence[RegionFit],
+    z: Vec3,
+    angle_tolerance_deg: float,
+    z_sigma_deg: float | None,
+    sigma_multiple: float | None,
 ) -> list[AxisCandidate]:
     """Planes containing the primary axis: their normal, orthogonalised, is X."""
     out: list[AxisCandidate] = []
@@ -928,11 +1410,41 @@ def _secondary_candidates(
         normal, point = region.direction(), region.anchor()
         if normal is None or point is None:
             continue
-        if abs(_angle_deg(normal, z) - 90.0) > angle_tolerance_deg:
+        offset_from_parallel = abs(_angle_deg(normal, z) - 90.0)
+        if offset_from_parallel > angle_tolerance_deg:
             continue
         x = _unit(_sub(normal, _scale(z, _dot(normal, z))))
         if x is None:
             continue
+        # The orthogonalisation subtracts the primary axis, which is itself
+        # measured, so the plane's own sigma is a *lower bound* on the
+        # orthogonalised direction's -- and `_canonical_cell` reads whatever it
+        # is given as the whole bound.  Feeding it the lower bound would certify
+        # cells that the primary axis can move out of, so both measured sigmas
+        # are combined here, first-order and in quadrature: a rotation of the
+        # primary axis by delta tilts a normal perpendicular to it by delta.
+        # Nothing is invented -- when the record states no sigma for either
+        # input the combined bound is unavailable, and an unavailable bound is
+        # what makes the candidate ineligible for the canonical tie-break.
+        plane_sigma = region.sigma("normal_deg")
+        combined = (
+            None
+            if plane_sigma is None or z_sigma_deg is None
+            else math.hypot(plane_sigma, z_sigma_deg)
+        )
+        # Being *in* this candidate set is itself a measurement against
+        # `angle_tolerance_deg`, and a plane 1.95 deg from perpendicular on
+        # a 2 deg tolerance is one a permitted perturbation drops out of --
+        # which changes what the canonical rule is choosing between, and so
+        # the axis, while the record calls the cell stable. A candidate
+        # whose own membership is not stable under its declared bound
+        # carries no sigma, which is what makes it ineligible for the
+        # tie-break rather than quietly certifiable.
+        eligible = (
+            combined is not None
+            and sigma_multiple is not None
+            and offset_from_parallel + combined * sigma_multiple <= angle_tolerance_deg
+        )
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
@@ -942,9 +1454,26 @@ def _secondary_candidates(
                 direction=_canonical_direction(x),
                 anchor=point,
                 basis="normal of a plane parallel to the primary axis, orthogonalised",
+                direction_sigma_deg=combined if eligible else None,
+                direction_sigma_basis="propagated",
             )
         )
     return _merge_parallel(out, angle_tolerance_deg)
+
+
+#: Where each kind's fit record keeps the positional sigma of its own anchor.
+#: A cone's anchor is its apex and a cylinder's is a point on its axis, and the
+#: record names them accordingly (``FIT_UNCERTAINTY_KEYS``) -- reading one key
+#: for both silently gives every cone no sigma at all, which reads as "carries
+#: no measured uncertainty" and refuses a tie the record could have settled.
+_ANCHOR_SIGMA_KEY = {"cylinder": "axis_point", "cone": "apex"}
+
+
+def _combined_positional_sigma(anchor: float | None, origin: float | None) -> float | None:
+    """The two measured numbers that place a second axis relative to the datum."""
+    if anchor is None or origin is None:
+        return None
+    return math.hypot(anchor, origin)
 
 
 def _secondary_from_second_axis(
@@ -953,12 +1482,16 @@ def _secondary_from_second_axis(
     origin: Vec3,
     primary_region_hash: str,
     offset_tolerance: float,
+    z_sigma_deg: float | None,
+    origin_sigma: float | None,
+    sigma_multiple: float | None,
+    primary_anchor: Vec3,
 ) -> list[AxisCandidate]:
     """A bolt pattern gives a natural X: the direction to the second axis."""
     out: list[AxisCandidate] = []
     for region in regions:
         fit = region.fit
-        if fit is None or fit.kind not in ("cylinder", "cone"):
+        if fit is None or fit.kind not in _ANCHOR_SIGMA_KEY:
             continue
         if region.region_hash == primary_region_hash:
             continue
@@ -967,20 +1500,91 @@ def _secondary_from_second_axis(
             continue
         offset = _sub(anchor, origin)
         perpendicular = _sub(offset, _scale(z, _dot(offset, z)))
-        if _length(perpendicular) <= offset_tolerance:
+        radial = _length(perpendicular)
+        if radial <= offset_tolerance:
             continue
+        # Being far enough off the axis to *be* a candidate is a measurement
+        # against `offset_tolerance`, like the plane case's parallelism. A
+        # candidate whose clearance is smaller than its own positional bound is
+        # one a re-tessellation drops out of the set -- and it can win an
+        # `arbitrary-canonical` tie first, then vanish and change X on the next
+        # fit. Its own bound has to keep it in.
+        positional = _combined_positional_sigma(
+            region.sigma(_ANCHOR_SIGMA_KEY[fit.kind]), origin_sigma
+        )
+        # `radial` is what is left after subtracting the primary axis, so a tilt
+        # of that axis moves it too: over the lever the tilt pivots on, by
+        # `axial * delta`. Bounding the clearance by the endpoints' positional
+        # sigma alone therefore understates it, and a candidate sitting just
+        # outside `offset_tolerance` on a long, weakly-measured primary axis
+        # passes a test its own axis can fail -- which is the case this guard
+        # exists to catch. Independent measurements, so in quadrature; the two
+        # levers inside `axial` are added because one tilt swings both.
+        axial = abs(_dot(_sub(anchor, primary_anchor), z)) + abs(
+            _dot(_sub(origin, primary_anchor), z)
+        )
+        radial_sigma = (
+            None
+            if positional is None or z_sigma_deg is None
+            else math.hypot(positional, axial * math.radians(z_sigma_deg))
+        )
+        stable_membership = (
+            radial_sigma is not None
+            and sigma_multiple is not None
+            and radial - radial_sigma * sigma_multiple > offset_tolerance
+        )
         x = _unit(perpendicular)
         if x is None:
             continue
+        # This direction is not a fitted axis: it is the direction *to* one, so
+        # three measured numbers move it and all three are propagated
+        # first-order.
+        #
+        # The anchor's own positional sigma, spread over the lever arm -- and
+        # read under the key this kind's record actually uses.
+        anchor_sigma = region.sigma(_ANCHOR_SIGMA_KEY[fit.kind])
+        # And the primary axis's angular sigma, because the projection that
+        # produces this direction subtracts that axis. The tilt pivots about
+        # the primary fit's *own* anchor, not about the datum origin: an origin
+        # placed on an end cap while the fitted axis point sits mid-span means
+        # a secondary anchor level with that cap has zero axial offset from the
+        # origin and the whole anchor-to-cap distance from the pivot. Both
+        # levers are measured from the pivot and added, because the tilt swings
+        # the origin and the anchor the same way at once. (`axial` is computed
+        # above, where the membership bound needs the same lever.)
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
                 kind=fit.kind,
-                score=_length(perpendicular),
+                score=radial,
                 area=region.area,
                 direction=_canonical_direction(x),
                 anchor=anchor,
                 basis="perpendicular offset from the origin to a second axis",
+                direction_sigma_deg=(
+                    None
+                    if not stable_membership
+                    or anchor_sigma is None
+                    or z_sigma_deg is None
+                    or origin_sigma is None
+                    else math.hypot(
+                        math.hypot(
+                            math.degrees(math.atan2(anchor_sigma, radial)),
+                            # The origin is this direction's other endpoint, and
+                            # moving it across the axis turns the direction over
+                            # the same lever arm as moving the far anchor does.
+                            math.degrees(math.atan2(origin_sigma, radial)),
+                        ),
+                        # Two ways a tilt of the primary axis turns this
+                        # direction, and an anchor level with the origin has
+                        # only the second: the axial component it subtracts
+                        # moves by `axial * delta` over the lever `radial`, and
+                        # the projection plane itself tilts by `delta`
+                        # regardless. `hypot(1, axial/radial)` carries both.
+                        z_sigma_deg * math.hypot(1.0, axial / radial),
+                    )
+                ),
+                direction_sigma_basis="propagated",
             )
         )
     return sorted(out, key=AxisCandidate.sort_key)
@@ -992,6 +1596,7 @@ def derive_datum_frame(
     frame_margin: float,
     angle_tolerance_deg: float,
     offset_tolerance: float,
+    sigma_multiple: float | None,
 ) -> DatumFrame:
     """Derive origin and axes from the accepted fits, or refuse.
 
@@ -1002,13 +1607,15 @@ def derive_datum_frame(
     ``frame_margin`` is a *relative* margin: the winner must beat the best rival
     candidate by that fraction of its own score.  Relative rather than absolute
     because the scores are areas and radius-times-length products, whose scale
-    is the part's, not ours.
+    is the part's, not ours.  Inside the margin the axis is not refused but
+    settled canonically -- see ``_decide_axis`` -- and ``evidence.frame_choice``
+    says which of the two happened.
     """
     for label, value in (
         ("frame_margin", frame_margin),
         ("angle_tolerance_deg", angle_tolerance_deg),
         ("offset_tolerance", offset_tolerance),
-    ):
+    ) + ((("sigma_multiple", sigma_multiple),) if sigma_multiple is not None else ()):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{label} must be a positive finite number declared by the caller.")
 
@@ -1030,27 +1637,64 @@ def derive_datum_frame(
     winner = candidates[0]
     rival = _first_rival(candidates, winner, angle_tolerance_deg)
     primary_margin = None if rival is None else _relative_margin(winner.score, rival.score)
-    if primary_margin is not None and primary_margin < frame_margin:
-        raise _refuse(
-            "frame-ambiguous",
-            f"the primary-axis winner beats its nearest differently-directed rival by "
-            f"{primary_margin:.4g}, below the declared margin {frame_margin:g}.",
-            {
-                "axis": "primary",
-                "winner": winner.to_dict(),
-                "runner_up": rival.to_dict(),
-                "margin": primary_margin,
-                "frame_margin": frame_margin,
-            },
-        )
+    winner, primary_choice = _decide_axis(
+        candidates,
+        winner,
+        rival,
+        primary_margin,
+        axis="primary",
+        frame_margin=frame_margin,
+        angle_tolerance_deg=angle_tolerance_deg,
+        sigma_multiple=sigma_multiple,
+    )
     z = winner.direction
-    origin, origin_source = _origin_on_axis(accepted, z, winner.anchor, angle_tolerance_deg)
+    origin, origin_source, placing_sigma = _origin_on_axis(
+        accepted, z, winner.anchor, angle_tolerance_deg
+    )
+    # A second-axis direction runs from the origin to another axis, so the
+    # origin is one of its two endpoints and its own uncertainty turns that
+    # direction exactly as the far endpoint's does. Two measured numbers place
+    # the origin: the region that named it, and the primary axis's own anchor,
+    # which is what fixes it *across* the axis. Either one missing leaves the
+    # origin without a stated uncertainty -- and a direction with an endpoint
+    # nothing measured is not a direction the canonical tie-break may certify.
+    primary_region = next(
+        (region for region in accepted if region.region_hash == winner.region_hash), None
+    )
+    # A plane's anchor is its *vertex centroid* and the only sigma a plane
+    # record carries is `offset`, which bounds motion along the normal and says
+    # nothing about where on the plane the centroid sits -- the same reason the
+    # no-perpendicular-plane origin fallback states no bound. So a plane primary
+    # states none either, and the canonical tie over directions measured from
+    # that origin refuses rather than certifying a cell it can slide out of.
+    primary_anchor_sigma = (
+        None
+        if primary_region is None
+        or primary_region.fit is None
+        or primary_region.fit.kind not in _ANCHOR_SIGMA_KEY
+        else primary_region.sigma(_ANCHOR_SIGMA_KEY[primary_region.fit.kind])
+    )
+    origin_sigma = (
+        None
+        if placing_sigma is None or primary_anchor_sigma is None
+        else math.hypot(placing_sigma, primary_anchor_sigma)
+    )
 
-    secondary = _secondary_candidates(accepted, z, angle_tolerance_deg)
+    secondary = _secondary_candidates(
+        accepted, z, angle_tolerance_deg, winner.direction_sigma_deg, sigma_multiple
+    )
     secondary_basis = "plane parallel to the primary axis"
     if not secondary:
         secondary = _secondary_from_second_axis(
-            accepted, z, origin, winner.region_hash, offset_tolerance
+            accepted,
+            z,
+            origin,
+            winner.region_hash,
+            offset_tolerance,
+            winner.direction_sigma_deg,
+            origin_sigma,
+            sigma_multiple,
+            winner.anchor,
         )
         secondary_basis = "second axis off the primary axis"
     if not secondary:
@@ -1063,19 +1707,16 @@ def derive_datum_frame(
     x_winner = secondary[0]
     x_rival = _first_rival(secondary, x_winner, angle_tolerance_deg)
     secondary_margin = None if x_rival is None else _relative_margin(x_winner.score, x_rival.score)
-    if secondary_margin is not None and secondary_margin < frame_margin:
-        raise _refuse(
-            "frame-ambiguous",
-            f"the secondary-axis winner beats its nearest differently-directed rival by "
-            f"{secondary_margin:.4g}, below the declared margin {frame_margin:g}.",
-            {
-                "axis": "secondary",
-                "winner": x_winner.to_dict(),
-                "runner_up": x_rival.to_dict(),
-                "margin": secondary_margin,
-                "frame_margin": frame_margin,
-            },
-        )
+    x_winner, secondary_choice = _decide_axis(
+        secondary,
+        x_winner,
+        x_rival,
+        secondary_margin,
+        axis="secondary",
+        frame_margin=frame_margin,
+        angle_tolerance_deg=angle_tolerance_deg,
+        sigma_multiple=sigma_multiple,
+    )
 
     x = _unit(_sub(x_winner.direction, _scale(z, _dot(x_winner.direction, z))))
     if x is None:  # pragma: no cover - the candidate builders already orthogonalised
@@ -1091,17 +1732,32 @@ def derive_datum_frame(
         y_axis=y,
         z_axis=z,
         evidence={
+            # `frame_choice` is the worse of the two axes: a frame with one
+            # arbitrary axis in it is an arbitrary frame, and a reader who sees
+            # only "evidence" must be able to trust that both axes were measured.
+            "frame_choice": (
+                "evidence"
+                if primary_choice["basis"] == "evidence" and secondary_choice["basis"] == "evidence"
+                else "arbitrary-canonical"
+            ),
             "primary": winner.to_dict(),
-            "primary_runner_up": None if rival is None else rival.to_dict(),
+            # Relative to the candidate above, which the canonical rule may have
+            # promoted over the highest scorer. `primary_choice` keeps the score
+            # ranking under `highest_score*` when the two differ, so a reader is
+            # never shown one candidate as both the winner and its own runner-up.
+            "primary_runner_up": primary_choice["runner_up"],
             "primary_margin": primary_margin,
             "primary_source": source,
+            "primary_choice": primary_choice,
             "secondary": x_winner.to_dict(),
-            "secondary_runner_up": None if x_rival is None else x_rival.to_dict(),
+            "secondary_runner_up": secondary_choice["runner_up"],
             "secondary_margin": secondary_margin,
             "secondary_source": secondary_basis,
+            "secondary_choice": secondary_choice,
             "origin_source": origin_source,
             "frame_margin": frame_margin,
             "angle_tolerance_deg": angle_tolerance_deg,
             "offset_tolerance": offset_tolerance,
+            "sigma_multiple": sigma_multiple,
         },
     )

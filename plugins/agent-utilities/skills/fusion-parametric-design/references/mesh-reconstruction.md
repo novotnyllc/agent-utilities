@@ -148,7 +148,7 @@ Inside Fusion, first: `emit-mesh-face-groups` runs `MeshGenerateFaceGroups` on t
 | regions accepted through every gate | 38 | 268 | **619** |
 | area-weighted coverage, 11 parts | **41.7%** | **62.5%** | **70.5%** |
 | cylinders accepted, 11 parts | 0 | 4 | **251** |
-| full-turn bores accepted (of 85 present) | 0 | 0 | **76** |
+| full-turn bores accepted (of 85 present) | 0 | 0 | **76**, and **85** once the structure gates stop testing the file format (below) |
 | fillet candidates | 0 | 1 | **114** |
 | POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% | 105 regions, 50.8% |
 | POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% | 188 regions, 72.1% |
@@ -159,7 +159,11 @@ and each is caller-declared with its rationale.
 
 The table above is the **pre-prism-filter** measurement. After
 `cylinder-normals-discrete`, its right column's 619 accepted regions are 598 and
-its 251 cylinders are 230, and 66 planned holes are 45. The difference is
+its 251 cylinders are 230, and 66 planned holes are 45. Re-measured over the same
+eleven dumps after the quantization precondition and the canonical frame below,
+those are **650 accepted regions, 282 cylinders and 74 planned holes** across
+**11 planned parts of 11**, at 71.2% area-weighted coverage against 70.0%; the
+three fillets and the eleven extrudes are unchanged. The difference is
 21 hexagonal M3 nut pockets — 5.700 mm across flats, 12 facets each, spread over
 five of the eleven parts — that the vertices read as 6.58 mm round bores because
 a hexagon's corners lie exactly on its circumscribed circle. They are refused
@@ -309,6 +313,61 @@ float32). Without that floor the residual-structure gates spend their power
 testing the file format — quantization is deterministic and therefore
 systematically signed, and it refused 56 of the 85 full-turn bores for "azimuthal
 structure" that was the quantization of a perfectly round hole.
+
+**The same floor is a precondition on the gates, not only a floor under sigma.**
+Flooring `sigma` left nine of the eighty-five bores still refused, because the
+structure gates' own power floor is a *tenth* of the surface scale and those nine
+sat in the decade between: residual fields of 2.2e-06 mm against a measured
+`vertex_precision_floor` of 2.1e-05 mm. A residual field lying entirely inside
+the precision the coordinates are stored at **is** the lattice, by definition, so
+Moran's I, the directional-bin test and the blocked held-out refit are now
+skipped on it and say so in `moran_unavailable_reason` /
+`heldout_unavailable_reason`, exactly as they already do below the noise floor —
+counted as skips by the `disproof.gates` census rather than passed. Measured over
+the eleven parts: seven of the nine were refused for residual structure (Moran z
+6.3 to 10.5 against a cap of 6) and two for a held-out ratio (2.5x and 3.8x
+against 1.5), and all nine are now accepted, all of them r = 1.15 or 1.7 mm bores
+with `material_side: inside`. **No declared threshold value moved**; this is a
+statement about what the gates can judge.
+
+**A frame nobody can measure is still a frame everybody can reproduce.** When two
+datum-axis candidates tie inside the declared `frame_margin`, the planner used to
+refuse `frame-ambiguous`. That protected reproducibility — two near-equal areas
+can swap under a re-tessellation — but reconstruction does not need the
+designer's preferred frame, only a deterministic one: every archetype in the
+program is expressed against the datum, so any reproducible choice rebuilds the
+same model. The tie is now settled on the tied candidates' canonical *directions*
+— which a re-tessellation does not move — quantized to the caller's declared
+`angle_tolerance_deg` grid, smallest cell first, and the program records
+`datum.evidence.frame_choice: "arbitrary-canonical"` with both candidates, their
+scores, the margin, the grid and each candidate's cell, against `"evidence"` on
+the ordinary path. **The refusal survives** for the case it still protects: a
+candidate whose measured direction sigma reaches the grid, or which carries no
+measured sigma at all, could quantize either way, and there the honest answer is
+still `frame-ambiguous`. The distance a cell has to clear is
+`sigma × sigma_multiple + direction_spread_deg`. `sigma_multiple` is the caller's
+declared confidence multiple, the same one the relationship licences turn a sigma
+into a tolerance with — a sigma is one standard deviation and not a bound, and a
+boundary 1.1 sigma away is one an ordinary re-tessellation crosses. The multiple
+applies to the sigma **and only to the sigma**: `direction_spread_deg` is the
+angular width a merged group's members already span, which is a deterministic
+property of the group rather than a distribution to take a confidence interval
+of, so it is added on top rather than scaled. Under a `declared-absolute` tolerance basis
+there is no multiple declared, the caller having said their numbers are not
+sigmas, and the canonical tie refuses rather than certifying with one nobody
+declared. Two more cases land in the same refusal. A cell spans
+the tolerance angle's *chord* in each component, so two candidates further apart
+than the tolerance can still share one cell — and a shared cell would put the
+choice back on the scores, which is the comparison this rule replaced. And a
+secondary candidate's direction is a plane normal orthogonalised against the
+measured primary axis, so the plane's own sigma is a lower bound on it: the two
+measured sigmas are combined in quadrature before the grid sees them
+(`direction_sigma_basis: "propagated"`), and a primary axis with no stated sigma
+leaves no bound to combine. Measured: POD-C-LID (secondary margin 0.042, three tied
+walls whose direction sigmas are 3.7e-08° to 6.9e-07° against a 2° grid) and the
+vendor honeycomb organiser (0.0986, hexagonal symmetry) both plan instead of
+refusing, taking the corpus from ten planned parts of eleven to eleven of eleven,
+and no part that already planned changes its frame.
 
 **A prism of planar walls fits the cylinder its own corners lie on.** A regular
 polygon's corners lie *exactly* on its circumscribed circle, so a hexagonal

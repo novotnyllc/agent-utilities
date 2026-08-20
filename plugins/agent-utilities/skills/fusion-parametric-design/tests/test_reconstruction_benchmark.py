@@ -32,10 +32,11 @@ reconstruction**, and each stops at a different named gate. Asserting the gates
 is the point: when one of them is fixed, this test fails and the manifest has to
 be re-measured rather than the improvement going unrecorded. That is exactly
 what happened to the honeycomb -- it used to refuse `feature-scale-below-noise`
-before fitting anything and it now fits 39 planes matching all four of the
-STEP's families, so what this file asserts about it changed with the build. It
-still stops at the planner, on `frame-ambiguous`, which is hexagonal symmetry
-rather than a threshold.
+before fitting anything, then fitted 39 planes and stopped at the planner on
+`frame-ambiguous`, and it now plans one sketch-extrude and stops at emission on
+`profile-ambiguous`. Twice the assertions here changed with the build. Its
+hexagonal symmetry did not go away: the frame it plans against is labelled
+`arbitrary-canonical`, and that label is asserted rather than the refusal.
 """
 
 from __future__ import annotations
@@ -150,6 +151,33 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _assert_recorded(case, recorded, measured, path="detail"):
+    """A recorded payload against a measured one, floats at the file's own width.
+
+    ``assertEqual`` on the whole structure would compare computed floats
+    bit-for-bit, which ``RECORDED_FLOAT_REL_TOLERANCE`` exists to say this
+    benchmark does not do. Everything else -- keys, ordering, strings, nulls --
+    is compared exactly, so a lost or renamed diagnostic field still fails.
+    """
+    if isinstance(recorded, dict):
+        case.assertIsInstance(measured, dict, path)
+        case.assertEqual(sorted(recorded), sorted(measured), path)
+        for key in recorded:
+            _assert_recorded(case, recorded[key], measured[key], f"{path}.{key}")
+    elif isinstance(recorded, list):
+        case.assertIsInstance(measured, list, path)
+        case.assertEqual(len(recorded), len(measured), path)
+        for index, entry in enumerate(recorded):
+            _assert_recorded(case, entry, measured[index], f"{path}[{index}]")
+    elif isinstance(recorded, float) or isinstance(measured, float):
+        case.assertAlmostEqual(
+            recorded, measured, delta=RECORDED_FLOAT_REL_TOLERANCE * max(abs(recorded), 1.0),
+            msg=path,
+        )
+    else:
+        case.assertEqual(recorded, measured, path)
+
+
 def _fit(source_id: str):
     """Replay one part's fit stage from its committed, hash-bound dump."""
     from fusion_design import mesh_segmentation as seg
@@ -178,6 +206,43 @@ def _plan(record):
         ), None
     except ReconstructionRefused as refused:
         return None, refused
+
+
+def _kind_counts(program):
+    """How many archetypes of each kind the program carries."""
+    counts = {}
+    for group in program["archetypes"]:
+        counts[group["kind"]] = counts.get(group["kind"], 0) + 1
+    return counts
+
+
+def _emit_rebuild(program, source_id):
+    """Emit the rebuild script; return the refusal reason, or None on success."""
+    from fusion_design.manifest import load_manifest
+    from fusion_design.mesh_datum import ReconstructionRefused
+    from fusion_design.mesh_rebuild import emit_mesh_rebuild_script
+    from fusion_design.mesh_source import mesh_source_record
+
+    manifest = load_manifest(BENCH / "fusion-project.json")
+    spec = json.loads((BENCH / "rebuild-spec.json").read_text(encoding="utf-8"))
+    # dump_path is committed relative to the benchmark directory; the emitter
+    # needs the bytes, so the runner resolves it here.
+    spec["dump_path"] = str(BENCH / "dumps" / MANIFEST["results"][source_id]["dump"])
+    classification = json.loads(
+        (BENCH / "results" / source_id / "classification.json").read_text(encoding="utf-8")
+    )
+    try:
+        emit_mesh_rebuild_script(
+            manifest,
+            classification,
+            mesh_source_record(manifest, source_id),
+            program,
+            spec,
+            "0" * 32,
+        )
+    except ReconstructionRefused as refused:
+        return refused.reason
+    return None
 
 
 class BenchmarkFixtureTests(unittest.TestCase):
@@ -534,23 +599,63 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
             )
         self.assertEqual(evidence["interior_edge_count"], noise["interior_edge_count"])
 
-    def test_the_planner_still_refuses_a_part_with_no_secondary_datum(self) -> None:
-        """Fitting the part did not invent a frame for it, and must not.
+    def test_the_secondary_datum_a_hexagon_cannot_choose_is_taken_canonically(self) -> None:
+        """The part did not become distinguishable; the frame became reproducible.
 
         Three wall directions 120 degrees apart carry 21,714 and 19,572 square
         millimetres: the margin is 0.0986 against a declared 0.1, and that is
-        hexagonal symmetry rather than a threshold set too tight.
+        hexagonal symmetry rather than a threshold set too tight. No smaller
+        margin picks a winner the geometry prefers, because the geometry has no
+        preference -- so the axis is settled on the tied candidates' quantized
+        canonical directions instead, and `frame_choice` says so. What this
+        asserts is that the label is there and honest, and that the primary axis
+        is still decided the ordinary way: an arbitrary secondary must not be
+        allowed to quietly make the whole frame arbitrary.
         """
         program, refused = _plan(self.record)
-        self.assertIsNone(program, "the honeycomb is expected to refuse at the planner")
+        self.assertIsNone(refused, "the honeycomb is expected to plan")
         recorded = MANIFEST["results"]["honeycomb_organizer_stl"]["plan"]
-        self.assertEqual(recorded["refusal"], refused.reason)
-        self.assertEqual("frame-ambiguous", refused.reason)
+        evidence = program["datum"]["evidence"]
+        self.assertEqual(recorded["frame_choice"], evidence["frame_choice"])
+        self.assertEqual("arbitrary-canonical", evidence["frame_choice"])
+        self.assertEqual("evidence", evidence["primary_choice"]["basis"])
+        secondary = evidence["secondary_choice"]
+        self.assertEqual("arbitrary-canonical", secondary["basis"])
         self.assertAlmostEqual(
-            recorded["margin"],
-            refused.detail["margin"],
-            delta=RECORDED_FLOAT_REL_TOLERANCE * recorded["margin"],
+            recorded["secondary_margin"],
+            secondary["margin"],
+            delta=RECORDED_FLOAT_REL_TOLERANCE * recorded["secondary_margin"],
         )
+        # The three walls are the tie, all three are recorded with the cell each
+        # quantized to, and the winner is the smallest of those cells.
+        self.assertEqual(3, len(secondary["tied"]))
+        self.assertEqual(
+            secondary["canonical_cell"],
+            min(entry["canonical_cell"] for entry in secondary["tied"]),
+        )
+        # And every tied candidate's measured direction sigma is far inside the
+        # grid, which is what licenses calling the choice reproducible at all.
+        for entry in secondary["tied"]:
+            self.assertLess(entry["direction_sigma_deg"], 1e-04 * secondary["quantization_grid_deg"])
+        self.assertEqual(recorded["archetypes"], _kind_counts(program))
+        self.assertEqual(recorded["unreconstructed"], len(program["unreconstructed"]))
+        self.assertAlmostEqual(
+            recorded["covered_area_fraction"], program["covered_area_fraction"], places=9
+        )
+
+    def test_the_honeycomb_then_refuses_at_emission_on_its_own_section(self) -> None:
+        """A planned part is not a rebuilt one, and the next gate is the section.
+
+        Eleven loops close at the extrude's station, because a honeycomb is
+        holes. Recorded so that reaching the planner is not read as reaching a
+        model: the frame moved this part one stage, and this is the stage it
+        moved to.
+        """
+        program, refused = _plan(self.record)
+        self.assertIsNone(refused)
+        recorded = MANIFEST["results"]["honeycomb_organizer_stl"]["rebuild_emission"]
+        self.assertEqual(recorded["refusal"], _emit_rebuild(program, "honeycomb_organizer_stl"))
+        self.assertEqual("profile-ambiguous", recorded["refusal"])
 
 
 class UnicornHornGroundTruthTests(unittest.TestCase):
@@ -703,28 +808,40 @@ class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurem
         )
         return row, record
 
-    def test_the_unicorn_horn_fits_a_little_and_then_cannot_build_a_profile(self) -> None:
+    def test_the_unicorn_horn_fits_a_little_and_then_cannot_settle_a_datum(self) -> None:
         # The horn is a coil swept along a lofted profile: the archetype
         # vocabulary has no member for any of that, and the F3D timeline in
         # ground-truth/ says so in the designer's own features.
         #
-        # It used to stop at the planner on `frame-x-underdetermined`, with 9
-        # accepted fits. It now clears the frame with 23 -- the held-out gate
+        # The fit stage clears the frame with 23 accepted -- the held-out gate
         # stopped refusing fits whose blocked half could not itself carry one,
         # which is the largest refusal class on any part whose face groups are
-        # small -- and reaches emission, where it refuses `profile-ambiguous`.
-        # Which is still the honest answer for a coil: what stops it is the
-        # geometry, and it is now stopped by the stage that can say so.
+        # small. The planner is where it stops, and the assertion is that it
+        # stops *by name*: the canonical tie rule settles a tied datum axis on
+        # the candidates' quantized directions, and refuses the tie it cannot
+        # settle. Here the rival sits 0.3666 deg from the winner carrying a
+        # 6.487 deg direction sigma against the declared 2 deg grid, so which of
+        # the two the rule picks is decided by measurement noise. Refusing is
+        # the point; picking would be the invention this skill exists to
+        # prevent.
         row, record = self._replay("unicorn_horn_3mf")
         program, refused = _plan(record)
-        self.assertIsNone(refused, "the horn is now expected to plan, then refuse at emission")
-        self.assertEqual(row["plan"]["archetypes"],
-                         {kind: sum(1 for g in program["archetypes"] if g["kind"] == kind)
-                          for kind in row["plan"]["archetypes"]})
-        # The local winding licence pays for itself here: a `hole` archetype is
-        # planned on a part that never reached the planner before.
-        self.assertIn("hole", row["plan"]["archetypes"])
-        self.assertEqual(row["rebuild_emission"]["refusal"], self._emit(program, "unicorn_horn_3mf"))
+        self.assertIsNotNone(refused, "the horn is expected to refuse at the planner")
+        self.assertEqual(row["plan"]["refusal"], refused.reason)
+        self.assertEqual("frame-ambiguous", refused.reason)
+        self.assertIsNone(program)
+        # The whole structured payload, field for field, not a phrase from the
+        # message. Prose cannot tell a diagnostic field that was lost from one
+        # that changed, and the candidates, their measured direction sigmas and
+        # the bound are what make this refusal checkable at all.
+        _assert_recorded(self, row["plan"]["detail"], refused.detail)
+        membership = refused.detail["unstable_membership"]
+        self.assertEqual("same-axis", membership["side"])
+        # It never reaches a score comparison: the membership test runs first.
+        self.assertIsNone(refused.detail["margin"])
+        self.assertIsNone(refused.detail["runner_up"])
+        self.assertGreater(membership["bound_deg"], refused.detail["quantization_grid_deg"])
+        self.assertLess(membership["separation_deg"], refused.detail["quantization_grid_deg"])
 
     def test_the_tropical_leaves_refuse_honestly_rather_than_inventing_a_primitive(self) -> None:
         # The assertion that matters on an organic part is not how much it
@@ -741,7 +858,7 @@ class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurem
         self.assertAlmostEqual(
             row["plan"]["covered_area_fraction"], program["covered_area_fraction"], places=9
         )
-        self.assertEqual(row["rebuild_emission"]["refusal"], self._emit(program, "tropical_leaves_stl"))
+        self.assertEqual(row["rebuild_emission"]["refusal"], _emit_rebuild(program, "tropical_leaves_stl"))
 
     def test_the_bambu_3mf_is_a_supported_intake_and_reaches_an_emitted_rebuild(self) -> None:
         # 3MF is handled: Fusion's mesh import reads it, the same face-group and
@@ -757,35 +874,8 @@ class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurem
         )["min_feature_size"]["value"])
         program, refused = _plan(record)
         self.assertIsNone(refused)
-        self.assertIsNone(self._emit(program, "desktop_organiser_3mf"))
+        self.assertIsNone(_emit_rebuild(program, "desktop_organiser_3mf"))
 
-    def _emit(self, program, source_id):
-        """Emit the rebuild script; return the refusal reason, or None on success."""
-        from fusion_design.manifest import load_manifest
-        from fusion_design.mesh_datum import ReconstructionRefused
-        from fusion_design.mesh_rebuild import emit_mesh_rebuild_script
-        from fusion_design.mesh_source import mesh_source_record
-
-        manifest = load_manifest(BENCH / "fusion-project.json")
-        spec = json.loads((BENCH / "rebuild-spec.json").read_text(encoding="utf-8"))
-        # dump_path is committed relative to the benchmark directory; the
-        # emitter needs the bytes, so the runner resolves it here.
-        spec["dump_path"] = str(BENCH / "dumps" / MANIFEST["results"][source_id]["dump"])
-        classification = json.loads(
-            (BENCH / "results" / source_id / "classification.json").read_text(encoding="utf-8")
-        )
-        try:
-            emit_mesh_rebuild_script(
-                manifest,
-                classification,
-                mesh_source_record(manifest, source_id),
-                program,
-                spec,
-                "0" * 32,
-            )
-        except ReconstructionRefused as refused:
-            return refused.reason
-        return None
 
 
 if __name__ == "__main__":  # pragma: no cover

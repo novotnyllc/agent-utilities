@@ -274,9 +274,12 @@ Measured over the same 11 parts: 251 cylinders survive every gate where 4 did,
 where one was found, and area coverage rises from 62.5% to 70.5%. No declared
 threshold changed value.
 
-**What this still does not buy.** Nine of the 85 full-turn bores remain refused,
-by the Moran and held-out gates operating on residuals at the mesh's own float32
-quantization. Fusion's grouping on these parts delivers each edge round as a
+**What this still does not buy.** (Nine of the 85 full-turn bores were still
+refused here, by the Moran and held-out gates operating on residuals at the
+mesh's own float32 quantization. That is fixed: those gates now decline to judge
+a residual field lying entirely inside the measured `vertex_precision_floor`, and
+all 85 are recovered — see `references/mesh-reconstruction.md`.) Fusion's
+grouping on these parts delivers each edge round as a
 *single* group, so the chain assembly that would join a fragmented round into one
 fillet has nothing to join and every chain has one member; on a grouping that
 does fragment, it would. And no cone or torus takes its axis from the normals:

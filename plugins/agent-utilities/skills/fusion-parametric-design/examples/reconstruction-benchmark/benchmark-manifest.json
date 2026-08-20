@@ -219,7 +219,8 @@
           "declared_frame_margin": 0.1,
           "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
           "margin": 0.09864400512321356,
-          "refusal": "frame-ambiguous"
+          "refusal": "frame-ambiguous",
+          "superseded": "This is what the planner did at the time of that diagnostic. The frame is no longer refused on a tie: see outcome.then_planner below."
         },
         "worst_plane_normal_deviation_deg": 0.3801
       },
@@ -231,11 +232,12 @@
         "regions_accepted": 39,
         "spurious_cylinders": 0,
         "step_families_hit": 4,
-        "then_planner_refuses": {
+        "then_planner": {
           "declared_frame_margin": 0.1,
-          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
-          "margin": 0.09864400512321356,
-          "refusal": "frame-ambiguous"
+          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable by evidence. It is structural rather than a threshold, which is why a smaller frame_margin was never the answer: the axis is now settled by the canonical quantized-direction rule and recorded as arbitrary-canonical, and the part plans one sketch-extrude before emission refuses profile-ambiguous on its eleven-loop section.",
+          "frame_choice": "arbitrary-canonical",
+          "refusal": null,
+          "secondary_margin": 0.09864400512321356
         },
         "worst_plane_normal_deviation_deg": 0.3801
       },
@@ -273,8 +275,8 @@
       "status": "open"
     },
     {
-      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter does accept is 9 regions covering 4.7 percent of the surface, and the planner then refuses because no plane parallel to the primary axis and no offset second axis exists, so rotation about that axis is unobservable.",
-      "gate": "frame-x-underdetermined",
+      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter now accepts is 23 regions covering 4.8 percent of the surface, and the planner refuses before the vocabulary is ever the binding constraint: two cylinders sit 0.3666 deg apart carrying measured direction sigmas of 1.7305 and 1.2966 deg, and that combined bound of 6.487 deg straddles the 2 deg line deciding whether the second is the winner re-measured or a rival, so a re-tessellation could move it across and change the axis the canonical rule selects. The scores never enter it -- margin and runner_up are null in the refusal payload. It used to refuse frame-x-underdetermined at 9 accepted regions; the gap this entry names is unchanged either way, because it is about the vocabulary and not about the gate reached first.",
+      "gate": "frame-ambiguous",
       "id": "unicorn-horn-is-not-in-the-vocabulary",
       "part": "unicorn_horn_3mf",
       "status": "open"
@@ -291,31 +293,31 @@
       "dump_sha256": "8a9ab10ee7bf089d910e5b13b3c2d3e7292d65a8da204dd495411a6ba9aa0154",
       "face_groups": 790,
       "fit": {
-        "accepted": 45,
+        "accepted": 36,
         "accepted_kinds": {
-          "plane": 26,
-          "sphere": 18,
-          "torus": 1
+          "plane": 21,
+          "sphere": 15
         },
-        "covered_area_fraction": 0.28069163960123533,
+        "covered_area_fraction": 0.2790909288075495,
         "refusal": null,
         "refusal_detail": null,
         "regions": 130,
         "top_gates": {
-          "parameter uncertainty: the fitted axis direction": 26,
+          "held-out residual": 27,
+          "parameter uncertainty": 10,
           "relative residual": 21,
-          "residual structure: Moran's I z =": 9,
-          "support floors: this cone is supported": 8,
-          "support floors: this plane is supported": 15
+          "residual structure": 13,
+          "support floors": 23
         }
       },
       "mesh_file": "desktop-organiser-bambulab-v0.3mf",
       "noise": {
+        "form_error_unavailable_reason": "fewer than 4 face groups both span twice the smallest rung (1) and stay flat across it to within the declared normal_alpha_deg (25), so no rung is measured on enough surfaces to be a statement about the part rather than about its curvature",
         "interior_edge_count": 9753,
         "median_abs_dihedral_deg": 14.999740382753975,
         "sigma": 0.13626866255184752,
         "sigma_dihedral": 0.13626866255184752,
-        "sigma_form": 0.13170586430499368,
+        "sigma_form": 0.0,
         "sigma_quadric": 0.04763099381495144
       },
       "plan": {
@@ -326,7 +328,7 @@
         "refusal": null,
         "unreconstructed": 120
       },
-      "re_measured": "Re-measured when the form-error estimator and the held-out power skip landed (issue #20). Two changes reach this row. The held-out gate no longer refuses a fit when a spatially blocked half of its points cannot itself carry one -- that is a fact about the split, not evidence about the fit, and it is now a skip with its reason. And the residual-structure gates read the measured form error at each region's own extent rather than the facet scale. No declared threshold value moved. The honeycomb organiser is byte-identical, because it is the one part in this corpus detected as an exact tessellation.",
+      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. The fit moves from 38 accepted to 36: two spheres whose in-sample residuals lie inside the vertex precision floor (4.02492e-05 mm) are now refitted on a spatially blocked half instead of skipped for want of power, and they come apart -- held-out residuals of 0.396 and 0.662 mm, ratios of 1.9e+06 and 2.5e+05. That is the over-parameterization the held-out gate exists to catch, and the precision floor is what licensed measuring it rather than declining to. Both were already unreconstructed, so the plan, its coverage and the emitted rebuild are unchanged: this is the one part in the corpus that emits. sigma_form reads 0.0 here and the reason is recorded: at a declared 2 mm feature size fewer than four of this part's face groups span twice the smallest rung, so the ladder has no rung to report and the form error is not taken. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
       "rebuild_emission": {
         "refusal": null
       },
@@ -367,13 +369,23 @@
         "vertex_precision_floor": 2.9922861311151757e-05
       },
       "plan": {
-        "margin": 0.09864400512321356,
-        "message": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. Structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
-        "refusal": "frame-ambiguous"
+        "archetypes": {
+          "sketch-extrude": 1
+        },
+        "covered_area_fraction": 0.33471078106478247,
+        "frame_choice": "arbitrary-canonical",
+        "note": "The three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres: a margin of 0.0986 against a declared 0.1, which is the part's own symmetry rather than a threshold set too tight. The secondary axis is therefore settled canonically -- the tied candidates' directions quantized to the declared 2-degree grid, lexicographically smallest cell taken -- and the frame is labelled arbitrary-canonical so no reader mistakes the convention for a measurement. Every archetype is expressed against that datum, so the rebuild is correct whichever of the three walls it names.",
+        "refusal": null,
+        "secondary_margin": 0.09864400512321356,
+        "unreconstructed": 23
       },
-      "re_measured": "Unchanged, and asserted so: this is the one part in the corpus the regime detector calls an exact tessellation, where the form-error estimator is recorded and never taken, and where the power floor already skipped both structure gates on all 39 accepted planes.",
+      "rebuild_emission": {
+        "message": "the section at station 51 mm closed 11 loops for sketch-extrude-004e58281151, of which 0 are bores this program cuts; a single-loop profile cannot describe what is left and picking one would discard the rest without saying so.",
+        "refusal": "profile-ambiguous"
+      },
+      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. Every number in this row replays unchanged. This is the one part in the corpus the regime detector calls an exact tessellation, so the form-error estimator is recorded and never taken; and it is the part the canonical tie rule moves, from a frame-ambiguous refusal to one sketch-extrude planned against an arbitrary-canonical frame, refused one stage later at emission on its eleven-loop section. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
       "regime": "tessellation",
-      "stage_reached": "plan",
+      "stage_reached": "emit-rebuild",
       "total_area_mm2": 257165.51365268845,
       "triangles": 556
     },
@@ -393,15 +405,16 @@
         "refusal_detail": null,
         "regions": 958,
         "top_gates": {
-          "held-out residual": 5,
+          "held-out residual": 193,
           "parameter uncertainty": 394,
-          "parsimony": 39,
+          "relative residual": 106,
           "residual structure": 44,
           "support floors": 132
         }
       },
       "mesh_file": "tropical-leaves.stl",
       "noise": {
+        "form_error_unavailable_reason": "fewer than 4 face groups both span twice the smallest rung (0.5) and stay flat across it to within the declared normal_alpha_deg (25), so no rung is measured on enough surfaces to be a statement about the part rather than about its curvature",
         "interior_edge_count": 129589,
         "median_abs_dihedral_deg": 7.766618597524077,
         "sigma": 0.08410277409800189,
@@ -417,7 +430,7 @@
         "refusal": null,
         "unreconstructed": 934
       },
-      "re_measured": "Re-measured when the form-error estimator and the held-out power skip landed (issue #20). Two changes reach this row. The held-out gate no longer refuses a fit when a spatially blocked half of its points cannot itself carry one -- that is a fact about the split, not evidence about the fit, and it is now a skip with its reason. And the residual-structure gates read the measured form error at each region's own extent rather than the facet scale. No declared threshold value moved. The honeycomb organiser is byte-identical, because it is the one part in this corpus detected as an exact tessellation.",
+      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. Every number in this row replays unchanged: the two changes meet on this part without moving it. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
       "rebuild_emission": {
         "refusal": "profile-ambiguous"
       },
@@ -442,15 +455,16 @@
         "refusal_detail": null,
         "regions": 539,
         "top_gates": {
-          "held-out residual": 8,
-          "parameter uncertainty": 38,
-          "parsimony": 4,
+          "held-out residual": 109,
+          "parameter uncertainty": 36,
+          "relative residual": 8,
           "residual structure": 160,
           "support floors": 203
         }
       },
       "mesh_file": "unicorn-horn-4examples-v3.3mf",
       "noise": {
+        "form_error_unavailable_reason": "fewer than 4 face groups both span twice the smallest rung (0.5) and stay flat across it to within the declared normal_alpha_deg (25), so no rung is measured on enough surfaces to be a statement about the part rather than about its curvature",
         "interior_edge_count": 132501,
         "median_abs_dihedral_deg": 6.2687303170736195,
         "sigma": 0.05046561412229853,
@@ -459,20 +473,66 @@
         "sigma_quadric": 0.0006552325417531704
       },
       "plan": {
-        "archetypes": {
-          "hole": 1,
-          "sketch-extrude": 1
+        "declared_frame_margin": 0.1,
+        "detail": {
+          "axis": "primary",
+          "winner": {
+            "region_hash": "9191c7815b2fc6c55b6bf3d9d62a234ccb938fd90d10016adc27047f7682d145",
+            "kind": "cylinder",
+            "score": 37.76697499673077,
+            "area": 38.32644520721044,
+            "direction": [
+              0.0006193770442242912,
+              0.999994272312446,
+              0.003327418575845409
+            ],
+            "anchor": [
+              -109.99881980073569,
+              6.805842257273617,
+              -0.0010100574959075452
+            ],
+            "basis": "radius x axial span",
+            "direction_sigma_deg": 1.730491135315662,
+            "direction_sigma_basis": "measured",
+            "direction_spread_deg": 0.0
+          },
+          "runner_up": null,
+          "margin": null,
+          "frame_margin": 0.1,
+          "quantization_grid_deg": 2.0,
+          "unstable_membership": {
+            "candidate": {
+              "region_hash": "32d126bcde4e197499c73da5f3b19e58539b04fb6a236a72fd71324d88ab95a8",
+              "kind": "cylinder",
+              "score": 37.75208607498929,
+              "area": 47.19051492412958,
+              "direction": [
+                -0.0008980006238726038,
+                0.9999954269072175,
+                -0.0028878641815935583
+              ],
+              "anchor": [
+                -109.99960475380647,
+                6.845554918526876,
+                -0.001067736445694578
+              ],
+              "basis": "radius x axial span",
+              "direction_sigma_deg": 1.2965782421042336,
+              "direction_sigma_basis": "measured",
+              "direction_spread_deg": 0.0
+            },
+            "separation_deg": 0.3665690465507736,
+            "bound_deg": 6.487020299470146,
+            "side": "same-axis"
+          }
         },
-        "covered_area_fraction": 0.03339823758995208,
-        "refusal": null,
-        "unreconstructed": 533
+        "detail_note": "the refusal's own structured payload, emitted by ReconstructionRefused and asserted against field for field rather than by matching prose: the two candidates, their scores, directions, measured direction sigmas, the separation, the bound and which side of the same-axis line the instability sits on. A prose-only row cannot tell a lost diagnostic field from a changed one.",
+        "message": "the primary-axis winner is within the declared margin 0.1 of candidate 32d126bcde4e in score, and the two are not reproducibly the same axis or different ones: that candidate sits 0.3666 deg from the winner, within 6.487 deg of the 2 deg line that decides whether it is this axis re-measured or a rival in the tie, so a re-tessellation can move it across and change the axis this rule selects.",
+        "refusal": "frame-ambiguous"
       },
-      "re_measured": "Re-measured when the form-error estimator and the held-out power skip landed (issue #20). Two changes reach this row. The held-out gate no longer refuses a fit when a spatially blocked half of its points cannot itself carry one -- that is a fact about the split, not evidence about the fit, and it is now a skip with its reason. And the residual-structure gates read the measured form error at each region's own extent rather than the facet scale. No declared threshold value moved. The honeycomb organiser is byte-identical, because it is the one part in this corpus detected as an exact tessellation.",
-      "rebuild_emission": {
-        "refusal": "profile-ambiguous"
-      },
+      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. The fit stage is unchanged from main -- 23 accepted, the same coverage -- and the planner is where this part moves. The canonical tie rule settles a tied axis on the candidates' quantized directions, and it deliberately keeps refusing the tie it cannot settle: here it never gets as far as a score comparison -- margin and runner_up are both null in the payload. Two cylinders sit 0.3666 deg apart with measured direction sigmas of 1.7305 and 1.2966 deg, so their combined bound of 6.487 deg straddles the 2 deg line that decides whether the second is the winner re-measured or a rival in the tie. Membership in the tie set is therefore not reproducible, and which axis the rule selects is decided by measurement noise rather than by the part. That refusal is present on the canonical-frame branch alone, at its own 9 accepted fits and against the same candidate 32d126bcde4e, so it is the rule's own behaviour and not an interaction with the form-error sigma. The horn used to refuse frame-x-underdetermined, then briefly planned a hole and a sketch-extrude; it now stops one gate earlier and says which measurement it stopped on. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
       "regime": "scan",
-      "stage_reached": "emit-rebuild",
+      "stage_reached": "plan",
       "total_area_mm2": 22900.99189470306,
       "triangles": 88334
     }

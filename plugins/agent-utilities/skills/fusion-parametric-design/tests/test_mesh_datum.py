@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import math
 import random
 import unittest
 
 from fusion_design.mesh_datum import (
     DATUM_REFUSALS,
+    FRAME_CHOICES,
     REFUSAL_ALTERNATIVES,
     ReconstructionRefused,
     derive_datum_frame,
@@ -16,7 +18,33 @@ from fusion_design.mesh_datum import (
 import fixtures_fit_record as fx
 
 
-FRAME_ARGS = dict(frame_margin=0.1, angle_tolerance_deg=2.0, offset_tolerance=0.5)
+FRAME_ARGS = dict(
+    frame_margin=0.1, angle_tolerance_deg=2.0, offset_tolerance=0.5, sigma_multiple=3.0
+)
+
+
+def _walled_lid(x_walls, y_walls):
+    """A lid: one boss on +z, plus wall planes facing +x and +y.
+
+    Shaped after POD-A1-LID, whose primary axis was never in doubt and whose X
+    axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a margin of
+    0.0063 -- while the stacks those two walls belong to measured 1008.4 mm2
+    against 189.6 mm2.
+    """
+    regions = [
+        fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+        fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
+    ]
+    for index, area in enumerate(x_walls):
+        regions.append(fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area))
+    for index, area in enumerate(y_walls):
+        regions.append(fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area))
+    return fx.record(regions)
+
+
+def _tied_lid():
+    """The square lid: two wall stacks of identical area, a dead tie on X."""
+    return _walled_lid([95.4, 95.4], [95.4, 95.4])
 
 
 def _regions(record):
@@ -196,6 +224,18 @@ class UncertaintyTests(unittest.TestCase):
         for reason in DATUM_REFUSALS:
             self.assertTrue(REFUSAL_ALTERNATIVES.get(reason, "").strip(), reason)
 
+    def test_every_frame_choice_a_frame_can_carry_is_in_the_closed_set(self) -> None:
+        # `frame_choice` is read to decide whether the datum is a measurement or
+        # a convention, so a token outside the vocabulary would be read as
+        # neither. Both paths are exercised here rather than the set restated.
+        seen = set()
+        for record in (fx.box_record(), _tied_lid()):
+            evidence = derive_datum_frame(_regions(record), **FRAME_ARGS).evidence
+            seen.add(evidence["frame_choice"])
+            for axis in ("primary", "secondary"):
+                seen.add(evidence[f"{axis}_choice"]["basis"])
+        self.assertEqual(FRAME_CHOICES, seen)
+
 
 class DatumFrameTests(unittest.TestCase):
     def test_a_cylinder_beats_planes_and_sets_the_primary_axis(self) -> None:
@@ -236,48 +276,177 @@ class DatumFrameTests(unittest.TestCase):
             rng.shuffle(shuffled["regions"])
             self.assertEqual(derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference)
 
-    def test_two_equally_good_perpendicular_cylinders_refuse_rather_than_pick(self) -> None:
+    def _crossed_cylinders(self, uncertainty=None):
+        """Two cylinders of identical score at right angles: a dead score tie."""
+        return fx.record(
+            [
+                fx.cylinder(
+                    "a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0, uncertainty=uncertainty
+                ),
+                fx.cylinder(
+                    "b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0, uncertainty=uncertainty
+                ),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+
+    def test_two_equally_good_perpendicular_cylinders_pick_canonically(self) -> None:
+        # The scores are equal to the last bit, so no evidence separates them.
+        # A reconstruction does not need the designer's axis, only a
+        # reproducible one -- so the tie is settled on the quantized canonical
+        # directions and *labelled* as the convention it is.
+        frame = derive_datum_frame(_regions(self._crossed_cylinders()), **FRAME_ARGS)
+        choice = frame.evidence["primary_choice"]
+        self.assertEqual(frame.evidence["frame_choice"], "arbitrary-canonical")
+        self.assertEqual(choice["basis"], "arbitrary-canonical")
+        self.assertEqual(frame.evidence["primary_margin"], 0.0)
+        self.assertEqual(choice["quantization_grid_deg"], 2.0)
+        self.assertEqual(2, len(choice["tied"]))
+        self.assertEqual({24.0}, {entry["score"] for entry in choice["tied"]})  # radius 3 x span 8
+        # (0,0,1) and (1,0,0) quantize to (0,0,29) and (29,0,0); the smaller
+        # cell is the first, so Z is the +z cylinder's axis.
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        self.assertEqual([0, 0, 29], choice["canonical_cell"])
+
+    def test_a_tie_the_uncertainties_cannot_resolve_still_refuses(self) -> None:
+        # The boundary the refusal still protects: directions known only to a
+        # sigma that reaches the quantization grid could quantize either way on
+        # a re-tessellation, so no canonical rule over them is reproducible.
+        record = self._crossed_cylinders(
+            uncertainty=dict(fx.CYLINDER_SIGMAS, axis_direction_deg=1.0)
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["margin"], 0.0)
+        self.assertEqual(caught.exception.detail["quantization_grid_deg"], 2.0)
+        self.assertIn("winner", caught.exception.detail)
+        self.assertIn("runner_up", caught.exception.detail)
+        self.assertEqual(2, len(caught.exception.detail["tied"]))
+
+    def test_two_tied_candidates_in_one_cell_refuse_rather_than_falling_back_to_score(self) -> None:
+        # A cell spans the tolerance angle's *chord* in each component, so two
+        # directions further apart than the tolerance can still share one. The
+        # sort would then decide on `sort_key`, whose first element is the score
+        # -- the number a re-tessellation moves, and the whole reason this rule
+        # replaced the score comparison. Same answer as an unstable cell.
+        # 2.0097 deg apart on a 2 deg grid, and both in cell (0, 0, 29).
+        tilt = 0.0124
+        norm = math.sqrt(1.0 + 2.0 * tilt * tilt)
         record = fx.record(
             [
-                fx.cylinder("a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
-                fx.cylinder("b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0),
+                fx.cylinder(
+                    "a", (tilt / norm, tilt / norm, 1.0 / norm), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0
+                ),
+                fx.cylinder(
+                    "b", (-tilt / norm, -tilt / norm, 1.0 / norm), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0
+                ),
                 fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
             ]
         )
         with self.assertRaises(ReconstructionRefused) as caught:
             derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
-        self.assertEqual(caught.exception.detail["margin"], 0.0)
-        self.assertIn("winner", caught.exception.detail)
-        self.assertIn("runner_up", caught.exception.detail)
+        self.assertIn("same 2 deg cell", caught.exception.message)
+        cells = [entry["canonical_cell"] for entry in caught.exception.detail["tied"]]
+        self.assertEqual([[0, 0, 29], [0, 0, 29]], cells)
 
-    def _walled_lid(self, x_walls, y_walls):
-        """A lid: one boss on +z, plus wall planes facing +x and +y.
+    def test_a_candidate_on_the_same_axis_line_refuses_rather_than_selecting(self) -> None:
+        """Whether a candidate is *in* the tie set is a measurement too.
 
-        Shaped after POD-A1-LID, whose primary axis was never in doubt and whose
-        X axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a
-        margin of 0.0063 -- while the stacks those two walls belong to measured
-        1008.4 mm2 against 189.6 mm2.
+        `angle_tolerance_deg` decides whether a second candidate is this axis
+        re-measured or a rival in the tie, and the two readings do not give the
+        same answer: excluded, the winner is settled by evidence; included, the
+        canonical rule can select the other one. These two cylinders have equal
+        scores and state 0.05 deg of direction sigma each, so at three sigma the
+        line is worth 0.21 deg -- and anywhere inside that, which reading
+        applies is not reproducible.
         """
-        regions = [
-            fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
-            fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
-        ]
-        for index, area in enumerate(x_walls):
-            regions.append(
-                fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area)
+
+        def refusal(separation_deg: float):
+            tilt = math.tan(math.radians(separation_deg / 2.0)) / math.sqrt(2.0)
+            norm = math.sqrt(1.0 + 2.0 * tilt * tilt)
+            record = fx.record(
+                [
+                    fx.cylinder(
+                        "a",
+                        (tilt / norm, tilt / norm, 1.0 / norm),
+                        (0.0, 0.0, 4.0),
+                        3.0,
+                        150.0,
+                        8.0,
+                    ),
+                    fx.cylinder(
+                        "b",
+                        (-tilt / norm, -tilt / norm, 1.0 / norm),
+                        (4.0, 0.0, 0.0),
+                        3.0,
+                        150.0,
+                        8.0,
+                    ),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
             )
-        for index, area in enumerate(y_walls):
-            regions.append(
-                fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area)
+            try:
+                derive_datum_frame(_regions(record), **FRAME_ARGS)
+            except ReconstructionRefused as caught:
+                return caught
+            return None
+
+        # Clear of the line by more than its own bound: the two are the same
+        # axis measured twice, and the frame is settled on the evidence.
+        self.assertIsNone(refusal(1.5))
+        # Inside the bound: which reading applies is not reproducible.
+        caught = refusal(1.99)
+        self.assertIsNotNone(caught)
+        self.assertEqual(caught.reason, "frame-ambiguous")
+        unstable = caught.detail["unstable_membership"]
+        self.assertAlmostEqual(1.99, unstable["separation_deg"], places=6)
+        self.assertAlmostEqual(3.0 * math.hypot(0.05, 0.05), unstable["bound_deg"], places=12)
+        self.assertIn("this axis re-measured or a rival", caught.message)
+        self.assertEqual("same-axis", unstable["side"])
+
+    def test_the_secondary_sigma_carries_the_primary_axis_uncertainty_too(self) -> None:
+        # A secondary direction is a plane normal orthogonalised against the
+        # measured primary axis, so the plane's own sigma is a lower bound on
+        # it. `_canonical_cell` reads whatever it is handed as the whole bound,
+        # so the two measured sigmas are combined before it sees them -- and
+        # when the record states no sigma for the primary axis there is no
+        # combined bound to hand it, which is the refusal's own case.
+        record = _tied_lid()
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        tied = frame.evidence["secondary_choice"]["tied"]
+        self.assertEqual({"propagated"}, {entry["direction_sigma_basis"] for entry in tied})
+        # hypot(0.05 plane normal, 0.05 cylinder axis).
+        for entry in tied:
+            self.assertAlmostEqual(math.hypot(0.05, 0.05), entry["direction_sigma_deg"], places=12)
+
+        blind = _tied_lid()
+        for region in blind["regions"]:
+            if region["fit"]["kind"] == "cylinder":
+                del region["fit"]["uncertainty"]["axis_direction_deg"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(blind), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
+    def test_the_canonical_choice_is_identical_under_shuffled_region_order(self) -> None:
+        record = self._crossed_cylinders()
+        reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
+        self.assertEqual(reference["evidence"]["frame_choice"], "arbitrary-canonical")
+        rng = random.Random(20260819)
+        for _ in range(12):
+            shuffled = copy.deepcopy(record)
+            rng.shuffle(shuffled["regions"])
+            self.assertEqual(
+                derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
             )
-        return fx.record(regions)
 
     def test_parallel_walls_pool_their_area_so_the_bigger_stack_sets_x(self) -> None:
         # Face for face the contest is a coin toss: 95.4 against 94.8. Stack for
         # stack it is not close, and the stack is the quantity that survives a
         # re-tessellation, which is what the margin is protecting.
-        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        record = _walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
         frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
         self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
@@ -286,10 +455,106 @@ class DatumFrameTests(unittest.TestCase):
         # (381.6 - 189.6) / 381.6, against a face-for-face margin of 0.0063.
         self.assertAlmostEqual(0.50314465, frame.evidence["secondary_margin"], places=6)
 
-    def test_a_lid_whose_wall_stacks_really_do_tie_still_refuses(self) -> None:
-        # The refusal is a feature. Pooling parallel evidence must not turn a
-        # square box into a decided one.
-        record = self._walled_lid([95.4, 95.4], [95.4, 95.4])
+    def test_a_lid_whose_wall_stacks_really_do_tie_is_settled_canonically(self) -> None:
+        # Pooling parallel evidence must not turn a square box into a *decided*
+        # one -- and it does not: the tie is recorded as a tie, and what changes
+        # is that the frame is still built, from a stated convention.
+        record = _tied_lid()
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        choice = frame.evidence["secondary_choice"]
+        self.assertEqual(frame.evidence["frame_choice"], "arbitrary-canonical")
+        self.assertEqual(choice["axis"], "secondary")
+        self.assertEqual(choice["basis"], "arbitrary-canonical")
+        self.assertEqual(frame.evidence["secondary_margin"], 0.0)
+        self.assertEqual(frame.evidence["primary_choice"]["basis"], "evidence")
+        self.assertEqual(2, len(choice["tied"]))
+        # The primary axis is measured; only the rotation about it is convention.
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        # (0,1,0) quantizes to (0,29,0) against the +x stack's (29,0,0).
+        self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
+
+    def test_a_pooled_stack_carries_its_members_spread_not_just_the_biggest_one(self) -> None:
+        """Which member represents a merged stack rests on areas, and areas move.
+
+        `_merge_parallel` keeps the largest single member as the group's
+        direction, so a re-tessellation that swaps which member is largest moves
+        the merged direction -- by up to the group's own angular spread, even
+        though every member sits safely inside its own cell. The merged
+        candidate's stated sigma has to cover that, or the tie-break certifies a
+        cell the next run can leave.
+        """
+        record = _walled_lid([95.4, 95.4], [95.4, 95.4])
+        # Tilt one wall of the +x stack inside the tolerance: still the same
+        # direction by the module's own rule, and still a real spread. Kept
+        # small enough that the merged cell is stable -- what is under test is
+        # that the spread reaches the sigma, not that it refuses.
+        tilt = 0.02
+        radians = math.radians(tilt)
+        for region in record["regions"]:
+            if region["region_hash"] == fx.region_hash("x1"):
+                region["fit"]["parameters"]["normal"] = [math.cos(radians), math.sin(radians), 0.0]
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        pooled = [
+            entry
+            for entry in frame.evidence["secondary_choice"]["tied"]
+            if "summed over" in entry["basis"]
+        ]
+        self.assertTrue(pooled, frame.evidence["secondary_choice"]["tied"])
+        for entry in pooled:
+            self.assertEqual("propagated", entry["direction_sigma_basis"])
+        # Each member already carries hypot(0.05 plane, 0.05 primary axis); the
+        # tilted stack's 0.2 deg spread dominates that and has to be in the
+        # number, or the representative could change and the cell with it. The
+        # untilted stack keeps the member sigma, which is the control.
+        member = math.hypot(0.05, 0.05)
+        # The sigma stays the members' own, and the deterministic jump is
+        # carried beside it: `_canonical_cell` needs `sigma * multiple + spread`
+        # of clearance, and the confidence multiple belongs to the sigma alone.
+        for entry in pooled:
+            self.assertAlmostEqual(member, entry["direction_sigma_deg"], places=9)
+        spreads = sorted(entry["direction_spread_deg"] for entry in pooled)
+        self.assertAlmostEqual(0.0, spreads[0], places=9)
+        self.assertAlmostEqual(tilt, spreads[-1], places=9)
+
+    def test_a_pooled_member_with_no_sigma_leaves_the_stack_with_none(self) -> None:
+        # One member nobody measured makes the whole merged direction
+        # unmeasured: the representative could become that member.
+        record = _tied_lid()
+        for region in record["regions"]:
+            if region["region_hash"] == fx.region_hash("x1"):
+                del region["fit"]["uncertainty"]["normal_deg"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
+    def test_a_wall_that_barely_qualifies_as_parallel_cannot_certify_a_cell(self) -> None:
+        """Membership in the candidate set is a measurement too.
+
+        A plane 1.95 deg from parallel to the primary axis is admitted by a
+        2 deg tolerance -- and a perturbation inside its own declared bound
+        drops it out again, which changes what the canonical rule is choosing
+        between and so changes the axis, while the record calls the cell
+        stable. A candidate whose own membership is not stable under its bound
+        carries no sigma, and the tie refuses.
+        """
+        record = _tied_lid()
+        radians = math.radians(1.95)
+        for region in record["regions"]:
+            if region["region_hash"] in (fx.region_hash("x0"), fx.region_hash("x1")):
+                region["fit"]["parameters"]["normal"] = [
+                    math.cos(radians), 0.0, math.sin(radians)
+                ]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
+    def test_a_tied_lid_whose_walls_are_too_uncertain_still_refuses(self) -> None:
+        record = _tied_lid()
+        for region in record["regions"]:
+            if region["fit"]["kind"] == "plane":
+                region["fit"]["uncertainty"]["normal_deg"] = 1.5
         with self.assertRaises(ReconstructionRefused) as caught:
             derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
@@ -297,7 +562,7 @@ class DatumFrameTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["margin"], 0.0)
 
     def test_pooling_leaves_the_frame_identical_under_shuffled_region_order(self) -> None:
-        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        record = _walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
         reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
         rng = random.Random(20260819)
         for _ in range(12):
@@ -306,6 +571,232 @@ class DatumFrameTests(unittest.TestCase):
             self.assertEqual(
                 derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
             )
+
+    def test_a_second_axis_carries_its_own_anchor_key_and_the_primary_s_lever_arm(self) -> None:
+        # Two propagations, both first-order, both from numbers the record
+        # states. A cone's positional sigma lives under `apex`, not
+        # `axis_point`, so reading one key for both kinds gave every cone no
+        # sigma at all -- which reads as "carries none" and refuses a tie the
+        # record could settle. And the direction *to* an axis is produced by
+        # projecting out the primary axis, so tilting that axis by delta turns
+        # this direction by about `axial / radial * delta`: an anchor 4 mm up
+        # the axis and 9 mm out from it levers 0.05 deg into 0.0222.
+        def as_cone(region):
+            fit = region["fit"]
+            fit["kind"] = "cone"
+            parameters = fit["parameters"]
+            parameters["apex"] = parameters.pop("axis_point")
+            parameters["half_angle_deg"] = 12.0
+            parameters.pop("radius")
+            fit["uncertainty"] = dict(fx.CONE_SIGMAS)
+            fit.pop("support", None)
+            region.pop("motion_moments", None)
+            region.pop("triangle_count", None)
+            return region
+
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                as_cone(fx.cylinder("pin", (0.0, 0.0, 1.0), (9.0, 0.0, 4.0), 1.0, 40.0, 6.0)),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        secondary = frame.evidence["secondary"]
+        self.assertEqual("cone", secondary["kind"])
+        self.assertEqual("propagated", secondary["direction_sigma_basis"])
+        # Three measured terms: the cone apex's own sigma over the 9 mm lever,
+        # the origin's over the same lever -- the cap plane's offset sigma and
+        # the primary cylinder's axis-point sigma, which place the two ends of
+        # that origin -- and the primary axis's 0.05 deg tilt levered by the
+        # anchor's 4 mm of axial offset over the same 9 mm.
+        origin_sigma = math.hypot(0.01, 0.01)
+        self.assertAlmostEqual(
+            math.hypot(
+                math.hypot(
+                    math.degrees(math.atan2(0.01, 9.0)),
+                    math.degrees(math.atan2(origin_sigma, 9.0)),
+                ),
+                # Both ways a primary-axis tilt turns this direction: the axial
+                # component it subtracts moves over the 9 mm lever, and the
+                # projection plane tilts by delta whatever the axial offset is.
+                0.05 * math.hypot(1.0, 4.0 / 9.0),
+            ),
+            secondary["direction_sigma_deg"],
+            places=12,
+        )
+
+    def test_an_origin_that_is_only_a_plane_centroid_states_no_bound(self) -> None:
+        """A plane's `offset` sigma is along its normal; the centroid slides.
+
+        With no plane perpendicular to the primary axis the origin falls back
+        to the largest plane's vertex centroid. Nothing in the record bounds
+        where on that plane the centroid sits -- a re-tessellation moves it
+        tangentially, and can swap which of two near-equal-area planes is
+        picked at all -- so the origin states no uncertainty and the canonical
+        tie over directions measured from it refuses rather than certifying a
+        cell the origin can walk out of.
+        """
+        record = fx.record(
+            [
+                # The primary axis is a cylinder along +z; the only planes are
+                # *parallel* to it, so no cap places the origin.
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                fx.plane("wall", (1.0, 0.0, 0.0), (0.0, 0.0, 4.0), 900.0),
+                fx.cylinder("pin-a", (0.0, 0.0, 1.0), (9.0, 0.0, 4.0), 1.0, 40.0, 6.0),
+                fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 9.0, 4.0), 1.0, 40.0, 6.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertIn("no plane is perpendicular", frame.evidence["origin_source"])
+        # The secondary came from the wall, which carries its own bound; what
+        # is under test is that a *second-axis* candidate measured from this
+        # origin would carry none.
+        self.assertEqual("plane parallel to the primary axis", frame.evidence["secondary_source"])
+
+    def test_the_tilt_lever_is_measured_from_the_primary_fit_not_the_origin(self) -> None:
+        """The tilt pivots about the fitted axis point, not about the datum origin.
+
+        With the origin on an end cap and the primary's fitted axis point
+        mid-span, a secondary anchor level with that cap has zero axial offset
+        from the *origin* -- and the whole anchor-to-cap distance from the
+        pivot. Measuring the lever from the origin reported no primary-tilt
+        term at all for exactly that arrangement.
+        """
+        record = fx.record(
+            [
+                # Axis point 6 mm up; the cap, and so the origin, is at z = 0.
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 6.0), 3.0, 150.0, 8.0),
+                fx.cylinder("pin", (0.0, 0.0, 1.0), (9.0, 0.0, 0.0), 1.0, 40.0, 6.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        secondary = frame.evidence["secondary"]
+        origin_sigma = math.hypot(0.01, 0.01)
+        # axial = |anchor - pivot| + |origin - pivot| = 6 + 6.
+        self.assertAlmostEqual(
+            math.hypot(
+                math.hypot(
+                    math.degrees(math.atan2(0.01, 9.0)),
+                    math.degrees(math.atan2(origin_sigma, 9.0)),
+                ),
+                0.05 * math.hypot(1.0, 12.0 / 9.0),
+            ),
+            secondary["direction_sigma_deg"],
+            places=12,
+        )
+
+    def test_a_declared_absolute_basis_refuses_the_tie_rather_than_raising(self) -> None:
+        # No `sigma_multiple` is declared under an absolute-tolerance basis, and
+        # a plane parallel to the primary axis then reached a multiplication by
+        # None. It has to be ineligible, not an exception.
+        args = dict(FRAME_ARGS)
+        args["sigma_multiple"] = None
+        frame = derive_datum_frame(_regions(fx.turned_record()), **args)
+        self.assertEqual(frame.evidence["primary_choice"]["basis"], "evidence")
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(_tied_lid()), **args)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+
+    def test_a_second_axis_barely_clear_of_the_offset_tolerance_is_ineligible(self) -> None:
+        """Being far enough off the axis to be a candidate is a measurement too.
+
+        A candidate whose radial clearance is smaller than its own positional
+        bound is one a re-tessellation drops out of the set -- and it can win
+        an `arbitrary-canonical` tie first and then vanish, changing X on the
+        next fit.
+        """
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                # 0.52 mm off the axis against a declared 0.5 mm tolerance: it
+                # clears by 0.02, and its own bound is far larger than that.
+                fx.cylinder("pin-a", (0.0, 0.0, 1.0), (0.52, 0.0, 4.0), 0.2, 8.0, 6.0),
+                fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 0.52, 4.0), 0.2, 8.0, 6.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
+    def test_the_membership_bound_carries_the_primary_axis_tilt_over_its_lever(
+        self,
+    ) -> None:
+        """The clearance being measured is measured *against the primary axis*.
+
+        `radial` is what is left of the offset once the primary axis is
+        subtracted, so a tilt of that axis moves it by `axial * delta` over the
+        lever the tilt pivots on -- the same lever this module already
+        propagates into the direction's own sigma. Bounding the clearance by
+        the endpoint positional sigmas alone therefore understates it, and on a
+        long part the understatement is the whole margin: these pins clear a
+        0.5 mm tolerance by 0.4 mm and sit 160 mm from the primary fit's
+        anchor, where 0.05 deg of axis tilt is worth 0.14 mm -- three of which
+        eat the margin. They were stable members carrying a 9 deg direction
+        sigma, which is the contradiction.
+        """
+
+        def sigmas(z: float) -> list[float | None]:
+            record = fx.record(
+                [
+                    fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                    fx.cylinder("pin-a", (0.0, 0.0, 1.0), (0.9, 0.0, z), 0.2, 8.0, 6.0),
+                    fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 0.9, z), 0.2, 8.0, 6.0),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
+            )
+            with self.assertRaises(ReconstructionRefused) as caught:
+                derive_datum_frame(_regions(record), **FRAME_ARGS)
+            self.assertEqual(caught.exception.reason, "frame-ambiguous")
+            return [entry["direction_sigma_deg"] for entry in caught.exception.detail["tied"]]
+
+        # Level with the primary fit's own anchor there is no lever, and the
+        # candidates are stable members with a measured direction sigma.
+        self.assertNotIn(None, sigmas(4.0))
+        # 160 mm up the axis, the same clearance no longer survives the tilt.
+        self.assertEqual([None, None], sigmas(164.0))
+
+    def test_score_jitter_inside_one_axis_does_not_move_the_frame(self) -> None:
+        """The cluster's representative was its highest score, which is jitter.
+
+        Two cylinders 0.4 deg and 1.6 deg off the same axis are the same axis
+        by the declared tolerance, and their scores do not separate either --
+        so the higher of them stood for the cluster and the canonical rule read
+        *its* cell. Swapping which is higher, by 0.02 mm of axial span, moved
+        the frame 1.2 deg with nothing crossing the angular line or the margin.
+        The cluster is represented by its smallest canonical cell now, the same
+        rule that settles the tie between clusters.
+        """
+
+        def tilt(degrees: float):
+            slope = math.tan(math.radians(degrees))
+            norm = math.sqrt(1.0 + slope * slope)
+            return (slope / norm, 0.0, 1.0 / norm)
+
+        def frame_for(span_a: float, span_b: float):
+            record = fx.record(
+                [
+                    fx.cylinder("a", tilt(0.4), (0.0, 0.0, 4.0), 3.0, 150.0, span_a),
+                    fx.cylinder("b", tilt(1.6), (6.0, 0.0, 4.0), 3.0, 150.0, span_b),
+                    # A differently-directed rival close enough in score to put
+                    # this axis on the canonical rule rather than on evidence.
+                    fx.cylinder("c", tilt(30.0), (0.0, 9.0, 4.0), 3.0, 150.0, 7.6),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
+            )
+            return derive_datum_frame(_regions(record), **FRAME_ARGS)
+
+        first, second = frame_for(8.0, 7.98), frame_for(7.98, 8.0)
+        self.assertEqual(
+            "arbitrary-canonical", first.evidence["primary_choice"]["basis"]
+        )
+        self.assertEqual(first.z_axis, second.z_axis)
+        # And the swap is on the record rather than silent.
+        self.assertNotIn("same_axis_representative", first.evidence["primary_choice"])
+        self.assertIn("same_axis_representative", second.evidence["primary_choice"])
 
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
