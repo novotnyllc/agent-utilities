@@ -26,6 +26,22 @@ for as many recognized surfaces/shapes/things as possible."* The scoreboard
 implementation; a design doc with an evident-things census for Dig-Next-2 is
 the entry ticket." This document is that entry ticket.
 
+**Prerequisite artifacts, and where they are.** This plan delegates its
+segmentation gates, acceptance evidence, and scoreboard definitions to two
+documents that are *in the same merge queue as this one*, not yet on `main`:
+`docs/plans/2026-08-20-002-design-scan-segmentation.md` on branch
+`docs/scan-segmentation` (**PR #52**) and
+`docs/plans/2026-08-20-003-scoreboard-mesh-to-cad.md` on branch
+`docs/scoreboard` (**PR #55**). Until both merge, this plan is
+implementation-ready *conditionally*: `artifact_readiness` above states the
+document's own state, not the tree's, and a reader who cannot resolve a cited
+PR 1/3/4 behaviour or a scoreboard cell should read those two branches rather
+than conclude the citation is dangling. The stage that actually consumes those
+gates, PR C-4, is already blocked on the segmentation PRs merging (§6), so no
+code in this lane runs against a prerequisite that is not in-tree by the time
+it is needed — but the *reading* of this plan does depend on them, which is
+what this note is for.
+
 The stakes, from the product expert's research (verified against its cited
 sources' summaries, not re-derived): no commercial scan-to-CAD tool promises
 automatic decomposition of a fused multi-object scan — the documented industry
@@ -387,6 +403,16 @@ structure without ever changing it.**
 - **License:** the base reconstructs with thing sub-meshes removed AND each
   claimed thing's sub-mesh reconstructs under the same gates. Fitting
   partitions beyond one → `thing-boundary-ambiguous`, all recorded.
+  **Both halves are statements about sub-meshes, so the stage that evaluates
+  this license is the stage that extracts them.** The first draft put
+  extraction in PR C-5 while C1 shipped in C-4, which left C-4 unable to
+  evaluate its own license, unable to claim a single thing, and unable to
+  reach its ≥ 8 acceptance floor. Extraction moves into C-4 (§6): it is
+  host-side, writes no Fusion geometry, and the reconstruction it feeds is
+  the existing fit/plan pipeline run on a sub-mesh — the same thing C-4
+  already does at the pause, before any Fusion write. C-5 keeps what needs
+  a document open: thing-local datum seeding, placement records, and
+  assembly emission.
 - **Floors and refusals:** `thing-below-support` (area enumerated),
   `interface-pierced` (through-hole; face pair + connecting regions named),
   `interface-not-planar` (nearest fits + band census), R5's merged clusters.
@@ -433,7 +459,7 @@ what it does not permit is recorded, not worked around silently.
 
 | Stage | Ships | Fusion surface | Gated by |
 | --- | --- | --- | --- |
-| C1 | assignment record, evident-things census, complexity witness | none (record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
+| C1 | assignment record, evident-things census, complexity witness, **thing sub-mesh extraction** (the license is evaluated on the sub-meshes, §4.1) | none (extraction and the license's reconstruction passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
 | C2 | grounded base + N placed reference-mesh components + ≤1 residual component | components, occurrences, `transform2`, mesh bodies | C1 + PC-1/2/7 (PC-9/10 for its report) |
 | C3 | per-thing status upgrades reference → primitive → parametric; two-level coverage; R3 layers 2–3 | geometry inside existing components; structure untouched | C2 + PC-11; parametric prisms also on 2.5D lane PRs 4–6 |
 | C4 | instancing verdicts + occurrences; lattice-gated patterns | `addExistingComponent`, pattern features | C3 + PC-3/8 |
@@ -534,11 +560,17 @@ blocked PRs name their gate.
 - **Files:** `src/fusion_design/` new `mesh_decomposition.py` (island-chain
   detector over `classify_loops`/`congruence`; interface census with derived
   δ; cross-check; trigger + license evaluation; assignment production +
-  one-assert invariant; complexity witness), stage wiring between fit and
-  plan, `reconstruction_coverage` citation, tests incl. an
-  adversarial-assignment property check (dropped region, double-assigned
-  region, cluster with no chain, chain with no component).
-- **Size:** ~400–500 added.
+  one-assert invariant; complexity witness), **the sub-mesh extractor**
+  (`thing-split` under `derived_from`, winding inheritance,
+  resume-cache/determinism contract per KTD-8) — moved here from C-5 because
+  the C1 license is evaluated on extracted sub-meshes and cannot be evaluated
+  without them (§4.1) — stage wiring between fit and plan,
+  `reconstruction_coverage` citation, tests incl. an adversarial-assignment
+  property check (dropped region, double-assigned region, cluster with no
+  chain, chain with no component).
+- **Size:** ~600–700 added (the extractor is ~150–200 of it).
+- **Fusion surface:** still none. Extraction and the license's reconstruction
+  passes are host-side; the stage ends at the existing pause with a record.
 - **Measured claim (Dig-Next-2, merged head):** assignment record with
   ≥ 8 things (§7 C1 row); assignment coverage ≥ 0.80; every residual island
   itemized; **the evident-things census published** — the scoreboard's C
@@ -553,11 +585,11 @@ blocked PRs name their gate.
 ### PR C-5 — thing sub-mesh extraction + placement + C2 on Dig-Next-2
 
 - **Blocked by:** PR C-4; PC-11 runnable within this PR (host-side).
-- **Files:** sub-mesh extractor (`thing-split` under `derived_from`, winding
-  inheritance, resume-cache/determinism contract per KTD-8), thing-local
-  datum seeding + `local-datum-disagrees`, per-DOF placement records,
-  assembly emission wired to real assignments.
-- **Size:** ~300–400 added.
+- **Files:** thing-local datum seeding + `local-datum-disagrees`, per-DOF
+  placement records, assembly emission wired to real assignments. (The
+  sub-mesh extractor is C-4's, per §4.1; this stage consumes the sub-meshes
+  and their recorded digests rather than producing them.)
+- **Size:** ~150–250 added.
 - **Measured claim (Dig-Next-2):** C cell moves 0 → 1 base + ≥ 8 placed
   occurrences (§7 C2 row); every component's mesh slice re-hashes to its
   recorded digest; occurrence-move check passes on ≥ 1 real thing; H: every
