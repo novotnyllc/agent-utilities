@@ -20,8 +20,9 @@ What the tests here assert, and what they deliberately do not:
   number below a fiction.
 * The honeycomb replays from its committed dump to the outcome recorded in
   `benchmark-manifest.json`, and the numbers that *can* be checked against the
-  STEP -- area, volume, bounding box -- are checked against it. The honeycomb is
-  556 triangles, so this runs in under a tenth of a second and stays a gate.
+  STEP -- area, volume, bounding box, and now every fitted plane's direction --
+  are checked against it. The honeycomb is 556 triangles, so this runs in under
+  a tenth of a second and stays a gate.
 * The three larger parts are a **measurement**, not a gate, and are env-gated
   like the two sweeps in `test_mesh_segmentation.py`. Together they take about a
   minute.
@@ -29,13 +30,19 @@ What the tests here assert, and what they deliberately do not:
 The recorded outcome today is that **no part in this corpus reaches a built
 reconstruction**, and each stops at a different named gate. Asserting the gates
 is the point: when one of them is fixed, this test fails and the manifest has to
-be re-measured rather than the improvement going unrecorded.
+be re-measured rather than the improvement going unrecorded. That is exactly
+what happened to the honeycomb -- it used to refuse `feature-scale-below-noise`
+before fitting anything and it now fits 39 planes matching all four of the
+STEP's families, so what this file asserts about it changed with the build. It
+still stops at the planner, on `frame-ambiguous`, which is hexagonal symmetry
+rather than a threshold.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import unittest
@@ -81,6 +88,31 @@ STEP_BBOX_ABS_TOLERANCE_MM = 1.0e-03
 #: last-place rounding into a test failure, so they are compared relatively at a
 #: width no real change to the estimator could hide inside.
 RECORDED_FLOAT_REL_TOLERANCE = 1.0e-09
+
+
+def _families(body):
+    """The set of unsigned plane normals in a B-Rep body, rounded to a milliunit.
+
+    A face and the face opposite it carry the same direction with opposite signs
+    and are one family; the sign is taken off the first non-zero component so the
+    two collapse onto each other rather than counting twice.
+    """
+    out = set()
+    for face in body["faces"]:
+        normal = face["normal"]
+        sign = 1.0
+        for value in normal:
+            if abs(value) > 1e-9:
+                sign = 1.0 if value > 0.0 else -1.0
+                break
+        out.add(tuple(round(value / sign, 3) + 0.0 for value in normal))
+    return out
+
+
+def _angle_deg(a, b) -> float:
+    """The unsigned angle between two directions, in degrees."""
+    dot = sum(x * y for x, y in zip(a, b))
+    return math.degrees(math.acos(max(-1.0, min(1.0, abs(dot)))))
 
 
 def _sha256(path: Path) -> str:
@@ -201,16 +233,7 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
         for face in body["faces"]:
             kinds[face["kind"]] = kinds.get(face["kind"], 0) + 1
         self.assertEqual({"PlaneSurfaceType": 145}, kinds)
-
-        families = set()
-        for face in body["faces"]:
-            normal = face["normal"]
-            sign = 1.0
-            for value in normal:
-                if abs(value) > 1e-9:
-                    sign = 1.0 if value > 0.0 else -1.0
-                    break
-            families.add(tuple(round(value / sign, 3) + 0.0 for value in normal))
+        families = _families(body)
         self.assertEqual(4, len(families), sorted(families))
 
     def test_the_stl_is_the_same_solid_the_step_describes(self) -> None:
@@ -234,46 +257,133 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
             with self.subTest(axis="xyz"[axis]):
                 self.assertAlmostEqual(expected, measured, delta=STEP_BBOX_ABS_TOLERANCE_MM)
 
-    def test_the_pipeline_refuses_this_part_and_claims_nothing_while_refusing(self) -> None:
-        # The recorded outcome, and the reason it is worth asserting: the
-        # honeycomb is refused before a single primitive is fitted, because the
-        # dihedral noise estimator reads the part's own 60-degree cell walls as
-        # noise. An honest refusal claims nothing, and that is checked here as
-        # well as the reason -- a refusal that still emitted fits would be worse
-        # than the refusal.
-        refusal = self.record["refusal"]
-        self.assertIsNotNone(refusal, "the honeycomb is expected to refuse; re-measure the manifest")
-        self.assertEqual(self.row["fit"]["refusal"], refusal["reason"])
-        self.assertEqual("feature-scale-below-noise", refusal["reason"])
-        self.assertEqual([], self.record["regions"])
-        self.assertEqual(0.0, self.record["covered_area_fraction"])
+    def test_the_pipeline_fits_this_part_and_the_manifest_records_what_it_fitted(self) -> None:
+        # The honeycomb used to refuse `feature-scale-below-noise` before a
+        # single primitive was fitted, because the dihedral noise estimator read
+        # the part's own 60-degree cell walls as noise. It fits now, and the
+        # numbers are asserted against the manifest so an improvement cannot
+        # arrive unrecorded any more than a regression can.
+        self.assertIsNone(
+            self.record["refusal"],
+            "the honeycomb is expected to fit; re-measure the manifest",
+        )
+        self.assertIsNone(self.row["fit"]["refusal"])
+        self.assertEqual(self.row["fit"]["regions"], len(self.record["regions"]))
+        accepted = [r for r in self.record["regions"] if r["accepted"]]
+        self.assertEqual(self.row["fit"]["accepted"], len(accepted))
+        kinds = {}
+        for region in accepted:
+            kinds[region["fit"]["kind"]] = kinds.get(region["fit"]["kind"], 0) + 1
+        self.assertEqual(self.row["fit"]["accepted_kinds"], kinds)
+        self.assertAlmostEqual(
+            self.row["fit"]["covered_area_fraction"],
+            self.record["covered_area_fraction"],
+            places=9,
+        )
 
-        recorded = self.row["fit"]["refusal_detail"]
-        for field in ("sigma", "recoverable_feature_size", "min_feature_size"):
-            with self.subTest(field=field):
-                self.assertAlmostEqual(
-                    recorded[field],
-                    refusal["detail"][field],
-                    delta=RECORDED_FLOAT_REL_TOLERANCE * abs(recorded[field]),
+    def test_not_one_curved_primitive_is_claimed_on_an_all_planar_part(self) -> None:
+        """The strongest check the STEP affords, and it is free.
+
+        The vendor B-Rep is 145 planar faces and not one cylinder, cone, sphere
+        or torus. So "how many curved surfaces did the pipeline claim" has an
+        answer that is knowable rather than arguable, and the answer is zero.
+        Before the discrete-normal gate it was six: each hexagonal pocket's six
+        walls arrive as one face group, and a regular hexagon's corners lie
+        *exactly* on its circumscribed circle, so the vertex fit returned a
+        cylinder of radius 15*cos(30) at float-noise residual and every gate that
+        reads vertices passed it.
+        """
+        body, = self.brep["bodies"]
+        self.assertEqual(
+            set(), {face["kind"] for face in body["faces"]} - {"PlaneSurfaceType"}
+        )
+        claimed = {
+            region["fit"]["kind"] for region in self.record["regions"] if region["accepted"]
+        }
+        self.assertEqual(set(), claimed & {"cylinder", "cone", "sphere", "torus"})
+        self.assertEqual({"plane"}, claimed)
+
+    def test_the_hex_pockets_are_refused_by_name_and_say_what_they_measured(self) -> None:
+        refused = [r for r in self.record["regions"] if not r["accepted"]]
+        gates = {}
+        for region in refused:
+            gate = (region["fit"].get("rejection") or "").split(":")[0]
+            gates[gate] = gates.get(gate, 0) + 1
+        self.assertEqual(self.row["fit"]["top_gates"], gates)
+        self.assertEqual({"cylinder-normals-discrete": 6}, gates)
+        for region in refused:
+            with self.subTest(region=region["region_hash"][:12]):
+                spread = region["fit"]["support"]["normal_direction_spread"]
+                # Five of the cell's six walls in this group, at 60 degrees each,
+                # against the eight directions per turn the fit-spec declares.
+                self.assertEqual(5, spread["directions"])
+                self.assertLess(
+                    spread["directions_per_turn"], spread["min_directions_per_turn"]
                 )
+                # And nothing is claimed while refusing: no radius, no axis.
+                self.assertEqual({}, region["fit"]["parameters"])
 
-    def test_the_recorded_diagnosis_still_describes_this_mesh(self) -> None:
-        # The gap entry blames one estimator by name and one number. Both are
-        # re-read here, so the diagnosis cannot rot into folklore while the
-        # mesh underneath it changes.
-        gap, = [g for g in MANIFEST["known_gaps"] if g["part"] == "honeycomb_organizer_stl"]
+    def test_every_fitted_plane_matches_one_of_the_steps_four_families(self) -> None:
+        body, = self.brep["bodies"]
+        families = sorted(_families(body))
+        self.assertEqual(4, len(families))
+        recorded = MANIFEST["step_comparison"]["honeycomb_organizer_stl"]["plane_match"]
+        hit, worst = set(), 0.0
+        for region in self.record["regions"]:
+            if not region["accepted"]:
+                continue
+            normal = region["fit"]["parameters"]["normal"]
+            nearest = min(families, key=lambda f: _angle_deg(normal, f))
+            hit.add(nearest)
+            worst = max(worst, _angle_deg(normal, nearest))
+        self.assertEqual(recorded["planes_matched"], self.row["fit"]["accepted_kinds"]["plane"])
+        self.assertEqual(recorded["step_families_hit"], len(hit))
+        self.assertEqual(len(families), len(hit))
+        self.assertLessEqual(worst, recorded["worst_plane_normal_deviation_deg"])
+
+    def test_the_noise_record_says_which_estimator_sigma_came_from_and_keeps_both(self) -> None:
+        # The defect was that `sigma = max(quadric, dihedral)` ran before the
+        # regime was known, so the check that already suppressed the
+        # `noise-model-inconsistent` *flag* never saw the *value*. The cross-check
+        # is still here -- both estimators recorded, still disagreeing -- and the
+        # dihedral reading still reaches `surface_scale`, which is what sizes the
+        # power floor under the residual-structure and held-out tests.
+        gap, = [g for g in MANIFEST["known_gaps"] if g["id"] == "estimator-b-counts-real-creases-as-noise"]
         evidence = gap["evidence"]
         noise = self.record["noise"]
-        self.assertEqual(0.0, noise["sigma_quadric"])
         self.assertEqual("tessellation", self.record["regime"]["regime"])
+        self.assertEqual(0.0, noise["sigma_quadric"])
+        self.assertEqual("quadric", noise["sigma_estimator"])
+        self.assertTrue(noise["estimators_disagree"])
+        self.assertTrue(noise["precision_floor_binds"])
+        self.assertEqual(noise["vertex_precision_floor"], noise["sigma"])
         for recorded, measured in (
             (evidence["sigma_dihedral"], noise["sigma_dihedral"]),
+            (evidence["sigma_dihedral"], noise["surface_scale"]),
             (evidence["median_abs_dihedral_deg"], noise["median_abs_dihedral_deg"]),
         ):
             self.assertAlmostEqual(
                 recorded, measured, delta=RECORDED_FLOAT_REL_TOLERANCE * abs(recorded)
             )
         self.assertEqual(evidence["interior_edge_count"], noise["interior_edge_count"])
+
+    def test_the_planner_still_refuses_a_part_with_no_secondary_datum(self) -> None:
+        """Fitting the part did not invent a frame for it, and must not.
+
+        Three wall directions 120 degrees apart carry 21,714 and 19,572 square
+        millimetres: the margin is 0.0986 against a declared 0.1, and that is
+        hexagonal symmetry rather than a threshold set too tight.
+        """
+        program, refused = _plan(self.record)
+        self.assertIsNone(program, "the honeycomb is expected to refuse at the planner")
+        recorded = MANIFEST["results"]["honeycomb_organizer_stl"]["plan"]
+        self.assertEqual(recorded["refusal"], refused.reason)
+        self.assertEqual("frame-ambiguous", refused.reason)
+        self.assertAlmostEqual(
+            recorded["margin"],
+            refused.detail["margin"],
+            delta=RECORDED_FLOAT_REL_TOLERANCE * recorded["margin"],
+        )
 
 
 @unittest.skipUnless(

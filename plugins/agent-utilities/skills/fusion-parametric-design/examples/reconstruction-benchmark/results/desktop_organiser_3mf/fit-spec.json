@@ -63,6 +63,10 @@
     "rationale": "this run measures detection, so coverage is reported and never gated",
     "value": 0.0
   },
+  "min_cylinder_normal_directions_per_turn": {
+    "rationale": "a tessellated circle carries one normal direction per facet; at eight per turn a facet already spans 45 degrees, coarser than any exporter's chord tolerance, so below it the group is a prism of planar walls whose corners happen to lie on the circle",
+    "value": 8.0
+  },
   "min_feature_size": {
     "rationale": "the organiser is 250 mm across and its 3MF carries 6502 facets, so one facet spans several millimetres; two is the smallest feature this tessellation separates from its neighbour, and at one the run refuses feature-scale-below-noise with a recoverable size of 1.3627 mm",
     "value": 2.0

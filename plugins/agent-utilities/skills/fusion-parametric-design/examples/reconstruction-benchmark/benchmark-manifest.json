@@ -173,6 +173,7 @@
         "sigma_dihedral": 13.107963242658034,
         "sigma_quadric": 0.0
       },
+      "fixed_by": "mesh_segmentation._stage_noise_scale now detects the regime before selecting sigma. In the tessellation regime sigma is the quadric estimator alone -- the only one estimating noise there -- and the dihedral reading moves into surface_scale, where a facet turn angle belongs and where it was already arriving through sigma in both regimes, so every power floor that reads surface_scale is unchanged. In the scan regime the conservative maximum stands. Both estimators are always recorded, with noise.sigma_estimator naming the one chosen. No declared threshold value moved.",
       "gate": "feature-scale-below-noise",
       "id": "estimator-b-counts-real-creases-as-noise",
       "measured_with_the_estimator_suppressed": {
@@ -183,6 +184,7 @@
         },
         "covered_area_fraction": 0.47617719812946524,
         "method": "diagnostic only, and nothing shipped changes: _sigma_dihedral forced to 0.0 so the rest of the pipeline could be measured on this part",
+        "note": "Kept as the record of how the fix was sized before it existed: _sigma_dihedral forced to 0.0 so the rest of the pipeline could be measured on this part. Its six cylinders are the second defect, now refused -- see hexagonal-pockets-fit-their-circumscribed-cylinder.",
         "planes_matching_a_step_family": 39,
         "regions": 45,
         "spurious_cylinder_diagnosis": "12.990381 mm is 15 x cos(30 deg), the apothem of the hexagonal cell. Fusion groups each hex pocket's six walls into one face group and the fitter accepts a cylinder through them, so a 25.98 mm across-flats hex pocket is reported as a 25.98 mm round bore: right size, wrong kind, and the STEP proves it wrong.",
@@ -197,19 +199,61 @@
         },
         "worst_plane_normal_deviation_deg": 0.3801
       },
-      "part": "honeycomb_organizer_stl"
+      "outcome": {
+        "covered_area_fraction": 0.4155607590145768,
+        "note": "What the diagnostic sized by forcing _sigma_dihedral to zero, now measured on the shipped build -- minus the six cylinders, which the discrete-normal gate refuses. Coverage is 41.6 rather than the diagnostic's 47.6 for exactly that reason: the hex pockets' area is unclaimed rather than wrongly claimed.",
+        "planes_matching_a_step_family": 39,
+        "regions": 45,
+        "regions_accepted": 39,
+        "spurious_cylinders": 0,
+        "step_families_hit": 4,
+        "then_planner_refuses": {
+          "declared_frame_margin": 0.1,
+          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
+          "margin": 0.09864400512321356,
+          "refusal": "frame-ambiguous"
+        },
+        "worst_plane_normal_deviation_deg": 0.3801
+      },
+      "part": "honeycomb_organizer_stl",
+      "status": "fixed"
     },
     {
-      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter does accept is 9 regions covering 4.7 percent of the surface, and the planner then refuses because no plane parallel to the primary axis and no offset second axis exists, so rotation about that axis is unobservable.",
-      "gate": "frame-x-underdetermined",
-      "id": "unicorn-horn-is-not-in-the-vocabulary",
-      "part": "unicorn_horn_3mf"
+      "diagnosis": "A regular polygon's corners lie exactly on its circumscribed circle, so a hexagonal pocket delivered as one face group fits a cylinder of that circumradius at float-noise residual -- and a sphere through the same corners just as exactly. Every gate that reads vertices passes it, because to the vertices it really is a cylinder. The honeycomb's six hex pockets came back as six 25.98 mm across-flats round bores, and the STEP proves there is no curved surface anywhere in the part. The same defect was then found on parts nobody had suspected: 21 M3 nut pockets across five of the eleven production STLs -- 5.700 mm across flats, 12 facets each, r = 3.290896 -- were being planned as 6.58 mm round holes. A round hole where an M3 nut must not rotate is the wrong part.",
+      "evidence": {
+        "honeycomb_directions_per_turn": 7.5,
+        "honeycomb_facet_normal_directions": 5,
+        "honeycomb_spurious_cylinder_radius_mm": 12.990381,
+        "note": "Bimodal with nothing in between, measured over the eleven production dumps and this corpus: genuine tessellated cylinders carry 29.6 to 108 distinct facet-normal directions per full turn at radii from 1.15 mm to 10 mm, and every prism sits below 7.6. The declared min_cylinder_normal_directions_per_turn is 8.0, which a coarse eight-facet cylinder still clears at 9.14.",
+        "production_hex_pockets": 21,
+        "production_hex_pockets_across_flats_mm": 5.7,
+        "production_hex_pockets_directions_per_turn": 7.111,
+        "production_parts_affected": 5,
+        "step_curved_faces": 0
+      },
+      "fixed_by": "mesh_fitting._prism_of_planes reads the accumulation normal_constrained_axis already builds. When the facet normals sit within the declared cylinder_normal_perpendicular_deg of perpendicular to one axis -- which is what says they are arranged around an axis, and what excludes a real sphere -- but occupy fewer distinct directions per turn than the declared minimum, every curved fit over the group is refused cylinder-normals-discrete. It is a verdict about the group, so the sphere falls with the cylinder; support.normal_direction_spread records the facet count, the distinct directions, the arc they cover and the directions per turn it was judged on.",
+      "gate": "cylinder-normals-discrete",
+      "id": "hexagonal-pockets-fit-their-circumscribed-cylinder",
+      "outcome": {
+        "eleven_part_corpus": "1,069 regions offered and 114 fillet candidates unchanged; 619 -> 598 accepted, 251 -> 230 cylinders (all 21 removals at r = 3.290896), 66 -> 45 planned holes, 10 extrudes and 3 fillets unchanged, mean coverage 0.5597 -> 0.5566, and no part changes the gate it stops at.",
+        "honeycomb_spurious_cylinders": 0
+      },
+      "part": "honeycomb_organizer_stl",
+      "status": "fixed"
     },
     {
       "diagnosis": "Fitting is honest: 31 of 958 regions accepted, 30 planes and one sphere, 18.3 percent of the area, and not one cylinder, cone or torus claimed on an organic panel. The plan reduces that to a single sketch-extrude at 5.7 percent, and emission then refuses because the section closes two loops and the mesh's winding is inconsistent (isOriented false, signed volume 0.0), so material_side is null and the inner loop cannot be held out as a hole. The refusal chain is the capture evidence, not a threshold.",
       "gate": "profile-ambiguous",
       "id": "tropical-leaves-cannot-close-a-profile",
-      "part": "tropical_leaves_stl"
+      "part": "tropical_leaves_stl",
+      "status": "open"
+    },
+    {
+      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter does accept is 9 regions covering 4.7 percent of the surface, and the planner then refuses because no plane parallel to the primary axis and no offset second axis exists, so rotation about that axis is unobservable.",
+      "gate": "frame-x-underdetermined",
+      "id": "unicorn-horn-is-not-in-the-vocabulary",
+      "part": "unicorn_horn_3mf",
+      "status": "open"
     }
   ],
   "measured_with": {
@@ -271,28 +315,37 @@
       "dump_sha256": "1b45117d02800951fa583e395f3c98d9d67858651ca75c4a2ff540f64f8283e3",
       "face_groups": 121,
       "fit": {
-        "accepted": 0,
-        "accepted_kinds": {},
-        "covered_area_fraction": 0.0,
-        "refusal": "feature-scale-below-noise",
-        "refusal_detail": {
-          "min_feature_size": 1.0,
-          "recoverable_feature_size": 131.07963242658033,
-          "sigma": 13.107963242658034
+        "accepted": 39,
+        "accepted_kinds": {
+          "plane": 39
         },
-        "regions": 0,
-        "top_gates": {}
+        "covered_area_fraction": 0.4155607590145768,
+        "refusal": null,
+        "refusal_detail": null,
+        "regions": 45,
+        "top_gates": {
+          "cylinder-normals-discrete": 6
+        }
       },
       "mesh_file": "honeycomb-tool-organizer.stl",
       "noise": {
         "interior_edge_count": 834,
         "median_abs_dihedral_deg": 59.999932056004646,
-        "sigma": 13.107963242658034,
+        "note": "The two estimators still disagree by six orders of magnitude and both are still recorded. What changed is which one sigma is taken from: the regime is detected before the selection now, and on an exact tessellation the dihedral median is a facet turn angle, so it is the discretization scale rather than the noise.",
+        "sigma": 2.9922861311151757e-05,
         "sigma_dihedral": 13.107963242658034,
-        "sigma_quadric": 0.0
+        "sigma_estimator": "quadric",
+        "sigma_quadric": 0.0,
+        "surface_scale": 13.107963242658034,
+        "vertex_precision_floor": 2.9922861311151757e-05
+      },
+      "plan": {
+        "margin": 0.09864400512321356,
+        "message": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. Structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
+        "refusal": "frame-ambiguous"
       },
       "regime": "tessellation",
-      "stage_reached": "fit",
+      "stage_reached": "plan",
       "total_area_mm2": 257165.51365268845,
       "triangles": 556
     },
@@ -397,6 +450,13 @@
       ],
       "mesh_volume_mm3": 314378.28832563106,
       "note": "The STEP carries no cylinder, cone, sphere or torus: the whole organiser is 145 planes in exactly four directions, three vertical walls 120 degrees apart and one horizontal. Any curved primitive the reconstruction claims on this part is a claim the ground truth contradicts.",
+      "plane_match": {
+        "curved_primitives_claimed": 0,
+        "note": "Every accepted fit is a plane and every one of them lands on a STEP family. The STEP carries no curved surface at all, so 'curved primitives claimed' is a checkable zero rather than an opinion -- it was six before the discrete-normal gate.",
+        "planes_matched": 39,
+        "step_families_hit": 4,
+        "worst_plane_normal_deviation_deg": 0.3801
+      },
       "step_area_mm2": 257165.521966,
       "step_bbox_extent_mm": [
         152.5,

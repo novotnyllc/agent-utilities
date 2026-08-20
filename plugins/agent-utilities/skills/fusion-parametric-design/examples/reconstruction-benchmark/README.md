@@ -40,7 +40,7 @@ different named gate.** That is the finding, not a preamble to one.
 
 | part | triangles | face groups | regime | accepted fits | fit coverage | stops at | gate |
 | --- | ---: | ---: | --- | --- | ---: | --- | --- |
-| honeycomb organiser (STL) | 556 | 121 | tessellation | 0 | 0.0% | fit | `feature-scale-below-noise` |
+| honeycomb organiser (STL) | 556 | 121 | tessellation | 39 — 39 planes | 41.6% | plan | `frame-ambiguous` |
 | unicorn horn (3MF) | 88,334 | 620 | scan | 9 — 6 planes, 3 cylinders | 4.7% | plan | `frame-x-underdetermined` |
 | tropical leaves (STL) | 86,394 | 2,299 | scan | 31 — 30 planes, 1 sphere | 18.3% | emit-rebuild | `profile-ambiguous` |
 | desktop organiser (3MF) | 6,502 | 790 | scan | 38 — 21 planes, 17 spheres | 27.9% | — | emitted; 1 `sketch-extrude`, 27.6% planned |
@@ -53,32 +53,51 @@ sphere or torus anywhere. The STL is the same solid: its summed facet area
 agrees with the STEP's analytic area to 3.2e-08 relative, its volume to 7.7e-07,
 and its bounding box to 2.3e-06 mm.
 
-The pipeline nevertheless refuses it before fitting anything, with
-`feature-scale-below-noise` at a recoverable feature size of **131.08 mm on a
-168.9 mm part**. The cause is one estimator and it states its own assumption:
+It now fits: **45 regions, 39 accepted, every one a plane, 41.6% of the area, and
+all 39 within 0.38° of one of the STEP's four families with all four families
+hit**. Not one cylinder, cone, sphere or torus is claimed — which is the
+strongest check this pair affords, because the STEP says the part contains none.
 
-> `_sigma_dihedral` — "Real creases are a small minority of interior edges on a
-> mechanical part, so the median sees only the noise."
+Getting there took two fixes, and this part is what found both.
+
+**The noise estimator was measuring the part.** `_sigma_dihedral` states its own
+assumption:
+
+> "Real creases are a small minority of interior edges on a mechanical part, so
+> the median sees only the noise."
 
 On a honeycomb that is false. 61.5% of the interior edges are genuine 60° cell
-creases, so the median interior dihedral is 59.99993° and estimator B reports
+creases, so the median interior dihedral is 59.99993° and estimator B reported
 13.108 mm of noise — on a mesh whose quadric estimator reports **exactly zero**
-and whose regime is correctly detected as an exact tessellation. `sigma` is taken
-as `max(quadric, dihedral)` before the regime is known, so the regime check that
-already suppresses the `noise-model-inconsistent` *flag* does not suppress the
-*value* that refuses the part.
+and whose regime is correctly detected as an exact tessellation. Ten sigma is the
+recoverable feature size, so the whole 168.9 mm part refused
+`feature-scale-below-noise` claiming 131.08 mm was unrecoverable. `sigma` was
+`max(quadric, dihedral)` computed *before* the regime was known, so the regime
+check that already suppressed the `noise-model-inconsistent` *flag* never saw the
+*value*. The regime is detected first now: on a tessellation `sigma` is the
+quadric estimator alone, and the dihedral reading becomes `surface_scale`, which
+is where a facet turn angle belongs and which is what it already reached through
+`sigma` — so every power floor sized by it is untouched. Both estimators stay in
+the record, with `noise.sigma_estimator` naming the one chosen.
 
-Sized, as a diagnostic only, by forcing `_sigma_dihedral` to zero and changing
-nothing that ships: the fitter then accepts **45 of 45 regions covering 47.6% of
-the area — 39 planes, every one within 0.38° of one of the STEP's four families,
-and all four families hit**. It also claims **6 cylinders of radius 12.990381 mm
-that the STEP proves do not exist**: that number is 15 × cos 30°, the apothem of
-the hexagonal cell, so each hex pocket's six walls are grouped together and
-fitted as the inscribed cylinder. Right size, wrong kind — a 25.98 mm
-across-flats hex pocket reported as a 25.98 mm round bore.
+**Six flat walls fitted as their own circumscribed cylinder.** With the estimator
+fixed, the fitter claimed **6 cylinders of radius 12.990381 mm that the STEP
+proves do not exist**. A regular hexagon's six corners lie *exactly* on that
+circle, so each pocket's six walls — delivered as one face group — fitted a
+cylinder at float-noise residual, and every gate that reads vertices passed it.
+The same corners lie on a sphere just as exactly. The facet normals are the only
+evidence that separates them: they sit within 0° of perpendicular to one axis but
+occupy five discrete directions across 240° of arc, 7.5 per full turn against a
+declared minimum of 8. Those groups are now refused `cylinder-normals-discrete`,
+the sphere falls with the cylinder, and the pockets' area is honestly unclaimed —
+which is why coverage is 41.6% rather than the 47.6% the wrong answer scored.
 
-The planner then refuses anyway, with `frame-ambiguous`: the three wall
-directions carry 21,714 mm² and 19,572 mm², a margin of 0.0986 against a declared
+The same defect was then found on parts nobody had suspected: **21 M3 nut pockets
+across five of the eleven production STLs** (5.700 mm across flats, 12 facets
+each) were being planned as 6.58 mm round holes.
+
+The planner still refuses, with `frame-ambiguous`: the three wall directions
+carry 21,714 mm² and 19,572 mm², a margin of 0.0986 against a declared
 `frame_margin` of 0.1. That one is structural rather than a threshold — a
 hexagonal part has no distinguishable secondary datum, and a smaller margin would
 pick a winner the geometry does not prefer.
@@ -153,3 +172,9 @@ from at the top of `tests/test_reconstruction_benchmark.py`.
 The test asserts the gates, so a fix makes it fail. That is deliberate: re-measure
 the corpus, update `benchmark-manifest.json`, and the improvement lands in the
 record instead of passing unnoticed.
+
+It has happened twice already, both on the honeycomb. `known_gaps` keeps a
+`fixed` entry for each with the evidence that diagnosed it, because the evidence
+is still true of the mesh — 61.5% of its interior edges really are 60° creases —
+and the tests re-read it, so a diagnosis cannot rot into folklore while the mesh
+underneath it changes.

@@ -63,6 +63,10 @@
     "rationale": "this run measures detection, so coverage is reported and never gated",
     "value": 0.0
   },
+  "min_cylinder_normal_directions_per_turn": {
+    "rationale": "a tessellated circle carries one normal direction per facet; at eight per turn a facet already spans 45 degrees, coarser than any exporter's chord tolerance, so below it the group is a prism of planar walls whose corners happen to lie on the circle",
+    "value": 8.0
+  },
   "min_feature_size": {
     "rationale": "the smallest fillet and bore an organiser of this family carries is one millimetre",
     "value": 1.0
