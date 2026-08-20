@@ -781,28 +781,31 @@ class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurem
         )
         return row, record
 
-    def test_the_unicorn_horn_fits_a_little_and_then_cannot_build_a_profile(self) -> None:
+    def test_the_unicorn_horn_fits_a_little_and_then_cannot_settle_a_datum(self) -> None:
         # The horn is a coil swept along a lofted profile: the archetype
         # vocabulary has no member for any of that, and the F3D timeline in
         # ground-truth/ says so in the designer's own features.
         #
-        # It used to stop at the planner on `frame-x-underdetermined`, with 9
-        # accepted fits. It now clears the frame with 23 -- the held-out gate
+        # The fit stage clears the frame with 23 accepted -- the held-out gate
         # stopped refusing fits whose blocked half could not itself carry one,
         # which is the largest refusal class on any part whose face groups are
-        # small -- and reaches emission, where it refuses `profile-ambiguous`.
-        # Which is still the honest answer for a coil: what stops it is the
-        # geometry, and it is now stopped by the stage that can say so.
+        # small. The planner is where it stops, and the assertion is that it
+        # stops *by name*: the canonical tie rule settles a tied datum axis on
+        # the candidates' quantized directions, and refuses the tie it cannot
+        # settle. Here the rival sits 0.3666 deg from the winner carrying a
+        # 6.487 deg direction sigma against the declared 2 deg grid, so which of
+        # the two the rule picks is decided by measurement noise. Refusing is
+        # the point; picking would be the invention this skill exists to
+        # prevent.
         row, record = self._replay("unicorn_horn_3mf")
         program, refused = _plan(record)
-        self.assertIsNone(refused, "the horn is now expected to plan, then refuse at emission")
-        self.assertEqual(row["plan"]["archetypes"],
-                         {kind: sum(1 for g in program["archetypes"] if g["kind"] == kind)
-                          for kind in row["plan"]["archetypes"]})
-        # The local winding licence pays for itself here: a `hole` archetype is
-        # planned on a part that never reached the planner before.
-        self.assertIn("hole", row["plan"]["archetypes"])
-        self.assertEqual(row["rebuild_emission"]["refusal"], self._emit(program, "unicorn_horn_3mf"))
+        self.assertIsNotNone(refused, "the horn is expected to refuse at the planner")
+        self.assertEqual(row["plan"]["refusal"], refused.reason)
+        self.assertEqual("frame-ambiguous", refused.reason)
+        self.assertIsNone(program)
+        # And the row says which measurement it stopped on, not just that it did.
+        self.assertIn("direction sigma", row["re_measured"])
+        self.assertIn("6.487 deg", row["plan"]["message"])
 
     def test_the_tropical_leaves_refuse_honestly_rather_than_inventing_a_primitive(self) -> None:
         # The assertion that matters on an organic part is not how much it

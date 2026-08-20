@@ -36,17 +36,19 @@ repository alone, and why `tests/test_reconstruction_benchmark.py` can assert it
 ## The result
 
 **No part in this corpus reaches a built reconstruction, and each stops at a
-named gate.** That is the finding, not a preamble to one. Two of the four now
-stop at the same one — a section that closes more than one loop — which is what
-the corpus looks like once the datum frame stops being the first thing in the
-way.
+named gate.** That is the finding, not a preamble to one. Two of the four stop
+at the same one — a section that closes more than one loop — which is what the
+corpus looks like once the datum frame stops being the first thing in the way.
+The horn is the one part where it still is, and it now says which measurement
+stops it: two axis candidates a third of a degree apart, one of them carrying a
+direction sigma three times the grid that would separate them.
 
 | part | triangles | face groups | regime | accepted fits | fit coverage | stops at | gate |
 | --- | ---: | ---: | --- | --- | ---: | --- | --- |
 | honeycomb organiser (STL) | 556 | 121 | tessellation | 39 — 39 planes | 41.6% | emit-rebuild | `profile-ambiguous` |
-| unicorn horn (3MF) | 88,334 | 620 | scan | 9 — 6 planes, 3 cylinders | 4.7% | plan | `frame-x-underdetermined` |
-| tropical leaves (STL) | 86,394 | 2,299 | scan | 31 — 30 planes, 1 sphere | 18.3% | emit-rebuild | `profile-ambiguous` |
-| desktop organiser (3MF) | 6,502 | 790 | scan | 38 — 21 planes, 17 spheres | 27.9% | — | emitted; 1 `sketch-extrude`, 27.6% planned |
+| unicorn horn (3MF) | 88,334 | 620 | scan | 23 — 20 planes, 3 cylinders | 4.8% | plan | `frame-ambiguous` |
+| tropical leaves (STL) | 86,394 | 2,299 | scan | 49 — 48 planes, 1 sphere | 19.0% | emit-rebuild | `profile-ambiguous` |
+| desktop organiser (3MF) | 6,502 | 790 | scan | 36 — 21 planes, 15 spheres | 27.9% | — | emitted; 1 `sketch-extrude`, 22.5% planned |
 
 ### The honeycomb, which is the one the STEP can grade
 
@@ -150,12 +152,21 @@ a revolve, never appears in the original at all. 22 of the graded body's 51 STEP
 faces are NURBS, which no member of the vocabulary describes. This part is out of
 scope by construction, not by tuning, and the F3D is the evidence for saying so.
 
+It does not get far enough for that to be what stops it. The fit stage accepts
+**23 regions — 20 planes and 3 cylinders, 4.8% of the area** — and the planner
+refuses `frame-ambiguous`: two primary-axis candidates sit within the declared
+`frame_margin` of each other in score and 0.3666° apart in direction, and the
+lower-scoring one carries a 6.487° direction sigma against the 2° grid that
+decides whether it is the winner re-measured or a rival. The canonical tie rule
+settles a tie it can quantize reproducibly; this one it cannot, so it says so
+rather than picking.
+
 ### The tropical leaves, which are here to be refused
 
 The assertion that matters on an organic part is not how much it recovers but
-what it declines to claim. It claims **no cylinder, no cone and no torus** — 30
-planes and one sphere out of 958 regions, 18.3% of the area — and the plan
-reduces that to a single `sketch-extrude` at 5.7%. Emission then refuses with
+what it declines to claim. It claims **no cylinder, no cone and no torus** — 48
+planes and one sphere out of 958 regions, 19.0% of the area — and the plan
+reduces that to a single `sketch-extrude` at 6.3%. Emission then refuses with
 `profile-ambiguous`: the section closes two loops, and because the mesh's winding
 is inconsistent (`isOriented` false, signed volume 0.0) `material_side` is null,
 so the inner loop cannot be held out as a hole. That refusal chain runs straight
@@ -169,7 +180,7 @@ rebuild script emits. Its `min_feature_size` is declared at 2 mm with the reason
 in `results/desktop_organiser_3mf/fit-spec.json` — the part is 250 mm across at
 6,502 facets, so one facet spans several millimetres; at 1 mm it refuses
 `feature-scale-below-noise` at a recoverable size of 1.3627 mm, which is the
-estimator working rather than failing. 17 of its 38 accepted fits are spheres,
+estimator working rather than failing. 15 of its 36 accepted fits are spheres,
 which no ground truth here can confirm or deny.
 
 ## Layout
