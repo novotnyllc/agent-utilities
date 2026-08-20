@@ -21,10 +21,13 @@ Layout conventions worth knowing before reading the code:
   the manifest before anything is written -- an index that disagrees is refused,
   never applied.
 * ``Metadata/Slic3r_PE.config`` carries preset *identifiers only*. The user's
-  profile settings are never copied into our artifacts.
-* PrusaSlicer has a single bed. "Plates" here are declared grouping, not a
-  capacity check: plate members are laid out adjacently, plates are separated
-  along Y, and nothing verifies that objects physically fit.
+  profile settings are never copied into our artifacts. The one thing read from
+  the printer profile is its geometry (``bed_shape``, ``max_print_height``),
+  used for placement and fit checks -- never written into the project config.
+* PrusaSlicer has a single bed. "Plates" are declared grouping: each plate is
+  laid out within the bed's bounding rectangle and checked to fit (bounding-box
+  shelf packing, not collision-accurate nesting), and plates after the first
+  are tiled past the bed's +Y edge for the user to load one at a time.
 """
 
 from __future__ import annotations
@@ -190,6 +193,139 @@ def _selected_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str,
     return selected, primary
 
 
+# Fields resolved from printer preset sections. Only these are retained when
+# parsing, so a vendor bundle's multi-kilobyte gcode blocks never stay in memory.
+_PRINTER_FIELDS = frozenset({"printer_model", "printer_variant", "inherits", "bed_shape", "max_print_height"})
+
+
+def _enabled_vendor_models(config_root: Path) -> dict[str, dict[str, set[str]]]:
+    """Vendor models the configuration wizard installed, from PrusaSlicer.ini.
+
+    Verified against a real PrusaSlicer 2.9.5 config: PrusaSlicer.ini carries one
+    ``[vendor:<name>]`` section per installed vendor, whose keys look like
+    ``model:COREONE = HF0.4`` and ``model:XL5IS = 0.25;HF0.4;HF0.6;HF0.8`` --
+    that is, ``model:<printer_model>`` mapped to the ``;``-separated variants the
+    wizard enabled. Returns ``{vendor: {model: {variants}}}``. Malformed lines
+    are skipped, never guessed at.
+    """
+    vendors: dict[str, dict[str, set[str]]] = {}
+    ini = config_root / "PrusaSlicer.ini"
+    if not ini.is_file():
+        return vendors
+    vendor = ""
+    for raw_line in ini.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            vendor = section[len("vendor:"):].strip() if section.lower().startswith("vendor:") else ""
+            # A vendor name becomes a filename under vendor/; anything that is
+            # not a bare name is refused rather than resolved as a path.
+            if vendor and (Path(vendor).name != vendor or vendor in (".", "..")):
+                vendor = ""
+            continue
+        if not vendor or "=" not in line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key.startswith("model:"):
+            continue
+        model = key[len("model:"):].strip()
+        variants = {variant.strip() for variant in value.split(";") if variant.strip()}
+        if model and variants:
+            vendors.setdefault(vendor, {})[model] = variants
+    return vendors
+
+
+def _printer_fields(lines: list[str]) -> dict[str, str]:
+    """The ``_PRINTER_FIELDS`` subset of ``key = value`` lines (first ``=`` wins)."""
+    fields: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if "=" not in line or line.startswith(("#", ";", "[")):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key in _PRINTER_FIELDS:
+            fields[key] = value.strip()
+    return fields
+
+
+def _vendor_bundle_printer_sections(bundle: Path) -> dict[str, dict[str, str]]:
+    """``[printer:<name>]`` sections of a vendor bundle, abstract ones included.
+
+    Verified against the real ``vendor/PrusaResearch.ini``: printer sections are
+    ``[printer:<preset name>]`` with ``printer_model``/``printer_variant`` keys;
+    abstract, inheritance-only sections have ``*``-wrapped names such as
+    ``[printer:*common*]`` and are never offered in the GUI, yet must be parsed
+    because concrete presets inherit fields from them (``[printer:Original Prusa
+    i3 MK2S]`` gets its ``printer_model`` from ``[printer:*common*]``).
+    ``inherits`` may list several ``;``-separated parents.
+    """
+    sections: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for raw_line in bundle.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            current = sections.setdefault(section[len("printer:"):].strip(), []) if section.startswith("printer:") else None
+            continue
+        if current is not None:
+            current.append(line)
+    return {name: _printer_fields(lines) for name, lines in sections.items() if name}
+
+
+def _resolve_printer_field(
+    name: str, sections: dict[str, dict[str, str]], field: str, seen: frozenset[str] = frozenset()
+) -> str | None:
+    """Resolve ``field`` for a printer preset, following its ``inherits`` chain.
+
+    A section's own value wins; otherwise parents are consulted last-to-first
+    (assumed from PrusaSlicer's bundle semantics, where later parents override
+    earlier ones -- not observable in the real config, whose multi-parent
+    ``inherits`` never define the same field twice). Cycles and unknown parents
+    resolve to None, never an exception.
+    """
+    section = sections.get(name)
+    if section is None or name in seen:
+        return None
+    value = section.get(field)
+    if value:
+        return value
+    parents = [parent.strip() for parent in section.get("inherits", "").split(";") if parent.strip()]
+    for parent in reversed(parents):
+        value = _resolve_printer_field(parent, sections, field, seen | {name})
+        if value:
+            return value
+    return None
+
+
+def _vendor_installed_printers(config_root: Path) -> set[str]:
+    """Printer preset names installed via a vendor bundle's wizard selection.
+
+    A vendor printer preset counts as installed iff its resolved
+    ``printer_model``/``printer_variant`` pair is enabled in PrusaSlicer.ini's
+    ``[vendor:<name>]`` section. Abstract ``*``-wrapped sections are excluded. A
+    missing or unreadable bundle contributes nothing (the resolver then degrades
+    to the user-``.ini`` and selected-preset sources), and a preset whose model
+    or variant cannot be resolved is not counted -- fail closed, never guessed.
+    """
+    names: set[str] = set()
+    for vendor, models in _enabled_vendor_models(config_root).items():
+        bundle = config_root / "vendor" / f"{vendor}.ini"
+        try:
+            sections = _vendor_bundle_printer_sections(bundle)
+        except (OSError, ValueError):
+            continue
+        for name in sections:
+            if name.startswith("*"):
+                continue
+            model = _resolve_printer_field(name, sections, "printer_model")
+            variant = _resolve_printer_field(name, sections, "printer_variant")
+            if model and variant and variant in models.get(model, ()):
+                names.add(name)
+    return names
+
+
 def _installed_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
     selected, primary = _selected_presets(config_root)
     available: dict[str, set[str]] = {}
@@ -197,6 +333,11 @@ def _installed_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str
         directory = config_root / kind
         stems = {entry.stem for entry in directory.glob("*.ini")} if directory.is_dir() else set()
         available[kind] = stems | selected[kind]
+    # Printers only: a wizard-installed system printer (e.g. installed via the
+    # vendor bundle but not currently selected) has no user .ini and no
+    # [presets] entry, yet is real and selectable in the GUI. Filament/print
+    # kinds are deliberately not widened.
+    available["printer"] |= _vendor_installed_printers(config_root)
     return available, selected, primary
 
 
@@ -206,9 +347,11 @@ def resolve_presets(
 ) -> ResolvedPresets:
     """Resolve printer/filament/print presets by identifier, fail-closed.
 
-    Only names are resolved; the user's profile settings are never read or
-    copied. An unrequested kind falls back to the preset PrusaSlicer.ini records
-    as currently selected.
+    Only names are resolved here; no profile settings are copied into any
+    artifact. An unrequested kind falls back to the preset PrusaSlicer.ini
+    records as currently selected. A name counts as installed when it has a user
+    ``.ini``, is selected in PrusaSlicer.ini, or -- printers only -- is a vendor
+    bundle preset whose model/variant the configuration wizard installed.
     """
     root = Path(config_root).expanduser() if config_root is not None else default_config_root()
     if not root.is_dir():
@@ -244,9 +387,12 @@ def resolve_presets(
             )
         if name not in available[kind]:
             options = ", ".join(sorted(available[kind])) or "<none installed>"
+            sources = "user .ini files, the PrusaSlicer.ini selection"
+            if kind == "printer":
+                sources += ", and installed vendor-bundle models"
             raise ValueError(
-                f"PrusaSlicer {kind} preset {name!r} is not installed in {str(root)!r}; "
-                f"available {kind} presets: {options}."
+                f"PrusaSlicer {kind} preset {name!r} is not installed in {str(root)!r} "
+                f"(sources checked: {sources}); available {kind} presets: {options}."
             )
         chosen[kind] = name
     return ResolvedPresets(
@@ -255,6 +401,103 @@ def resolve_presets(
         print_settings=chosen["print"],
         config_root=str(root),
     )
+
+
+def _geometry_sections(config_root: Path) -> dict[str, dict[str, str]]:
+    """Printer sections usable for field resolution: vendor bundles plus user inis.
+
+    User preset ``.ini`` files are flat ``key = value`` documents (verified: a
+    real user printer ini carries ``bed_shape``, ``max_print_height``, and an
+    ``inherits`` line naming its system parent). They shadow same-named vendor
+    sections, matching PrusaSlicer's own precedence. An unreadable file simply
+    contributes nothing; the caller fails closed if the needed field is missing.
+    """
+    sections: dict[str, dict[str, str]] = {}
+    for vendor in sorted(_enabled_vendor_models(config_root)):
+        try:
+            sections.update(_vendor_bundle_printer_sections(config_root / "vendor" / f"{vendor}.ini"))
+        except (OSError, ValueError):
+            continue
+    directory = config_root / "printer"
+    if directory.is_dir():
+        for entry in sorted(directory.glob("*.ini")):
+            try:
+                sections[entry.stem] = _printer_fields(entry.read_text(encoding="utf-8", errors="replace").splitlines())
+            except OSError:
+                continue
+    return sections
+
+
+def printer_geometry(printer_name: str, config_root: str | Path) -> dict[str, Any]:
+    """Resolve the chosen printer's bed rectangle and maximum print height.
+
+    ``bed_shape`` is a comma-separated list of ``<x>x<y>`` bed-outline points
+    (verified in both a real user ini, ``0x0,360x0,360x360,0x360``, and the
+    vendor bundle's Core One section, ``0x0,250x0,250x220,0x220``); the bed is
+    treated as the bounding rectangle of those points even when the outline is
+    polygonal -- a deliberate simplification. Fails closed when ``bed_shape``
+    cannot be resolved or parsed: a project is never laid out on an assumed
+    bed. ``max_print_height`` (a plain number, verified 270/360) is optional --
+    absent means the height check is skipped -- but a present, unparseable
+    value fails closed.
+    """
+    root = Path(config_root).expanduser()
+    sections = _geometry_sections(root)
+    raw_shape = _resolve_printer_field(printer_name, sections, "bed_shape")
+    if not raw_shape:
+        raise ValueError(
+            f"bed_shape for printer preset {printer_name!r} could not be resolved from {str(root)!r} "
+            "(sources checked: user printer .ini files and installed vendor bundles, following "
+            "inherits); refusing to lay out a project on an assumed bed."
+        )
+    points: list[tuple[float, float]] = []
+    for token in raw_shape.split(","):
+        coordinates = token.strip().split("x")
+        try:
+            x, y = (float(coordinates[0]), float(coordinates[1])) if len(coordinates) == 2 else (math.nan, math.nan)
+        except ValueError:
+            x = y = math.nan
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise ValueError(
+                f"Printer preset {printer_name!r} declares bed_shape {raw_shape!r}, which is not a "
+                "comma-separated list of <x>x<y> points."
+            )
+        points.append((x, y))
+    if len(points) < 3:
+        raise ValueError(
+            f"Printer preset {printer_name!r} declares bed_shape {raw_shape!r} with fewer than three "
+            "points; a bed outline cannot be derived from it."
+        )
+    min_x = min(point[0] for point in points)
+    min_y = min(point[1] for point in points)
+    width = max(point[0] for point in points) - min_x
+    depth = max(point[1] for point in points) - min_y
+    if width <= 0 or depth <= 0:
+        raise ValueError(
+            f"Printer preset {printer_name!r} declares bed_shape {raw_shape!r}, whose bounding "
+            "rectangle is degenerate."
+        )
+    raw_height = _resolve_printer_field(printer_name, sections, "max_print_height")
+    height: float | None = None
+    if raw_height is not None:
+        try:
+            height = float(raw_height)
+        except ValueError:
+            height = math.nan
+        if not math.isfinite(height) or height <= 0:
+            raise ValueError(
+                f"Printer preset {printer_name!r} declares max_print_height {raw_height!r}; "
+                "expected a positive number."
+            )
+    return {
+        "printer": printer_name,
+        "bed_shape": raw_shape,
+        "bed_min_x_mm": min_x,
+        "bed_min_y_mm": min_y,
+        "bed_width_mm": width,
+        "bed_depth_mm": depth,
+        "max_print_height_mm": height,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -796,27 +1039,72 @@ def _deterministic_zip(entries: list[tuple[str, str]]) -> bytes:
     return buffer.getvalue()
 
 
-def _layout(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _layout(parts: list[dict[str, Any]], geometry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deterministic shelf layout within the printer's bed rectangle, fail-closed.
+
+    Instances are placed left-to-right in rows within the bed's bounding
+    rectangle; a row wraps when the next footprint would cross the bed's +X
+    edge. Any instance that cannot fit -- footprint wider or deeper than the
+    bed, height above max_print_height, or a plate whose rows overrun the bed
+    depth (including an ``assembled`` group that cannot share one plate) -- is
+    an error naming the part, its bounds, and the bed, never a silently
+    overflowing project. Plates after the first are tiled past the bed's +Y
+    edge (PrusaSlicer has a single bed), so only plate 1 lies on the bed as
+    written; bounding boxes, not true outlines, decide fit.
+    """
     plates = assign_plates(parts)
-    y_cursor = 0.0
-    for plate in plates:
+    bed_width = geometry["bed_width_mm"]
+    bed_depth = geometry["bed_depth_mm"]
+    max_height = geometry["max_print_height_mm"]
+    bed = f"{_fmt(bed_width)} x {_fmt(bed_depth)} mm bed of printer preset {geometry['printer']!r}"
+    for plate_index, plate in enumerate(plates):
+        plate_origin_y = geometry["bed_min_y_mm"] + plate_index * (bed_depth + PLATE_GAP_MM)
         x_cursor = 0.0
-        depth = 0.0
+        row_y = 0.0
+        row_depth = 0.0
         for part in plate["parts"]:
             minimum, maximum = _rotated_bounds(part["rotation"], part["vertices"])
             width = maximum[0] - minimum[0]
-            depth = max(depth, maximum[1] - minimum[1])
+            depth = maximum[1] - minimum[1]
+            height = maximum[2] - minimum[2]
+            footprint = f"{_fmt(width)} x {_fmt(depth)} mm"
+            if width > bed_width or depth > bed_depth:
+                raise ValueError(
+                    f"Printable part {part['part_path']!r} has a rotated footprint of {footprint}, "
+                    f"which cannot fit the {bed}."
+                )
+            if max_height is not None and height > max_height:
+                raise ValueError(
+                    f"Printable part {part['part_path']!r} is {_fmt(height)} mm tall as oriented, "
+                    f"above the {_fmt(max_height)} mm maximum print height of printer preset "
+                    f"{geometry['printer']!r}."
+                )
             transforms = []
             translations = []
             for _ in range(part["quantity"]):
-                translation = (x_cursor - minimum[0], y_cursor - minimum[1], -minimum[2])
+                if x_cursor > 0.0 and x_cursor + width > bed_width:
+                    x_cursor = 0.0
+                    row_y += row_depth + OBJECT_GAP_MM
+                    row_depth = 0.0
+                if row_y + depth > bed_depth:
+                    raise ValueError(
+                        f"Plate {plate['plate']} cannot fit all its parts on the {bed}: part "
+                        f"{part['part_path']!r} (footprint {footprint}) does not fit in the remaining "
+                        "space. Assembled parts must share one plate; reduce quantity or size, or "
+                        "declare them separate."
+                    )
+                translation = (
+                    geometry["bed_min_x_mm"] + x_cursor - minimum[0],
+                    plate_origin_y + row_y - minimum[1],
+                    -minimum[2],
+                )
                 transforms.append(_item_transform(part["rotation"], translation))
                 translations.append([float(_fmt(value)) for value in translation])
                 x_cursor += width + OBJECT_GAP_MM
+                row_depth = max(row_depth, depth)
             part["plate"] = plate["plate"]
             part["item_transforms"] = transforms
             part["translations_mm"] = translations
-        y_cursor += depth + PLATE_GAP_MM
     return plates
 
 
@@ -834,8 +1122,8 @@ def build_project(
     field -- so the reported provenance describes the design actually built. It
     must also name the verification report and export run behind it, both of which
     are carried into the result. Fails closed on any index, binding, hash,
-    byte-size, intent, orientation, or override problem, and refuses to overwrite
-    an existing output.
+    byte-size, intent, orientation, override, or bed-fit problem (including an
+    unresolvable printer bed), and refuses to overwrite an existing output.
     """
     index_file = Path(index_path).expanduser()
     output = Path(output_path).expanduser()
@@ -860,7 +1148,8 @@ def build_project(
     _assert_intent_matches_manifest(manifest, parts)
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
-    plates = _layout(parts)
+    geometry = printer_geometry(presets.printer, presets.config_root)
+    plates = _layout(parts, geometry)
 
     payload = _deterministic_zip(
         [
@@ -897,6 +1186,9 @@ def build_project(
         "export_run_id": index.get("export_run_id"),
         "presets": presets.as_dict(),
         "preset_config_root": presets.config_root,
+        # Resolved from the printer preset (user .ini or vendor bundle via
+        # inherits) and used for placement and fit checks; auditable here.
+        "printer_geometry": geometry,
         "plates": [
             {"plate": plate["plate"], "part_paths": [part["part_path"] for part in plate["parts"]]}
             for plate in plates
@@ -917,12 +1209,12 @@ def build_project(
             for part in parts
         ],
         "notes": [
-            "Preset identifiers only; no PrusaSlicer profile settings were copied.",
-            "PrusaSlicer has a single bed: plates are declared grouping laid out side by side, "
-            "and plate capacity was not validated.",
-            "Plates march along +Y without bound, so past roughly seven plates the layout runs off "
-            "a 360 mm bed. Bed size is not known here -- printer presets are referenced by name and "
-            "never read -- so arrange the plates in the PrusaSlicer GUI before slicing.",
+            "Preset identifiers only; no PrusaSlicer profile settings were copied into the project.",
+            "Placement uses the printer's bed_shape bounding rectangle and bounding-box shelf "
+            "packing: every plate is checked to fit the bed, but the layout is not "
+            "collision-accurate nesting and a polygonal bed outline is treated as its rectangle.",
+            "PrusaSlicer has a single bed: plate 1 lies on it as written; later plates are tiled "
+            "past the bed's +Y edge, so load them one at a time or re-arrange in the GUI.",
             "Project construction executed no binary; slicing is a separate opt-in step.",
         ],
     }

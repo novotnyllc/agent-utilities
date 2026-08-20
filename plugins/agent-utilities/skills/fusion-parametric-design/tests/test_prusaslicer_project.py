@@ -18,6 +18,7 @@ from fusion_design.prusaslicer_project import (
     ResolvedPresets,
     build_project,
     overrides_for_intent,
+    printer_geometry,
     resolve_presets,
     rotation_for_contact_face,
     validate_overrides,
@@ -204,7 +205,41 @@ class _Fixture:
         return build_project(manifest if manifest is not None else self.manifest(), index, output, presets)
 
 
-def _config_root(root: Path, selected: dict[str, str] | None = None, user_presets: dict[str, list[str]] | None = None) -> Path:
+# Synthetic printer profile: a 200 x 180 mm bed, 150 mm tall build volume.
+PRINTER_INI = "bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 150\n"
+
+# Synthetic vendor bundle in the real PrusaResearch.ini shape: an abstract
+# *common* parent carrying model/variant/bed fields, concrete presets
+# inheriting from it, and one preset for a model the wizard did not install.
+VENDOR_BUNDLE = """\
+[printer:*common*]
+printer_model = COREONE
+printer_variant = HF0.4
+bed_shape = 0x0,250x0,250x220,0x220
+max_print_height = 270
+
+[printer:Prusa CORE One HF0.4 nozzle]
+inherits = *common*
+
+[printer:Prusa CORE One HF0.6 nozzle]
+inherits = *common*
+printer_variant = HF0.6
+
+[printer:Prusa MINI]
+printer_model = MINI
+printer_variant = 0.4
+bed_shape = 0x0,180x0,180x180,0x180
+"""
+
+
+def _config_root(
+    root: Path,
+    selected: dict[str, str] | None = None,
+    user_presets: dict[str, list[str]] | None = None,
+    printer_ini: str = PRINTER_INI,
+    vendor_models: str | None = None,
+    vendor_bundle: str | None = None,
+) -> Path:
     config = root / "PrusaSlicer"
     user_presets = user_presets if user_presets is not None else {
         "printer": ["Original Prusa XL - 5T"],
@@ -214,8 +249,9 @@ def _config_root(root: Path, selected: dict[str, str] | None = None, user_preset
     for kind, names in user_presets.items():
         directory = config / kind
         directory.mkdir(parents=True, exist_ok=True)
+        content = printer_ini if kind == "printer" else "layer_height = 0.2\n"
         for preset_name in names:
-            (directory / f"{preset_name}.ini").write_text("layer_height = 0.2\n", encoding="utf-8")
+            (directory / f"{preset_name}.ini").write_text(content, encoding="utf-8")
     config.mkdir(parents=True, exist_ok=True)
     selected = selected if selected is not None else {
         "printer": "Original Prusa XL - 5T",
@@ -223,7 +259,12 @@ def _config_root(root: Path, selected: dict[str, str] | None = None, user_preset
         "print": "0.40 SPEED @XLIS HF0.6 mixed",
     }
     lines = ["[presets]"] + [f"{kind} = {name}" for kind, name in sorted(selected.items())]
+    if vendor_models is not None:
+        lines += ["[vendor:PrusaResearch]", vendor_models]
     (config / "PrusaSlicer.ini").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if vendor_bundle is not None:
+        (config / "vendor").mkdir(exist_ok=True)
+        (config / "vendor" / "PrusaResearch.ini").write_text(vendor_bundle, encoding="utf-8")
     return config
 
 
@@ -418,6 +459,175 @@ class PresetResolutionTests(unittest.TestCase):
                 )
         with mock.patch.object(prusaslicer_project.sys, "platform", "linux"):
             self.assertEqual(Path.home() / ".config" / "PrusaSlicer", prusaslicer_project.default_config_root())
+
+
+class VendorPresetTests(unittest.TestCase):
+    """Printer presets installed via a vendor bundle's wizard selection."""
+
+    def _vendor_config(self, root: Path, models: str = "model:COREONE = HF0.4") -> Path:
+        return _config_root(root, vendor_models=models, vendor_bundle=VENDOR_BUNDLE)
+
+    def test_vendor_preset_with_installed_model_resolves_even_when_not_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = self._vendor_config(Path(temporary))
+            self.assertFalse((config / "printer" / "Prusa CORE One HF0.4 nozzle.ini").exists())
+            presets = resolve_presets({"printer": "Prusa CORE One HF0.4 nozzle"}, config)
+            self.assertEqual("Prusa CORE One HF0.4 nozzle", presets.printer)
+
+    def test_vendor_preset_whose_model_is_not_installed_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = self._vendor_config(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "'Prusa MINI' is not installed"):
+                resolve_presets({"printer": "Prusa MINI"}, config)
+
+    def test_vendor_preset_whose_variant_is_not_installed_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = self._vendor_config(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "'Prusa CORE One HF0.6 nozzle' is not installed"):
+                resolve_presets({"printer": "Prusa CORE One HF0.6 nozzle"}, config)
+            both = self._vendor_config(Path(temporary) / "both", models="model:COREONE = HF0.4;HF0.6")
+            resolved = resolve_presets({"printer": "Prusa CORE One HF0.6 nozzle"}, both)
+            self.assertEqual("Prusa CORE One HF0.6 nozzle", resolved.printer)
+
+    def test_abstract_star_sections_are_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = self._vendor_config(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "is not installed"):
+                resolve_presets({"printer": "*common*"}, config)
+
+    def test_malformed_vendor_bundle_degrades_to_the_two_original_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(Path(temporary), vendor_models="model:COREONE = HF0.4")
+            # The bundle is a directory, so reading it raises OSError.
+            (config / "vendor" / "PrusaResearch.ini").mkdir(parents=True)
+            presets = resolve_presets({}, config)
+            self.assertEqual("Original Prusa XL - 5T", presets.printer)
+            with self.assertRaisesRegex(ValueError, "is not installed"):
+                resolve_presets({"printer": "Prusa CORE One HF0.4 nozzle"}, config)
+
+
+class PrinterGeometryTests(unittest.TestCase):
+    def test_bed_shape_resolves_from_the_user_printer_ini(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(Path(temporary))
+            geometry = printer_geometry("Original Prusa XL - 5T", config)
+            self.assertEqual(200.0, geometry["bed_width_mm"])
+            self.assertEqual(180.0, geometry["bed_depth_mm"])
+            self.assertEqual(150.0, geometry["max_print_height_mm"])
+
+    def test_bed_shape_resolves_through_the_vendor_bundle_inherits_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            # The concrete section carries no bed_shape of its own; it comes
+            # from the abstract *common* parent via inherits.
+            config = _config_root(
+                Path(temporary), vendor_models="model:COREONE = HF0.4", vendor_bundle=VENDOR_BUNDLE
+            )
+            geometry = printer_geometry("Prusa CORE One HF0.4 nozzle", config)
+            self.assertEqual("0x0,250x0,250x220,0x220", geometry["bed_shape"])
+            self.assertEqual(250.0, geometry["bed_width_mm"])
+            self.assertEqual(220.0, geometry["bed_depth_mm"])
+            self.assertEqual(270.0, geometry["max_print_height_mm"])
+
+    def test_missing_bed_shape_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(Path(temporary), printer_ini="layer_height = 0.2\n")
+            with self.assertRaisesRegex(ValueError, "refusing to lay out a project on an assumed bed"):
+                printer_geometry("Original Prusa XL - 5T", config)
+
+    def test_unparseable_bed_shape_or_max_print_height_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            garbled = _config_root(root / "a", printer_ini="bed_shape = round-ish\n")
+            with self.assertRaisesRegex(ValueError, "is not a\\s+comma-separated list|not a comma-separated"):
+                printer_geometry("Original Prusa XL - 5T", garbled)
+            bad_height = _config_root(
+                root / "b", printer_ini="bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = tall\n"
+            )
+            with self.assertRaisesRegex(ValueError, "expected a positive number"):
+                printer_geometry("Original Prusa XL - 5T", bad_height)
+
+    def test_absent_max_print_height_skips_the_height_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(Path(temporary), printer_ini="bed_shape = 0x0,200x0,200x180,0x180\n")
+            self.assertIsNone(printer_geometry("Original Prusa XL - 5T", config)["max_print_height_mm"])
+
+
+class BedPlacementTests(unittest.TestCase):
+    """Deterministic placement within the resolved bed, fail-closed on overflow."""
+
+    def _build(self, root: Path, fixture: _Fixture, printer_ini: str) -> dict:
+        config = _config_root(root, printer_ini=printer_ini)
+        return fixture.build(fixture.write_index(), root / "p.3mf", _presets(config))
+
+    def test_placement_stays_within_a_small_synthetic_bed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            # Footprint is 10 x 20 per instance; a 30 mm wide bed forces row wrapping.
+            fixture.add_part("Widget/Bracket", intent=_intent(quantity=3, print_as="assembled"))
+            result = self._build(root, fixture, "bed_shape = 0x0,30x0,30x100,0x100\n")
+            geometry = result["printer_geometry"]
+            self.assertEqual(30.0, geometry["bed_width_mm"])
+            placements = result["objects"][0]["translations_mm"]
+            self.assertEqual(3, len(placements))
+            xs = {translation[0] for translation in placements}
+            ys = {translation[1] for translation in placements}
+            self.assertGreater(len(ys), 1, "expected the third instance to wrap to a new row")
+            for x, y, z in placements:
+                self.assertGreaterEqual(x, 0.0)
+                self.assertLessEqual(x + 10.0, 30.0)
+                self.assertGreaterEqual(y, 0.0)
+                self.assertLessEqual(y + 20.0, 100.0)
+                self.assertEqual(0.0, z)
+
+    def test_oversized_part_fails_closed_naming_part_and_bed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            with self.assertRaisesRegex(
+                ValueError, r"'Widget/Bracket' has a rotated footprint of 10 x 20 mm.*5 x 5 mm bed"
+            ):
+                self._build(root, fixture, "bed_shape = 0x0,5x0,5x5,0x5\n")
+
+    def test_assembled_group_that_cannot_share_a_plate_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            # Each 10 x 20 part fits a 15 x 25 bed alone, but not both on one plate.
+            fixture.add_part("Widget/Base", intent=_intent(print_as="assembled"))
+            fixture.add_part("Widget/Lid", intent=_intent(print_as="assembled"))
+            with self.assertRaisesRegex(
+                ValueError, r"Plate 1 cannot fit all its parts on the 15 x 25 mm bed.*'Widget/Lid'"
+            ):
+                self._build(root, fixture, "bed_shape = 0x0,15x0,15x25,0x25\n")
+
+    def test_part_taller_than_max_print_height_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")  # 30 mm tall as oriented
+            with self.assertRaisesRegex(ValueError, r"30 mm tall as oriented.*25 mm maximum print height"):
+                self._build(root, fixture, "bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 25\n")
+
+    def test_result_records_the_resolved_bed_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            result = self._build(root, fixture, PRINTER_INI)
+            self.assertEqual(
+                {
+                    "printer": "Original Prusa XL - 5T",
+                    "bed_shape": "0x0,200x0,200x180,0x180",
+                    "bed_min_x_mm": 0.0,
+                    "bed_min_y_mm": 0.0,
+                    "bed_width_mm": 200.0,
+                    "bed_depth_mm": 180.0,
+                    "max_print_height_mm": 150.0,
+                },
+                result["printer_geometry"],
+            )
 
 
 class ProjectWriterTests(unittest.TestCase):
