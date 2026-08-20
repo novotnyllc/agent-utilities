@@ -1182,12 +1182,19 @@ def _origin_on_axis(
     )
     if planes:
         _area, region_hash, point = planes[0]
-        plane = next(r for r in regions if r.region_hash == region_hash)
+        # `None`, deliberately. This point is a plane's *vertex centroid*, and
+        # the only sigma the record carries for a plane is `offset`, which
+        # bounds displacement along the normal and says nothing about where on
+        # the plane the centroid sits. A re-tessellation moves that centroid
+        # tangentially -- and can swap which of two near-equal-area planes is
+        # picked at all -- by far more than `offset`. Returning `offset` here
+        # would let the canonical tie-break certify a cell that the origin can
+        # walk out of, so this fallback states no bound and the tie refuses.
         return (
             point,
             f"centroid of the largest plane {region_hash[:12]}; no plane is perpendicular to the "
             "primary axis",
-            plane.sigma("offset"),
+            None,
         )
 
     anchors = sorted(

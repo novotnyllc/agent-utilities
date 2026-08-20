@@ -539,6 +539,34 @@ class DatumFrameTests(unittest.TestCase):
             places=12,
         )
 
+    def test_an_origin_that_is_only_a_plane_centroid_states_no_bound(self) -> None:
+        """A plane's `offset` sigma is along its normal; the centroid slides.
+
+        With no plane perpendicular to the primary axis the origin falls back
+        to the largest plane's vertex centroid. Nothing in the record bounds
+        where on that plane the centroid sits -- a re-tessellation moves it
+        tangentially, and can swap which of two near-equal-area planes is
+        picked at all -- so the origin states no uncertainty and the canonical
+        tie over directions measured from it refuses rather than certifying a
+        cell the origin can walk out of.
+        """
+        record = fx.record(
+            [
+                # The primary axis is a cylinder along +z; the only planes are
+                # *parallel* to it, so no cap places the origin.
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                fx.plane("wall", (1.0, 0.0, 0.0), (0.0, 0.0, 4.0), 900.0),
+                fx.cylinder("pin-a", (0.0, 0.0, 1.0), (9.0, 0.0, 4.0), 1.0, 40.0, 6.0),
+                fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 9.0, 4.0), 1.0, 40.0, 6.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertIn("no plane is perpendicular", frame.evidence["origin_source"])
+        # The secondary came from the wall, which carries its own bound; what
+        # is under test is that a *second-axis* candidate measured from this
+        # origin would carry none.
+        self.assertEqual("plane parallel to the primary axis", frame.evidence["secondary_source"])
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [
