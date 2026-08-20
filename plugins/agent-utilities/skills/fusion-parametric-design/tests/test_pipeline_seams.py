@@ -869,7 +869,12 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         self.assertEqual(1, len([g for g in with_slabs["archetypes"] if g.get("slab")]))
         self.assertEqual(without["order"], with_slabs["order"])
         self.assertEqual(without["user_parameters"], with_slabs["user_parameters"])
-        for before, after in zip(without["archetypes"], with_slabs["archetypes"]):
+        # `zip` truncates to the shorter list, so a gained or lost archetype
+        # would leave this loop passing on the ones that survived.
+        self.assertEqual(len(without["archetypes"]), len(with_slabs["archetypes"]))
+        for before, after in zip(
+            without["archetypes"], with_slabs["archetypes"], strict=True
+        ):
             self.assertEqual(
                 {k: v for k, v in before.items() if k != "slab"},
                 {k: v for k, v in after.items() if k != "slab"},

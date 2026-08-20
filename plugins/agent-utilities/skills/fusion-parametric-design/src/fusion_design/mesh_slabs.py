@@ -39,6 +39,10 @@ SLAB_GATES = {
     "slab-section-inconstant",
     "slab-axis-not-primary",
     "slab-loops-unclassified",
+    # Recorded by the planner rather than here: a gated slab with surviving
+    # slabs on both sides leaves the stack in two pieces, and a join across the
+    # gap fuses nothing.  The single-extrude plan stands instead.
+    "slab-stack-discontinuous",
 }
 
 #: How a slab's outline compares with the slab below it.  Recorded, never acted
@@ -598,6 +602,27 @@ def decompose(
             merged["station_hi"] = below["station_hi"]
             merged["height"] = merged["station_hi"] - merged["station_lo"]
             merged["gates"] = sorted(set(here["gates"]) | set(below["gates"]))
+            # `section_station`, `constancy.checks` and `loops` came off the
+            # lower slab and are not re-measured: the two slabs sectioned to
+            # congruent loop sets, which is *why* they merged, so the evidence
+            # does describe the merged slab -- but it was taken over the lower
+            # slab's stations only, and `section_station` is no longer the
+            # merged slab's midpoint.  Say so on the record rather than leave a
+            # reader to notice that the checks lie in one half of what they are
+            # attached to.  A slab merged twice keeps the range it was first
+            # measured over, not the widened one.
+            merged["constancy"] = dict(
+                here["constancy"],
+                measured_over=here["constancy"].get(
+                    "measured_over", [here["station_lo"], here["station_hi"]]
+                ),
+                measured_over_note=(
+                    "this slab is two or more coalesced slabs; section_station, "
+                    "constancy.checks and loops were measured over measured_over, not over the "
+                    "merged slab's full height. The coalescing test is what licenses reading "
+                    "them as the merged slab's: see the events' coalesced.worst_hausdorff."
+                ),
+            )
             slabs[index : index + 2] = [merged]
             continue
         index += 1

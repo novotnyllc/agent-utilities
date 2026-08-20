@@ -1520,11 +1520,15 @@ def _plan_slabs(
     fallback: every path out of here that is not a usable multi-slab
     decomposition leaves it standing, untouched, with the reason recorded.
 
-    Region assignment is a **partition**: each region goes to the one slab
-    containing the midpoint of its own axial span.  A wall spanning three slabs
-    is measured by all three sections but claimed by one, because the coverage
-    account sums each archetype's regions and a region counted three times would
-    inflate what the program claims to have delivered.
+    Region assignment is a **partition**: each region goes to the slab whose
+    centre is nearest the midpoint of the region's own axial span.  A wall
+    spanning three slabs is measured by all three sections but claimed by one,
+    because the coverage account sums each archetype's regions and a region
+    counted three times would inflate what the program claims to have
+    delivered.  Nearest centre rather than containment: the two agree while the
+    slabs are equal in height, and where they differ a region inside a tall
+    slab can be nearest a shorter neighbour's centre and is claimed by it.
+    Either rule partitions, which is what the account needs.
     """
     if slab_gates is None:
         return _slab_not_attempted(
@@ -1645,11 +1649,15 @@ def _plan_slabs(
 
     # A slab whose own measurement failed is not built: its regions come back
     # with the gate that stopped it, and the slabs above it still stack because
-    # each one's profile is the material measured at its own station.
+    # each one's profile is the material measured at its own station -- which
+    # holds geometrically only while the gated slab is at one end of the stack.
     surviving: list[dict[str, Any]] = []
-    for group, slab in zip(planned, slabs):
+    surviving_indices: list[int] = []
+    gated_indices: list[int] = []
+    for index, (group, slab) in enumerate(zip(planned, slabs)):
         if slab["gates"]:
             gate = slab["gates"][0]
+            gated_indices.append(index)
             for region_hash in group["regions"]:
                 record["_gated"][region_hash] = (
                     f"{gate}: slab {slab['index']} between {slab['station_lo']:.6g} and "
@@ -1658,11 +1666,40 @@ def _plan_slabs(
                 )
             continue
         surviving.append(group)
+        surviving_indices.append(index)
+    if not surviving:
+        return record
+    interior = [
+        index
+        for index in gated_indices
+        if surviving_indices[0] < index < surviving_indices[-1]
+    ]
+    if interior:
+        # The slabs above a gated *interior* slab do not touch the ones below
+        # it: the gate leaves a positive axial gap, so `join` would ask Fusion
+        # to fuse a body that is nowhere near the one it names, and the
+        # dependency would describe a stack that is not continuous.
+        # `_plan_holes` reads the same wrong picture -- it folds the stack into
+        # one span with min(lo) and max(hi), so a bore lying entirely inside
+        # the gap passes containment instead of gating `hole-not-contained`.
+        # The single extrude the caller planned spans the whole part and is
+        # still true, so it stands, and every region keeps its claim.
+        record["_gated"] = {}
+        record["usable"] = False
+        record["gate"] = "slab-stack-discontinuous"
+        record["detail"] = (
+            "slab(s) "
+            + ", ".join(str(slabs[index]["index"]) for index in interior)
+            + " did not hold their own measurement and sit between slabs that did, so the "
+            "surviving slabs no longer touch: an extrude joined across that gap would fuse "
+            "nothing, and a bore inside the gap would read as contained by the stack. The "
+            "single-extrude plan spans the whole part and stands instead. See "
+            "program.slab_decomposition for what each slab measured."
+        )
+        return record
     for position, group in enumerate(surviving):
         group["operation"] = "new-body" if position == 0 and len(groups) == 1 else "join"
         group["dependencies"] = [surviving[position - 1]["id"]] if position else []
-    if not surviving:
-        return record
     groups[-1:] = surviving
     return record
 
@@ -2258,12 +2295,45 @@ def _attach_constraints(
 
 
 def _emission_order(groups: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Bases before cuts before finishing, and deterministic within each class."""
+    """Bases before cuts before finishing, and deterministic within each class.
+
+    Kahn's algorithm over the declared dependencies, with the same
+    ``(rank, id)`` tie-break ``mesh_rebuild.total_order`` uses.  That function
+    re-derives this order and refuses ``program-order-invalid`` when the two
+    disagree, and a rank-then-id sort disagrees as soon as one archetype
+    depends on another whose id sorts after it.  A multi-slab stack does
+    exactly that: ``slab4`` can sort before ``slab3`` while depending on it.
+
+    A cycle or a dangling dependency is not repaired here.  Both are refusals
+    in ``mesh_rebuild``, which owns that vocabulary and states the recourse;
+    this falls back to the plain sorted order so the program still carries one
+    and the refusal there names the real fault instead of an order mismatch.
+    """
     rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
-    return [
-        group["id"]
-        for group in sorted(groups, key=lambda g: (rank[g["operation"]], g["id"]))
-    ]
+    keys = {str(group["id"]): (rank[group["operation"]], str(group["id"])) for group in groups}
+    lexical = sorted(keys, key=lambda identifier: keys[identifier])
+    pending = {
+        str(group["id"]): {
+            str(dependency)
+            for dependency in (group.get("dependencies") or ())
+            if str(dependency) in keys
+        }
+        for group in groups
+    }
+    ordered: list[str] = []
+    while pending:
+        ready = sorted(
+            (identifier for identifier, deps in pending.items() if not deps),
+            key=lambda identifier: keys[identifier],
+        )
+        if not ready:
+            return lexical
+        for identifier in ready:
+            ordered.append(identifier)
+            del pending[identifier]
+        for deps in pending.values():
+            deps.difference_update(ready)
+    return ordered
 
 
 # --------------------------------------------------------------------------

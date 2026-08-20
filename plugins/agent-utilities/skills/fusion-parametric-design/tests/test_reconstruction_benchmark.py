@@ -191,8 +191,14 @@ def _fit(source_id: str):
     return row, seg.fit_regions(dump, spec)
 
 
-def _plan(record):
-    """Run the planner, returning either the program or the refusal it raised."""
+def _plan(record, dump=None):
+    """Run the planner, returning either the program or the refusal it raised.
+
+    Without ``dump`` the planner records the slab decomposition as *not
+    attempted*: that is the legacy single-extrude path, and it is what the
+    numbers recorded in the manifest describe. Pass the part's own hash-bound
+    dump to exercise the decomposition itself.
+    """
     from fusion_design.manifest import load_manifest
     from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
     from fusion_design.reconstruction_program import build_reconstruction_program
@@ -202,10 +208,17 @@ def _plan(record):
     digest = manifest_sha256(load_manifest(BENCH / "fusion-project.json"))
     try:
         return build_reconstruction_program(
-            parse_fit_record(record), spec, manifest_sha256=digest
+            parse_fit_record(record), spec, manifest_sha256=digest, dump=dump
         ), None
     except ReconstructionRefused as refused:
         return None, refused
+
+
+def _bound_dump(row):
+    """One part's committed dump, read back through its recorded digest."""
+    from fusion_design.mesh_dump import read_mesh_dump
+
+    return read_mesh_dump(BENCH / "dumps" / row["dump"], row["dump_sha256"])
 
 
 def _kind_counts(program):
@@ -642,6 +655,56 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
         self.assertAlmostEqual(
             recorded["covered_area_fraction"], program["covered_area_fraction"], places=9
         )
+
+    def test_the_honeycomb_plans_its_slab_stack_from_the_bound_dump(self) -> None:
+        """The 2.5D path itself, replayed on the corpus rather than only on fixtures.
+
+        Every other planner assertion in this class calls `_plan` without a
+        dump, which records the slab decomposition as *not attempted* -- the
+        legacy single-extrude path the manifest's recorded numbers describe.
+        This one passes the part's own hash-bound dump, so the decomposition
+        this PR adds is measured against a real part.
+
+        The declared build order is the assertion that matters. `sorted` by
+        (operation rank, id) -- which is what the order used to be -- puts
+        `...-1d44bda5fbcf-s4` ahead of `...-slab3-sketch-s3` while s4 depends
+        on s3, and the emitter re-derives the order and refuses
+        `program-order-invalid` on exactly that mismatch. The stack is five
+        slabs deep here, so the corpus carries the case.
+        """
+        from fusion_design.mesh_rebuild import total_order
+
+        program, refused = _plan(self.record, dump=_bound_dump(self.row))
+        self.assertIsNone(refused, "the honeycomb is expected to plan from its dump")
+        decomposition = program["slab_decomposition"]
+        self.assertTrue(decomposition["usable"])
+        self.assertIsNone(decomposition["gate"])
+        # Five slabs, one archetype each: a base and four joins, each depending
+        # on the slab below, and each carrying its own station block.
+        slabs = [group["slab"] for group in program["archetypes"] if group.get("slab")]
+        self.assertEqual([(index, 5) for index in range(5)], [(s["index"], s["of"]) for s in slabs])
+        self.assertEqual({"sketch-extrude": 5}, _kind_counts(program))
+        self.assertEqual(
+            ["new-body"] + ["join"] * 4,
+            [group["operation"] for group in program["archetypes"]],
+        )
+        identifiers = [group["id"] for group in program["archetypes"]]
+        self.assertEqual(
+            [[]] + [[identifier] for identifier in identifiers[:-1]],
+            [group["dependencies"] for group in program["archetypes"]],
+        )
+        # The gate the emitter applies to the declared order, applied here.
+        self.assertEqual(total_order(program["archetypes"]), program["order"])
+        # And this part is a live instance of the case: the old rank-then-id
+        # sort disagrees with the dependency order on it.
+        rank = {"new-body": 0, "join": 1, "cut": 2, "finish": 3}
+        self.assertNotEqual(
+            sorted(identifiers, key=lambda identifier: (rank["join"], identifier)),
+            program["order"],
+        )
+        # The datum is untouched by the decomposition: still this part's own
+        # canonical secondary axis, not a second guess at it.
+        self.assertEqual("arbitrary-canonical", program["datum"]["evidence"]["frame_choice"])
 
     def test_the_honeycomb_then_refuses_at_emission_on_its_own_section(self) -> None:
         """A planned part is not a rebuilt one, and the next gate is the section.

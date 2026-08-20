@@ -1125,5 +1125,99 @@ class HausdorffTests(unittest.TestCase):
         self.assertIsNone(verdict["worst_hausdorff"])
 
 
+class SlabStackContinuityTests(unittest.TestCase):
+    """What the planner does when one slab does not hold its own measurement.
+
+    A gated slab at either end is simply not built and the rest still stack. A
+    gated slab *between* two that survive leaves a positive axial gap: the
+    surviving groups no longer touch, so a `join` would ask Fusion to fuse a
+    body nowhere near the one it names, and `_plan_holes` -- which folds the
+    stack into one span from min(lo) to max(hi) -- would read a bore lying
+    inside the gap as contained. The single extrude spans the whole part and is
+    still true, so it stands.
+
+    The decomposition itself is measured on real meshes elsewhere; what is
+    under test here is the planner's response to a gate, so `decompose` is
+    replaced by a three-slab answer with the gates placed by hand.
+    """
+
+    def _slab(self, index, gated):
+        low = index * 4.0
+        return {
+            "index": index,
+            "lower_event": index,
+            "upper_event": index + 1,
+            "station_lo": low,
+            "station_hi": low + 4.0,
+            "height": 4.0,
+            "section_station": low + 2.0,
+            "constancy": {
+                "constant": True,
+                "tolerance": 0.05,
+                "fractions": [0.25, 0.75],
+                "checks": [],
+            },
+            "winding": {"closed": True},
+            "loops": [],
+            "gates": ["slab-section-inconstant"] if gated else [],
+            "relation_to_below": "first" if index == 0 else "same-outline",
+        }
+
+    def _plan(self, gated):
+        from unittest.mock import patch
+
+        decomposition = {
+            "usable": True,
+            "gate": None,
+            "detail": None,
+            "events": [{"members": []} for _ in range(4)],
+            "coalesced_events": [],
+            "slabs": [self._slab(index, index in gated) for index in range(3)],
+            "declared": {},
+        }
+        frame = rp.derive_datum_frame(
+            [region for region in parse_fit_record(two_bores()).regions if region.accepted],
+            frame_margin=0.1,
+            angle_tolerance_deg=2.0,
+            offset_tolerance=0.5,
+        )
+        groups = [{"id": "sketch-extrude-base", "kind": "sketch-extrude", "regions": []}]
+        with patch.object(rp.mesh_slabs, "decompose", return_value=decomposition):
+            record = rp._plan_slabs(
+                groups,
+                [],
+                frame,
+                "XY",
+                {"slab_constancy_tolerance_mm": 0.05},
+                ([], []),
+                None,
+                set(),
+                {"rule": "datum-primary-axis"},
+                2.0,
+            )
+        return groups, record
+
+    def test_a_gate_on_the_top_slab_leaves_the_stack_below_it_standing(self) -> None:
+        groups, record = self._plan({2})
+        self.assertTrue(record["usable"])
+        self.assertIsNone(record["gate"])
+        self.assertEqual(2, len(groups))
+        self.assertEqual(["new-body", "join"], [group["operation"] for group in groups])
+        self.assertEqual([[], [groups[0]["id"]]], [group["dependencies"] for group in groups])
+
+    def test_a_gate_between_two_surviving_slabs_refuses_the_decomposition(self) -> None:
+        groups, record = self._plan({1})
+        self.assertFalse(record["usable"])
+        self.assertEqual("slab-stack-discontinuous", record["gate"])
+        self.assertIn("slab-stack-discontinuous", ms.SLAB_GATES)
+        self.assertIn("would fuse nothing", record["detail"])
+        # The single extrude the caller planned is untouched, and no region is
+        # taken away from it: the gap is a reason not to decompose, not a
+        # reason to stop claiming the material.
+        self.assertEqual(1, len(groups))
+        self.assertEqual("sketch-extrude-base", groups[0]["id"])
+        self.assertEqual({}, record["_gated"])
+
+
 if __name__ == "__main__":
     unittest.main()
