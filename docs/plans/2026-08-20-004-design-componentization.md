@@ -187,6 +187,19 @@ record** (product's C1): a total map from the region tree's terminal
 partition onto owner classes {base, thing-k, interface-j, residual}, where
 `residual` includes the below-support and unclaimed populations, itemized.
 
+- **The interface band is a cut of the region tree, not a filter over it.**
+  The band is distance-defined (§4.1 selects triangles within δ of an accepted
+  base face), so it runs through terminal regions rather than along their
+  boundaries, and a map from the *existing* terminals onto owner classes
+  cannot express it: the region would owe its band triangles to `interface-j`
+  and the rest to a thing or the base, which no single owner satisfies. So
+  `plan-decomposition` **refines the tree first**: a terminal the band crosses
+  is split at the band boundary into two terminals (`interface-split`, under
+  the same `derived_from` schema the thing sub-meshes use, both parts carrying
+  their parent's identity and their own triangle lists), and the partition is
+  taken over the refined terminals. Areas conserve across the split by
+  construction, which is what makes the audit below satisfiable; nothing owns
+  a fraction of a region, and nothing is owned at two granularities.
 - **The partition invariant at assembly level is owned by the
   `plan-decomposition` stage record**, which asserts it exactly once (every
   terminal region — hence every triangle — has exactly one owner), the same
@@ -268,11 +281,22 @@ layers, cheapest first:
 2. **The declared escalation floor.** When the witness exceeds a declared
    floor (area fraction in persistent chains, with rationale, through
    `_declared_number`), the decomposed reading is *attempted and compared*
-   even though the monolithic reading fit. The comparison is the existing
-   parsimony/F-test idiom: monolithic vs decomposed on (residual, parameter
-   count, coverage), declared statistic, declared margin. The verdict —
-   `monolithic-preferred` or `decomposition-preferred-by-parsimony` — is
-   recorded either way.
+   even though the monolithic reading fit. **Not the existing F-test.** That
+   statistic (`mesh_segmentation`'s parsimony test) is nested-only: it
+   compares primitive kinds where one model's parameter space contains the
+   other's, evaluated on the *same* points. These two candidates are neither —
+   different topology, and different triangle populations once the interface
+   band is removed and inferred closure is added — so its p-value would have
+   no interpretation and could select or suppress componentization on
+   arithmetic rather than on evidence. The comparison is instead a **held-out
+   score over identical observed support**: both readings are scored on the
+   same triangle set (the observed triangles, band and inferred-closure
+   triangles excluded from both), on held-out samples not used to fit either,
+   as declared RMS deviation per triangle plus a declared parameter-count
+   penalty and a declared margin — no distributional claim, and both terms
+   caller-declared through `_declared_number` with rationale. The verdict —
+   `monolithic-preferred` or `decomposition-preferred-on-held-out` — is
+   recorded either way, with the support size and both scores beside it.
 3. **The claim rule.** Decomposition is *claimed* over a fitting monolithic
    reading only when the comparison is decisive by its declared margin, or
    the spec declares `decomposition: prefer-things` (geometry's policy
