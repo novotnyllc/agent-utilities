@@ -471,6 +471,16 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
   array *in* `fit.json`, covered by the record's own digest like everything
   else in it, and `cli.py` needs no new output path — which is why it is
   absent from the file list below rather than forgotten from it.
+- **The size gate is on the *compact* encoding, and PR 1 changes the encoding.**
+  `_cmd_fit_regions` writes `json.dumps(..., indent=2)`, which puts every
+  integer on its own indented line: a 524,614-entry permutation serializes to
+  about 6.2 MB that way even as the identity, so an indented record cannot
+  reach 1.5 MB whatever is in it. PR 1 therefore writes the two bulk arrays —
+  the permutation and each region's range pair — on one line each
+  (`separators=(",", ":")` for those values, the surrounding record still
+  indented so it stays readable and reviewable in a diff), and the 1.5 MB gate
+  is measured against that. If the compact encoding still misses it, the PR
+  revises the number with the measurement rather than shipping past it.
 - **The comparison this PR is gated on, stated exactly.** This PR replaces
   per-region index lists with `(offset, count)` ranges plus one permutation —
   which is where most of the 32.6 MB goes — so a byte comparison of
