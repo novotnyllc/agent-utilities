@@ -1269,6 +1269,10 @@ class MeshCliTests(unittest.TestCase):
         )
         self.assertEqual(0, code, errors)
         source = script.read_text(encoding="utf-8")
+        self.assertIn("BRepBody.pointContainment", source)
+        self.assertIn("MeshManager.createMeshCalculator", source)
+        # compareWith survives as corroboration and as the reason it cannot be
+        # the mechanism, never as the measurement.
         self.assertIn("PolygonMesh.compareWith", source)
         self.assertIn("neither certifies the other", source)
 

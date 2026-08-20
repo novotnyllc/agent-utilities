@@ -86,26 +86,46 @@ A success is labeled `"label": "faceted", "parametric": false`, and the report c
 
 `emit-mesh-deviation` grades a reconstruction against the immutable source and reports **two directions that answer different questions**. They are never collapsed into one "deviation: X mm" that reads as a fitness certificate:
 
-- **`reconstruction_to_source`** — how far the reconstructed surface sits from the nearest scanned surface. This answers whether the rebuild stayed on the scan. It says **nothing** about scanned detail the rebuild never modelled.
-- **`source_to_reconstruction`** — how far each scanned point sits from the reconstruction, and whether it lies inside the reconstructed solid (a native `BRepBody.pointContainment` query when the reconstruction is a B-Rep). This answers whether the rebuild captured what was scanned. It says **nothing** about material the rebuild added where the scan has no points.
+- **`source_to_reconstruction`** — how far each scanned vertex sits from the reconstruction's boundary, and whether it is inside or outside the reconstructed solid. This answers whether the rebuild captured what was scanned, and whether it put material where the scan says the part ends. It says **nothing** about rebuilt surface standing where the scan has no points at all. This is the signed direction, and the verdict rests on it.
+- **`reconstruction_to_source`** — how far the reconstructed surface sits from the nearest scanned surface. This answers whether the rebuild stayed on the scan. It is **unsigned**, so it carries `attribution: "not-established"`: a rebuilt sample far from every scanned triangle may be invented material or a region the rebuild deliberately simplified, and this direction does not decide which.
 
 The verdict is asymmetric: rebuilt material **outside** the source is *invented geometry* — a hard failure naming coordinates — while scanned detail absent from the rebuild is *omitted detail* — advisory, because a rebuild models only the geometry the edit requires. This is also why the wall beneath a dropped boss does not false-positive: it is omitted in one direction and dead-on in the other.
 
-Thresholds (`invented_material`, `omitted_detail`, `percentile_sample_limit`) are **declared per reconstruction with a rationale** and recorded with the verdict, never module constants. Percentiles may be computed from a strided sample; every comparison against a threshold scans the exact per-node values.
+Thresholds (`invented_material`, `omitted_detail`, `percentile_sample_limit`) are **declared per reconstruction with a rationale** and recorded with the verdict, never module constants. Percentiles may be computed from a strided sample; every comparison against a threshold scans the exact per-vertex values.
 
-### The sign convention is measured, not assumed
+### How the two directions are measured
 
-Nothing documents which sign `compareWith` uses for "outside", and assuming it is how an inverted convention turns invented material into a pass. The run reads the convention off the native containment query instead: every source node whose distance clears the invented-material threshold has an independent inside/outside answer from `BRepBody.pointContainment`, and the observed pairing decides whether positive or negative means outside. The observed convention and the sample tally are recorded in the verdict.
+Fusion answers no distance question this verdict can use — `measureMinimumDistance` returns zero for interior points against a body, measures the *untrimmed* surface against a face, and refuses a mesh outright; `PolygonMesh.compareWith` is preview and is not defined for a B-Rep's `TriangleMesh` at all. `references/unsupported.md` records each of those with the numbers that show it.
 
-If no reconstructed node lies further than the threshold from the source **in either direction**, no sign reading could change the answer, so the verdict passes without establishing a convention and says so.
+So the reconstruction's boundary comes from `MeshManager.createMeshCalculator()`, and every distance is a point-to-triangle computation inside the transaction, stdlib only:
 
-Three fail-closed cases produce no verdict rather than a number:
+- **`surfaceTolerance`** is one tenth of the declared `invented_material` threshold — the tessellation must not contribute a tenth of the deviation it is used to measure. It is recorded, and so is the fact that this Fusion refuses to report the tolerance it achieved.
+- **`maxSideLength`** is the **source mesh's own median triangle edge**, so the rebuilt surface is sampled at the scan's resolution and the sampling cannot step over a feature the scan was able to express. Direction 2's samples are that tessellation's own nodes.
+- Direction 1 uses **every** scanned vertex, not a sample.
 
-- **`deviation-capability`** — `PolygonMesh.compareWith` is a **preview** API (July 2026) and is the *only* API-level deviation mechanism Fusion has. `BRepBody.pointContainment` and both `PointContainment` members are equally required: containment is the only evidence here that does not rest on the sign, and it is what establishes the sign. A missing enum must never read as "nothing was outside", so each is a hard capability, never a conditional. The refusal names the API and the connected Fusion version.
-- **`deviation-unsigned-comparison`** — the connected Fusion returned only unsigned magnitudes, which cannot separate invented material from omitted detail.
-- **`sign-convention-unestablished`** — material lies beyond the threshold, but the containment probe and the returned signs did not agree on which sign means outside.
+`PolygonMesh.compareWith` is kept as corroboration only. Where it exists and runs, its maximum is recorded beside the native one and a disagreement is flagged; the native measurement stands.
 
-In all three the invented-material verdict is `not-established`, never a pass, and it carries no `count` or `max_mm` that could be misread as a zero.
+**The numerics run inside the transaction, not host-side.** The sides can only be read where the B-Rep is, so the transaction has to run in Fusion anyway; and it reads the source's vertices and triangles from the same `PolygonMesh` the hash-bound dump is written from, in one pass, with no transport in between. A dump is how those numbers reach a host process — when there is no host process the hash defends a journey nothing takes. The distance code is stdlib only: numpy inside Fusion is a probed capability (`emit-capability-probe` records it per Fusion version), and a verdict must not rest on a dependency that can be absent. It costs about 0.07 ms per query, flat from 800 to 12,800 triangles.
+
+### The containment convention is verified, not assumed
+
+The whole asymmetry turns on one mapping: **a scanned vertex inside the reconstruction means the rebuild put solid where the scan says the part ends — invented material; a scanned vertex outside means the scan carries something the rebuild does not reach — omitted detail. `PointOnPointContainment` is neither, and measures zero.** An inverted reading would report invented material as omitted detail and pass.
+
+So the transaction proves it on the actual body before reading a side, against two answers known by construction:
+
+1. a point pushed a full bounding-box diagonal beyond the body's own bounding box must read outside, whatever the enum is named;
+2. a point stepped `invented_material` along a tessellation facet's normal and a point stepped the same distance against it must straddle that facet — one inside, one outside — and **both must measure that distance from the boundary**, by the same point-to-triangle code the verdict uses. The facet is the largest one whose inradius clears twice the step, so no neighbouring facet can be the nearer boundary.
+
+The probe, its epsilon, its tolerance and its measured numbers are recorded under `containment_convention`, with `sign_convention_verified`. When it does not reproduce, the run fails closed.
+
+Four fail-closed cases produce no verdict rather than a number:
+
+- **`deviation-capability`** — `BRepBody.pointContainment`, all three `PointContainment` members, `BRepBody.meshManager` and `MeshManager.createMeshCalculator` are each hard capabilities. A missing enum must never read as "nothing was outside", so each is checked by name and never conditionally. The refusal names the API and the connected Fusion version.
+- **`tessellation-failed`** — the reconstruction's boundary could not be produced, so there is nothing to measure against and nothing here is a zero.
+- **`deviation-comparison-empty`** — the source carries no vertices, no triangles, or no measurable edge.
+- **`sign-convention-unestablished`** — the containment probe did not reproduce its known answers on this body.
+
+In all of them the invented-material verdict is `not-established`, never a pass, and it carries no `count` or `max_mm` that could be misread as a zero.
 
 ## What the reconstruction pipeline builds
 

@@ -287,15 +287,27 @@ instances.
 
 ## Mesh deviation comparison (`PolygonMesh.compareWith`)
 
-**Status:** Supported where present, and **preview-gated**.
+**Status:** Unusable for the case it exists for, and **preview-gated**.
 
-`PolygonMesh.compareWith(other, transform, transformOther)` (July 2026) returns the signed distance from every node of one mesh to the closest point on another, in centimetres. It is the **only** API-level deviation mechanism in Fusion, it has no UI equivalent, and like every mesh feature class it is flagged preview — Autodesk's own guidance is never to deliver programs that use preview capabilities.
+`PolygonMesh.compareWith(other, transform, transformOther)` (July 2026) returns the signed distance from every node of one mesh to the closest point on another, in centimetres. It is flagged preview, like every mesh feature class, and Autodesk's own guidance is never to deliver programs that use preview capabilities.
 
-`fusion-design emit-mesh-deviation` therefore fails closed rather than degrading:
+It also **cannot grade a B-Rep reconstruction at all**, which is the primary case. `compareWith` is defined on `PolygonMesh`; only `MeshBody.mesh` returns one. Everything a `BRepBody` offers through its `meshManager` is a `TriangleMesh`, and on Fusion 2705.0.108 `hasattr(adsk.fusion.TriangleMesh, "compareWith")` is **`False`**. A reconstruction is a B-Rep, so the comparison was never reachable for it.
 
-- when `compareWith` is absent, the report is `deviation-capability` with the API name and the connected Fusion version — never a silent skip and never a fabricated number;
-- when the connected Fusion returns only unsigned magnitudes, or when the sign convention cannot be established by probing `BRepBody.pointContainment` against the returned signs, invented material cannot be separated from omitted detail, so the invented-material verdict is reported `not-established` rather than as a pass. The polarity is never assumed: nothing documents it, and assuming it turns invented material into a pass under an inverted convention;
-- the two directions are reported as distinct questions and are never collapsed into a single "deviation: X mm". A small maximum deviation from the reconstruction to the scan does not establish that the reconstruction captured every scanned feature.
+`fusion-design emit-mesh-deviation` therefore measures both directions itself, with released APIs, and keeps `compareWith` only as a **corroboration** path: it runs when both bodies happen to expose a `PolygonMesh` that has it, its result is recorded beside the native measurement, and a disagreement is flagged rather than resolved in `compareWith`'s favour. When it is unavailable the report says so by name and the verdict is unaffected.
+
+## Point-to-surface and point-to-mesh distance
+
+**Status:** Both unsupported for this question; measured, not assumed.
+
+Every one of these was tried on Fusion 2705.0.108 and the numbers are why the deviation verdict computes its own distances:
+
+- `MeasureManager.measureMinimumDistance(point, BRepBody)` returns **zero for any point inside the solid** — and a scanned vertex inside the reconstruction is exactly the invented-material case the verdict has to size.
+- `MeasureManager.measureMinimumDistance(point, BRepFace)` measures the face's **untrimmed** underlying surface. On a box with a boss, a point 3 mm inside the hole of the annular top face measured **0.0 mm** to that face. `MeasureResults.positionOne` came back as the query point, so the answer cannot even be post-filtered against `isParameterOnFace`.
+- `MeasureManager.measureMinimumDistance(point, MeshBody)` raises `3 : measurement failed`, and against a `PolygonMesh` or a display `TriangleMesh` it raises `3 : invalid argument geometryTwo`. A closed mesh fares no better than an open one.
+
+So the reconstruction's boundary is taken from `MeshManager.createMeshCalculator()` at a declared `surfaceTolerance` and `maxSideLength`, and every distance is a point-to-triangle computation in the transaction, stdlib only. The tessellation is an approximation of the exact B-Rep, bounded by that tolerance, and the report carries the number.
+
+`TriangleMesh.surfaceTolerance` raises `2 : InternalValidationError : res` rather than reporting what was achieved, so the report records the requested tolerance and states plainly that the achieved one was not reported — it never copies the request into the achieved slot.
 
 Facet ceilings are likewise never hardcoded: the widely-cited 10,000/50,000 numbers are unverified and version-specific, so the faceted refusal ladder quotes `errorOrWarningMessage`/`healthState` from Fusion itself. `MeshConvertFeatures.add` and `MeshGenerateFaceGroupsFeatures.add` are documented to return null for non-parametric operations even when the operation succeeded, and the emitted transaction handles that rather than assuming a feature object.
 
