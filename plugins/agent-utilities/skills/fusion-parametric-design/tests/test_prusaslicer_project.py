@@ -551,6 +551,43 @@ class PrinterGeometryTests(unittest.TestCase):
             config = _config_root(Path(temporary), printer_ini="bed_shape = 0x0,200x0,200x180,0x180\n")
             self.assertIsNone(printer_geometry("Original Prusa XL - 5T", config)["max_print_height_mm"])
 
+    def test_declared_but_empty_max_print_height_fails_closed(self) -> None:
+        # An empty value must not silently disable the height check.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(
+                Path(temporary), printer_ini="bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height =\n"
+            )
+            with self.assertRaisesRegex(ValueError, "expected a positive number"):
+                printer_geometry("Original Prusa XL - 5T", config)
+
+    def test_vendor_bundles_resolve_in_separate_namespaces(self) -> None:
+        # Two vendors both define *common*; AlphaVendor's printer must never
+        # inherit BetaVendor's bed even though "BetaVendor" sorts later and a
+        # flattened section map would let it overwrite the abstract parent.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "PrusaSlicer"
+            (config / "vendor").mkdir(parents=True)
+            (config / "PrusaSlicer.ini").write_text(
+                "[presets]\nprinter = Alpha One\n"
+                "[vendor:AlphaVendor]\nmodel:A1 = 0.4\n"
+                "[vendor:BetaVendor]\nmodel:B1 = 0.4\n",
+                encoding="utf-8",
+            )
+            (config / "vendor" / "AlphaVendor.ini").write_text(
+                "[printer:*common*]\nbed_shape = 0x0,100x0,100x90,0x90\nmax_print_height = 80\n"
+                "[printer:Alpha One]\ninherits = *common*\nprinter_model = A1\nprinter_variant = 0.4\n",
+                encoding="utf-8",
+            )
+            (config / "vendor" / "BetaVendor.ini").write_text(
+                "[printer:*common*]\nbed_shape = 0x0,999x0,999x999,0x999\nmax_print_height = 999\n"
+                "[printer:Beta One]\ninherits = *common*\nprinter_model = B1\nprinter_variant = 0.4\n",
+                encoding="utf-8",
+            )
+            geometry = printer_geometry("Alpha One", config)
+            self.assertEqual(100.0, geometry["bed_width_mm"])
+            self.assertEqual(90.0, geometry["bed_depth_mm"])
+            self.assertEqual(80.0, geometry["max_print_height_mm"])
+
 
 class BedPlacementTests(unittest.TestCase):
     """Deterministic placement within the resolved bed, fail-closed on overflow."""

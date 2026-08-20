@@ -282,19 +282,22 @@ def _resolve_printer_field(
     A section's own value wins; otherwise parents are consulted last-to-first
     (assumed from PrusaSlicer's bundle semantics, where later parents override
     earlier ones -- not observable in the real config, whose multi-parent
-    ``inherits`` never define the same field twice). Cycles and unknown parents
-    resolve to None, never an exception.
+    ``inherits`` never define the same field twice). A declared-but-empty value
+    is terminal, not a fall-through to a parent: the caller sees the empty
+    string and fails closed, rather than this resolver inheriting past a value
+    the section deliberately blanked. Cycles and unknown parents resolve to
+    None, never an exception.
     """
     section = sections.get(name)
     if section is None or name in seen:
         return None
     value = section.get(field)
-    if value:
+    if value is not None:
         return value
     parents = [parent.strip() for parent in section.get("inherits", "").split(";") if parent.strip()]
     for parent in reversed(parents):
         value = _resolve_printer_field(parent, sections, field, seen | {name})
-        if value:
+        if value is not None:
             return value
     return None
 
@@ -403,29 +406,38 @@ def resolve_presets(
     )
 
 
-def _geometry_sections(config_root: Path) -> dict[str, dict[str, str]]:
-    """Printer sections usable for field resolution: vendor bundles plus user inis.
+def _geometry_namespaces(config_root: Path) -> list[dict[str, dict[str, str]]]:
+    """Per-vendor resolution namespaces: one section map per vendor bundle.
 
-    User preset ``.ini`` files are flat ``key = value`` documents (verified: a
-    real user printer ini carries ``bed_shape``, ``max_print_height``, and an
-    ``inherits`` line naming its system parent). They shadow same-named vendor
-    sections, matching PrusaSlicer's own precedence. An unreadable file simply
-    contributes nothing; the caller fails closed if the needed field is missing.
+    Vendor bundles are deliberately *not* flattened into one mapping: two
+    vendors may both define an abstract parent like ``*common*``, and a merged
+    map would let one vendor's printers inherit another vendor's bed. Each
+    namespace is one vendor's sections plus the user preset ``.ini`` files
+    (flat ``key = value`` documents -- verified: a real user printer ini
+    carries ``bed_shape``, ``max_print_height``, and an ``inherits`` line
+    naming its system parent), user entries shadowing same-named vendor
+    sections to match PrusaSlicer's own precedence. A final user-only namespace
+    covers configs with no readable vendor bundle. Order is sorted by vendor
+    name, so resolution is deterministic. An unreadable file contributes
+    nothing; the caller fails closed if the needed field never resolves.
     """
-    sections: dict[str, dict[str, str]] = {}
-    for vendor in sorted(_enabled_vendor_models(config_root)):
-        try:
-            sections.update(_vendor_bundle_printer_sections(config_root / "vendor" / f"{vendor}.ini"))
-        except (OSError, ValueError):
-            continue
+    user: dict[str, dict[str, str]] = {}
     directory = config_root / "printer"
     if directory.is_dir():
         for entry in sorted(directory.glob("*.ini")):
             try:
-                sections[entry.stem] = _printer_fields(entry.read_text(encoding="utf-8", errors="replace").splitlines())
+                user[entry.stem] = _printer_fields(entry.read_text(encoding="utf-8", errors="replace").splitlines())
             except OSError:
                 continue
-    return sections
+    namespaces: list[dict[str, dict[str, str]]] = []
+    for vendor in sorted(_enabled_vendor_models(config_root)):
+        try:
+            bundle = _vendor_bundle_printer_sections(config_root / "vendor" / f"{vendor}.ini")
+        except (OSError, ValueError):
+            continue
+        namespaces.append({**bundle, **user})
+    namespaces.append(dict(user))
+    return namespaces
 
 
 def printer_geometry(printer_name: str, config_root: str | Path) -> dict[str, Any]:
@@ -438,12 +450,19 @@ def printer_geometry(printer_name: str, config_root: str | Path) -> dict[str, An
     polygonal -- a deliberate simplification. Fails closed when ``bed_shape``
     cannot be resolved or parsed: a project is never laid out on an assumed
     bed. ``max_print_height`` (a plain number, verified 270/360) is optional --
-    absent means the height check is skipped -- but a present, unparseable
-    value fails closed.
+    absent means the height check is skipped -- but a present, unparseable or
+    empty value fails closed. Both fields are read from the first vendor
+    namespace (sorted order, user inis shadowing) where ``bed_shape`` resolves,
+    so a printer never mixes one vendor's bed with another's height.
     """
     root = Path(config_root).expanduser()
-    sections = _geometry_sections(root)
-    raw_shape = _resolve_printer_field(printer_name, sections, "bed_shape")
+    sections: dict[str, dict[str, str]] = {}
+    raw_shape: str | None = None
+    for namespace in _geometry_namespaces(root):
+        raw_shape = _resolve_printer_field(printer_name, namespace, "bed_shape")
+        if raw_shape is not None:
+            sections = namespace
+            break
     if not raw_shape:
         raise ValueError(
             f"bed_shape for printer preset {printer_name!r} could not be resolved from {str(root)!r} "
