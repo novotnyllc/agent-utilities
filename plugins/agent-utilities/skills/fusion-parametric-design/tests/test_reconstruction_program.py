@@ -1203,6 +1203,18 @@ class LoopRoleTests(unittest.TestCase):
         # The island's parent is the cavity it stands in, not the outer boundary.
         self.assertEqual(1, roles[2]["parent"])
 
+    def test_a_section_fraction_list_of_only_the_midpoint_is_refused(self) -> None:
+        # The reference section *is* the midpoint, so 0.5 compares it with
+        # itself: a spec declaring only that validates as a constancy guard and
+        # performs none.
+        spec = fx.spec(slabs=True)
+        spec["thresholds"]["slab_evidence"]["slab_section_fractions"]["value"] = [0.5]
+        codes = {issue.code for issue in rp.validate_program_spec(spec)}
+        self.assertIn("threshold-invalid-value", codes)
+        # A list that also carries a real station is fine.
+        spec["thresholds"]["slab_evidence"]["slab_section_fractions"]["value"] = [0.25, 0.5]
+        self.assertEqual([], rp.validate_program_spec(spec))
+
     def test_slabs_that_agree_on_geometry_and_not_on_roles_do_not_coalesce(self) -> None:
         """Congruent loops are not the same section.
 

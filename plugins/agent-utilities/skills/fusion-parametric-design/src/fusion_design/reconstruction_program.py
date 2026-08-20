@@ -2417,6 +2417,20 @@ def _declared_fractions(issues: list[ValidationIssue], raw: Any, path: str) -> N
                 "grazes a cap.",
             )
         )
+    elif not any(float(entry) != 0.5 for entry in value):
+        # The reference section *is* the midpoint, so 0.5 compares it with
+        # itself and every check agrees by construction. A spec declaring only
+        # 0.5 validates as a constancy guard and performs none, which is a
+        # measurement that cannot fail rather than one that passed.
+        issues.append(
+            ValidationIssue(
+                "threshold-invalid-value",
+                f"{path}.value",
+                "at least one fraction must differ from 0.5: the slab is already sectioned at its "
+                "midpoint, so 0.5 compares that section with itself and the constancy guard checks "
+                "nothing.",
+            )
+        )
     rationale = raw.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         issues.append(

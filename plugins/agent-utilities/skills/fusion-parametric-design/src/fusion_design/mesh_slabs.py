@@ -412,11 +412,20 @@ def congruence(
     centres_second = [polygon_centroid(loop) for loop in second]
     areas_first = [abs(_signed_area(loop)) for loop in first]
     areas_second = [abs(_signed_area(loop)) for loop in second]
-    scale = max(areas_first + areas_second + [1.0])
+    # The area term is normalised by *each pair's own* size, not by the
+    # section's largest loop. Normalising by the section made a big outer
+    # boundary swamp the term and let two differently sized inner loops pair on
+    # centroid alone. Hausdorff would be the direct geometric cost, and it is
+    # deliberately not the one used here: it is O(n*m) per pair over every pair
+    # of a section that can carry tens of loops of hundreds of points, inside a
+    # per-slab loop, and centroid-plus-relative-area separates the cases that
+    # were measured to go wrong. The Hausdorff still decides *agreement* on the
+    # pairing this produces.
     costs = sorted(
         (
             math.dist(centres_first[i], centres_second[j])
-            + abs(areas_first[i] - areas_second[j]) / scale,
+            + abs(areas_first[i] - areas_second[j])
+            / max(areas_first[i], areas_second[j], 1e-09),
             i,
             j,
         )
@@ -646,6 +655,7 @@ def decompose(
         evidence, projected = measure(mid)
         checks = []
         constant = True
+        station_gates: set[str] = set()
         for fraction in fractions:
             other_station = lower["station"] + height * fraction
             other_evidence, other_projected = measure(other_station)
@@ -659,6 +669,15 @@ def decompose(
                 # reports differing verdicts for a slab that is constant.
                 here_verdicts = [loop["verdict"] for loop in evidence["loops"]]
                 there_verdicts = [loop["verdict"] for loop in other_evidence["loops"]]
+                # Every station's own evidence gates, not only the midpoint's.
+                # A quarter-section loop can carry `slab-wall-unattributed`
+                # while keeping the midpoint's material verdict, and the slab's
+                # gates are derived from the midpoint loops alone -- so that
+                # station's failure was measured, recorded on nothing, and the
+                # slab's regions were claimed as reconstructed.
+                station_gates.update(
+                    gate for loop in other_evidence["loops"] for gate in loop["gates"] or ()
+                )
                 verdict["agrees"] = all(
                     here_verdicts[index] == there_verdicts[other]
                     for index, other in verdict["pairs"]
@@ -710,7 +729,9 @@ def decompose(
                     and not any(loop["role"] == "unclassified" for loop in loops)
                     else ["slab-loops-unclassified"]
                 )
-                + sorted({gate for loop in loops for gate in loop["gates"] or ()}),
+                + sorted(
+                    {gate for loop in loops for gate in loop["gates"] or ()} | station_gates
+                ),
                 "relation_to_below": "first",
                 "_projected": projected,
                 "_outer": outer,
