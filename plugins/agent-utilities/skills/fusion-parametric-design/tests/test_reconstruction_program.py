@@ -1184,6 +1184,38 @@ class LoopRoleTests(unittest.TestCase):
         # The island's parent is the cavity it stands in, not the outer boundary.
         self.assertEqual(1, roles[2]["parent"])
 
+    def test_a_loop_whose_walls_nobody_owns_is_not_called_a_cavity(self) -> None:
+        """`cavity` means "these walls belong to no bore", and that needs walls.
+
+        A fit record written before `triangle_indices` existed leaves every
+        loop with no wall regions, so the bore test could never be satisfied
+        and every hole in the section was labelled a cavity -- on a part where
+        the same program separately plans that hole's cylinder as a bore. That
+        is missing evidence read as evidence.
+        """
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]
+        unowned = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", []),
+                self._loop(1, 1, "material-outside", []),
+            ],
+            [square, inner],
+            {"bore-a"},
+        )
+        self.assertEqual(["outer", "unclassified"], [row["role"] for row in unowned])
+        # With no bore planned anywhere, there is no bore for an unattributed
+        # loop to be one of, and `cavity` is a statement again.
+        no_bores = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", []),
+                self._loop(1, 1, "material-outside", []),
+            ],
+            [square, inner],
+            set(),
+        )
+        self.assertEqual(["outer", "cavity"], [row["role"] for row in no_bores])
+
     def test_a_loop_with_no_material_verdict_is_unclassified_not_guessed(self) -> None:
         square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
         roles = ms.classify_loops(

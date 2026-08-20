@@ -795,8 +795,49 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
     # A hole in the surface is what makes the sign meaningless; a self-touch is
     # not. See the docstring -- this is the per-edge locality, and it is the only
     # place the two kinds of dirt are told apart.
-    winding = ("outward" if volume > 0.0 else "inward") if boundary == 0 and volume != 0.0 else None
+    #
+    # But a self-touch can also be two *shells* meeting at an edge, and one
+    # global sign is a claim about one solid. Two closed shells wound opposite
+    # ways share no boundary edge, so the total signed volume takes the larger
+    # one's sign and flips every clean loop on the smaller -- swapping its
+    # material verdicts. So the shells are separated over the manifold edges
+    # and their signs compared: they agree, and the global sign is one solid's,
+    # or they do not, and this mesh carries no global winding at all.
+    parent = list(range(len(faces)))
+
+    def _root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for key, members in incident.items():
+        if len(members) != 2:
+            continue
+        first, second = _root(members[0]), _root(members[1])
+        if first != second:
+            parent[first] = second
+    shells: dict[int, float] = {}
+    for index, (a, b, c) in enumerate(faces):
+        pa, pb, pc = verts[a], verts[b], verts[c]
+        if _unit(_cross(_sub(pb, pa), _sub(pc, pa))) is None:
+            continue
+        root = _root(index)
+        shells[root] = shells.get(root, 0.0) + _dot(pa, _cross(pb, pc)) / 6.0
+    signs = {value > 0.0 for value in shells.values() if value != 0.0}
+    # Disagreement is only evidence of *two solids* when the shells are joined
+    # by a non-manifold edge. A solid with an internal void is two disjoint
+    # shells whose signs disagree by construction -- the void's is inward --
+    # and that is one solid, correctly wound, which this must not withhold.
+    shells_agree = len(signs) <= 1 or non_manifold == 0
+    winding = (
+        ("outward" if volume > 0.0 else "inward")
+        if boundary == 0 and volume != 0.0 and shells_agree
+        else None
+    )
     return {
+        "shell_count": len(shells),
+        "shells_agree": shells_agree,
         "closed": closed,
         "consistently_wound": reversed_edges == 0,
         "signed_volume": volume,

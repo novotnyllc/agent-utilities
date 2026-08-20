@@ -439,7 +439,18 @@ def classify_loops(
         if verdict == "material-inside" and depth % 2 == 0:
             role = "outer" if depth == 0 else "island"
         elif verdict == "material-outside" and depth % 2 == 1:
-            role = "bore" if walls and walls <= bore_regions else "cavity"
+            # `cavity` is what "these walls belong to no bore this program
+            # cuts" means, and that is only a statement when the walls are
+            # *known*. A fit record written before `triangle_indices` existed
+            # leaves every loop with no wall regions at all, and calling those
+            # loops cavities would label a real bore -- one the same program
+            # separately plans as a hole -- on the absence of evidence.
+            if walls:
+                role = "bore" if walls <= bore_regions else "cavity"
+            elif not bore_regions:
+                # No bore is planned anywhere on this part, so there is no bore
+                # for an unattributed loop to be one of.
+                role = "cavity"
         classified.append(
             {
                 "polyline_index": loop["polyline_index"],

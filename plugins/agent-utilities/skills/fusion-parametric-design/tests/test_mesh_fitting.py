@@ -550,6 +550,35 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         self.assertEqual(outward["verdict"], inward["verdict"])
         self.assertEqual(outward["consensus_fraction"], inward["consensus_fraction"])
 
+    def test_two_shells_joined_at_an_edge_carry_no_one_global_winding(self) -> None:
+        """One sign is a claim about one solid, and a shared edge makes two.
+
+        Two closed shells wound opposite ways and touching at an edge have no
+        boundary edge between them, so the total signed volume simply takes the
+        larger one's sign -- and every clean loop on the smaller shell is then
+        flipped, swapping its material verdicts. A solid with an internal void
+        is also two shells of opposite sign, but they are *disjoint*, and that
+        one is one solid and must keep its winding.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        # The void: disjoint shells, opposite signs, still one solid.
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, reversed_tris(BOX_TRIS)))
+        void = mesh_winding_evidence(verts, tris)
+        self.assertEqual(0, void["non_manifold_edges"])
+        self.assertEqual("outward", void["winding"])
+
+        # Two shells sharing a face, and so its four edges: every one of them
+        # carries four triangles and is non-manifold, and the two shells are
+        # separate components over what is left.
+        beside = [(x + 1.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (beside, reversed_tris(BOX_TRIS)))
+        touching = mesh_winding_evidence(verts, tris)
+        self.assertGreater(touching["non_manifold_edges"], 0)
+        self.assertFalse(touching["shells_agree"])
+        self.assertIsNone(touching["winding"])
+
     def test_a_cavity_reads_as_material_outside_its_own_loop(self) -> None:
         # A closed shell with a void: the outer box wound outward, an inner box
         # wound inward. That is what a solid with an internal cavity *is* as a
