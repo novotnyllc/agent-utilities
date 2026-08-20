@@ -1504,12 +1504,38 @@ def run(context):
         # a reason. A 0.1 mm recess is not an omitted-detail advisory under a
         # 0.25 mm declaration just because it cleared the 0.05 mm one.
         omitted_inside_source = 0
+        omitted_unresolved = 0
         for point, distance in zip(sample_points, sample_distances):
             if distance <= omitted_threshold:
                 continue
-            if source_grid.encloses(point[0], point[1], point[2]):
+            verdict = source_grid.encloses(point[0], point[1], point[2])
+            if verdict is None:
+                omitted_unresolved += 1
+            elif verdict:
                 omitted_inside_source += 1
-        if omitted_inside_source and not omitted["count"]:
+        if omitted_unresolved:
+            # The two thresholds are declared independently and the validator
+            # permits `omitted_detail` below `invented_material`. A sample
+            # between them is not seen by the classification above, so a `None`
+            # here -- an open source mesh, or a ray the parity cannot answer --
+            # would have gone by as "not omitted" and the run would have passed
+            # over a deviation past the omitted-detail threshold that nothing
+            # classified. Recorded on the verdict below and failed closed with
+            # it.
+            established = False
+            omitted = dict(
+                omitted,
+                severity="not-established",
+                unresolved_reconstruction_samples=omitted_unresolved,
+                meaning=(
+                    str(omitted_unresolved)
+                    + " reconstruction samples past the omitted-detail threshold could not be "
+                    "classified against the source solid -- an open source mesh has no inside -- "
+                    "so whether they are omitted detail is not established, and neither is the "
+                    "absence of it."
+                ),
+            )
+        elif omitted_inside_source and not omitted["count"]:
             # Omission the scanned *vertices* did not see. A deep narrow recess
             # whose rim carries no scanned node leaves `outside_gaps` at zero,
             # so the signed direction counts nothing -- and the reverse

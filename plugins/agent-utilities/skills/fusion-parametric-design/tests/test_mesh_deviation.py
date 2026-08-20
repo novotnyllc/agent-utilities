@@ -566,6 +566,40 @@ class DeviationVerdictTests(unittest.TestCase):
         self.assertEqual(1, report["containment_unknown"]["nodes"])
         self.assertNotIn("verdict", report)
 
+    def test_a_sample_past_the_omitted_threshold_that_nobody_could_classify_fails(self) -> None:
+        """The two thresholds are independent, and the validator permits either order.
+
+        With `omitted_detail` *below* `invented_material`, a sample between
+        them is never seen by the invented-material classification -- so a ray
+        the parity cannot answer went by as "not omitted" and the run passed
+        over a deviation past the omitted-detail threshold that nothing had
+        classified.
+        """
+        spec = copy.deepcopy(DEVIATION_SPEC)
+        spec["thresholds_mm"]["invented_material"] = 5.0
+        spec["thresholds_mm"]["omitted_detail"] = 0.05
+        spec["rationale"] = "deliberately inverted: omitted detail held tighter than invention."
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)
+        # Drop the +x face, so the scan is open and has no inside at all.
+        kept = []
+        for offset in range(0, len(triangles), 3):
+            corners = [vertices[triangles[offset + step]] for step in range(3)]
+            if all(abs(corner[0] - 20.0) < 1e-09 for corner in corners):
+                continue
+            kept.extend(triangles[offset : offset + 3])
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(vertices, kept),
+                reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 8.0)),
+                spec=spec,
+            ),
+            failure="invented-material-unclassified",
+        )[0]
+        self.assertFalse(report["ok"])
+        omitted = report["verdict"]["omitted_detail"]
+        self.assertEqual("not-established", omitted["severity"])
+        self.assertGreater(omitted["unresolved_reconstruction_samples"], 0)
+
     def test_an_omission_below_its_own_threshold_is_not_an_advisory(self) -> None:
         # The classification uses the *invented* threshold, because that is the
         # question it answers. Turning those samples into an omitted-detail
