@@ -728,6 +728,13 @@ class AxisCandidate:
     #: direction; ``"propagated"`` -- combined first-order from the record's
     #: measured sigmas because this direction is derived from more than one fit.
     direction_sigma_basis: str = "measured"
+    #: A *deterministic* angular spread this direction can jump by, in degrees,
+    #: kept apart from the sigma because it is not a measurement error: it is
+    #: the whole distance the direction moves if a different member of a merged
+    #: parallel group becomes its representative. A confidence multiple applies
+    #: to a standard deviation and not to a jump, so this is added after the
+    #: multiplication rather than before it.
+    direction_spread_deg: float = 0.0
 
     def sort_key(self) -> tuple[Any, ...]:
         # Total order: score, then supporting area, then the canonicalised
@@ -747,6 +754,7 @@ class AxisCandidate:
             "basis": self.basis,
             "direction_sigma_deg": self.direction_sigma_deg,
             "direction_sigma_basis": self.direction_sigma_basis,
+            "direction_spread_deg": self.direction_spread_deg,
         }
 
 
@@ -792,7 +800,11 @@ def _first_rival(
 
 
 def _canonical_cell(
-    direction: Vec3, sigma_deg: float | None, grid_deg: float, sigma_multiple: float | None
+    direction: Vec3,
+    sigma_deg: float | None,
+    grid_deg: float,
+    sigma_multiple: float | None,
+    spread_deg: float = 0.0,
 ) -> tuple[int, int, int] | None:
     """``direction`` as integer cells on a ``grid_deg`` angular grid, or ``None``.
 
@@ -834,7 +846,12 @@ def _canonical_cell(
     # choice reproducible. So the distance a cell has to clear is the caller's
     # own declared `sigma_multiple`, the same confidence multiple the
     # relationship licences already turn a sigma into a tolerance with.
-    slack = math.sin(math.radians(min(float(sigma_deg) * sigma_multiple, 90.0)))
+    # The multiple applies to the sigma and to nothing else. A deterministic
+    # spread is already the whole jump; multiplying it by a confidence factor
+    # would demand clearance for an excursion nothing can make.
+    slack = math.sin(
+        math.radians(min(float(sigma_deg) * sigma_multiple + float(spread_deg), 90.0))
+    )
     half_cell = math.sin(math.radians(grid_deg) / 2.0)
     if slack >= half_cell:
         # The grid is not coarse compared with the uncertainty, which is the
@@ -923,6 +940,7 @@ def _decide_axis(
             candidate.direction_sigma_deg,
             angle_tolerance_deg,
             sigma_multiple,
+            candidate.direction_spread_deg,
         )
         if cell is None:
             raise _refuse(
@@ -1070,15 +1088,16 @@ def _merge_parallel(
             # spread, not just the representative's own. A member with no stated
             # sigma leaves the group with none, which is what makes it
             # ineligible for the canonical tie-break rather than quietly stable.
-            # Added, not combined in quadrature: the representative changing is
-            # a *discrete jump* of the whole spread, not an independent random
-            # error that partly cancels. After the jump the new representative
-            # is still uncertain by its own sigma, so the distance a cell has to
-            # clear is spread + sigma. A 0.8 deg jump with 0.15 deg members is
-            # 0.95, not the 0.814 quadrature would report.
+            # Carried *beside* the sigma, not folded into it. The
+            # representative changing is a discrete jump of the whole spread,
+            # not an independent random error that partly cancels, so the
+            # clearance a cell needs is `sigma * multiple + spread` -- and the
+            # confidence multiple belongs to the sigma alone. Folding it in
+            # multiplied the jump too, which demanded clearance for an
+            # excursion nothing can make.
             spread = max(_angle_deg(head.direction, member.direction) for member in members)
             sigmas = [member.direction_sigma_deg for member in members]
-            sigma = None if any(s is None for s in sigmas) else max(sigmas) + spread
+            sigma = None if any(s is None for s in sigmas) else max(sigmas)
             basis = "propagated"
         merged.append(
             replace(
@@ -1087,6 +1106,7 @@ def _merge_parallel(
                 area=total,
                 direction_sigma_deg=sigma,
                 direction_sigma_basis=basis,
+                direction_spread_deg=(spread if count > 1 else head.direction_spread_deg),
                 basis=(
                     head.basis
                     if count == 1
@@ -1247,6 +1267,7 @@ def _secondary_candidates(
     z: Vec3,
     angle_tolerance_deg: float,
     z_sigma_deg: float | None,
+    sigma_multiple: float | None,
 ) -> list[AxisCandidate]:
     """Planes containing the primary axis: their normal, orthogonalised, is X."""
     out: list[AxisCandidate] = []
@@ -1257,7 +1278,8 @@ def _secondary_candidates(
         normal, point = region.direction(), region.anchor()
         if normal is None or point is None:
             continue
-        if abs(_angle_deg(normal, z) - 90.0) > angle_tolerance_deg:
+        offset_from_parallel = abs(_angle_deg(normal, z) - 90.0)
+        if offset_from_parallel > angle_tolerance_deg:
             continue
         x = _unit(_sub(normal, _scale(z, _dot(normal, z))))
         if x is None:
@@ -1273,6 +1295,22 @@ def _secondary_candidates(
         # input the combined bound is unavailable, and an unavailable bound is
         # what makes the candidate ineligible for the canonical tie-break.
         plane_sigma = region.sigma("normal_deg")
+        combined = (
+            None
+            if plane_sigma is None or z_sigma_deg is None
+            else math.hypot(plane_sigma, z_sigma_deg)
+        )
+        # Being *in* this candidate set is itself a measurement against
+        # `angle_tolerance_deg`, and a plane 1.95 deg from perpendicular on
+        # a 2 deg tolerance is one a permitted perturbation drops out of --
+        # which changes what the canonical rule is choosing between, and so
+        # the axis, while the record calls the cell stable. A candidate
+        # whose own membership is not stable under its declared bound
+        # carries no sigma, which is what makes it ineligible for the
+        # tie-break rather than quietly certifiable.
+        eligible = combined is not None and (
+            offset_from_parallel + combined * sigma_multiple <= angle_tolerance_deg
+        )
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
@@ -1282,11 +1320,7 @@ def _secondary_candidates(
                 direction=_canonical_direction(x),
                 anchor=point,
                 basis="normal of a plane parallel to the primary axis, orthogonalised",
-                direction_sigma_deg=(
-                    None
-                    if plane_sigma is None or z_sigma_deg is None
-                    else math.hypot(plane_sigma, z_sigma_deg)
-                ),
+                direction_sigma_deg=combined if eligible else None,
                 direction_sigma_basis="propagated",
             )
         )
@@ -1468,7 +1502,9 @@ def derive_datum_frame(
         else math.hypot(placing_sigma, primary_anchor_sigma)
     )
 
-    secondary = _secondary_candidates(accepted, z, angle_tolerance_deg, winner.direction_sigma_deg)
+    secondary = _secondary_candidates(
+        accepted, z, angle_tolerance_deg, winner.direction_sigma_deg, sigma_multiple
+    )
     secondary_basis = "plane parallel to the primary axis"
     if not secondary:
         secondary = _secondary_from_second_axis(

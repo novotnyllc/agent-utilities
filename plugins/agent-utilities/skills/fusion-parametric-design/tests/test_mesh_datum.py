@@ -452,12 +452,14 @@ class DatumFrameTests(unittest.TestCase):
         # number, or the representative could change and the cell with it. The
         # untilted stack keeps the member sigma, which is the control.
         member = math.hypot(0.05, 0.05)
-        sigmas = sorted(entry["direction_sigma_deg"] for entry in pooled)
-        self.assertAlmostEqual(member, sigmas[0], places=9)
-        # Added, not in quadrature: the representative changing is a discrete
-        # jump of the whole spread, after which the new representative is still
-        # uncertain by its own sigma.
-        self.assertAlmostEqual(member + tilt, sigmas[-1], places=9)
+        # The sigma stays the members' own, and the deterministic jump is
+        # carried beside it: `_canonical_cell` needs `sigma * multiple + spread`
+        # of clearance, and the confidence multiple belongs to the sigma alone.
+        for entry in pooled:
+            self.assertAlmostEqual(member, entry["direction_sigma_deg"], places=9)
+        spreads = sorted(entry["direction_spread_deg"] for entry in pooled)
+        self.assertAlmostEqual(0.0, spreads[0], places=9)
+        self.assertAlmostEqual(tilt, spreads[-1], places=9)
 
     def test_a_pooled_member_with_no_sigma_leaves_the_stack_with_none(self) -> None:
         # One member nobody measured makes the whole merged direction
@@ -466,6 +468,28 @@ class DatumFrameTests(unittest.TestCase):
         for region in record["regions"]:
             if region["region_hash"] == fx.region_hash("x1"):
                 del region["fit"]["uncertainty"]["normal_deg"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
+    def test_a_wall_that_barely_qualifies_as_parallel_cannot_certify_a_cell(self) -> None:
+        """Membership in the candidate set is a measurement too.
+
+        A plane 1.95 deg from parallel to the primary axis is admitted by a
+        2 deg tolerance -- and a perturbation inside its own declared bound
+        drops it out again, which changes what the canonical rule is choosing
+        between and so changes the axis, while the record calls the cell
+        stable. A candidate whose own membership is not stable under its bound
+        carries no sigma, and the tie refuses.
+        """
+        record = _tied_lid()
+        radians = math.radians(1.95)
+        for region in record["regions"]:
+            if region["region_hash"] in (fx.region_hash("x0"), fx.region_hash("x1")):
+                region["fit"]["parameters"]["normal"] = [
+                    math.cos(radians), 0.0, math.sin(radians)
+                ]
         with self.assertRaises(ReconstructionRefused) as caught:
             derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
