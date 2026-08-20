@@ -30,6 +30,7 @@ DEVIATION_FAILURES = frozenset(
         "tessellation-failed",
         "sign-convention-unestablished",
         "invented-material",
+        "invented-material-unclassified",
     }
 )
 
@@ -174,6 +175,15 @@ UNSIGNED_DIRECTION_MEANING = (
     "invented material or a region the rebuild deliberately simplified, and this measurement does not "
     "decide which. The invented-material verdict rests on the signed source_to_reconstruction "
     "measurement, whose sign is verified against this body before it is read."
+)
+UNCLASSIFIED_MEANING = (
+    "No scanned vertex lies inside the reconstruction beyond the threshold, but the reconstruction's "
+    "own tessellation does reach past it from every scanned surface. A scan carries only the vertices "
+    "it captured: material invented *between* two of them leaves each one on the reconstruction's "
+    "boundary, so the signed direction measures zero while the unsigned one does not. That direction "
+    "cannot say whether this is invented material or deliberate simplification, so it does not fail "
+    "the run for invented material -- but it does disprove the absence of it, and the absence is what "
+    "a pass would claim. Classify these samples against a closed source mesh to settle it."
 )
 VERDICT_NOTE = (
     "These two numbers answer different questions and neither certifies the other. A small maximum "
@@ -440,7 +450,17 @@ class _TriangleGrid(object):
         ci = int(math.floor(x / cell))
         cj = int(math.floor(y / cell))
         ck = int(math.floor(z / cell))
-        ring = 0
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
+        # Every occupied cell lies in this box, so a ring below the box's own
+        # Chebyshev distance is empty by construction and a ring above it meets
+        # the box only where the two overlap. Without both, one query on a
+        # displaced reconstruction walks the empty space between the bodies cell
+        # by cell: at a 0.1 mm cell and 100 mm of displacement that is a
+        # thousand shells of up to 24 million lookups each, inside a transaction
+        # Fusion runs this for every node.
+        ring = max(
+            0, low_i - ci, ci - high_i, low_j - cj, cj - high_j, low_k - ck, ck - high_k
+        )
         # Everything in the grid is inside this many rings of the query cell, so
         # the loop terminates even for a point far outside the mesh.
         limit = self._ring_limit(ci, cj, ck)
@@ -454,9 +474,9 @@ class _TriangleGrid(object):
                     break
             if ring > limit:
                 break
-            for i in range(ci - ring, ci + ring + 1):
-                for j in range(cj - ring, cj + ring + 1):
-                    for k in range(ck - ring, ck + ring + 1):
+            for i in range(max(ci - ring, low_i), min(ci + ring, high_i) + 1):
+                for j in range(max(cj - ring, low_j), min(cj + ring, high_j) + 1):
+                    for k in range(max(ck - ring, low_k), min(ck + ring, high_k) + 1):
                         if ring > 0 and abs(i - ci) != ring and abs(j - cj) != ring and abs(k - ck) != ring:
                             continue
                         bucket = self.buckets.get((i, j, k))
@@ -469,7 +489,8 @@ class _TriangleGrid(object):
             ring += 1
         return None if best is None else math.sqrt(best)
 
-    def _ring_limit(self, ci, cj, ck):
+    def _extent_box(self):
+        """The occupied cells' bounding box, measured once."""
         if not hasattr(self, "_extent"):
             keys = list(self.buckets)
             self._extent = (
@@ -480,7 +501,10 @@ class _TriangleGrid(object):
                 max(key[1] for key in keys),
                 max(key[2] for key in keys),
             )
-        low_i, low_j, low_k, high_i, high_j, high_k = self._extent
+        return self._extent
+
+    def _ring_limit(self, ci, cj, ck):
+        low_i, low_j, low_k, high_i, high_j, high_k = self._extent_box()
         return max(
             abs(ci - low_i), abs(ci - high_i),
             abs(cj - low_j), abs(cj - high_j),
@@ -1063,9 +1087,21 @@ def run(context):
             raise RuntimeError("Deviation verdict failed closed: sign-convention-unestablished")
 
         invented_count = sum(1 for value in inside_depths if value > invented_threshold)
+        # The signed direction reads scanned *vertices*, and a scan carries only
+        # the ones it captured. Material invented between two of them leaves
+        # each on the reconstruction's boundary, so `inside_depths` stays at
+        # zero while the reconstruction's own nodes sit millimetres from any
+        # scanned surface -- and that direction is measured here, recorded, and
+        # was then read by nothing. It is unsigned, so it cannot establish
+        # invented material; it can and does disprove the absence of it, which
+        # is what a pass claims.
+        unclassified = report["reconstruction_to_source"]["beyond_invented_material_threshold"]
+        established = bool(invented_count) or not unclassified
         report["verdict"] = {
             "invented_material": {
-                "severity": "failure" if invented_count else "pass",
+                "severity": (
+                    "failure" if invented_count else "pass" if established else "not-established"
+                ),
                 "threshold_mm": invented_threshold,
                 "count": invented_count,
                 "max_mm": max(inside_depths),
@@ -1073,7 +1109,8 @@ def run(context):
                 "worst_points": _worst(source_points, inside_depths, invented_threshold, 5),
                 "sign_convention_verified": True,
                 "sign_probe": convention_evidence,
-                "meaning": INVENTED_MEANING,
+                "unclassified_reconstruction_samples": unclassified,
+                "meaning": INVENTED_MEANING if established else UNCLASSIFIED_MEANING,
             },
             "omitted_detail": omitted,
         }
@@ -1084,6 +1121,17 @@ def run(context):
             raise RuntimeError(
                 "Deviation verdict failed: invented material at "
                 + json.dumps(report["verdict"]["invented_material"]["worst_points"][:1])
+            )
+        if not established:
+            report["failures"] = ["invented-material-unclassified"]
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError(
+                "Deviation verdict failed closed: invented-material-unclassified, "
+                "{0} reconstruction samples beyond {1:g} mm from any scanned surface while no "
+                "scanned vertex lies inside the reconstruction".format(
+                    unclassified, invented_threshold
+                )
             )
 
         report["ok"] = True

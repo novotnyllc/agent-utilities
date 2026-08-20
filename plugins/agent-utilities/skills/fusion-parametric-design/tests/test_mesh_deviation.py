@@ -295,6 +295,33 @@ def _competing_facet_calculator(calculator, namespace, epsilon_mm, gap_mm):
     return calculator
 
 
+def _boss_calculator(calculator, low_mm, high_mm):
+    """A tessellation carrying a boss the *source* mesh knows nothing about.
+
+    The body's own `pointContainment` is still the plain box, which is what a
+    coarse scan sees: every scanned corner is on the boundary and none is
+    inside. The invented boss lives entirely between them.
+    """
+    inner = calculator.calculate
+
+    def calculate():
+        mesh = inner()
+        vertices = [value * MM_PER_CM for value in mesh.nodeCoordinatesAsDouble]
+        boss_vertices, boss_triangles = _box_mesh(
+            low_mm, high_mm, None, offset=len(vertices) // 3
+        )
+        for vertex in boss_vertices:
+            vertices.extend(vertex)
+        mesh.nodeCoordinatesAsDouble = [value / MM_PER_CM for value in vertices]
+        mesh.nodeIndices = list(mesh.nodeIndices) + list(boss_triangles)
+        mesh.nodeCount = len(vertices) // 3
+        mesh.triangleCount = len(mesh.nodeIndices) // 3
+        return mesh
+
+    calculator.calculate = calculate
+    return calculator
+
+
 def _empty_calculator():
     return SimpleNamespace(
         surfaceTolerance=0.0,
@@ -397,6 +424,38 @@ class DeviationVerdictTests(unittest.TestCase):
         self.assertEqual(24, report["source_to_reconstruction"]["nodes_on_reconstruction_boundary"])
         self.assertEqual(0, report["source_to_reconstruction"]["nodes_inside_reconstruction_solid"])
         self.assertEqual(0, report["source_to_reconstruction"]["nodes_outside_reconstruction_solid"])
+
+    def test_a_boss_invented_between_two_scanned_vertices_is_not_a_pass(self) -> None:
+        """The signed direction reads vertices, and a coarse scan has few of them.
+
+        The rebuild carries a 4 x 4 x 3 mm boss the scan does not: the scan's
+        24 corners all sit *on* the rebuilt box, so every signed depth is zero
+        and the run used to report `ok`. The reverse direction measured the
+        boss at 3 mm all along, recorded it, and was read by nothing. It is
+        unsigned, so it cannot call this invented material -- but it does
+        disprove the absence of it, and the absence is what a pass claims.
+        """
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
+        inner = reconstruction.meshManager.createMeshCalculator
+        reconstruction.meshManager = SimpleNamespace(
+            createMeshCalculator=lambda: _boss_calculator(
+                inner(), (8.0, 8.0, 10.0), (12.0, 12.0, 13.0)
+            )
+        )
+        report = self._run(
+            self._namespace(mesh=self._scan(), reconstruction=reconstruction),
+            failure="invented-material-unclassified",
+        )[0]
+        self.assertFalse(report["ok"])
+        self.assertEqual(["invented-material-unclassified"], report["failures"])
+        verdict = report["verdict"]["invented_material"]
+        self.assertEqual("not-established", verdict["severity"])
+        # No scanned vertex is inside the rebuild -- that is the whole point.
+        self.assertEqual(0, verdict["count"])
+        self.assertAlmostEqual(0.0, verdict["max_mm"])
+        self.assertTrue(verdict["sign_convention_verified"])
+        self.assertGreater(verdict["unclassified_reconstruction_samples"], 0)
+        self.assertAlmostEqual(3.0, report["reconstruction_to_source"]["max_mm"])
 
     def test_a_rebuild_grown_half_a_millimetre_reads_as_half_a_millimetre_invented(self) -> None:
         # The rebuild is 0.5 mm proud of the scan on every side, so every scanned
@@ -887,6 +946,37 @@ class PointToTriangleTests(unittest.TestCase):
                     for offset in range(0, len(triangles), 3)
                 )
                 self.assertAlmostEqual(math.sqrt(brute), grid.nearest_mm(*probe), places=9)
+
+    def test_a_query_far_outside_the_mesh_does_not_walk_the_empty_space(self) -> None:
+        """A displaced reconstruction must not be able to hang the transaction.
+
+        The ring walk used to start at the query cell and enumerate every cell
+        of every shell until it reached an occupied one. At a 0.1 mm cell and
+        100 mm of displacement that is a thousand shells of up to 24 million
+        empty lookups -- per node, inside a Fusion transaction. The grid's own
+        occupied box bounds both ends now, so the work is the box's size rather
+        than the displacement's cube.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 5.0)
+        flat = [value for vertex in vertices for value in vertex]
+        grid = self.namespace["_TriangleGrid"](flat, triangles, 5.0)
+
+        class _CountingBuckets(dict):
+            lookups = 0
+
+            def get(self, key, default=None):
+                _CountingBuckets.lookups += 1
+                return dict.get(self, key, default)
+
+        grid.buckets = _CountingBuckets(grid.buckets)
+        # 100 mm away on every axis: 20 cells of displacement.
+        self.assertAlmostEqual(
+            math.sqrt(3.0) * 100.0, grid.nearest_mm(120.0, 120.0, 110.0), places=6
+        )
+        # The occupied box is 4 x 4 x 2 cells and nothing outside it is ever
+        # probed, so the total is that box a few times over. The old walk needed
+        # more than 68,000 lookups just to reach the first occupied cell.
+        self.assertLess(_CountingBuckets.lookups, 200)
 
     def test_a_triangle_far_larger_than_the_cell_is_still_found(self) -> None:
         # One triangle spanning many cells goes to the oversized list rather than
