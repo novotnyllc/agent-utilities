@@ -2583,6 +2583,176 @@ def _cylinder_over_sphere(
     return (cylinder,) + tuple(f for f in fits if f is not cylinder)
 
 
+def _normal_direction_spread(
+    normals: Sequence[Any], axis: Vec3, merge_deg: float
+) -> dict[str, Any] | None:
+    """How many distinct directions the facet normals occupy around ``axis``.
+
+    A cylinder's facet normals sweep its axis continuously: a tessellation of
+    ``n`` facets across an arc puts ``n`` distinct normals along that arc, evenly
+    spaced by the exporter's chord tolerance.  A prism's do not -- every facet on
+    one planar wall carries the *same* normal, so the distribution is a handful
+    of spikes with the wall count as its cardinality however many facets there
+    are.  Both fit the same circle through the same vertices, because a regular
+    polygon's corners lie exactly on its circumscribed circle; only the normals
+    tell them apart.
+
+    Azimuths are merged at ``merge_deg``, the caller's measurement floor on a
+    facet normal's direction.  That is deliberately a *noise* width and not a
+    design angle: on a tessellation it is float precision, so only exactly
+    parallel facets merge, and on a scan every facet is its own direction and
+    this measurement cannot refuse anything -- which is correct, since discrete
+    normals are a tessellation signature and a scan has none.
+
+    ``angular_coverage_deg`` is 360 minus the largest gap between adjacent
+    directions: the arc the directions actually occupy, so a partial round is
+    measured over its own arc rather than penalised for the arc it does not
+    cover.  ``None`` when a normal is unreadable -- absent evidence refuses
+    rather than defaulting to a spread nobody measured.
+    """
+    u, v = _frame(axis)
+    azimuths: list[float] = []
+    for raw in normals:
+        vector = _unit(_as_point(raw, "facet_normals"))
+        if vector is None:
+            return None
+        x, y = _dot(vector, u), _dot(vector, v)
+        if math.hypot(x, y) <= _ZERO_RESIDUAL_FLOOR_RATIO:
+            # Parallel to the axis: an end cap swept into the group, carrying no
+            # azimuth at all. Not evidence either way, so it is not counted.
+            continue
+        azimuths.append(math.degrees(math.atan2(y, x)) % 360.0)
+    if len(azimuths) < 2:
+        return None
+    azimuths.sort()
+    clusters = [[azimuths[0]]]
+    for angle in azimuths[1:]:
+        if angle - clusters[-1][-1] <= merge_deg:
+            clusters[-1].append(angle)
+        else:
+            clusters.append([angle])
+    if len(clusters) > 1 and (azimuths[0] + 360.0) - clusters[-1][-1] <= merge_deg:
+        clusters[0] = clusters.pop() + clusters[0]
+    representatives = sorted(cluster[0] for cluster in clusters)
+    directions = len(representatives)
+    if directions < 2:
+        # Every facet normal points the same way: that is one plane, and a plane
+        # has no arc to spread over.
+        return {
+            "facet_count": len(azimuths),
+            "directions": directions,
+            "angular_coverage_deg": 0.0,
+            "directions_per_turn": 0.0,
+            "largest_gap_deg": 360.0,
+            "merge_tolerance_deg": merge_deg,
+        }
+    gaps = [representatives[i + 1] - representatives[i] for i in range(directions - 1)]
+    gaps.append(representatives[0] + 360.0 - representatives[-1])
+    coverage = 360.0 - max(gaps)
+    return {
+        "facet_count": len(azimuths),
+        "directions": directions,
+        "angular_coverage_deg": coverage,
+        "directions_per_turn": directions * 360.0 / coverage if coverage > 0.0 else math.inf,
+        "largest_gap_deg": max(gaps),
+        "merge_tolerance_deg": merge_deg,
+    }
+
+
+def _prism_of_planes(
+    fits: Sequence[PrimitiveFit],
+    normals: Sequence[Any],
+    axis: Vec3,
+    max_perpendicular_deg: float,
+    minimum_per_turn: float,
+    merge_deg: float,
+) -> tuple[PrimitiveFit, ...]:
+    """Refuse a curved fit whose facet normals are a prism's spikes, not a sweep.
+
+    The measured case: a hexagonal pocket's six planar walls arrive as one face
+    group, and a regular polygon's corners lie *exactly* on its circumscribed
+    circle -- so the vertex fit returns the right radius at float-noise residual
+    and every existing gate passes it.  Six 26 mm across-corners hex pockets on
+    the honeycomb organiser came back as six 26 mm round bores, and the vendor's
+    own STEP -- 145 planar faces, not one curved surface -- says they are not.
+    Those same corners lie on a *sphere* as well, so refusing only the cylinder
+    hands the group to the sphere; the verdict is therefore about the group and
+    every curved primitive over it falls with the same named gate.
+
+    Two conditions, both from evidence this run already carries:
+
+    * the facet normals are perpendicular to a common axis, within the caller's
+      already-declared ``cylinder_normal_perpendicular_deg``.  This is what says
+      "these facets are arranged around an axis" and it is what excludes a real
+      sphere, whose normals are perpendicular to nothing;
+    * they occupy fewer distinct directions per turn than the caller declared.
+
+    The threshold is measured against the tessellation, not against a shape: a
+    genuine tessellated circle carries one normal direction per facet, and below
+    ``min_cylinder_normal_directions_per_turn`` the facets are further apart than
+    any exporter's chord tolerance would leave them.
+    """
+    curved = [f for f in fits if f.accepted and f.kind != "plane"]
+    if not curved:
+        return tuple(fits)
+    perpendicular = _perpendicularity_deg(normals, axis)
+    if perpendicular is None or perpendicular > max_perpendicular_deg:
+        # The normals are not arranged around this axis at all, so "prism" is not
+        # a claim the evidence supports either way.
+        return tuple(fits)
+    spread = _normal_direction_spread(normals, axis, merge_deg)
+    if spread is None:
+        return tuple(fits)
+    measured = dict(
+        spread,
+        min_directions_per_turn=minimum_per_turn,
+        max_deviation_from_perpendicular_deg=perpendicular,
+        declared_max_perpendicular_deg=max_perpendicular_deg,
+    )
+    out: list[PrimitiveFit] = []
+    discrete = spread["directions_per_turn"] < minimum_per_turn
+    for fit in fits:
+        if fit not in curved:
+            out.append(fit)
+            continue
+        support = dict(fit.support)
+        support["normal_direction_spread"] = dict(measured)
+        if not discrete:
+            checked = list(support.get("checked", ()))
+            if "cylinder-normals-discrete" not in checked:
+                checked.append("cylinder-normals-discrete")
+            support["checked"] = checked
+            out.append(
+                PrimitiveFit(
+                    kind=fit.kind,
+                    accepted=True,
+                    rms_residual=fit.rms_residual,
+                    relative_residual=fit.relative_residual,
+                    extent=fit.extent,
+                    parameters=dict(fit.parameters),
+                    support=support,
+                    uncertainty=dict(fit.uncertainty),
+                )
+            )
+            continue
+        out.append(
+            _rejected(
+                fit.kind,
+                fit.extent,
+                f"cylinder-normals-discrete: the {spread['facet_count']} facet normals sit within "
+                f"{perpendicular:.4g} degrees of perpendicular to one axis but occupy only "
+                f"{spread['directions']} distinct directions across "
+                f"{spread['angular_coverage_deg']:.4g} degrees of arc -- "
+                f"{spread['directions_per_turn']:.4g} per full turn, below the declared "
+                f"{minimum_per_turn:g}. A curved surface's normals sweep; these are the spikes of "
+                "a prism of planar walls whose corners happen to lie on the circle -- and on the "
+                f"sphere -- this {fit.kind} fits.",
+                support,
+            )
+        )
+    return tuple(out)
+
+
 def _normal_constrained_cylinder(
     fits: Sequence[PrimitiveFit],
     points: Sequence[Vec3],
@@ -2676,6 +2846,7 @@ def fit_face_group(
     facet_areas: Sequence[float] | None = None,
     normal_axis_eigengap_min: float | None = None,
     normal_sigma_theta_floor_deg: float | None = None,
+    min_cylinder_normal_directions_per_turn: float | None = None,
     **gates: Any,
 ) -> tuple[PrimitiveFit, ...]:
     """Fit each requested primitive, accepted fits first by relative residual.
@@ -2690,10 +2861,12 @@ def fit_face_group(
     residual ranking unchanged, which is what every caller got before.
 
     ``facet_centroids``, ``facet_areas`` and the caller-declared
-    ``normal_axis_eigengap_min`` / ``normal_sigma_theta_floor_deg`` additionally
-    turn those normals from a tie-break into *fit data*: a winning cylinder is
-    refitted about the axis they determine, with the joint uncertainty that
-    determination carries.  All four are declared together or not at all.
+    ``normal_axis_eigengap_min`` / ``normal_sigma_theta_floor_deg`` /
+    ``min_cylinder_normal_directions_per_turn`` additionally turn those normals
+    from a tie-break into *fit data*: a winning cylinder is refitted about the
+    axis they determine, with the joint uncertainty that determination carries,
+    and a cylinder whose normals are a prism's discrete spikes rather than a
+    sweep is refused.  All five are declared together or not at all.
     """
     requested = list(kinds)
     for kind in requested:
@@ -2712,15 +2885,20 @@ def fit_face_group(
         facet_areas,
         normal_axis_eigengap_min,
         normal_sigma_theta_floor_deg,
+        min_cylinder_normal_directions_per_turn,
     )
     if any(part is not None for part in constrained):
         if any(part is None for part in constrained) or facet_normals is None:
             raise ValueError(
                 "normal-constrained fitting needs facet_normals, facet_centroids, facet_areas, "
-                "normal_axis_eigengap_min and normal_sigma_theta_floor_deg together; a partial set "
-                "would need this module to invent the rest."
+                "normal_axis_eigengap_min, normal_sigma_theta_floor_deg and "
+                "min_cylinder_normal_directions_per_turn together; a partial set would need this "
+                "module to invent the rest."
             )
         _as_tolerance(normal_axis_eigengap_min, "normal_axis_eigengap_min")
+        _as_tolerance(
+            min_cylinder_normal_directions_per_turn, "min_cylinder_normal_directions_per_turn"
+        )
 
     pts = _as_points(points, "points", 4)
     fits = [fit_primitive(pts, kind, **gates) for kind in requested]
@@ -2740,8 +2918,28 @@ def fit_face_group(
     )
     if evidence is None:
         return tuple(ordered)
-    return _normal_constrained_cylinder(
-        ordered, pts, evidence, float(normal_axis_eigengap_min), gates
+    ordered = list(
+        _normal_constrained_cylinder(ordered, pts, evidence, float(normal_axis_eigengap_min), gates)
+    )
+    # Last, so it reads the axis the refit settled on rather than one it is about
+    # to replace. The same accumulation, read a fourth way: its smallest
+    # eigenvector is the axis the normals are perpendicular to, and how those
+    # normals are spread *around* it says whether there is a curved surface there
+    # at all. Stable on acceptance alone: a newly refused fit moves behind the
+    # accepted ones and the tie-break's ordering among those survives, which
+    # re-sorting by residual would silently undo.
+    return tuple(
+        sorted(
+            _prism_of_planes(
+                ordered,
+                facet_normals,
+                evidence["axis"],
+                float(cylinder_perpendicular_deg),
+                float(min_cylinder_normal_directions_per_turn),
+                float(normal_sigma_theta_floor_deg),
+            ),
+            key=lambda f: not f.accepted,
+        )
     )
 
 

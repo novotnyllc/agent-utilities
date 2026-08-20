@@ -1325,6 +1325,7 @@ NORMAL_GATES = {
     "normal_axis_eigengap_min": 0.05,
     "normal_sigma_theta_floor_deg": 1e-06,
     "cylinder_perpendicular_deg": 5.0,
+    "min_cylinder_normal_directions_per_turn": 8.0,
 }
 
 
@@ -1490,6 +1491,81 @@ class NormalConstrainedFitTests(unittest.TestCase):
         points, _centroids, _normals, _areas = two_ring_bore()
         with self.assertRaises(ValueError):
             fit_primitive(points, "sphere", fixed_axis=(0.0, 0.0, 1.0))
+
+
+class PrismOfPlanesTests(unittest.TestCase):
+    """A regular polygon's corners lie on its circumscribed circle -- and on a sphere.
+
+    `two_ring_bore(sides=6)` is a hexagonal prism, and every vertex-side gate
+    reads it as a perfect cylinder of the hexagon's circumradius at rms 0. The
+    facet normals are the only evidence that separates it from a bore, and they
+    have to take the sphere with them: refusing only the cylinder hands the group
+    to the sphere that fits the same twelve corners exactly.
+    """
+
+    def _group(self, sides, **overrides):
+        points, centroids, normals, areas = two_ring_bore(radius=5.0, height=2.0, sides=sides)
+        return fit_face_group(
+            points,
+            kinds=("plane", "cylinder", "sphere"),
+            facet_normals=normals,
+            facet_centroids=centroids,
+            facet_areas=areas,
+            **{**NORMAL_GATES, **overrides},
+        )
+
+    def test_a_hexagonal_prism_is_refused_and_so_is_the_sphere_behind_it(self) -> None:
+        fits = self._group(6)
+        self.assertEqual([], [f.kind for f in fits if f.accepted and f.kind != "plane"])
+        refused = {f.kind: f for f in fits if not f.accepted}
+        for kind in ("cylinder", "sphere"):
+            self.assertIn("cylinder-normals-discrete", refused[kind].rejection, kind)
+            spread = refused[kind].support["normal_direction_spread"]
+            self.assertEqual(6, spread["directions"])
+            self.assertAlmostEqual(7.2, spread["directions_per_turn"], places=9)
+
+    def test_an_eight_sided_group_passes_and_records_what_it_measured(self) -> None:
+        best = self._group(8)[0]
+        self.assertEqual("cylinder", best.kind)
+        self.assertTrue(best.accepted)
+        spread = best.support["normal_direction_spread"]
+        self.assertEqual(8, spread["directions"])
+        self.assertAlmostEqual(315.0, spread["angular_coverage_deg"], places=9)
+        self.assertGreater(spread["directions_per_turn"], 8.0)
+        self.assertIn("cylinder-normals-discrete", best.support["checked"])
+
+    def test_a_real_bore_is_far_from_the_gate_and_keeps_its_axis_evidence(self) -> None:
+        best = self._group(48)[0]
+        self.assertEqual("cylinder", best.kind)
+        self.assertTrue(best.accepted)
+        self.assertEqual("facet-normals", best.support["axis_evidence"]["source"])
+        self.assertEqual(48, best.support["normal_direction_spread"]["directions"])
+
+    def test_the_threshold_is_the_callers_and_moving_it_moves_the_verdict(self) -> None:
+        best = self._group(48, min_cylinder_normal_directions_per_turn=200.0)[0]
+        self.assertFalse(best.accepted)
+        self.assertIn("cylinder-normals-discrete", best.rejection)
+
+    def test_a_spread_needs_two_directions_before_it_is_a_spread(self) -> None:
+        """One direction is one plane, and a plane has no arc to be spread over."""
+        from fusion_design.mesh_fitting import _normal_direction_spread
+
+        axis = (0.0, 0.0, 1.0)
+        self.assertIsNone(_normal_direction_spread([(1.0, 0.0, 0.0)], axis, 1e-06))
+        # Facets parallel to the axis carry no azimuth at all and are not counted.
+        self.assertIsNone(_normal_direction_spread([axis, axis, axis], axis, 1e-06))
+        flat = _normal_direction_spread([(1.0, 0.0, 0.0), (1.0, 0.0, 0.0)], axis, 1e-06)
+        self.assertEqual(1, flat["directions"])
+        self.assertEqual(0.0, flat["directions_per_turn"])
+
+    def test_an_unreadable_normal_refuses_rather_than_defaulting(self) -> None:
+        from fusion_design.mesh_fitting import _normal_direction_spread
+
+        self.assertIsNone(
+            _normal_direction_spread(
+                [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)], (0.0, 0.0, 1.0), 1e-06
+            )
+        )
 
 
 

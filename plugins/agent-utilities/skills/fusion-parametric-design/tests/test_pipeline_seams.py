@@ -499,6 +499,92 @@ class NormalsAcrossTheDumpSeamTests(GroupingToFitSeamTests):
         )
 
 
+class PrismAcrossTheDumpSeamTests(NormalsAcrossTheDumpSeamTests):
+    """A hexagonal pocket and a real bore, side by side, through the real transactions.
+
+    The measured failure: on the honeycomb organiser six hexagonal pockets came
+    back as six round bores of radius 15*cos(30), because a regular hexagon's six
+    corners lie *exactly* on that circle -- so the vertex fit is exact and every
+    gate that reads vertices passes it. Only the facet normals separate the two,
+    and the normals are reconstructed host-side from `triangleNodeIndices` after
+    welding, which is why this belongs at the dump seam rather than in a unit
+    test: a winding the extraction reordered would hand the same six spikes back
+    in a different order and the discrimination would silently stop working.
+
+    The bore beside it is the control. Both live in the same dump, both reach the
+    fitters through the same two emitted transactions, and the assertion is that
+    one is refused by name and the other is not touched.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        brick_v, brick_t, brick_g = ts.box_mesh(size=20.0, divisions=6)
+        bore_v, bore_t, _g = ts.cylinder_mesh(radius=5.0, height=2.0, sides=48, stacks=1)
+        hex_v, hex_t, _g = ts.cylinder_mesh(radius=5.0, height=6.0, sides=6, stacks=3)
+        bore_at = len(brick_v)
+        hex_at = bore_at + len(bore_v)
+        self.vertices_cm = (
+            [(x * 0.1, y * 0.1, z * 0.1) for x, y, z in brick_v]
+            + [((x + 60.0) * 0.1, y * 0.1, z * 0.1) for x, y, z in bore_v]
+            + [((x + 60.0) * 0.1, (y + 40.0) * 0.1, z * 0.1) for x, y, z in hex_v]
+        )
+        self.triangles = (
+            list(brick_t)
+            + [tuple(i + bore_at for i in t) for t in bore_t]
+            + [tuple(i + hex_at for i in t) for t in hex_t]
+        )
+        self.groups = (
+            list(brick_g)
+            + [max(brick_g) + 1] * len(bore_t)
+            + [max(brick_g) + 2] * len(hex_t)
+        )
+
+    def test_the_grouping_transaction_feeds_extraction_which_feeds_the_fitters(self) -> None:
+        """Overridden: this fixture carries the brick's six faces plus two pockets."""
+        record = seg.fit_regions(self._run_both(), ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        self.assertEqual(8, record["face_groups"]["group_count"])
+
+    def _pockets(self):
+        record = seg.fit_regions(self._run_both(), ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        by_count = {r["triangle_count"]: r for r in record["regions"]}
+        self.assertIn(96, by_count, sorted(by_count))
+        self.assertIn(36, by_count, sorted(by_count))
+        return record, by_count[96], by_count[36]
+
+    def test_the_hexagonal_pocket_is_refused_by_name_across_the_real_dump(self) -> None:
+        _record, _bore, pocket = self._pockets()
+        self.assertFalse(pocket["accepted"])
+        self.assertIn("cylinder-normals-discrete", pocket["fit"]["rejection"])
+        spread = pocket["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(6, spread["directions"])
+        self.assertEqual(36, spread["facet_count"])
+        self.assertLess(spread["directions_per_turn"], spread["min_directions_per_turn"])
+        # And it claims nothing while refusing: the radius it would have reported
+        # is the hexagon's circumradius, which is what made this invisible to
+        # every vertex-side gate in the first place.
+        self.assertEqual({}, pocket["fit"]["parameters"])
+
+    def test_the_bore_in_the_same_dump_is_untouched_by_the_gate(self) -> None:
+        _record, bore, _pocket = self._pockets()
+        self.assertTrue(bore["accepted"], bore["fit"].get("rejection"))
+        self.assertEqual("cylinder", bore["fit"]["kind"])
+        self.assertAlmostEqual(5.0, bore["fit"]["parameters"]["radius"], places=6)
+        spread = bore["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(48, spread["directions"])
+        self.assertIn("cylinder-normals-discrete", bore["fit"]["support"]["checked"])
+
+    def test_the_refused_pocket_survives_the_seam_as_a_refusal(self) -> None:
+        """It has to reach the planner as unclaimed area, not vanish from the record."""
+        record, _bore, pocket = self._pockets()
+        parsed = parse_fit_record(record)
+        self.assertNotIn(
+            pocket["region_hash"], {r.region_hash for r in parsed.regions if r.accepted}
+        )
+        self.assertIn(pocket["region_hash"], {r.region_hash for r in parsed.regions})
+
+
 class PlanToRebuildSeamTests(unittest.TestCase):
     """A real program, emitted and run: the cap ordering has to survive the frame."""
 

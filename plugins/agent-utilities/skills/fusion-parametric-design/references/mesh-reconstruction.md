@@ -128,6 +128,14 @@ All 24 thresholds the middle column declared carry the same values in the right
 one; the seven the right column adds are new evidence, not loosened old evidence,
 and each is caller-declared with its rationale.
 
+The right column's 251 is now 230, and 66 planned holes are 45. The difference is
+21 hexagonal M3 nut pockets — 5.700 mm across flats, 12 facets each, spread over
+five of the eleven parts — that the vertices read as 6.58 mm round bores because
+a hexagon's corners lie exactly on its circumscribed circle. They are refused
+`cylinder-normals-discrete` below, and nothing else in the table moves: 1,069
+regions offered, 114 fillet candidates, 3 fillets and 10 extrudes are unchanged
+and no part changes the gate it stops at.
+
 So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
 
 **Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
@@ -160,15 +168,63 @@ written by a solid modeller has vertices on the analytic surface to float
 precision and a bimodal dihedral distribution — facet pairs from one planar face
 meet at exactly zero. A scan has neither. `record.regime` carries the decision,
 both readings behind it, and any caller override (`regime: auto|tessellation|scan`).
-Two consequences follow. `noise-model-inconsistent` no longer fires on a
+Three consequences follow. `noise-model-inconsistent` no longer fires on a
 noise-free mesh, where the two estimators are *meant* to disagree because one
 absorbs curvature and the other measures the facet turn angle: it fired on all 11
-production parts and now fires on none. And `sigma` is floored at the precision
+production parts and now fires on none.
+
+**The regime decides which estimator `sigma` comes from, and it is detected
+before the selection rather than after it.** Estimator B declares its own
+domain — "real creases are a small minority of interior edges on a mechanical
+part, so the median sees only the noise" — and on a honeycomb that is false:
+61.5% of the vendor honeycomb organiser's 834 interior edges are genuine 60°
+cell walls, the median interior dihedral is 59.99993°, and estimator B returned
+13.108 mm of "noise" for a mesh whose quadric estimator returned exactly 0.0 and
+whose regime detector said *tessellation*. Ten sigma is the recoverable feature
+size, so the pipeline refused a 169 mm part `feature-scale-below-noise` claiming
+131 mm was unrecoverable, and its STL is byte-equivalent to the vendor's own
+STEP to 3.2e-08 of area. `sigma` was `max(quadric, dihedral)` computed **before**
+the regime was known, so the check that already suppressed the *flag* never saw
+the *value*. In the `tessellation` regime `sigma` is now the quadric estimator
+alone — the only one estimating noise there — and the dihedral reading becomes
+`surface_scale`, which is where a facet turn angle belongs and which is what it
+already reached through `sigma` in both regimes. Every power floor is therefore
+exactly where it was: re-measured over the eleven production dumps, all 1,069
+regions, 619 acceptances, 114 fillet candidates and every coverage figure are
+unchanged. In the `scan` regime the conservative maximum stands. Both estimators
+are always recorded, with `noise.sigma_estimator` and
+`noise.sigma_estimator_reason` saying which was chosen and why. No declared
+threshold moved: this is a selection, not a tolerance.
+
+And `sigma` is floored at the precision
 the coordinates are *stored* at (`vertex_precision_rel`; a binary STL holds
 float32). Without that floor the residual-structure gates spend their power
 testing the file format — quantization is deterministic and therefore
 systematically signed, and it refused 56 of the 85 full-turn bores for "azimuthal
 structure" that was the quantization of a perfectly round hole.
+
+**A prism of planar walls fits the cylinder its own corners lie on.** A regular
+polygon's corners lie *exactly* on its circumscribed circle, so a hexagonal
+pocket delivered as one face group fits a cylinder of that circumradius at
+float-noise residual — and a sphere through the same corners just as exactly.
+Every gate that reads vertices passes it, because to the vertices it really is a
+cylinder. Measured: six 26 mm across-corners hex pockets on the honeycomb
+organiser came back as six 26 mm round bores, and 21 M3 nut pockets across five
+of the eleven production parts (5.700 mm across flats, 12 facets each) came back
+as 6.58 mm round holes. The facet normals refute all of them: they sit within
+`cylinder_normal_perpendicular_deg` of perpendicular to one axis — which is what
+says the facets are arranged *around* an axis at all, and what excludes a real
+sphere — but occupy only six discrete directions where a cylinder's sweep. The
+refusal is `cylinder-normals-discrete`, it is a verdict about the *group* so the
+sphere falls with the cylinder, and `support.normal_direction_spread` records the
+facet count, the distinct-direction count, the arc they cover and the
+directions-per-turn it was judged on. The threshold is the caller's
+`min_cylinder_normal_directions_per_turn`: a genuine tessellated circle carries
+one normal direction per facet, and at eight per turn a facet already spans 45°,
+coarser than any exporter's chord tolerance. Measured over the eleven parts the
+distribution is bimodal with nothing in between — the 230 genuine cylinders carry
+29.6 to 108 directions per turn at radii from 1.15 mm to 10 mm, and the 21 hex
+pockets carry 7.2.
 
 **Group boundaries are free evidence.** The loop between a bore and the face it
 breaks through is a circle, and it is shared with the neighbouring group rather

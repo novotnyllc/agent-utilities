@@ -425,6 +425,7 @@ REFERENCE = {
     "tessellation_sigma_over_extent": (1e-9, "an exporter's vertices sit on the analytic surface to float precision; a scan's never do"),
     "min_normal_axis_eigengap": (0.05, "a twentieth of the normal spectrum away from the axis is a full ring of facets, not a sliver"),
     "normal_sigma_theta_floor_deg": (1e-06, "double precision over a millimetre-scale part leaves about a microdegree of normal direction"),
+    "min_cylinder_normal_directions_per_turn": (8.0, "a tessellated circle carries one normal direction per facet; at eight per turn a facet already spans 45 degrees, coarser than any exporter's chord tolerance, so below it the group is a prism of walls -- measured, the 230 genuine cylinders in the 11-part corpus carry 29.6 per turn or more and the hexagonal pockets carry 7.2"),
     "max_fillet_radius_rel_spread": (0.02, "a constant-radius round is constant; two percent is the tessellation's own radius wobble"),
     "boundary_circle_sigmas": (3.0, "three joint sigmas before an independent boundary circle counts as disagreeing"),
     "max_fillet_arc_deg": (180.0, "a bore or a boss closes on itself; an edge round never sweeps past a half turn"),
@@ -1537,6 +1538,206 @@ class NormalConstrainedRegionTests(unittest.TestCase):
         support = tori[0]["fit"]["support"]
         self.assertNotIn("boundary_circle", support)
         self.assertNotIn("boundary-circle-corroboration", support["checked"])
+
+
+def plate_with_pockets(*, sides, radius=6.0, depth=12.0, stacks=3, plate=60.0):
+    """A tessellated plate with one prismatic/cylindrical pocket standing beside it.
+
+    The plate is what makes this a *tessellation*: its faces put the tenth
+    percentile of the quadric residual at exactly zero and its coplanar interior
+    edges make the dihedral distribution bimodal, which is the honeycomb's
+    situation and not a bare tube's.  ``sides`` is the pocket's wall count, and
+    the whole point is that the vertices cannot tell six walls from six facets:
+    a regular polygon's corners lie exactly on its circumscribed circle.
+    """
+    vertices, triangles, groups = box_mesh(size=plate, divisions=6)
+    vertices, triangles, groups = list(vertices), list(triangles), list(groups)
+    offset = len(vertices)
+    for k in range(stacks + 1):
+        z = 10.0 + depth * k / stacks
+        for i in range(sides):
+            angle = 2.0 * math.pi * i / sides
+            vertices.append((30.0 + radius * math.cos(angle), 90.0 + radius * math.sin(angle), z))
+    for k in range(stacks):
+        for i in range(sides):
+            a = offset + k * sides + i
+            b = offset + k * sides + (i + 1) % sides
+            c = offset + (k + 1) * sides + (i + 1) % sides
+            d = offset + (k + 1) * sides + i
+            triangles.append((a, b, c))
+            triangles.append((a, c, d))
+            # The box's six analytic faces are groups 0..5; the pocket is the
+            # seventh, exactly as Fusion delivers a pocket's walls: one group.
+            groups.extend([6, 6])
+    return vertices, triangles, groups
+
+
+class DiscreteNormalTests(unittest.TestCase):
+    """The hex pocket that fits its own circumscribed cylinder, and the coarse bore that does not.
+
+    Measured on the honeycomb organiser: six hexagonal pockets came back as six
+    round bores of radius 15*cos(30) at float-noise residual, because a regular
+    hexagon's six corners lie *exactly* on that circle.  Every gate that reads
+    vertices passed them.  The facet normals are the only evidence that separates
+    the two, and the two sides of this test are the two sides of the declared
+    threshold.
+    """
+
+    def _pocket(self, sides, **declared):
+        """The record, and the one region that is the pocket's walls."""
+        record = seg.fit_regions(
+            make_dump(*plate_with_pockets(sides=sides)),
+            spec(min_feature_size=1.0, **declared),
+        )
+        self.assertIsNone(record["refusal"], record["refusal"])
+        walls = [r for r in record["regions"] if r["triangle_count"] == 6 * sides]
+        self.assertEqual(1, len(walls), [r["triangle_count"] for r in record["regions"]])
+        return record, walls[0]
+
+    def test_a_hexagonal_pocket_is_refused_as_a_cylinder_by_its_own_facet_normals(self) -> None:
+        _record, region = self._pocket(6)
+        self.assertFalse(region["accepted"])
+        self.assertIn("cylinder-normals-discrete", region["fit"]["rejection"])
+
+    def test_the_refusal_records_the_cluster_count_and_the_arc_they_cover(self) -> None:
+        """A named refusal that does not say what it measured is folklore."""
+        _record, region = self._pocket(6)
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(6, spread["directions"])
+        self.assertEqual(36, spread["facet_count"])
+        self.assertAlmostEqual(300.0, spread["angular_coverage_deg"], places=6)
+        self.assertAlmostEqual(7.2, spread["directions_per_turn"], places=6)
+        self.assertEqual(8.0, spread["min_directions_per_turn"])
+        # The other half of the claim: these normals really are arranged around
+        # an axis. Without that the group could be a sphere, and refusing it as a
+        # prism would be an assertion about evidence nobody produced.
+        self.assertLess(spread["max_deviation_from_perpendicular_deg"], 1e-09)
+
+    def test_a_coarse_eight_facet_bore_still_passes_the_same_gate(self) -> None:
+        """The boundary, from the other side: the threshold is where the caller put it."""
+        _record, region = self._pocket(8)
+        self.assertTrue(region["accepted"], region["fit"].get("rejection"))
+        self.assertEqual("cylinder", region["fit"]["kind"])
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(8, spread["directions"])
+        self.assertGreater(spread["directions_per_turn"], 8.0)
+        self.assertIn("cylinder-normals-discrete", region["fit"]["support"]["checked"])
+
+    def test_a_finely_tessellated_bore_is_nowhere_near_the_gate(self) -> None:
+        _record, region = self._pocket(48)
+        self.assertTrue(region["accepted"], region["fit"].get("rejection"))
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(48, spread["directions"])
+        self.assertGreater(spread["directions_per_turn"], 40.0)
+
+    def test_the_declared_minimum_is_what_decides_and_nothing_else_moves(self) -> None:
+        """Raise the caller's threshold past the coarse bore and it goes too."""
+        _record, region = self._pocket(8, min_cylinder_normal_directions_per_turn=16.0)
+        self.assertFalse(region["accepted"])
+        self.assertIn("cylinder-normals-discrete", region["fit"]["rejection"])
+
+
+class SigmaSelectionTests(unittest.TestCase):
+    """Which estimator sigma comes from is the regime's decision, not the maximum's.
+
+    The honeycomb is the case: 61.5% of its interior edges are genuine 60-degree
+    cell walls, so the dihedral estimator -- whose stated assumption is that real
+    creases are a small minority -- reported 13.108 mm of noise on a mesh whose
+    quadric estimator reported exactly 0.0.  `sigma = max(...)` ran before the
+    regime was known, so the regime check that already suppressed the
+    *noise-model-inconsistent flag* never saw the *value*, and a 169 mm part
+    refused `feature-scale-below-noise` claiming 131 mm was unrecoverable.
+    """
+
+    def test_a_tessellation_takes_sigma_from_the_quadric_estimator(self) -> None:
+        """The torus is the lever: a tessellated tube's dihedral is 2.2x its quadric.
+
+        The disagreement is the same one the honeycomb has and the same one the
+        record already flags -- only larger there, because a honeycomb's creases
+        are 60 degrees and a fine torus's facet turns are five. Declaring the
+        regime is what isolates the *selection* from the detection.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        self.assertEqual("scan", auto["noise"]["regime"])
+        self.assertEqual("dihedral", auto["noise"]["sigma_estimator"])
+        self.assertEqual("tessellation", declared["noise"]["regime"])
+        self.assertEqual("quadric", declared["noise"]["sigma_estimator"])
+        # Both estimators are recorded in both runs -- the cross-check stays
+        # honest, and it is only the selection that respects the regime.
+        for record in (auto, declared):
+            self.assertEqual(auto["noise"]["sigma_quadric"], record["noise"]["sigma_quadric"])
+            self.assertEqual(auto["noise"]["sigma_dihedral"], record["noise"]["sigma_dihedral"])
+        self.assertEqual(declared["noise"]["sigma_quadric"], declared["noise"]["sigma"])
+        self.assertLess(declared["noise"]["sigma"], auto["noise"]["sigma"])
+
+    def test_the_dihedral_reading_becomes_the_discretization_scale(self) -> None:
+        """It is not discarded: on a tessellation a dihedral is a facet turn angle.
+
+        `surface_scale` is what sizes the power floor under the residual-structure
+        and held-out tests, and the dihedral reading was already reaching it
+        through `sigma` in both regimes. Moving it here is what leaves every one
+        of those gates exactly where it was -- measured over the 11-part corpus,
+        every accepted region, archetype and coverage figure is unchanged.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        self.assertEqual(auto["noise"]["surface_scale"], declared["noise"]["surface_scale"])
+        self.assertGreaterEqual(declared["noise"]["surface_scale"], declared["noise"]["sigma_dihedral"])
+        self.assertGreater(
+            declared["noise"]["discretization_scale"], auto["noise"]["discretization_scale"]
+        )
+
+    def test_a_quiet_tessellation_falls_to_the_vertex_precision_floor(self) -> None:
+        """With both estimators at zero the floor is the only thing left, and it binds."""
+        noise = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]
+        self.assertEqual("tessellation", noise["regime"])
+        self.assertEqual("quadric", noise["sigma_estimator"])
+        self.assertEqual(noise["vertex_precision_floor"], noise["sigma"])
+        self.assertTrue(noise["precision_floor_binds"])
+
+    def test_a_scan_still_takes_the_conservative_larger_of_the_two(self) -> None:
+        noise = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )["noise"]
+        self.assertEqual("scan", noise["regime"])
+        self.assertAlmostEqual(
+            max(noise["sigma_quadric"], noise["sigma_dihedral"]), noise["sigma"], places=12
+        )
+        self.assertEqual(
+            "quadric" if noise["sigma_quadric"] >= noise["sigma_dihedral"] else "dihedral",
+            noise["sigma_estimator"],
+        )
+
+    def test_the_feature_scale_budget_is_the_thing_the_selection_moves(self) -> None:
+        """`feature-scale-below-noise` is the refusal the honeycomb hit, and it reads sigma.
+
+        Ten sigma is the recoverable feature size, so an estimator measuring the
+        part's own creases prices the whole part out: 13.108 mm of "noise" on the
+        honeycomb put the recoverable feature at 131 mm of a 169 mm part. Here is
+        the same arithmetic, on one mesh, under the two regimes.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        for record in (auto, declared):
+            self.assertAlmostEqual(
+                10.0 * record["noise"]["sigma"],
+                record["feature_scale"]["recoverable_feature_size"],
+                places=12,
+            )
+        self.assertLess(
+            declared["feature_scale"]["recoverable_feature_size"],
+            auto["feature_scale"]["recoverable_feature_size"],
+        )
 
 
 class RegimeTests(unittest.TestCase):

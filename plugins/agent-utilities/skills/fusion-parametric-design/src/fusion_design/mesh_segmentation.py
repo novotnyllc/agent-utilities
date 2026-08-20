@@ -291,6 +291,13 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
         "the measurement floor on facet-normal direction: how far a normal may be wrong on a mesh "
         "whose vertices are exact, so a noise-free tessellation does not report zero uncertainty",
     ),
+    "min_cylinder_normal_directions_per_turn": (
+        "float",
+        _positive,
+        "how many distinct facet-normal directions a full turn of genuine cylinder must carry "
+        "before a face group is a tessellated circle rather than a prism of planar walls whose "
+        "corners happen to lie on one",
+    ),
     "max_fillet_radius_rel_spread": (
         "float",
         _non_negative,
@@ -883,6 +890,13 @@ def _sigma_dihedral(topo: _Topology) -> float:
     Real creases are a small minority of interior edges on a mechanical part, so
     the median sees only the noise. The 2.2 is the derived calibration constant,
     not a tuning knob.
+
+    That assumption is the estimator's *domain*, and it is not always true: on a
+    honeycomb 61.5% of interior edges are genuine 60-degree cell walls, so the
+    median reads 59.99993 degrees and this returns 13.108 mm of "noise" for a
+    mesh that carries none. The caller is `_stage_noise_scale`, and it is the
+    detected regime -- not this function -- that decides whether what comes back
+    is a noise estimate or a measurement of the part's own creases.
     """
     angles = _dihedral_degrees(topo)
     if not angles or topo.median_edge <= 0.0:
@@ -1599,11 +1613,41 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     topo: _Topology = state["topology"]
     surface_scale, sigma_quadric = _local_scale_estimates(mesh, topo, state["live_points"])
     sigma_dihedral = _sigma_dihedral(topo)
-    # Two independent *noise* estimators, cross-checked. The larger is used --
-    # the conservative choice, since every downstream band widens with it.
-    sigma = max(sigma_quadric, sigma_dihedral)
     lo, hi = sorted((sigma_quadric, sigma_dihedral))
     disagree = hi > 0.0 and (lo <= 0.0 or hi / lo > 2.0)
+    dihedral = _dihedral_degrees(topo)
+    # The regime is detected *before* sigma is selected, because it is the regime
+    # that says which estimator is estimating noise at all. Estimator B assumes
+    # real creases are a small minority of interior edges; on a honeycomb 61.5%
+    # of them are genuine 60-degree cell walls, so its median reads the part's
+    # own geometry and it reported 13.108 mm of "noise" on a mesh whose quadric
+    # estimator reported exactly 0.0 and whose regime detector said tessellation.
+    # Selecting sigma first and detecting the regime afterwards is how that value
+    # escaped the check that already suppressed the flag.
+    regime = _detect_regime(state["spec"], topo, sigma_quadric, dihedral)
+    state["regime"] = regime
+    state["record"]["regime"] = regime
+    if regime["regime"] == "tessellation":
+        # An exact tessellation carries no measurement noise, so a dihedral is a
+        # facet turn angle and belongs to `discretization_scale`, which is where
+        # the surface scale already puts it. The quadric estimator is the only
+        # one still measuring noise here, and the precision floor below is what
+        # keeps it from claiming a certainty float32 cannot support.
+        sigma, estimator = sigma_quadric, "quadric"
+        why = (
+            "the mesh reads as an exact tessellation, where the dihedral estimator measures the "
+            "facet turn angle of a noise-free mesh rather than noise; the quadric estimator is the "
+            "only one estimating noise, and the vertex precision floor bounds it from below"
+        )
+    else:
+        # Two independent *noise* estimators, cross-checked. The larger is used --
+        # the conservative choice, since every downstream band widens with it.
+        sigma = max(sigma_quadric, sigma_dihedral)
+        estimator = "quadric" if sigma_quadric >= sigma_dihedral else "dihedral"
+        why = (
+            "both estimators are estimating noise on a measured surface, so the larger is taken: "
+            "every downstream band widens with sigma, and the conservative side is the honest one"
+        )
     # No estimator can see below the precision the coordinates are *stored* at.
     # A binary STL holds float32, so a 100 mm part carries about 1e-05 mm of
     # quantization in every vertex -- deterministic, and therefore systematically
@@ -1614,14 +1658,18 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     # perfectly round hole. The floor binds only where the mesh is quiet enough
     # for it to matter; on a scan the estimators are orders of magnitude above it.
     precision_floor = float(state["spec"].value("vertex_precision_rel")) * topo.extent
+    selected = sigma
     sigma = max(sigma, precision_floor)
-    surface_scale = max(surface_scale, sigma)
+    # What the dihedral estimator measures on a tessellation is the facet turn
+    # angle, and that *is* the discretization scale -- so it moves here rather
+    # than being discarded. It was already reaching this line through `sigma` in
+    # both regimes, which is why the power floors that read `surface_scale` are
+    # unchanged by the selection above; only the feature-scale budget, which is a
+    # statement about noise, sees the difference. In the scan regime `sigma` is
+    # already the larger of the two, so this max is a no-op there.
+    surface_scale = max(surface_scale, sigma, sigma_dihedral)
     discretization = math.sqrt(max(0.0, surface_scale * surface_scale - sigma * sigma))
     state["noise"] = {"sigma": sigma, "surface_scale": surface_scale}
-    dihedral = _dihedral_degrees(topo)
-    regime = _detect_regime(state["spec"], topo, sigma_quadric, dihedral)
-    state["regime"] = regime
-    state["record"]["regime"] = regime
     # The flag says the *noise model* is inconsistent, and that claim only means
     # something where both estimators are estimating noise. On an exact
     # tessellation the dihedral estimator is measuring the facet turn angle of a
@@ -1636,10 +1684,12 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "regime": regime["regime"],
         "estimators_disagree": disagree,
         "vertex_precision_floor": precision_floor,
-        "precision_floor_binds": precision_floor >= max(sigma_quadric, sigma_dihedral),
+        "precision_floor_binds": precision_floor >= selected,
         "sigma": sigma,
         "sigma_quadric": sigma_quadric,
         "sigma_dihedral": sigma_dihedral,
+        "sigma_estimator": estimator,
+        "sigma_estimator_reason": why,
         "surface_scale": surface_scale,
         "discretization_scale": discretization,
         "sigma_over_extent": sigma / topo.extent if topo.extent > 0.0 else math.inf,
@@ -1650,9 +1700,11 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "note": (
             "sigma is measurement noise, estimated about a local quadric so surface curvature "
             "does not read as noise, and cross-checked against the calibrated dihedral median. "
-            "surface_scale adds the mesh's own discretization; it sizes the power floor below "
-            "which the residual-structure test has nothing to test. Neither decides whether to "
-            "give up: that is the feature-scale budget."
+            "Both estimators are always reported; sigma_estimator says which one sigma was taken "
+            "from and sigma_estimator_reason says why, because the regime decides which of them is "
+            "estimating noise at all. surface_scale adds the mesh's own discretization; it sizes "
+            "the power floor below which the residual-structure test has nothing to test. Neither "
+            "decides whether to give up: that is the feature-scale budget."
         ),
     }
     return None
@@ -1939,6 +1991,13 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             facet_areas=[topo.areas[t] for t in triangles],
             normal_axis_eigengap_min=float(spec.value("min_normal_axis_eigengap")),
             normal_sigma_theta_floor_deg=sigma_theta_floor,
+            # The same normals that determine the axis also say whether there is
+            # an axis to determine: a prism's walls are spikes, a cylinder's
+            # facets are a sweep, and the vertices cannot tell them apart because
+            # a regular polygon's corners lie exactly on its circumscribed circle.
+            min_cylinder_normal_directions_per_turn=float(
+                spec.value("min_cylinder_normal_directions_per_turn")
+            ),
             **gates,
         )
         fit = fits[0]
