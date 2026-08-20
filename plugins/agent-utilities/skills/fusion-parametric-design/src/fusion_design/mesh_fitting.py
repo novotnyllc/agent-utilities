@@ -417,16 +417,33 @@ def _as_tolerance(raw: Any, label: str) -> float:
 
 @dataclass(frozen=True, slots=True)
 class SectionPolyline:
-    """An ordered run of section points.
+    """An ordered run of section points, each segment naming the triangles it came from.
 
     A closed loop does *not* repeat its first point; ``closed`` says it wraps.
+
+    ``segment_triangles`` is one entry per *segment*, in the same order as the
+    segments implied by ``points`` — ``len(points)`` of them when ``closed``,
+    ``len(points) - 1`` when open — and each entry is the tuple of dump triangle
+    indices that produced that segment.  It is a tuple rather than one index
+    because a segment lying *on* an edge shared by two triangles genuinely has
+    two producers, and recording one of them would be choosing which piece of
+    evidence to discard.  A segment whose producers are unknown carries an empty
+    tuple, which is a measurement ("nothing attributed this") and not a zero.
+
+    It defaults to empty so every construction site that predates provenance
+    still builds, and ``to_dict`` omits the key when it is empty rather than
+    writing an empty list a reader could mistake for "measured, found nothing".
     """
 
     points: tuple[Vec3, ...]
     closed: bool
+    segment_triangles: tuple[tuple[int, ...], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"points": [list(p) for p in self.points], "closed": self.closed}
+        out: dict[str, Any] = {"points": [list(p) for p in self.points], "closed": self.closed}
+        if self.segment_triangles:
+            out["segment_triangles"] = [list(t) for t in self.segment_triangles]
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,6 +490,13 @@ def section_mesh(
       and the junction point is reported.
     * **Open vs closed**: a run whose two ends coincide is returned with
       ``closed=True`` and no repeated point; everything else is open.
+
+    Every emitted segment records the *index of the triangle that produced it*,
+    in the caller's own triangle order, on ``SectionPolyline.segment_triangles``.
+    That is the wire nothing downstream could reconstruct afterwards: the
+    chained points carry no memory of which facet they were cut from, and the
+    material side of a loop is read from those facets' winding.  A segment lying
+    on an edge two triangles share records both.
 
     Segment endpoints are keyed by *topology* — a vertex index, or a sorted
     edge-index pair — never by rounded coordinates.  Two triangles sharing an
@@ -523,32 +547,43 @@ def section_mesh(
             coords[key] = _add(verts[lo], _scale(_sub(verts[hi], verts[lo]), t))
         return key
 
-    coplanar: list[tuple[int, int, int]] = []
+    coplanar: list[tuple[int, tuple[int, int, int]]] = []
     segments: dict[frozenset, tuple[tuple, tuple]] = {}
+    producers: dict[frozenset, list[int]] = {}
     vertex_touches = 0
 
-    def emit(a: tuple, b: tuple) -> None:
-        if a != b:
-            segments.setdefault(frozenset((a, b)), (a, b))
+    def emit(a: tuple, b: tuple, source: int) -> None:
+        if a == b:
+            return
+        key = frozenset((a, b))
+        segments.setdefault(key, (a, b))
+        # Append rather than overwrite: two triangles sharing an in-plane edge
+        # both produced this segment, and which one is "the" producer is not a
+        # question the geometry answers. Deduped because a triangle can reach
+        # the same edge twice through the coplanar-boundary pass.
+        incident = producers.setdefault(key, [])
+        if source not in incident:
+            incident.append(source)
 
-    for tri in faces:
+    for tri_index, tri in enumerate(faces):
         s = [side[i] for i in tri]
         on = [tri[k] for k in range(3) if s[k] == 0]
         if len(on) == 3:
-            coplanar.append(tri)
+            coplanar.append((tri_index, tri))
             continue
         if len(on) == 2:
             # An edge lying in the plane: emit it.  If the plane merely grazes the
             # surface here the section is a real, if degenerate, curve; dedup by
-            # endpoint pair keeps a shared edge from being emitted twice.
-            emit(vertex_key(on[0]), vertex_key(on[1]))
+            # endpoint pair keeps a shared edge from being emitted twice -- and
+            # both triangles that reached it are recorded as its producers.
+            emit(vertex_key(on[0]), vertex_key(on[1]), tri_index)
             continue
         if len(on) == 1:
             others = [tri[k] for k in range(3) if s[k] != 0]
             if side[others[0]] == side[others[1]]:
                 vertex_touches += 1
                 continue
-            emit(vertex_key(on[0]), edge_key(others[0], others[1]))
+            emit(vertex_key(on[0]), edge_key(others[0], others[1]), tri_index)
             continue
         if s[0] == s[1] == s[2]:
             continue
@@ -558,21 +593,21 @@ def section_mesh(
             if side[tri[k]] != side[tri[(k + 1) % 3]]
         ]
         if len(crossings) == 2:
-            emit(crossings[0], crossings[1])
+            emit(crossings[0], crossings[1], tri_index)
 
     if coplanar:
-        edge_use: dict[frozenset, int] = {}
-        for tri in coplanar:
+        edge_use: dict[frozenset, list[int]] = {}
+        for tri_index, tri in coplanar:
             for k in range(3):
-                edge_use[frozenset((tri[k], tri[(k + 1) % 3]))] = (
-                    edge_use.get(frozenset((tri[k], tri[(k + 1) % 3])), 0) + 1
-                )
-        for edge, count in edge_use.items():
-            if count == 1:
+                edge_use.setdefault(
+                    frozenset((tri[k], tri[(k + 1) % 3])), []
+                ).append(tri_index)
+        for edge, incident in edge_use.items():
+            if len(incident) == 1:
                 a, b = tuple(edge)
-                emit(vertex_key(a), vertex_key(b))
+                emit(vertex_key(a), vertex_key(b), incident[0])
 
-    polylines, junctions = _chain_segments(segments, coords)
+    polylines, junctions = _chain_segments(segments, producers, coords)
     return MeshSection(
         polylines=tuple(polylines),
         coplanar_triangles=len(coplanar),
@@ -582,9 +617,13 @@ def section_mesh(
 
 
 def _chain_segments(
-    segments: Mapping[frozenset, tuple[tuple, tuple]], coords: Mapping[tuple, Vec3]
+    segments: Mapping[frozenset, tuple[tuple, tuple]],
+    producers: Mapping[frozenset, Sequence[int]],
+    coords: Mapping[tuple, Vec3],
 ) -> tuple[list[SectionPolyline], list[Vec3]]:
-    ordered = [segments[key] for key in sorted(segments, key=lambda k: sorted(map(repr, k)))]
+    keys_ordered = sorted(segments, key=lambda k: sorted(map(repr, k)))
+    ordered = [segments[key] for key in keys_ordered]
+    ordered_producers = [tuple(producers.get(key, ())) for key in keys_ordered]
     adjacency: dict[tuple, list[tuple[tuple, int]]] = {}
     for index, (a, b) in enumerate(ordered):
         adjacency.setdefault(a, []).append((b, index))
@@ -593,22 +632,24 @@ def _chain_segments(
     junction_keys = sorted((k for k, adj in adjacency.items() if len(adj) >= 3), key=repr)
     ends = sorted((k for k, adj in adjacency.items() if len(adj) == 1), key=repr)
     used: set[int] = set()
-    runs: list[list[tuple]] = []
+    runs: list[tuple[list[tuple], list[int]]] = []
 
-    def walk(start: tuple, first: int) -> list[tuple]:
+    def walk(start: tuple, first: int) -> tuple[list[tuple], list[int]]:
         run = [start]
+        walked: list[int] = []
         current = start
         seg = first
         while True:
             used.add(seg)
+            walked.append(seg)
             a, b = ordered[seg]
             nxt = b if a == current else a
             run.append(nxt)
             if nxt in junction_keys or nxt == run[0]:
-                return run
+                return run, walked
             options = [s for _, s in adjacency[nxt] if s not in used]
             if len(options) != 1:
-                return run
+                return run, walked
             current = nxt
             seg = options[0]
 
@@ -621,13 +662,368 @@ def _chain_segments(
             runs.append(walk(a, index))
 
     polylines: list[SectionPolyline] = []
-    for run in runs:
+    for run, walked in runs:
         closed = len(run) > 2 and run[0] == run[-1]
         keys = run[:-1] if closed else run
+        # ``walked`` is one segment per step, so it is already parallel to the
+        # point run: len(keys) entries when the run closes, len(keys) - 1 when
+        # it does not. The assertion is the invariant, not a guess.
         polylines.append(
-            SectionPolyline(points=tuple(coords[k] for k in keys), closed=closed)
+            SectionPolyline(
+                points=tuple(coords[k] for k in keys),
+                closed=closed,
+                segment_triangles=tuple(ordered_producers[s] for s in walked),
+            )
         )
     return polylines, [coords[k] for k in junction_keys]
+
+
+# --------------------------------------------------------------------------
+# 1b. winding evidence, and what a section loop's own walls say about material
+# --------------------------------------------------------------------------
+
+#: What a loop's walls can be measured to say.  ``material-inside`` means the
+#: solid fills the loop (an outer boundary); ``material-outside`` means the loop
+#: is a hole in material (a bore, a pocket, a nut pocket).  ``contradictory``
+#: means the walls disagreed with themselves beyond the declared consensus
+#: floor, and ``unavailable`` means nothing licensed the question at all.
+LOOP_VERDICTS = {"material-inside", "material-outside", "contradictory", "unavailable"}
+
+#: The gate tokens this measurement can raise.  They are *recorded*, not acted
+#: on: this layer diagnoses, and the stage that refuses on them is the slab
+#: planner that does not exist yet.  Held as a closed set here for the same
+#: reason every other vocabulary in this package is closed -- a token nobody
+#: declared is a token nobody can write a handler for.
+LOOP_EVIDENCE_GATES = {
+    "loop-orientation-unavailable",
+    "slab-wall-unattributed",
+    "loop-material-contradictory",
+    "loop-parity-contradiction",
+}
+
+
+def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
+    """Is this mesh closed and consistently wound, and which way does it face?
+
+    This is the licence every material verdict below rests on, and it is the
+    *same* licence ``material_side`` already rests on in the segmentation stage:
+    a closed mesh with a non-zero signed volume has an outward direction, and
+    anything else does not.  Reporting a direction for an open or torn mesh
+    would be inventing the one fact the whole classification hangs from.
+
+    Two things are measured beyond that licence and reported rather than used,
+    because they are what tells a reader *why* a dirty mesh is dirty:
+    ``non_manifold_edges`` (an edge more than two triangles share) and
+    ``reversed_edges`` (an edge two triangles traverse the *same* way, which is
+    a winding flip rather than a hole).
+
+    Adjacency is keyed by exact vertex *position*, not by index: a dump exported
+    through a triangle-soup format repeats a position under several indices, and
+    keying by index would report every edge as a boundary on a perfectly closed
+    solid.  The weld is exact -- coordinates that differ in the last bit stay
+    distinct, which reads as "not closed", which is the honest answer for a mesh
+    whose vertices genuinely do not meet.
+    """
+    verts = _as_points(vertices, "vertices", 3)
+    faces = _as_triangle_indices(triangles, len(verts))
+
+    node = {}
+    weld: list[int] = []
+    for point in verts:
+        target = node.get(point)
+        if target is None:
+            target = len(node)
+            node[point] = target
+        weld.append(target)
+
+    directed: dict[tuple[int, int], int] = {}
+    degenerate = 0
+    volume = 0.0
+    for a, b, c in faces:
+        pa, pb, pc = verts[a], verts[b], verts[c]
+        if _unit(_cross(_sub(pb, pa), _sub(pc, pa))) is None:
+            # A zero-area triangle has no normal and no adjacency worth having.
+            # Counted, and excluded from both, never given a fabricated one.
+            degenerate += 1
+            continue
+        volume += _dot(pa, _cross(pb, pc)) / 6.0
+        wa, wb, wc = weld[a], weld[b], weld[c]
+        for i, j in ((wa, wb), (wb, wc), (wc, wa)):
+            directed[(i, j)] = directed.get((i, j), 0) + 1
+
+    boundary = non_manifold = reversed_edges = 0
+    seen: set[tuple[int, int]] = set()
+    for (i, j), forward in directed.items():
+        key = (i, j) if i < j else (j, i)
+        if key in seen:
+            continue
+        seen.add(key)
+        backward = directed.get((j, i), 0)
+        total = forward + backward
+        if total > 2:
+            non_manifold += 1
+        elif total == 1:
+            boundary += 1
+        elif forward == 2 or backward == 2:
+            reversed_edges += 1
+
+    closed = boundary == 0 and non_manifold == 0
+    winding = ("outward" if volume > 0.0 else "inward") if closed and volume != 0.0 else None
+    return {
+        "closed": closed,
+        "consistently_wound": reversed_edges == 0,
+        "signed_volume": volume,
+        "winding": winding,
+        "boundary_edges": boundary,
+        "non_manifold_edges": non_manifold,
+        "reversed_edges": reversed_edges,
+        "degenerate_triangles": degenerate,
+        "welded_positions": len(node),
+        "node_count": len(verts),
+        "unavailable_reason": (
+            None
+            if winding is not None
+            else "the mesh is not closed with a non-zero signed volume, so its winding carries no "
+            "inside/outside information"
+        ),
+    }
+
+
+def _as_triangle_indices(triangles: Any, vertex_count: int) -> list[tuple[int, int, int]]:
+    if isinstance(triangles, (str, bytes)) or not isinstance(triangles, Sequence):
+        raise ValueError("triangles must be a sequence of index triples.")
+    faces: list[tuple[int, int, int]] = []
+    for index, raw in enumerate(triangles):
+        if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence) or len(raw) != 3:
+            raise ValueError(f"triangles[{index}] must be a triple of vertex indices.")
+        tri: list[int] = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"triangles[{index}] must contain integer vertex indices.")
+            if not 0 <= value < vertex_count:
+                raise ValueError(
+                    f"triangles[{index}] references vertex {value}, which does not exist."
+                )
+            tri.append(value)
+        faces.append((tri[0], tri[1], tri[2]))
+    return faces
+
+
+def _polygon_contains(polygon: Sequence[tuple[float, float]], point: tuple[float, float]) -> bool:
+    """Even-odd ray crossing in 2-D. No tolerance, because none would be declared."""
+    inside = False
+    n = len(polygon)
+    for index in range(n):
+        ax, ay = polygon[index]
+        bx, by = polygon[(index + 1) % n]
+        if (ay > point[1]) != (by > point[1]):
+            span = by - ay
+            if span == 0.0:
+                continue
+            x = ax + (point[1] - ay) / span * (bx - ax)
+            if x > point[0]:
+                inside = not inside
+    return inside
+
+
+def loop_material_evidence(
+    section: MeshSection,
+    vertices: Any,
+    triangles: Any,
+    plane_normal: Any,
+    *,
+    consensus_fraction: float,
+    attribution_min_fraction: float,
+    triangle_regions: Mapping[int, str] | None = None,
+) -> dict[str, Any]:
+    """Measure, per closed loop of a section, which side of it the material is on.
+
+    The evidence is the mesh's **own winding**, not the fitted regions: every
+    triangle of a closed oriented mesh has an outward normal whether or not any
+    fitter ever accepted the surface it belongs to, so this measurement does not
+    inherit the fitters' coverage ceiling.  Fitted regions are consulted here for
+    *identity only* -- which region a wall came from -- and never for the side.
+
+    Per segment: the producing triangle's outward normal is projected into the
+    section plane and compared with the loop's own inward direction (read from
+    its signed area and traversal order).  An outward normal pointing *out* of
+    the loop votes ``material-inside``; one pointing *in* votes
+    ``material-outside``.  Votes are weighted by segment length, a segment two
+    triangles produced splits its length between them, and a segment whose
+    triangle is parallel to the section plane -- a cap facet the plane grazes --
+    has no in-plane direction at all and is counted as unattributed rather than
+    given a vote it cannot cast.
+
+    Both fractions are the caller's, declared with their rationale upstream:
+    ``consensus_fraction`` is the share of attributed length that must agree
+    before a verdict is a verdict, and ``attribution_min_fraction`` is how much
+    of a loop may go unattributed before the loop's walls are not evidence.
+
+    Nothing here refuses.  The gates a loop trips are named on the loop and
+    collected on the record; acting on them belongs to the stage that builds
+    slabs, which does not exist yet.
+    """
+    if not isinstance(consensus_fraction, (int, float)) or isinstance(consensus_fraction, bool):
+        raise ValueError("consensus_fraction must be a number the caller declared.")
+    if not 0.0 < float(consensus_fraction) <= 1.0:
+        raise ValueError("consensus_fraction must lie in (0, 1].")
+    if not isinstance(attribution_min_fraction, (int, float)) or isinstance(
+        attribution_min_fraction, bool
+    ):
+        raise ValueError("attribution_min_fraction must be a number the caller declared.")
+    if not 0.0 <= float(attribution_min_fraction) <= 1.0:
+        raise ValueError("attribution_min_fraction must lie in [0, 1].")
+
+    verts = _as_points(vertices, "vertices", 3)
+    faces = _as_triangle_indices(triangles, len(verts))
+    normal = _as_direction(plane_normal, "plane_normal")
+    u, v = _frame(normal)
+    winding = mesh_winding_evidence(verts, faces)
+    licensed = winding["winding"] is not None
+    flip = -1.0 if winding["winding"] == "inward" else 1.0
+
+    closed_loops = [
+        (index, line)
+        for index, line in enumerate(section.polylines)
+        if line.closed and len(line.points) >= 3
+    ]
+    # (u, v, normal) is right-handed -- u x v == normal -- so a loop whose
+    # shoelace area is positive here runs counter-clockwise seen from +normal.
+    projected = [
+        [(_dot(p, u), _dot(p, v)) for p in line.points] for _index, line in closed_loops
+    ]
+
+    loops: list[dict[str, Any]] = []
+    gates: set[str] = set()
+    for slot, (index, line) in enumerate(closed_loops):
+        flat = projected[slot]
+        n = len(flat)
+        area2 = sum(
+            flat[k][0] * flat[(k + 1) % n][1] - flat[(k + 1) % n][0] * flat[k][1] for k in range(n)
+        )
+        turn = 1.0 if area2 >= 0.0 else -1.0
+        depth = sum(
+            1
+            for other, points in enumerate(projected)
+            if other != slot and _polygon_contains(points, flat[0])
+        )
+
+        inside_length = outside_length = unattributed_length = 0.0
+        regions: set[str] = set()
+        provenance = line.segment_triangles
+        for k in range(n):
+            ax, ay = flat[k]
+            bx, by = flat[(k + 1) % n]
+            length = math.hypot(bx - ax, by - ay)
+            if length <= 0.0:
+                continue
+            # The loop's interior is to the left of travel for a counter-clockwise
+            # loop and to the right for a clockwise one; `turn` carries which.
+            inward = (-(by - ay) * turn, (bx - ax) * turn)
+            sources = provenance[k] if k < len(provenance) else ()
+            votes: list[float] = []
+            for tri_index in sources:
+                if tri_index >= len(faces):
+                    continue
+                if triangle_regions is not None and tri_index in triangle_regions:
+                    regions.add(triangle_regions[tri_index])
+                a, b, c = faces[tri_index]
+                outward = _unit(_cross(_sub(verts[b], verts[a]), _sub(verts[c], verts[a])))
+                if outward is None or not licensed:
+                    continue
+                outward = _scale(outward, flip)
+                planar = _sub(outward, _scale(normal, _dot(outward, normal)))
+                dot = planar[0] * u[0] + planar[1] * u[1] + planar[2] * u[2]
+                dotv = planar[0] * v[0] + planar[1] * v[1] + planar[2] * v[2]
+                if dot == 0.0 and dotv == 0.0:
+                    # The facet is parallel to the section plane: it bounds
+                    # material along the axis, not across the loop, so it has no
+                    # opinion about which side of the loop is solid.
+                    continue
+                votes.append(dot * inward[0] + dotv * inward[1])
+            if not votes:
+                unattributed_length += length
+                continue
+            share = length / len(votes)
+            for value in votes:
+                if value < 0.0:
+                    inside_length += share
+                elif value > 0.0:
+                    outside_length += share
+                else:
+                    unattributed_length += share
+
+        attributed = inside_length + outside_length
+        total = attributed + unattributed_length
+        consensus = (max(inside_length, outside_length) / attributed) if attributed > 0.0 else None
+        unattributed_fraction = (unattributed_length / total) if total > 0.0 else 1.0
+        loop_gates: list[str] = []
+        if not licensed:
+            verdict = "unavailable"
+            loop_gates.append("loop-orientation-unavailable")
+        elif attributed <= 0.0:
+            verdict = "unavailable"
+            loop_gates.append("slab-wall-unattributed")
+        elif consensus is not None and consensus < float(consensus_fraction):
+            verdict = "contradictory"
+            loop_gates.append("loop-material-contradictory")
+        else:
+            verdict = "material-inside" if inside_length >= outside_length else "material-outside"
+        if licensed and unattributed_fraction > float(attribution_min_fraction):
+            if "slab-wall-unattributed" not in loop_gates:
+                loop_gates.append("slab-wall-unattributed")
+        parity_expected = "material-inside" if depth % 2 == 0 else "material-outside"
+        parity_agrees = (
+            (verdict == parity_expected) if verdict in {"material-inside", "material-outside"} else None
+        )
+        if parity_agrees is False:
+            loop_gates.append("loop-parity-contradiction")
+        gates.update(loop_gates)
+        loops.append(
+            {
+                "polyline_index": index,
+                "point_count": n,
+                "segment_count": len(provenance),
+                "signed_area_mm2": area2 / 2.0,
+                "perimeter_mm": total,
+                "depth": depth,
+                "verdict": verdict,
+                "consensus_fraction": consensus,
+                "material_inside_length_mm": inside_length,
+                "material_outside_length_mm": outside_length,
+                "unattributed_length_mm": unattributed_length,
+                "unattributed_fraction": unattributed_fraction,
+                "parity_expected": parity_expected,
+                "parity_agrees": parity_agrees,
+                "wall_regions": sorted(regions),
+                "gates": loop_gates,
+            }
+        )
+
+    unknown = gates - LOOP_EVIDENCE_GATES
+    if unknown:  # pragma: no cover - the set and its uses are edited together
+        raise ValueError(
+            f"{sorted(unknown)} is outside this layer's closed gate vocabulary; a token nobody "
+            "declared is a token nobody can write a handler for."
+        )
+    return {
+        "winding": winding,
+        "declared": {
+            "loop_material_consensus_fraction": float(consensus_fraction),
+            "loop_attribution_min_fraction": float(attribution_min_fraction),
+        },
+        "closed_loop_count": len(loops),
+        "open_polyline_count": sum(1 for line in section.polylines if not line.closed),
+        "junction_count": len(section.junctions),
+        "coplanar_triangles": section.coplanar_triangles,
+        "loops": loops,
+        "gates": sorted(gates),
+        "note": (
+            "Verdicts come from the mesh's own winding, never from the fitted regions: fit "
+            "coverage is a ceiling this measurement does not inherit. `wall_regions` is identity "
+            "only. Nothing here refuses; the gates are recorded for the stage that will."
+        ),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -643,6 +1039,11 @@ class SketchEntity:
     share endpoints exactly and a coincident constraint is trivially satisfiable.
     ``center``/``radius``/``mid`` are present only for arcs and circles — a line
     reports them absent rather than carrying a fabricated centre.
+
+    ``triangles`` is the sorted set of dump triangle indices that produced the
+    segments this entity covers — present only when the caller passed the
+    section's own ``segment_triangles`` through, absent otherwise, because an
+    empty list would read as "measured, and nothing produced it".
     """
 
     kind: str
@@ -653,6 +1054,7 @@ class SketchEntity:
     center: Vec3 | None = None
     radius: float | None = None
     mid: Vec3 | None = None
+    triangles: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not _in_closed_set(self.kind, ENTITY_KINDS):
@@ -666,6 +1068,8 @@ class SketchEntity:
             "residual": self.residual,
             "point_count": self.point_count,
         }
+        if self.triangles:
+            out["triangles"] = list(self.triangles)
         if self.center is not None:
             out["center"] = list(self.center)
         if self.radius is not None:
@@ -720,6 +1124,7 @@ def classify_polyline(
     tolerance: float,
     closed: bool = False,
     normal: Any = None,
+    segment_triangles: Sequence[Sequence[int]] | None = None,
 ) -> tuple[SketchEntity, ...]:
     """Split a section polyline into line and arc runs within ``tolerance``.
 
@@ -731,10 +1136,17 @@ def classify_polyline(
     A closed polyline is first rotated to start at its sharpest corner, so a
     square section yields four lines rather than five; a closed loop that fits a
     single circle within tolerance is reported as one ``circle`` entity.
+
+    ``segment_triangles`` is the section's own per-segment provenance — one
+    entry per segment, exactly as ``SectionPolyline.segment_triangles`` carries
+    it — and when it is given each entity reports the triangles that produced
+    the segments it covers.  Passing it is optional and changes nothing else:
+    every caller that does not is byte-identical to before.
     """
     pts = list(_as_points(points, "points", 2))
     tol = _as_tolerance(tolerance, "tolerance")
     plane_normal = None if normal is None else _as_direction(normal, "normal")
+    segs = _as_segment_triangles(segment_triangles, len(pts), closed)
 
     if closed:
         if len(pts) < 3:
@@ -753,10 +1165,15 @@ def classify_polyline(
                     center=centre,
                     radius=radius,
                     mid=pts[len(pts) // 2],
+                    triangles=_union_triangles(segs, 0, len(pts)) if segs else (),
                 ),
             )
         pivot = _sharpest_corner(pts)
         pts = pts[pivot:] + pts[:pivot] + [pts[pivot]]
+        if segs is not None:
+            # The points rotated, so the segments rotate with them: new segment
+            # i is old segment (pivot + i) % n, which keeps the parallel intact.
+            segs = segs[pivot:] + segs[:pivot]
 
     _n, u, v = _plane_basis(pts, plane_normal)
     entities: list[SketchEntity] = []
@@ -789,6 +1206,7 @@ def classify_polyline(
                     center=centre,
                     radius=radius,
                     mid=pts[(i + arc_end) // 2],
+                    triangles=_union_triangles(segs, i, arc_end) if segs else (),
                 )
             )
             i = arc_end
@@ -800,10 +1218,57 @@ def classify_polyline(
                 end=pts[line_end],
                 residual=_line_residual(pts[i : line_end + 1]),
                 point_count=line_end - i + 1,
+                triangles=_union_triangles(segs, i, line_end) if segs else (),
             )
         )
         i = line_end
     return tuple(entities)
+
+
+def _as_segment_triangles(
+    raw: Any, point_count: int, closed: bool
+) -> list[tuple[int, ...]] | None:
+    """Validate per-segment provenance against the point run it must parallel.
+
+    A provenance list that does not have exactly one entry per segment is not a
+    slightly-wrong list, it is a list nobody can index safely -- so it raises
+    here rather than silently attributing a segment to its neighbour's triangle.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        raise ValueError("segment_triangles must be a sequence of index tuples.")
+    expected = point_count if closed else max(point_count - 1, 0)
+    if len(raw) != expected:
+        raise ValueError(
+            f"segment_triangles carries {len(raw)} entries for {point_count} "
+            f"{'closed' if closed else 'open'} points, which implies {expected} segments."
+        )
+    out: list[tuple[int, ...]] = []
+    for index, entry in enumerate(raw):
+        if isinstance(entry, (str, bytes)) or not isinstance(entry, Sequence):
+            raise ValueError(f"segment_triangles[{index}] must be a sequence of triangle indices.")
+        row: list[int] = []
+        for value in entry:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"segment_triangles[{index}] must contain non-negative triangle indices."
+                )
+            row.append(value)
+        out.append(tuple(row))
+    return out
+
+
+def _union_triangles(
+    segs: Sequence[Sequence[int]] | None, start: int, end: int
+) -> tuple[int, ...]:
+    """The triangles behind segments ``start`` .. ``end - 1``, sorted and deduped."""
+    if segs is None:
+        return ()
+    found: set[int] = set()
+    for index in range(start, min(end, len(segs))):
+        found.update(segs[index])
+    return tuple(sorted(found))
 
 
 def _sharpest_corner(points: Sequence[Vec3]) -> int:

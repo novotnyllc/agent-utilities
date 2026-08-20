@@ -225,6 +225,75 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual("profile-ambiguous", caught.exception.reason)
         self.assertEqual(2, len(caught.exception.detail["closed_loop_point_counts"]))
 
+    def test_the_ambiguous_refusal_now_names_every_loops_walls_and_material_side(self):
+        # The refusal is unchanged -- two loops still stop this emitter -- but a
+        # loop count is not a diagnosis. The detail now carries what was measured
+        # at that station, which is what makes the next reader able to see two
+        # disjoint outer loops rather than guess at an internal void.
+        dump = fx.two_box_dump()
+        with self.assertRaises(ReconstructionRefused) as caught:
+            plan_emission(fx.program(dump.sha256), dump, self.spec)
+        evidence = caught.exception.detail["loop_evidence"]
+        self.assertEqual("outward", evidence["winding"]["winding"])
+        self.assertTrue(evidence["winding"]["closed"])
+        self.assertEqual(2, evidence["closed_loop_count"])
+        self.assertEqual(
+            ["material-inside", "material-inside"], [row["verdict"] for row in evidence["loops"]]
+        )
+        for row in evidence["loops"]:
+            self.assertEqual(1.0, row["consensus_fraction"])
+            self.assertEqual(0, row["depth"])
+            self.assertTrue(row["parity_agrees"])
+            # This emitter never sees the fit record, so it names no regions.
+            self.assertEqual([], row["wall_regions"])
+        self.assertEqual([], evidence["gates"])
+        self.assertEqual(
+            {"loop_material_consensus_fraction": 0.95, "loop_attribution_min_fraction": 0.05},
+            evidence["declared"],
+        )
+
+    def test_a_single_loop_station_pays_nothing_for_the_evidence_it_does_not_need(self):
+        # The measurement is a whole winding pass over the dump. It runs only
+        # where the station is about to be ambiguous; a one-loop section builds
+        # exactly as it did before, with no evidence table anywhere in the plan.
+        plan = plan_emission(fx.program(self.dump.sha256), self.dump, self.spec)
+        self.assertNotIn("loop_evidence", json.dumps(plan))
+
+    def test_a_deliberately_inverted_wall_reaches_the_contradictory_verdict(self):
+        # One triangle of one wall wound the other way: the mesh stays closed and
+        # keeps its volume, so the question stays licensed, and the walls of that
+        # loop then disagree with themselves past the declared floor.
+        dump = fx.two_box_dump()
+        station = 0.0  # the fixture program's own mid-station, on the lower cap
+        triangles = list(dump.triangles)
+        walls = [
+            index
+            for index in range(0, len(triangles), 3)
+            if sorted(dump.vertices_mm[3 * triangles[index + k] + 2] for k in range(3))[:2]
+            == [station, station]
+            and max(dump.vertices_mm[3 * triangles[index + k] + 2] for k in range(3)) > station
+        ]
+        # Two of the twenty-four wall facets this loop is cut from, so the
+        # dissent is 1/12 of its length -- comfortably past the declared 5%.
+        for index in walls[:2]:
+            triangles[index], triangles[index + 2] = triangles[index + 2], triangles[index]
+        inverted = fx.make_dump(
+            [
+                tuple(dump.vertices_mm[3 * i + k] for k in range(3))
+                for i in range(len(dump.vertices_mm) // 3)
+            ],
+            [tuple(triangles[i : i + 3]) for i in range(0, len(triangles), 3)],
+            face_groups=list(dump.face_group_ids),
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            plan_emission(fx.program(inverted.sha256), inverted, self.spec)
+        evidence = caught.exception.detail["loop_evidence"]
+        self.assertFalse(evidence["winding"]["consistently_wound"])
+        self.assertIn("loop-material-contradictory", evidence["gates"])
+        contradictory = [r for r in evidence["loops"] if r["verdict"] == "contradictory"]
+        self.assertEqual(1, len(contradictory))
+        self.assertLess(contradictory[0]["consensus_fraction"], 0.95)
+
     def test_a_plane_that_misses_the_mesh_refuses_rather_than_inventing_a_profile(self):
         program = fx.program(
             self.dump.sha256,

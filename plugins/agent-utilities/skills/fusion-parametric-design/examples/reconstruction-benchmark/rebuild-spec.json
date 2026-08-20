@@ -34,6 +34,14 @@
     "entity_match_tolerance_mm": {
       "value": 0.05,
       "rationale": "the window for binding a built face back to the fitted region it came from, at the scale these parts are modelled to."
+    },
+    "loop_material_consensus_fraction": {
+      "value": 0.95,
+      "rationale": "a section loop's walls vote by length for which side of the loop the material is on, and on a designed export they should be unanimous. Five per cent is the room a blend crossing or a sliver triangle at a corner needs; beyond that the winding is not noisy, it is saying the section crossed a junction or a degenerate feature, which is a finding and not a tolerance to widen."
+    },
+    "loop_attribution_min_fraction": {
+      "value": 0.05,
+      "rationale": "how much of a loop's length may lie on triangles that cast no vote -- degenerate facets, and facets parallel to the section plane that bound material along the axis rather than across the loop -- before the loop's walls stop being evidence. The same five per cent as the consensus slack, for the same reason: these sections are taken at the mid-station precisely to be far from the caps, so a loop that grazes one there is a station problem rather than a mesh to make allowances for."
     }
   }
 }

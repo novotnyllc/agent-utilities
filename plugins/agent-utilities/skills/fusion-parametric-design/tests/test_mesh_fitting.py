@@ -5,11 +5,17 @@ import unittest
 
 from fusion_design.mesh_fitting import (
     INTENT_KINDS,
+    LOOP_EVIDENCE_GATES,
+    LOOP_VERDICTS,
     IntentProposal,
+    MeshSection,
     PrimitiveFit,
+    SectionPolyline,
     SketchEntity,
     best_fit,
     classify_polyline,
+    loop_material_evidence,
+    mesh_winding_evidence,
     fit_face_group,
     fit_primitive,
     normal_constrained_axis,
@@ -316,6 +322,382 @@ class SectionValidationTests(unittest.TestCase):
     def test_unhashable_triangle_payload_is_a_value_error(self) -> None:
         with self.assertRaises(ValueError):
             section_mesh(BOX_VERTS, [{"a": 1}], (0.0, 0.0, 0.5), (0.0, 0.0, 1.0))
+
+
+# --------------------------------------------------------------------------
+# 1b. section provenance and the loop material evidence built on it
+# --------------------------------------------------------------------------
+
+
+def scaled(verts, factor, centre=(0.5, 0.5, 0.5)):
+    return [tuple(c + (p[i] - c) * factor for i, c in enumerate(centre)) for p in verts]
+
+
+def combine(*meshes):
+    """Concatenate meshes, renumbering triangles into one index space."""
+    verts: list = []
+    tris: list = []
+    for mesh_verts, mesh_tris in meshes:
+        base = len(verts)
+        verts.extend(mesh_verts)
+        tris.extend((a + base, b + base, c + base) for a, b, c in mesh_tris)
+    return verts, tris
+
+
+def reversed_tris(tris):
+    return [(c, b, a) for a, b, c in tris]
+
+
+def crossing_triangles(verts, tris, station=0.5):
+    return [
+        index
+        for index, tri in enumerate(tris)
+        if min(verts[v][2] for v in tri) < station < max(verts[v][2] for v in tri)
+    ]
+
+
+MID_PLANE = ((0.0, 0.0, 0.5), (0.0, 0.0, 1.0))
+
+
+def evidence_at(verts, tris, point=MID_PLANE[0], normal=MID_PLANE[1], **overrides):
+    kwargs = {"consensus_fraction": 0.95, "attribution_min_fraction": 0.05}
+    kwargs.update(overrides)
+    section = section_mesh(verts, tris, point, normal)
+    return loop_material_evidence(section, verts, tris, normal, **kwargs)
+
+
+class SectionProvenanceTests(unittest.TestCase):
+    """Every segment names the triangle it was cut from -- the wire B rests on."""
+
+    def test_every_segment_of_a_closed_loop_names_one_crossing_triangle(self) -> None:
+        loop = section_mesh(BOX_VERTS, BOX_TRIS, *MID_PLANE).polylines[0]
+        self.assertTrue(loop.closed)
+        # A closed run has exactly one segment per point.
+        self.assertEqual(len(loop.points), len(loop.segment_triangles))
+        named = [t for entry in loop.segment_triangles for t in entry]
+        self.assertEqual(8, len(named))
+        for index in named:
+            zs = [BOX_VERTS[v][2] for v in BOX_TRIS[index]]
+            self.assertLess(min(zs), 0.5)
+            self.assertGreater(max(zs), 0.5)
+
+    def test_an_open_run_carries_one_fewer_segment_than_points(self) -> None:
+        verts = [(0.0, 0.0, -1.0), (1.0, 0.0, -1.0), (0.5, 0.0, 1.0)]
+        section = section_mesh(verts, [(0, 1, 2)], *MID_PLANE)
+        line = section.polylines[0]
+        self.assertFalse(line.closed)
+        self.assertEqual(len(line.points) - 1, len(line.segment_triangles))
+        self.assertEqual(((0,),), line.segment_triangles)
+
+    def test_an_edge_two_triangles_share_records_both_producers(self) -> None:
+        verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.5, 1.0, 1.0), (0.5, -1.0, 1.0)]
+        section = section_mesh(verts, [(0, 1, 2), (1, 0, 3)], (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+        line = section.polylines[0]
+        self.assertEqual(((0, 1),), line.segment_triangles)
+
+    def test_a_coplanar_face_names_both_its_own_triangle_and_the_side_it_meets(self) -> None:
+        section = section_mesh(BOX_VERTS, BOX_TRIS, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+        loop = section.polylines[0]
+        self.assertEqual(len(loop.points), len(loop.segment_triangles))
+        named = {t for entry in loop.segment_triangles for t in entry}
+        coplanar = {
+            i for i, tri in enumerate(BOX_TRIS) if all(BOX_VERTS[v][2] == 0.0 for v in tri)
+        }
+        # The face's own boundary edge is also an in-plane edge of the side wall
+        # that meets it there, and both producers are recorded: which of the two
+        # a segment "really" came from is not a question the geometry answers.
+        self.assertTrue(coplanar < named)
+        # Four side triangles, one per wall of the box, plus the two cap ones.
+        self.assertEqual(4, len(named - coplanar))
+        for entry in loop.segment_triangles:
+            self.assertEqual(2, len(entry))
+            self.assertEqual(1, len(set(entry) & coplanar))
+
+    def test_provenance_is_absent_from_to_dict_when_it_was_never_measured(self) -> None:
+        bare = SectionPolyline(points=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)), closed=False)
+        self.assertNotIn("segment_triangles", bare.to_dict())
+        measured = section_mesh(BOX_VERTS, BOX_TRIS, *MID_PLANE).polylines[0]
+        self.assertIn("segment_triangles", measured.to_dict())
+
+
+class EntityProvenanceTests(unittest.TestCase):
+    def test_entities_report_the_triangles_of_the_segments_they_cover(self) -> None:
+        loop = section_mesh(BOX_VERTS, BOX_TRIS, *MID_PLANE).polylines[0]
+        entities = classify_polyline(
+            loop.points,
+            tolerance=1e-9,
+            closed=True,
+            normal=(0.0, 0.0, 1.0),
+            segment_triangles=loop.segment_triangles,
+        )
+        self.assertEqual(["line"] * 4, [e.kind for e in entities])
+        covered = sorted(t for e in entities for t in e.triangles)
+        self.assertEqual(sorted(t for entry in loop.segment_triangles for t in entry), covered)
+        for entity in entities:
+            self.assertEqual(tuple(sorted(set(entity.triangles))), entity.triangles)
+            self.assertIn("triangles", entity.to_dict())
+
+    def test_a_caller_that_passes_nothing_gets_exactly_what_it_got_before(self) -> None:
+        loop = section_mesh(BOX_VERTS, BOX_TRIS, *MID_PLANE).polylines[0]
+        entities = classify_polyline(
+            loop.points, tolerance=1e-9, closed=True, normal=(0.0, 0.0, 1.0)
+        )
+        for entity in entities:
+            self.assertEqual((), entity.triangles)
+            self.assertNotIn("triangles", entity.to_dict())
+
+    def test_provenance_that_does_not_parallel_the_points_is_refused(self) -> None:
+        loop = section_mesh(BOX_VERTS, BOX_TRIS, *MID_PLANE).polylines[0]
+        with self.assertRaises(ValueError):
+            classify_polyline(
+                loop.points,
+                tolerance=1e-9,
+                closed=True,
+                normal=(0.0, 0.0, 1.0),
+                segment_triangles=loop.segment_triangles[:-1],
+            )
+
+
+class MeshWindingEvidenceTests(unittest.TestCase):
+    def test_a_closed_outward_box_licenses_the_question(self) -> None:
+        winding = mesh_winding_evidence(BOX_VERTS, BOX_TRIS)
+        self.assertTrue(winding["closed"])
+        self.assertTrue(winding["consistently_wound"])
+        self.assertEqual("outward", winding["winding"])
+        self.assertAlmostEqual(1.0, winding["signed_volume"], places=12)
+        self.assertIsNone(winding["unavailable_reason"])
+
+    def test_the_same_box_wound_inward_is_licensed_and_says_so(self) -> None:
+        winding = mesh_winding_evidence(BOX_VERTS, reversed_tris(BOX_TRIS))
+        self.assertTrue(winding["closed"])
+        self.assertEqual("inward", winding["winding"])
+        self.assertAlmostEqual(-1.0, winding["signed_volume"], places=12)
+
+    def test_a_hole_in_the_mesh_is_a_boundary_and_licenses_nothing(self) -> None:
+        winding = mesh_winding_evidence(BOX_VERTS, BOX_TRIS[:-1])
+        self.assertFalse(winding["closed"])
+        self.assertEqual(3, winding["boundary_edges"])
+        self.assertIsNone(winding["winding"])
+        self.assertIn("not closed", winding["unavailable_reason"])
+
+    def test_one_flipped_triangle_is_reported_as_a_reversal_not_a_hole(self) -> None:
+        tris = list(BOX_TRIS)
+        tris[0] = tuple(reversed(tris[0]))
+        winding = mesh_winding_evidence(BOX_VERTS, tris)
+        self.assertEqual(0, winding["boundary_edges"])
+        self.assertEqual(0, winding["non_manifold_edges"])
+        self.assertEqual(3, winding["reversed_edges"])
+        self.assertFalse(winding["consistently_wound"])
+
+    def test_an_unwelded_dump_is_welded_by_position_before_the_edges_are_counted(self) -> None:
+        # Triangle soup: every triangle carries its own copy of each corner,
+        # which is the shape a mesh exported through STL arrives in.
+        verts = [BOX_VERTS[v] for tri in BOX_TRIS for v in tri]
+        tris = [(3 * i, 3 * i + 1, 3 * i + 2) for i in range(len(BOX_TRIS))]
+        winding = mesh_winding_evidence(verts, tris)
+        self.assertEqual(36, winding["node_count"])
+        self.assertEqual(8, winding["welded_positions"])
+        self.assertTrue(winding["closed"])
+        self.assertEqual("outward", winding["winding"])
+
+    def test_a_zero_area_triangle_is_counted_and_excluded(self) -> None:
+        verts = list(BOX_VERTS) + [(2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (4.0, 0.0, 0.0)]
+        tris = list(BOX_TRIS) + [(8, 9, 10)]
+        winding = mesh_winding_evidence(verts, tris)
+        self.assertEqual(1, winding["degenerate_triangles"])
+        self.assertTrue(winding["closed"])
+
+
+class LoopMaterialEvidenceTests(unittest.TestCase):
+    """Every verdict and every gate in the design's loop ladder, on synthetic meshes."""
+
+    def test_a_solid_boxs_outline_measures_material_inside_it(self) -> None:
+        evidence = evidence_at(BOX_VERTS, BOX_TRIS)
+        self.assertEqual(1, evidence["closed_loop_count"])
+        loop = evidence["loops"][0]
+        self.assertEqual("material-inside", loop["verdict"])
+        self.assertEqual(1.0, loop["consensus_fraction"])
+        self.assertEqual(0, loop["depth"])
+        self.assertTrue(loop["parity_agrees"])
+        self.assertEqual(0.0, loop["unattributed_length_mm"])
+        self.assertEqual([], evidence["gates"])
+
+    def test_the_verdict_is_the_same_whichever_way_the_mesh_is_wound(self) -> None:
+        outward = evidence_at(BOX_VERTS, BOX_TRIS)["loops"][0]
+        inward = evidence_at(BOX_VERTS, reversed_tris(BOX_TRIS))["loops"][0]
+        self.assertEqual("material-inside", outward["verdict"])
+        self.assertEqual(outward["verdict"], inward["verdict"])
+        self.assertEqual(outward["consensus_fraction"], inward["consensus_fraction"])
+
+    def test_a_cavity_reads_as_material_outside_its_own_loop(self) -> None:
+        # A closed shell with a void: the outer box wound outward, an inner box
+        # wound inward. That is what a solid with an internal cavity *is* as a
+        # mesh, and both loops are measured rather than assumed.
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, reversed_tris(BOX_TRIS)))
+        evidence = evidence_at(verts, tris)
+        self.assertEqual("outward", evidence["winding"]["winding"])
+        loops = sorted(evidence["loops"], key=lambda row: row["depth"])
+        self.assertEqual([0, 1], [row["depth"] for row in loops])
+        self.assertEqual(["material-inside", "material-outside"], [r["verdict"] for r in loops])
+        self.assertEqual([1.0, 1.0], [r["consensus_fraction"] for r in loops])
+        self.assertEqual([True, True], [r["parity_agrees"] for r in loops])
+        self.assertEqual([], evidence["gates"])
+
+    def test_a_deliberately_inverted_wall_makes_the_loop_contradictory(self) -> None:
+        # One of the triangles the mid-plane crosses is wound the other way. The
+        # mesh is still closed and still encloses a volume, so the question stays
+        # licensed -- and the walls then disagree with themselves.
+        tris = list(BOX_TRIS)
+        flipped = crossing_triangles(BOX_VERTS, tris)[0]
+        tris[flipped] = tuple(reversed(tris[flipped]))
+        evidence = evidence_at(BOX_VERTS, tris)
+        self.assertTrue(evidence["winding"]["closed"])
+        self.assertFalse(evidence["winding"]["consistently_wound"])
+        loop = evidence["loops"][0]
+        self.assertEqual("contradictory", loop["verdict"])
+        self.assertLess(loop["consensus_fraction"], 0.95)
+        self.assertGreater(loop["consensus_fraction"], 0.5)
+        self.assertIn("loop-material-contradictory", loop["gates"])
+        self.assertIn("loop-material-contradictory", evidence["gates"])
+
+    def test_a_slack_enough_floor_turns_that_contradiction_into_a_verdict(self) -> None:
+        """The floor is the caller's number, and it is the only thing that moves."""
+        tris = list(BOX_TRIS)
+        flipped = crossing_triangles(BOX_VERTS, tris)[0]
+        tris[flipped] = tuple(reversed(tris[flipped]))
+        loose = evidence_at(BOX_VERTS, tris, consensus_fraction=0.5)["loops"][0]
+        self.assertEqual("material-inside", loose["verdict"])
+
+    def test_a_torn_mesh_makes_every_loop_unavailable_by_name(self) -> None:
+        evidence = evidence_at(BOX_VERTS, BOX_TRIS[:-1])
+        self.assertIsNone(evidence["winding"]["winding"])
+        for loop in evidence["loops"]:
+            self.assertEqual("unavailable", loop["verdict"])
+            self.assertEqual(["loop-orientation-unavailable"], loop["gates"])
+        self.assertEqual(["loop-orientation-unavailable"], evidence["gates"])
+
+    def test_a_facet_parallel_to_the_section_abstains_rather_than_dissenting(self) -> None:
+        # Sectioning exactly on the z = 0 cap. Every segment there names two
+        # producers: the cap triangle, whose normal is along the section normal
+        # and so has no opinion about which side of the loop is solid, and the
+        # side wall that meets it, which does. An abstention is not dissent, so
+        # the wall decides the segment outright and consensus stays whole.
+        evidence = evidence_at(BOX_VERTS, BOX_TRIS, point=(0.0, 0.0, 0.0))
+        loop = evidence["loops"][0]
+        self.assertEqual("material-inside", loop["verdict"])
+        self.assertEqual(1.0, loop["consensus_fraction"])
+        self.assertEqual(0.0, loop["unattributed_length_mm"])
+        self.assertEqual([], evidence["gates"])
+
+    def test_a_loop_whose_walls_are_all_degenerate_is_unattributed_by_name(self) -> None:
+        # The one case the winding cannot speak to at all: every producer of
+        # every segment is a zero-area triangle, so nothing votes. The section is
+        # built here rather than cut, because a closed mesh does not offer a loop
+        # whose whole length sits on degenerate facets -- which is the point: the
+        # gate exists for a mesh that is dirty in a way this box is not.
+        verts = list(BOX_VERTS) + [(2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (4.0, 0.0, 0.0)]
+        tris = list(BOX_TRIS) + [(8, 9, 10)]
+        dead = len(tris) - 1
+        square = ((0.0, 0.0, 0.5), (1.0, 0.0, 0.5), (1.0, 1.0, 0.5), (0.0, 1.0, 0.5))
+        section = MeshSection(
+            polylines=(
+                SectionPolyline(
+                    points=square, closed=True, segment_triangles=((dead,),) * 4
+                ),
+            ),
+            coplanar_triangles=0,
+            vertex_touches=0,
+            junctions=(),
+        )
+        evidence = loop_material_evidence(
+            section,
+            verts,
+            tris,
+            (0.0, 0.0, 1.0),
+            consensus_fraction=0.95,
+            attribution_min_fraction=0.05,
+        )
+        loop = evidence["loops"][0]
+        self.assertEqual("unavailable", loop["verdict"])
+        self.assertEqual(1.0, loop["unattributed_fraction"])
+        self.assertEqual(["slab-wall-unattributed"], loop["gates"])
+        self.assertEqual(["slab-wall-unattributed"], evidence["gates"])
+
+    def test_winding_that_disagrees_with_nesting_parity_is_named(self) -> None:
+        # A second solid box sitting inside the first, both wound outward. That
+        # is neither a cavity nor a boss: it is geometry whose winding and whose
+        # nesting cannot both be right, and it says so by name.
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, BOX_TRIS))
+        evidence = evidence_at(verts, tris)
+        loops = sorted(evidence["loops"], key=lambda row: row["depth"])
+        self.assertEqual([0, 1], [row["depth"] for row in loops])
+        self.assertEqual(["material-inside", "material-inside"], [r["verdict"] for r in loops])
+        self.assertEqual([True, False], [r["parity_agrees"] for r in loops])
+        self.assertEqual(["loop-parity-contradiction"], evidence["gates"])
+
+    def test_an_island_inside_a_cavity_is_depth_two_and_material_inside(self) -> None:
+        # Outer solid, a void inside it, a boss standing in the void: the
+        # design's island row, measured rather than assumed.
+        verts, tris = combine(
+            (BOX_VERTS, BOX_TRIS),
+            (scaled(BOX_VERTS, 0.6), reversed_tris(BOX_TRIS)),
+            (scaled(BOX_VERTS, 0.2), BOX_TRIS),
+        )
+        evidence = evidence_at(verts, tris)
+        loops = sorted(evidence["loops"], key=lambda row: row["depth"])
+        self.assertEqual([0, 1, 2], [row["depth"] for row in loops])
+        self.assertEqual(
+            ["material-inside", "material-outside", "material-inside"],
+            [row["verdict"] for row in loops],
+        )
+        self.assertEqual([True, True, True], [row["parity_agrees"] for row in loops])
+        self.assertEqual([], evidence["gates"])
+
+    def test_wall_regions_are_identity_only_and_never_the_verdict(self) -> None:
+        regions = {index: "region-a" for index in range(len(BOX_TRIS))}
+        named = evidence_at(BOX_VERTS, BOX_TRIS, triangle_regions=regions)
+        bare = evidence_at(BOX_VERTS, BOX_TRIS)
+        self.assertEqual(["region-a"], named["loops"][0]["wall_regions"])
+        self.assertEqual([], bare["loops"][0]["wall_regions"])
+        self.assertEqual(bare["loops"][0]["verdict"], named["loops"][0]["verdict"])
+        self.assertEqual(
+            bare["loops"][0]["consensus_fraction"], named["loops"][0]["consensus_fraction"]
+        )
+
+    def test_a_loop_whose_walls_no_fitter_claimed_still_gets_a_verdict(self) -> None:
+        """The evidence hierarchy: winding does not inherit the fitters' ceiling."""
+        evidence = evidence_at(BOX_VERTS, BOX_TRIS, triangle_regions={})
+        self.assertEqual("material-inside", evidence["loops"][0]["verdict"])
+        self.assertEqual([], evidence["loops"][0]["wall_regions"])
+
+    def test_the_declared_fractions_are_the_callers_and_are_range_checked(self) -> None:
+        for bad in (0.0, -0.5, 1.5, True, "1"):
+            with self.subTest(consensus=bad), self.assertRaises(ValueError):
+                evidence_at(BOX_VERTS, BOX_TRIS, consensus_fraction=bad)
+        for bad in (-0.1, 1.5, True, "0"):
+            with self.subTest(attribution=bad), self.assertRaises(ValueError):
+                evidence_at(BOX_VERTS, BOX_TRIS, attribution_min_fraction=bad)
+        self.assertEqual(
+            {"loop_material_consensus_fraction": 0.5, "loop_attribution_min_fraction": 0.25},
+            evidence_at(
+                BOX_VERTS, BOX_TRIS, consensus_fraction=0.5, attribution_min_fraction=0.25
+            )["declared"],
+        )
+
+    def test_every_gate_it_can_raise_is_in_its_own_closed_vocabulary(self) -> None:
+        self.assertEqual(
+            {
+                "loop-orientation-unavailable",
+                "slab-wall-unattributed",
+                "loop-material-contradictory",
+                "loop-parity-contradiction",
+            },
+            LOOP_EVIDENCE_GATES,
+        )
+        for verdict in ("material-inside", "material-outside", "contradictory", "unavailable"):
+            self.assertIn(verdict, LOOP_VERDICTS)
 
 
 # --------------------------------------------------------------------------

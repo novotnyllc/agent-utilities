@@ -41,6 +41,7 @@ from .manifest import (
 from .mesh_datum import ReconstructionRefused, refusal
 from .mesh_dump import MeshDump, read_mesh_dump
 from .mesh_fitting import (
+    LOOP_EVIDENCE_GATES,
     Vec3,
     _add,
     _dot,
@@ -48,6 +49,7 @@ from .mesh_fitting import (
     _scale,
     _sub,
     classify_polyline,
+    loop_material_evidence,
     section_mesh,
 )
 from .mesh_reconstruction import _source_evidence, require_classification
@@ -115,6 +117,20 @@ REBUILD_THRESHOLD_FIELDS = {
     "constraint_displacement_tolerance_mm",
     "constraint_rejection_budget",
     "entity_match_tolerance_mm",
+    "loop_material_consensus_fraction",
+    "loop_attribution_min_fraction",
+}
+
+#: The two loop-evidence thresholds are *fractions of a length*, so on top of the
+#: usual positive-and-declared check they carry an upper bound: a consensus floor
+#: above 1.0 can never be met and a tolerated-unattributed share above 1.0
+#: tolerates everything, and both would be a threshold that silently does not
+#: work. Declared like every other number this stage compares against; they buy
+#: diagnosis and nothing else today, because the verdicts they gate are recorded
+#: and acted on by nothing.
+REBUILD_FRACTION_THRESHOLDS = {
+    "loop_material_consensus_fraction",
+    "loop_attribution_min_fraction",
 }
 
 REBUILD_REFUSALS = {
@@ -131,6 +147,11 @@ REBUILD_REFUSALS = {
     "entity-resolution-ambiguous",
     "parameter-name-collision",
     "program-parameter-unbound",
+    # Declared now, raised by nothing yet: the 2.5D loop ladder measures these
+    # and records them on the profile-ambiguous evidence table, and the slab
+    # planner that refuses on them is a later unit. Declaring them here is what
+    # makes the diagnostic record's tokens lookup-able instead of free text.
+    *LOOP_EVIDENCE_GATES,
 }
 
 REBUILD_REFUSAL_ALTERNATIVES = {
@@ -195,6 +216,36 @@ REBUILD_REFUSAL_ALTERNATIVES = {
     "program-parameter-unbound": (
         "An archetype's extent, radius, hole diameter or hole position names no user parameter, so "
         "its dimension would be a magic number in the timeline. Re-plan the program."
+    ),
+    # The four below are measured today and refused by nobody. Their alternatives
+    # are written now because the token and the way out of it are one thought,
+    # and splitting them across units is how a token ends up meaning whatever
+    # the next reader assumed.
+    "loop-orientation-unavailable": (
+        "The mesh is not closed with a non-zero signed volume, so its winding carries no "
+        "inside/outside information and no loop at any station can be told from a hole. This is a "
+        "capture problem, not a threshold: re-export the mesh from a solid, or repair it, and "
+        "check the capture's own isClosed/isOriented before re-running. Nothing here will guess a "
+        "material side."
+    ),
+    "loop-material-contradictory": (
+        "This loop's own wall triangles disagree about which side of it the material is on, by "
+        "more than the declared loop_material_consensus_fraction. That is usually a section "
+        "crossing a junction, a self-touching wall, or a duplicated triangle -- not a tolerance. "
+        "Read the dissenting arc length on the evidence table before moving the fraction: a floor "
+        "loosened until a contradiction passes is a contradiction nobody recorded."
+    ),
+    "loop-parity-contradiction": (
+        "The winding says material is on one side of this loop and even-odd nesting says the "
+        "other. One of the two is wrong about the geometry, which is the signature of a section "
+        "through a junction or a self-intersecting chain. Section at a different station, or "
+        "accept the region as unreconstructed."
+    ),
+    "slab-wall-unattributed": (
+        "More than the declared loop_attribution_min_fraction of this loop's length lies on "
+        "triangles that cast no vote -- degenerate facets, or facets parallel to the section plane "
+        "that bound material along the axis rather than across the loop. Section away from the cap "
+        "if the station grazes one; otherwise the walls at this station are not evidence."
     ),
 }
 
@@ -280,7 +331,25 @@ def validate_rebuild_spec(spec: Any) -> list[ValidationIssue]:
             issues, thresholds, REBUILD_THRESHOLD_FIELDS, "rebuild_spec.thresholds"
         )
         for field in sorted(REBUILD_THRESHOLD_FIELDS - {"constraint_rejection_budget"}):
-            _declared_number(issues, thresholds.get(field), f"rebuild_spec.thresholds.{field}")
+            path = f"rebuild_spec.thresholds.{field}"
+            _declared_number(issues, thresholds.get(field), path)
+            if field in REBUILD_FRACTION_THRESHOLDS:
+                declared = thresholds.get(field)
+                value = declared.get("value") if isinstance(declared, dict) else None
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and float(value) > 1.0
+                ):
+                    issues.append(
+                        ValidationIssue(
+                            "threshold-invalid-value",
+                            f"{path}.value",
+                            "This threshold is a fraction of a loop's own length, so it cannot "
+                            "exceed 1.0; above that it is a gate that can never fire or one that "
+                            "never refuses, and either way it is not the number it reads as.",
+                        )
+                    )
         _declared_budget(
             issues,
             thresholds.get("constraint_rejection_budget"),
@@ -420,7 +489,11 @@ def _project(point: Vec3, origin: Vec3, u: Vec3, v: Vec3) -> tuple[float, float]
 
 
 def _single_closed(
-    section: Any, archetype_id: str, station: float, bores: Sequence[Any] = ()
+    section: Any,
+    archetype_id: str,
+    station: float,
+    bores: Sequence[Any] = (),
+    evidence: Mapping[str, Any] | None = None,
 ) -> Any:
     """The one closed polyline at this station that is not a bore, or a refusal.
 
@@ -435,6 +508,12 @@ def _single_closed(
     cuts, matched to their declared centres and radii. Those are not a second
     profile: they are features of their own, already in the program and ordered
     after this one. Everything else still refuses.
+
+    ``evidence`` is the per-loop material record from ``loop_material_evidence``,
+    carried onto the ``profile-ambiguous`` detail unchanged. It changes no
+    decision here -- a second loop refuses exactly as it did before it existed --
+    and its whole job is that the reader of the refusal sees *which* loops, on
+    which walls, with material on which side, instead of a loop count.
     """
     closed = [line for line in section.polylines if line.closed and len(line.points) >= 3]
     if not closed:
@@ -454,18 +533,21 @@ def _single_closed(
         outer = [line for line in closed if id(line) not in bore_ids]
         if len(outer) == 1:
             return outer[0]
+        detail: dict[str, Any] = {
+            "archetype_id": archetype_id,
+            "station_mm": station,
+            "closed_loop_point_counts": [len(line.points) for line in closed],
+            "loops_matched_to_holes": len(closed) - len(outer),
+        }
+        if evidence is not None:
+            detail["loop_evidence"] = evidence
         raise _refuse(
             "profile-ambiguous",
             f"the section at station {station:.6g} mm closed {len(closed)} loops for "
             f"{archetype_id}, of which {len(closed) - len(outer)} are bores this program cuts; "
             "a single-loop profile cannot describe what is left and picking one would discard "
             "the rest without saying so.",
-            {
-                "archetype_id": archetype_id,
-                "station_mm": station,
-                "closed_loop_point_counts": [len(line.points) for line in closed],
-                "loops_matched_to_holes": len(closed) - len(outer),
-            },
+            detail,
         )
     return closed[0]
 
@@ -567,6 +649,28 @@ def _require_chained(
             )
 
 
+def _loop_evidence(
+    section: Any, dump: MeshDump, normal: Vec3, thresholds: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The per-loop winding record for this station -- measured, never acted on.
+
+    This emitter receives the program and the dump and never the fit record
+    (see ``ADOPTED_CONSTRAINT_NOTE``), so ``triangle_regions`` stays absent here
+    and the loops report their walls' material side without naming the regions
+    those walls belong to. That is the correct split: the verdict is winding
+    evidence, which the dump carries on its own; region identity is fit-record
+    evidence, and a stage that does not hold the fit record must not pretend to.
+    """
+    return loop_material_evidence(
+        section,
+        _dump_vertices(dump),
+        _dump_triangles(dump),
+        normal,
+        consensus_fraction=_value(thresholds, "loop_material_consensus_fraction"),
+        attribution_min_fraction=_value(thresholds, "loop_attribution_min_fraction"),
+    )
+
+
 def _extrude_profile(
     group: Mapping[str, Any],
     dump: MeshDump,
@@ -645,12 +749,17 @@ def _extrude_profile(
         v,
         _value(thresholds, "entity_match_tolerance_mm"),
     )
-    polyline = _single_closed(section, str(group["id"]), station, bores)
+    # Measured only when the station is about to be ambiguous. On the one-loop
+    # path there is nothing to disambiguate, and an O(triangles) winding pass
+    # per archetype to produce a table nobody reads is cost with no reader.
+    evidence_table = _loop_evidence(section, dump, normal, thresholds) if len(closed) > 1 else None
+    polyline = _single_closed(section, str(group["id"]), station, bores, evidence_table)
     entities = classify_polyline(
         polyline.points,
         tolerance=_value(thresholds, "classify_tolerance_mm"),
         closed=True,
         normal=normal,
+        segment_triangles=polyline.segment_triangles or None,
     )
     rows = _entities_2d(entities, origin, u, v)
     _require_chained(rows, _value(thresholds, "profile_chain_tolerance_mm"), str(group["id"]))
@@ -756,7 +865,14 @@ def _revolve_profile(
         normal,
         tolerance=_value(thresholds, "section_tolerance_mm"),
     )
-    polyline = _single_closed(section, str(group["id"]), float(plane["offset"]))
+    axial_loops = sum(1 for line in section.polylines if line.closed and len(line.points) >= 3)
+    polyline = _single_closed(
+        section,
+        str(group["id"]),
+        float(plane["offset"]),
+        (),
+        _loop_evidence(section, dump, normal, thresholds) if axial_loops > 1 else None,
+    )
     clipped = _clip_half(
         polyline.points, u, origin, _value(thresholds, "section_tolerance_mm")
     )
