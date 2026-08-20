@@ -288,6 +288,35 @@ Do not convert a dense mesh to B-rep merely to claim parametric editability. Con
   --classification build/classification.json --face-group-spec build/face-groups.json -o build/mesh-face-groups.py
 ```
 
+**The facet normals are fit data, not decoration.** A bore tessellated as two
+vertex rings determines a radius and no axis, and 85 full-turn bores across 11
+production STLs were refused for exactly that. Every facet normal on a cylinder
+is perpendicular to its axis by construction, so `fit-regions` takes the axis
+from the area-weighted facet-normal second moment and reports the closed-form
+sigma that determination carries; `min_axial_span_ratio` still applies to every
+fit whose axis came from the vertices, and a fit whose axis came from the normals
+records the floor as measured-and-not-applied with the eigengap that replaced it.
+The same normals say whether there is an axis to take: a regular polygon's
+corners lie *exactly* on its circumscribed circle, so a hexagonal pocket's six
+planar walls fit a cylinder at float-noise residual and every vertex-side gate
+passes it — six of them on the honeycomb organiser came back as six round bores
+of the right diameter and the wrong kind. A group whose facet normals are
+perpendicular to one axis but occupy fewer distinct directions per turn than the
+declared `min_cylinder_normal_directions_per_turn` is refused
+`cylinder-normals-discrete`, and the sphere that fits the same corners falls with
+it. The detection spec therefore declares one regime selector and seven more
+thresholds, each with its own rationale like every other: `regime` (`auto`,
+`tessellation` or `scan`) selects the regime;
+`tessellation_sigma_over_extent`, `vertex_precision_rel`,
+`min_normal_axis_eigengap`, `normal_sigma_theta_floor_deg`,
+`min_cylinder_normal_directions_per_turn`, `max_fillet_radius_rel_spread` and
+`boundary_circle_sigmas`. Read `record.regime` before anything else: an exact
+tessellation and a scan need different noise floors, the record says which it
+decided and on what evidence, a caller who knows what they captured can say so
+instead — and the regime is what decides which noise estimator `sigma` comes
+from, which `record.noise.sigma_estimator` names.
+
+
 **A `parametric-rebuild` produces a timeline, and the claim that it is editable is measured, not asserted.** `plan-reconstruction` decides what will be built before anything is; `emit-mesh-rebuild` sections the mesh dump the program was fitted from — reading it only after its bytes hash to the program's recorded `dump_sha256` — and emits one data-driven transaction that verifies, constructs, measures and reports, making no choices of its own. A feature it cannot build exactly as declared is a named refusal with full rollback and no geometry; `replan-without` then turns that refusal into a smaller program in one explicit, recorded command rather than letting anything improvise inside Fusion.
 
 Then prove the result. `designType == ParametricDesignType` establishes nothing — it is equally true of a faceted body with no timeline. `emit-mesh-editability` perturbs each user parameter one at a time, asserts the observable that parameter *declares* it moves (`volume`, `centroid` or `bbox` — volume alone would report a correct hole-position or plane-offset parameter as dead), restores it, and asserts the model came back within the declared epsilon. A failure names which parameter broke which feature. `check-editability` is the gate and cannot pass a report that asserts more than the run performed.

@@ -113,25 +113,160 @@ Inside Fusion, first: `emit-mesh-face-groups` runs `MeshGenerateFaceGroups` on t
 
 **The regions come from Fusion; the judgement does not.** Both paths were run end to end over the same dumps of the same 11 production STLs, at the same declared thresholds:
 
-| | RANSAC/ICM (deleted) | face groups, accurate |
-| --- | --- | --- |
-| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) |
-| regions accepted through every gate | 38 | 268 |
-| area-weighted coverage, 11 parts | **41.7%** | **62.5%** |
-| cylinders accepted, 11 parts | 0 | 4 |
-| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% |
-| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% |
+| | RANSAC/ICM (deleted) | face groups, vertices only | face groups, normals as fit data |
+| --- | --- | --- | --- |
+| regions offered to the fitters, 11 parts | 47 | 1,069 (of 1,908 groups; the rest carry fewer than four points, which is below what a least-squares fit needs) | 1,069 |
+| regions accepted through every gate | 38 | 268 | **619** |
+| area-weighted coverage, 11 parts | **41.7%** | **62.5%** | **70.5%** |
+| cylinders accepted, 11 parts | 0 | 4 | **251** |
+| full-turn bores accepted (of 85 present) | 0 | 0 | **76** |
+| fillet candidates | 0 | 1 | **114** |
+| POD-A2-BASE | 8 regions, 27.4% | 105 regions, 36.6% | 105 regions, 50.8% |
+| POD-B-BASE | 1 region, 2.3% | 188 regions, 69.1% | 188 regions, 72.1% |
 
-So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
+All 24 thresholds the middle column declared carry the same values in the right
+one; the seven the right column adds are new evidence, not loosened old evidence,
+and each is caller-declared with its rationale.
+
+The table above is the **pre-prism-filter** measurement. After
+`cylinder-normals-discrete`, its right column's 619 accepted regions are 598 and
+its 251 cylinders are 230, and 66 planned holes are 45. The difference is
+21 hexagonal M3 nut pockets — 5.700 mm across flats, 12 facets each, spread over
+five of the eleven parts — that the vertices read as 6.58 mm round bores because
+a hexagon's corners lie exactly on its circumscribed circle. They are refused
+`cylinder-normals-discrete` below, and nothing else in the table moves: 1,069
+regions offered, 114 fillet candidates, 3 fillets and 10 extrudes are unchanged
+and no part changes the gate it stops at. Every other number quoted from that
+table in this document is its pre-filter value unless it says otherwise.
+
+So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. *Run* is not assumed: both structure gates have a power floor — against residuals an order of magnitude inside the measurement noise they have nothing to test, and they say so instead of passing — so `disproof.gates` counts, per gate, how many accepted fits it actually judged and why it skipped the rest, derived from each region's own `checked` list rather than asserted beside it. On the honeycomb organiser that floor skipped Moran and the held-out refit on all 39 accepted planes. That gap between 1,069 fitted and 268 accepted -- the table's *left* column, before the normals became fit data; 619 in the right column and 598 after the prism filter -- is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
 
 **Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
+
+**The normals are fit data, not only a tie-break.** Every facet normal on a
+cylinder is perpendicular to its axis by construction, so a bore tessellated as
+two vertex rings — which determines a radius and no axis — has the axis sitting
+in the facets between the rings. `normal_constrained_axis` accumulates the
+area-weighted second moment `A = sum w n n^T` (weights are facet areas over their
+own mean, so the trace is an effective facet count), takes the axis from its
+smallest eigenvector, and reports the closed-form Gauss-Newton sigma
+`sigma_theta * sqrt(1/l1 + 1/l2)` in the tangent plane, where `sigma_theta^2 =
+l0 / (W - 2)` floored by a caller-declared measurement precision. The
+determinacy of the axis is the eigengap `l1 / trace`: one half for a full ring of
+facets, zero for a sliver. With the direction pinned, radius and axis point stay
+the module's existing exact 2-D circle fit. The same accumulation, read as the
+whole 6×6 `n·(c̄ + c×x) = 0` system, is `route_kinematic_surface` — Pottmann and
+Randrup's kinematic router, which answers extrusion, revolution and helix in one
+eigenproblem and refuses a plane or a cylinder outright, because their invariant
+motions form a family and no eigenvector describes a family.
+
+`min_axial_span_ratio` is untouched and still applied to every fit whose axis
+came from the vertices. A fit whose axis came from the normals records the floor
+as **measured and not applied**, with the eigengap that replaced it: the floor
+asks how long a cylinder must be *before its axis is determined*, and that is a
+question about a determination this fit did not make.
+
+**Two measurement regimes, decided from evidence and never silently.** An STL
+written by a solid modeller has vertices on the analytic surface to float
+precision and a bimodal dihedral distribution — facet pairs from one planar face
+meet at exactly zero. A scan has neither. `record.regime` carries the decision,
+both readings behind it, and any caller override (`regime: auto|tessellation|scan`).
+Three consequences follow. `noise-model-inconsistent` no longer fires on a
+noise-free mesh, where the two estimators are *meant* to disagree because one
+absorbs curvature and the other measures the facet turn angle: it fired on all 11
+production parts and now fires on none.
+
+**The regime decides which estimator `sigma` comes from, and it is detected
+before the selection rather than after it.** Estimator B declares its own
+domain — "real creases are a small minority of interior edges on a mechanical
+part, so the median sees only the noise" — and on a honeycomb that is false:
+61.5% of the vendor honeycomb organiser's 834 interior edges are genuine 60°
+cell walls, the median interior dihedral is 59.99993°, and estimator B returned
+13.108 mm of "noise" for a mesh whose quadric estimator returned exactly 0.0 and
+whose regime detector said *tessellation*. Ten sigma is the recoverable feature
+size, so the pipeline refused a 169 mm part `feature-scale-below-noise` claiming
+131 mm was unrecoverable, and its STL is byte-equivalent to the vendor's own
+STEP to 3.2e-08 of area. `sigma` was `max(quadric, dihedral)` computed **before**
+the regime was known, so the check that already suppressed the *flag* never saw
+the *value*. In the `tessellation` regime `sigma` is now the quadric estimator
+alone — the only one estimating noise there — and the dihedral reading becomes
+`surface_scale`, which is where a facet turn angle belongs and which is what it
+already reached through `sigma` in both regimes. Every power floor is therefore
+exactly where it was: re-measured over the eleven production dumps, all 1,069
+regions, 619 acceptances, 114 fillet candidates and every coverage figure are
+unchanged. In the `scan` regime the conservative maximum stands. Both estimators
+are always recorded, with `noise.sigma_estimator` and
+`noise.sigma_estimator_reason` saying which was chosen and why. No declared
+threshold moved: this is a selection, not a tolerance.
+
+And `sigma` is floored at the precision
+the coordinates are *stored* at (`vertex_precision_rel`; a binary STL holds
+float32). Without that floor the residual-structure gates spend their power
+testing the file format — quantization is deterministic and therefore
+systematically signed, and it refused 56 of the 85 full-turn bores for "azimuthal
+structure" that was the quantization of a perfectly round hole.
+
+**A prism of planar walls fits the cylinder its own corners lie on.** A regular
+polygon's corners lie *exactly* on its circumscribed circle, so a hexagonal
+pocket delivered as one face group fits a cylinder of that circumradius at
+float-noise residual — and a sphere through the same corners just as exactly.
+Every gate that reads vertices passes it, because to the vertices it really is a
+cylinder. Measured: six 26 mm across-corners hex pockets on the honeycomb
+organiser came back as six 26 mm round bores, and 21 M3 nut pockets across five
+of the eleven production parts (5.700 mm across flats, 12 facets each) came back
+as 6.58 mm round holes. The facet normals refute all of them: they sit within
+`cylinder_normal_perpendicular_deg` of perpendicular to one axis — which is what
+says the facets are arranged *around* an axis at all, and what excludes a real
+sphere — but occupy only six discrete directions where a cylinder's sweep. The
+refusal is `cylinder-normals-discrete`, it is a verdict about the *group* so the
+sphere falls with the cylinder, and `support.normal_direction_spread` records the
+facet count, the distinct-direction count, the arc they cover and the
+directions-per-turn it was judged on. The threshold is the caller's
+`min_cylinder_normal_directions_per_turn`: a genuine tessellated circle carries
+one normal direction per facet, and at eight per turn a facet already spans 45°,
+coarser than any exporter's chord tolerance. Measured over the eleven parts the
+distribution is bimodal with nothing in between — the 230 genuine cylinders carry
+29.6 to 108 directions per turn at radii from 1.15 mm to 10 mm, and the 21 hex
+pockets carry 7.2. Either side of the declared 8.0 the nearest measurements are
+13% away — a 7-sided prism carries 8.17 and passes, an 8-sided one 9.14 — and
+that band is asserted in the tests rather than left to be discovered by a part.
+
+Directions are merged at the run's own floor on a facet normal's direction, by
+**complete** linkage: a direction joins the open cluster only while it stays
+within the floor of that cluster's *first* member, so no cluster is ever wider
+than the floor it was merged at. Single linkage chains instead — in the scan
+regime the floor is the mesh's own normal noise, routinely wider than the azimuth
+spacing of a fine tessellation, and a genuine 360-facet cylinder collapsed into
+one direction, zero per turn, and was refused as a prism.
+
+**Group boundaries are free evidence.** The loop between a bore and the face it
+breaks through is a circle, and it is shared with the neighbouring group rather
+than being one more reading of the bore's own wall. `support.boundary_circle`
+fits that loop in its *own* best-fit plane and reports the radius and the angle to
+the fitted axis, so the two readings are independent. Agreement strengthens the
+fit; disagreement beyond the declared `boundary_circle_sigmas` is the named flag
+`boundary-circle-disagrees`, never a silent preference for either number, and a
+loop that is not a circle at all yields no corroboration rather than a
+disagreement. Measured: 105 of 251 accepted turned surfaces have a circular
+boundary loop, and 103 of those agree.
+
+**A fillet is a chain, not a fragment.** Fusion's grouping can cut one edge round
+into a run of partial-arc cylinder groups, and marking them one at a time gives
+one "fillet" per tessellation artefact. Blends are assembled into chains first —
+adjacent, radii agreeing within the declared `max_fillet_radius_rel_spread`, and
+lying between the same two primaries — and the chain is the candidate, carrying a
+`chain_id` and the area-weighted radius. The evidence discipline is applied to
+the chain and is otherwise unchanged: exactly two accepted non-blend neighbours,
+or it is an ordinary run of fits and says so. On these 11 parts the accurate
+grouping already delivers one group per round, so every chain has one member; the
+assembly matters for a grouping that fragments.
 
 The archetype vocabulary is closed and all four kinds now emit:
 
 | Archetype | Assigned when | Emitted as |
 | --- | --- | --- |
 | `sketch-extrude` | two parallel cap planes, with side surfaces perpendicular to them | a sketch on an origin plane or a parameter-driven offset from one, then an extrude |
-| `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore | a half-profile sketch containing the axis, then a revolve |
+| `revolve` | at least two accepted fits coaxial with the primary axis, one of which is a turned surface that is **not** a bore, *and* the group's own facet normals shown invariant under a single rotation about that axis | a half-profile sketch containing the axis, then a revolve |
 | `hole` | an accepted cylinder whose `orientation.material_side` is `"inside"`, lying wholly within one extruded body, its axis along that body's extrusion direction | a placement point dimensioned to the sketch origin, then a hole feature with parametric diameter and depth |
 | `fillet` | an accepted blend — a torus, or a cylinder sweeping less arc than the declared `max_fillet_arc_deg` — adjacent to exactly two non-blend primaries, both of which this program rebuilt | a constant-radius fillet on the edge those two features share |
 
@@ -153,9 +288,20 @@ The same fail-closed rule runs the other way, which is the half that is easy to 
 
 The arithmetic runs one direction only: each stage may lose area relative to the one before it and can never gain any. A fillet that was planned and then skipped at build time subtracts its region *even though the build succeeded* — counting a planned-but-undelivered archetype as reconstructed would be exactly the over-claim this pipeline exists to prevent.
 
+### A revolve is earned before precedence is consulted
+
+Precedence decides between two archetypes the evidence *both* supports. It is not a licence to claim one the evidence does not support at all, and that distinction is where this stage went wrong for two units: any plane perpendicular to the primary axis counted as a surface of revolution about it. The first live acceptance run planned an 80 × 50 × 10 rectangular plate as a 360-degree revolve of radius 10 — 77% of its area — which then died at emission with `entity-resolution-ambiguous`; on the eleven-part benchmark two rectangular lids planned as revolves, and since a revolve's faces cannot be partitioned into named sets, all 61 remaining fillet candidates gated `fillet-neighbour-shared` inside them.
+
+A perpendicular cap is *consistent with* a revolve. It is not evidence for one, and no amount of normal data can make it so: a plane's normals are ±z on an annulus and on a rectangular plate alike. Two measurements now stand between a coaxial group and a `revolve`, and both read evidence the record already carries:
+
+1. **A cap's footprint, not its normal.** A disc or annulus swept about the axis is centred on the axis, so its axis-aligned bounding box is centred on it. Measured across the eleven benchmark parts, every large coaxial plane's box centre sat 23 to 160 mm off the candidate axis — the caps were plates perpendicular to it, and not one part was turned. The tolerance is the caller's already-declared `offset_tolerance`, which is the same question it was declared for.
+2. **The group's own invariant motion.** Pottmann and Randrup's kinematic router answers extrusion, revolution and helix from one 6×6 eigenproblem over facet normals; `route_kinematic_surface` runs it over one region's facets at fitting time. The planner has no triangles, so every region now carries the router's *sufficient statistic* for its own facets: `sum over facets of area · b bᵀ` with `b = [x × n, n]`, twenty-one numbers, additive across regions and re-centrable by a congruence — exactly so in the algebra, and to relative rounding in floats: summing the blocks and routing the union of the facets agree to 2.0e-16 relative on the seam test's own group, about one ulp, which is what the seam test asserts rather than an absolute number of decimal places. The planner sums the blocks of a candidate group through `route_kinematic_group` — the entry point that takes summed blocks rather than facets — and requires a `revolution` verdict whose recovered axis is the datum axis. A verdict of translation plans `sketch-extrude` however many caps are perpendicular; `router-ambiguous` — the invariant motions form a family rather than a single one — falls through to the next archetype in the precedence, with the router's record carried on whichever archetype claims the regions. Never a silent choice.
+
+The area weighting is what makes the second test bite: a 4 mm² corner round cannot certify a 2000 mm² plate as a solid of revolution, because the eigengap that says "one motion, not a family" is proportional to how much *surface* pins the axis. Its five gates are declared by the caller under `thresholds.motion_evidence`; undeclared means no revolve is claimed, and the program records that rather than falling back on precedence.
+
 ### We recover *a* parameterization, not *the* original
 
-A boss modelled as an extrude and the same boss modelled as a revolve are indistinguishable from the outside. The archetype precedence is therefore a **stated rule**, not a discovery: revolve is tried before sketch-extrude, and bores are classified before the extrude group chooses its side surfaces. The result is a feature tree consistent with the measured surface. It is not a claim about what the original designer did, and nothing in the pipeline reports one.
+A boss modelled as an extrude and the same boss modelled as a revolve are indistinguishable from the outside. The archetype precedence is therefore a **stated rule**, not a discovery: revolve is tried before sketch-extrude once it is earned, and bores are classified before the extrude group chooses its side surfaces. The result is a feature tree consistent with the measured surface. It is not a claim about what the original designer did, and nothing in the pipeline reports one.
 
 ### Every threshold is caller-declared, with its rationale
 

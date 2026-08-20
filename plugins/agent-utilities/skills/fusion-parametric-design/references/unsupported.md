@@ -249,15 +249,41 @@ closes on itself and a round never does, which is the measurement that separates
 them. The evidence discipline is unchanged: two accepted non-blend neighbours or
 it is an ordinary fit.
 
-**What the tie-break does not buy, stated plainly.** All 367 groups now select a
-cylinder and carry its true radius, and most are then still refused for support
-span: two rings of vertices and nothing between them determine the *radius*
-without determining the *axis*, and the support floor says so. Only 4 cylinders
-across the 11 parts survive every gate, and only one fillet candidate is found,
-because a blend has to be accepted before it can be adjacent to anything. The
-298-group partial-arc bucket is therefore recognised but largely unrecovered.
-Closing that gap means denser sampling across the round -- a capture problem, not
-a threshold one -- and is not attempted here.
+**The normals are fit data, not only a tie-break.** Using them only to rank
+kinds left 367 groups selecting a cylinder with its true radius and then being
+refused for support span, because two rings of vertices determine a *radius*
+without determining an *axis*. That refusal was correct about the vertices and
+wrong about the mesh: every facet normal on a cylinder is perpendicular to its
+axis by construction, so the facets between the two rings determine the axis
+exactly. `mesh_fitting.normal_constrained_axis` takes the area-weighted
+second moment `A = sum w n n^T`, reads the axis off its smallest eigenvector, and
+reports the closed-form Gauss-Newton sigma `sigma_theta * sqrt(1/l1 + 1/l2)` in
+the tangent plane -- so the determinacy of the axis is `l1 / trace`, one half for
+a full ring of facets and falling to zero for a sliver. With the direction
+pinned, the radius and axis point are the module's existing exact 2-D circle fit.
+
+The `min_axial_span_ratio` floor is untouched and still applied to every fit
+whose axis came from the vertices. What changed is that a fit whose axis came
+from the normals, at a caller-declared `min_normal_axis_eigengap`, records the
+floor as *measured and not applied* along with the evidence that replaced it: the
+floor asks "how long a cylinder must be before its axis is determined", and that
+question is about a determination this fit did not make.
+
+Measured over the same 11 parts: 251 cylinders survive every gate where 4 did,
+76 of the 85 full-turn bores are recovered where none were, 114 fillet candidates
+where one was found, and area coverage rises from 62.5% to 70.5%. No declared
+threshold changed value.
+
+**What this still does not buy.** Nine of the 85 full-turn bores remain refused,
+by the Moran and held-out gates operating on residuals at the mesh's own float32
+quantization. Fusion's grouping on these parts delivers each edge round as a
+*single* group, so the chain assembly that would join a fragmented round into one
+fillet has nothing to join and every chain has one member; on a grouping that
+does fragment, it would. And no cone or torus takes its axis from the normals:
+the router recovers a surface of revolution's axis from the same accumulation,
+but no cone or torus survives any gate on any of the 11 parts, so wiring it would
+mean declaring the router's five thresholds to drive a path with no measured
+instances.
 
 ## Mesh deviation comparison (`PolygonMesh.compareWith`)
 
@@ -363,12 +389,30 @@ the named gate rather than producing an approximate feature:
    (`hole-axis-oblique`) or that reaches outside the body it would cut
    (`hole-not-contained`).
 5. **A fillet whose two neighbours were not both rebuilt**
-   (`fillet-neighbour-unreconstructed`), or whose neighbours are surfaces of the
-   same archetype (`fillet-neighbour-shared`). A fillet rounds the edge between
-   two features; without two features there is no edge.
+   (`fillet-neighbour-unreconstructed`) — without two rebuilt neighbours there is
+   no edge. **Or whose neighbours are surfaces of one archetype whose faces this
+   emitter cannot partition** (`fillet-neighbour-shared`): an edge between two
+   faces of a *single* feature is rounded where that feature is a
+   `sketch-extrude` — its `startFaces`, `endFaces` and `sideFaces` name the edge,
+   and the plan records its caps in station order so the right one is picked —
+   but a `revolve` exposes no such partition and an edge inside one is not
+   nameable. Blend fragments are pooled **per edge**, which the fit record's own
+   `fillet.chain_id` names -- a chain is a run of adjacent fragments that agree
+   in radius and lie between the same two primaries, which is one rounded edge.
+   Two edges between the same pair of face sets are two fillets, each carrying
+   its own radius; the fragments of one edge are pooled into one fillet, and only
+   when an `equal_radius_tolerance` is declared and they agree inside it
+   (`fillet-radius-undeclared`, `fillet-radius-disagrees`). A record that names no
+   chain for a pair carrying more than one fragment cannot say which fragments
+   share an edge and is refused (`fillet-edge-unidentified`). **Or whose
+   own blend surface another archetype already rebuilds** — a partial-arc
+   cylinder can be a side of an extrude or the wall of a bore, where a torus
+   never could, and a region rebuilt twice is counted twice in the coverage
+   account. That last case names no gate: the region *is* reconstructed, by the
+   archetype that claimed it, so it never reaches `unreconstructed` at all.
 6. **A fillet whose parent features share no edge in the built solid.** Recorded
    in the rebuild report's `fillets_skipped` and subtracted from coverage. The
-   torus fit said the two surfaces meet and the built solid says they do not;
+   blend fit said the two surfaces meet and the built solid says they do not;
    rounding some other nearby edge would invent the geometry the measurement
    failed to find.
 7. **Variable-radius and elliptical blends.** Fillets are proposed by adjacency

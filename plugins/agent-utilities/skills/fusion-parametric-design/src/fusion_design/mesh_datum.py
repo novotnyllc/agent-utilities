@@ -20,12 +20,14 @@ becomes an absolute-threshold judgement wearing the same label.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from .manifest import _in_closed_set
 from .mesh_fitting import (
+    MOTION_MOMENT_FIELDS,
     PRIMITIVE_KINDS,
     PrimitiveFit,
     Vec3,
@@ -48,6 +50,7 @@ _HEX64_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 # it cannot be mistaken for a considered "no".
 DATUM_REFUSALS = {
     "fit-record-malformed",
+    "fit-record-moments-unbound",
     "fit-record-missing-axial-span",
     "fit-record-missing-uncertainty",
     "frame-no-accepted-fits",
@@ -60,6 +63,11 @@ DATUM_REFUSALS = {
 REFUSAL_ALTERNATIVES = {
     "fit-record-malformed": (
         "Re-run the fitting stage; this record cannot be read and nothing downstream may guess at it."
+    ),
+    "fit-record-moments-unbound": (
+        "This region's moment block does not describe this region's facets: its facet count or its "
+        "area disagrees with the region's own. Re-run the fitting stage against the same dump, "
+        "which writes both from the same triangles."
     ),
     "fit-record-missing-axial-span": (
         "Re-run the fitting stage so each cylinder and cone carries its supporting axial span, or "
@@ -101,6 +109,15 @@ FIT_UNCERTAINTY_KEYS = {
 }
 
 TOLERANCE_BASES = {"uncertainty", "declared-absolute"}
+
+#: The measurement regimes U2 can settle on, and what a caller may declare.
+#: Carried across this seam because the regime changes what the numbers on the
+#: far side of it *mean* -- the noise floors, the normal-direction merge width,
+#: which estimator is estimating noise at all -- and a program that does not say
+#: which regime produced it is byte-identical whether the mesh was measured or
+#: the caller overrode the measurement.
+MEASUREMENT_REGIMES = {"tessellation", "scan"}
+DECLARABLE_REGIMES = MEASUREMENT_REGIMES | {"auto"}
 
 
 class ReconstructionRefused(ValueError):
@@ -205,6 +222,20 @@ class RegionFit:
     # U2's fillet proposal for this region: ``{"radius", "between"}`` when an
     # accepted torus is adjacent to exactly two non-torus primaries, else None.
     fillet: dict[str, Any] | None = None
+    # Whether U2 measured this surface as a *round* -- an arc short enough to be
+    # an edge blend against the caller's declared ceiling -- as opposed to a wall
+    # that closes on itself.  ``fillet`` is the accepted proposal; this is the
+    # shape, and it stays true for a round whose chain was refused.  The planner
+    # needs the distinction because a round's axis runs along an edge, which may
+    # lie along the sweep direction or across it, while a wall's axis is the
+    # sweep direction.
+    blend_shaped: bool = False
+    # The kinematic router's raw moment block over this region's own facets, as
+    # ``mesh_fitting.region_motion_moments`` builds it.  ``None`` on a record
+    # written before this field existed, or on a region whose facets carried no
+    # readable normal -- absent, and never a zero block, because a zero block
+    # would sum into a group's evidence as if the region had been measured.
+    motion_moments: dict[str, Any] | None = None
 
     @property
     def accepted(self) -> bool:
@@ -247,6 +278,8 @@ class RegionFit:
             material_side=self.material_side,
             orientation_gate=self.orientation_gate,
             fillet=self.fillet,
+            blend_shaped=self.blend_shaped,
+            motion_moments=self.motion_moments,
         )
 
 
@@ -256,6 +289,12 @@ class FitRecord:
     units: str
     total_area: float
     regions: tuple[RegionFit, ...]
+    #: U2's measurement regime: ``{"regime", "declared", "overridden"}``, or
+    #: ``None`` on a record written before the regime was detected.  The
+    #: evidence stays in the fit record; what crosses this seam is the verdict,
+    #: whether the caller overrode it, and what they declared -- enough for a
+    #: reader of the *program* to tell a measured regime from an asserted one.
+    regime: dict[str, Any] | None = None
 
     def accepted(self) -> tuple[RegionFit, ...]:
         return tuple(region for region in self.regions if region.accepted)
@@ -386,7 +425,125 @@ def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | 
             "exactly two region hashes; a blend that touches one region, or three, is not the "
             "two-neighbour adjacency a constant-radius fillet edge is",
         )
-    return {"radius": radius, "between": sorted(str(item) for item in between)}
+    # Which edge this fragment lies on, as U2's blend chaining named it: a chain
+    # is a run of adjacent fragments that agree in radius and lie between the
+    # same two primaries, which is exactly one rounded edge. Absent is not
+    # malformed -- a record written before chaining existed carries none -- and
+    # the planner refuses rather than pooling fragments whose edge it cannot tell
+    # apart. Present and not a string is malformed: an edge identity that is not
+    # an identity would silently pool two edges into one fillet.
+    chain_id = body.get("chain_id")
+    if chain_id is not None and not isinstance(chain_id, str):
+        raise _malformed(f"{path}.fillet.chain_id", "a string when present")
+    return {
+        "radius": radius,
+        "between": sorted(str(item) for item in between),
+        "chain_id": chain_id,
+    }
+
+
+def _parse_motion_moments(
+    raw: Any, path: str, triangle_count: Any, region_area: float, box: tuple[Vec3, Vec3]
+) -> dict[str, Any] | None:
+    """U2's kinematic moment block, kept only when it describes *this* region.
+
+    Absent is not malformed — a record written before this field existed simply
+    does not carry one, and a region whose facets carried no readable normal
+    honestly has none.
+
+    Present, the block is bound to the region it rides on.  Shape validation
+    alone let fabricated blocks through — a matrix scaled by 1e6, a zero block,
+    a centroid a kilometre away, another region's block copied over — and each
+    one silently changed which archetypes the planner emitted, because a block
+    is *summed* into a group's evidence and nothing downstream re-derives it.
+    Three checks, all against numbers the record already carries:
+
+    * ``facet_count`` equals the region's ``triangle_count`` and ``area`` its
+      ``area``: U2 writes both from the same triangles in the same loop, so a
+      block from anywhere else disagrees with one or the other;
+    * the trace of the matrix's normal block is that same area.  ``M`` is
+      ``sum(area_i * b b^T)`` with ``b = [x x n, n]`` and ``n`` a *unit* normal,
+      so those three diagonal entries sum to ``sum(area_i)`` identically.  That
+      is what ties the 21 numbers to the area rather than only the header;
+    * the mean facet centroid lies inside the region's own bounding box, which
+      it must, being an average of points that are all inside it.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _malformed(path, "an object when present")
+    unknown = sorted(set(raw) - MOTION_MOMENT_FIELDS)
+    missing = sorted(MOTION_MOMENT_FIELDS - set(raw))
+    if unknown or missing:
+        raise _malformed(path, f"exactly {sorted(MOTION_MOMENT_FIELDS)} (missing {missing}, unknown {unknown})")
+    matrix = raw.get("matrix")
+    if not isinstance(matrix, (list, tuple)) or len(matrix) != 21:
+        raise _malformed(
+            f"{path}.matrix",
+            "21 numbers: the row-major upper triangle of the symmetric 6x6 moment block",
+        )
+    values = [_number(item) for item in matrix]
+    if any(item is None for item in values):
+        raise _malformed(f"{path}.matrix", "finite numbers")
+    count = raw.get("facet_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise _malformed(f"{path}.facet_count", "a positive integer")
+    area = _number(raw.get("area"))
+    if area is None or area <= 0.0:
+        raise _malformed(f"{path}.area", "a positive number")
+    centroid = _vector(raw.get("centroid_sum"))
+    if centroid is None:
+        raise _malformed(f"{path}.centroid_sum", "three finite numbers")
+    if isinstance(triangle_count, bool) or not isinstance(triangle_count, int):
+        raise _malformed(
+            f"{path}: the region carrying a moment block",
+            "a triangle_count the block can be bound to; a block whose region does not say how "
+            "many triangles it has cannot be checked against anything",
+        )
+    # (3,3), (4,4) and (5,5) of the row-major upper triangle: the normal block's
+    # diagonal.
+    normal_trace = float(values[15] + values[18] + values[20])  # type: ignore[operator]
+    lo, hi = box
+    mean = tuple(component / count for component in centroid)
+    slack = 1e-06 * max(1.0, max(hi[i] - lo[i] for i in range(3)))
+    disagreements = []
+    if int(count) != int(triangle_count):
+        disagreements.append(f"it counts {count} facets where the region has {triangle_count}")
+    if not math.isclose(float(area), float(region_area), rel_tol=1e-09, abs_tol=0.0):
+        disagreements.append(f"its area is {area:.6g} where the region's is {region_area:.6g}")
+    if not math.isclose(normal_trace, float(area), rel_tol=1e-06, abs_tol=0.0):
+        disagreements.append(
+            f"the trace of its normal block is {normal_trace:.6g}, which for unit normals is the "
+            f"area it also states as {area:.6g}"
+        )
+    if any(not (lo[i] - slack <= mean[i] <= hi[i] + slack) for i in range(3)):
+        disagreements.append(
+            f"its mean facet centroid {tuple(round(c, 6) for c in mean)} is outside the region's "
+            f"own bounding box"
+        )
+    if disagreements:
+        raise _refuse(
+            "fit-record-moments-unbound",
+            f"{path} does not describe this region's facets: {'; and '.join(disagreements)}. The "
+            "block is summed into a group's motion evidence as-is, so one that does not describe "
+            "this region's own facets is a measurement nobody made.",
+            {
+                "path": path,
+                "block_facet_count": int(count),
+                "region_triangle_count": triangle_count,
+                "block_area": float(area),
+                "region_area": float(region_area),
+                "normal_block_trace": normal_trace,
+                "mean_facet_centroid": list(mean),
+                "region_bounding_box": [list(lo), list(hi)],
+            },
+        )
+    return {
+        "matrix": [float(v) for v in values],  # type: ignore[arg-type]
+        "facet_count": int(count),
+        "area": area,
+        "centroid_sum": list(centroid),
+    }
 
 
 def parse_fit_record(raw: Any) -> FitRecord:
@@ -460,6 +617,19 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 material_side=material_side,
                 orientation_gate=orientation_gate,
                 fillet=_parse_fillet(raw_region, f"{path}"),
+                # U2 walked this surface as a blend: its measured arc was short
+                # enough to be an edge round rather than a wall that closes on
+                # itself. True even when the chain was then refused, because the
+                # *shape* is what this flag reports and the refusal is about the
+                # chain's neighbours or its radius spread.
+                blend_shaped=isinstance(raw_region.get("fillet_chain"), dict),
+                motion_moments=_parse_motion_moments(
+                    raw_region.get("motion_moments"),
+                    f"{path}.motion_moments",
+                    raw_region.get("triangle_count"),
+                    area,
+                    (lo, hi),
+                ),
             )
         )
     return FitRecord(
@@ -467,7 +637,31 @@ def parse_fit_record(raw: Any) -> FitRecord:
         units=units.strip(),
         total_area=total_area,
         regions=tuple(regions),
+        regime=_parse_regime(raw.get("regime")),
     )
+
+
+def _parse_regime(raw: Any) -> dict[str, Any] | None:
+    """U2's regime verdict, or ``None`` on a record written before there was one.
+
+    Only the three fields a reader of the program needs are carried: which
+    regime the run was in, what the caller declared, and whether that declaration
+    overrode what the mesh said.  The evidence behind the detection stays in the
+    fit record, which is where a reader can already find it by dump hash.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _malformed("fit_record.regime", "an object when present")
+    regime, declared = raw.get("regime"), raw.get("declared")
+    overridden = raw.get("overridden")
+    if not _in_closed_set(regime, MEASUREMENT_REGIMES):
+        raise _malformed("fit_record.regime.regime", f"one of {sorted(MEASUREMENT_REGIMES)}")
+    if not _in_closed_set(declared, DECLARABLE_REGIMES):
+        raise _malformed("fit_record.regime.declared", f"one of {sorted(DECLARABLE_REGIMES)}")
+    if not isinstance(overridden, bool):
+        raise _malformed("fit_record.regime.overridden", "a boolean")
+    return {"regime": regime, "declared": declared, "overridden": overridden}
 
 
 def require_uncertainty(regions: Iterable[RegionFit]) -> None:
@@ -569,7 +763,55 @@ def _first_rival(
     return None
 
 
-def _primary_candidates(regions: Sequence[RegionFit]) -> tuple[list[AxisCandidate], str]:
+def _merge_parallel(
+    candidates: Sequence[AxisCandidate], angle_tolerance_deg: float
+) -> list[AxisCandidate]:
+    """Sum the areas of candidates that already agree on a direction.
+
+    ``_first_rival`` states half of this rule already: a candidate parallel to
+    the winner is not a rival, it *agrees*.  Agreement that only ever silenced a
+    rival never counted for anything, so the ranking compared one face's area
+    against one other face's area.  On a rectangular lid that is a coin toss --
+    POD-A1-LID's two rival walls measured 95.40 mm2 and 94.80 mm2, a margin of
+    0.0063 -- while the *stacks* they belong to measured 1008.4 mm2 facing one
+    way against 189.6 mm2 facing the other.  The part is not ambiguous; the
+    ranking was reading one face out of each stack.  Evidence that agrees adds.
+
+    Only a score that *is* an amount of evidence may be summed, which is why
+    this is applied to the area-scored candidate sets and to neither of the
+    others: two coaxial cylinders do not make one with a longer axial span, and
+    two bolt holes 100 mm off the axis do not make one 200 mm off it.
+
+    The representative -- region hash, anchor, direction -- stays the group's
+    largest single member, so the origin still lands on a face that exists.
+    Greedy over the sorted list rather than the caller's, because greedy over an
+    arbitrary order picks an arbitrary representative: the sort is what makes
+    both the grouping and the representative total.
+    """
+    groups: list[list[Any]] = []
+    for candidate in sorted(candidates, key=AxisCandidate.sort_key):
+        for group in groups:
+            if _angle_deg(candidate.direction, group[0].direction) <= angle_tolerance_deg:
+                group[1] += candidate.area
+                group[2] += 1
+                break
+        else:
+            groups.append([candidate, candidate.area, 1])
+    merged = [
+        replace(
+            head,
+            score=total,
+            area=total,
+            basis=head.basis if count == 1 else f"{head.basis}, summed over {count} parallel fits",
+        )
+        for head, total, count in groups
+    ]
+    return sorted(merged, key=AxisCandidate.sort_key)
+
+
+def _primary_candidates(
+    regions: Sequence[RegionFit], angle_tolerance_deg: float
+) -> tuple[list[AxisCandidate], str]:
     """Cylinders ranked by radius x axial span; planes by area when none fits.
 
     Cones are deliberately not candidates: a cone's axis is well defined but its
@@ -625,7 +867,7 @@ def _primary_candidates(regions: Sequence[RegionFit]) -> tuple[list[AxisCandidat
                 basis="supporting area",
             )
         )
-    return sorted(planes, key=AxisCandidate.sort_key), "plane"
+    return _merge_parallel(planes, angle_tolerance_deg), "plane"
 
 
 def _origin_on_axis(
@@ -702,7 +944,7 @@ def _secondary_candidates(
                 basis="normal of a plane parallel to the primary axis, orthogonalised",
             )
         )
-    return sorted(out, key=AxisCandidate.sort_key)
+    return _merge_parallel(out, angle_tolerance_deg)
 
 
 def _secondary_from_second_axis(
@@ -778,7 +1020,7 @@ def derive_datum_frame(
             {"region_count": len(list(regions))},
         )
 
-    candidates, source = _primary_candidates(accepted)
+    candidates, source = _primary_candidates(accepted, angle_tolerance_deg)
     if not candidates:
         raise _refuse(
             "frame-no-accepted-fits",

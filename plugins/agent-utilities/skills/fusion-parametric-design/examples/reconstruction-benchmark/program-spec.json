@@ -1,0 +1,52 @@
+{
+  "adopted": [],
+  "thresholds": {
+    "angle_tolerance_deg": {
+      "rationale": "screening window wider than any fit's angular sigma.",
+      "value": 2.0
+    },
+    "equal_radius_tolerance": {
+      "rationale": "screening window for radii that might be one parameter.",
+      "value": 0.05
+    },
+    "frame_margin": {
+      "rationale": "10% of the winning score separates two datum candidates.",
+      "value": 0.1
+    },
+    "motion_evidence": {
+      "eigengap_min": {
+        "rationale": "half a percent of the spectrum pins one motion.",
+        "value": 0.005
+      },
+      "pitch_epsilon": {
+        "rationale": "two percent of extent per radian.",
+        "value": 0.02
+      },
+      "residual_sigma_factor": {
+        "rationale": "three sigma of that noise.",
+        "value": 3.0
+      },
+      "sigma_theta_deg": {
+        "rationale": "0.005 rad of facet-normal noise.",
+        "value": 0.2865
+      },
+      "translation_epsilon": {
+        "rationale": "a twentieth of the unit six-vector.",
+        "value": 0.05
+      }
+    },
+    "offset_tolerance": {
+      "rationale": "screening window in mm for axis offsets at this part size.",
+      "value": 0.5
+    },
+    "sigma_multiple": {
+      "rationale": "three sigma: beyond it is not explained by fit noise.",
+      "value": 3.0
+    },
+    "tangent_tolerance": {
+      "rationale": "screening window for tangency on a part of this size.",
+      "value": 0.05
+    },
+    "tolerance_basis": "uncertainty"
+  }
+}

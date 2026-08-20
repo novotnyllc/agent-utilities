@@ -3,7 +3,65 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Any
+
+from fusion_design.mesh_fitting import region_motion_moments
+
+
+def _plane_moments(normal, point, area):
+    """Facets of a square patch of the declared area, centred on the fitted point.
+
+    The fixture describes surfaces analytically and U3 now reads a *facet*
+    statistic, so the fixture has to produce facets or it would be testing the
+    consumer against evidence no producer could write.  These are honest facets
+    of the very surface the fit record declares: the normal is the fitted one,
+    the positions lie in the fitted plane, and the weights sum to the declared
+    area.  `test_pipeline_seams` is what proves the real producer agrees.
+    """
+    axis = min(range(3), key=lambda i: abs(normal[i]))
+    u = _unit_cross(normal, tuple(1.0 if i == axis else 0.0 for i in range(3)))
+    v = _unit_cross(normal, u)
+    # Kept inside the declared bounding box so the box and the facets describe
+    # the same patch; the weights, not the footprint, carry the area.
+    half, n = 1.0, 6
+    points, normals, areas = [], [], []
+    for i in range(n):
+        for j in range(n):
+            su = -half + 2.0 * half * (i + 0.5) / n
+            sv = -half + 2.0 * half * (j + 0.5) / n
+            points.append(tuple(point[k] + su * u[k] + sv * v[k] for k in range(3)))
+            normals.append(tuple(normal))
+            areas.append(area / (n * n))
+    return region_motion_moments(points, normals, areas)
+
+
+def _cylinder_moments(axis, axis_point, radius, area, span):
+    u = _unit_cross(axis, (1.0, 0.0, 0.0) if abs(axis[0]) < 0.9 else (0.0, 1.0, 0.0))
+    v = _unit_cross(axis, u)
+    rings, around = 4, 24
+    points, normals, areas = [], [], []
+    for i in range(rings):
+        t = -0.5 * span + span * (i + 0.5) / rings
+        for j in range(around):
+            phi = 2.0 * math.pi * j / around
+            radial = tuple(math.cos(phi) * u[k] + math.sin(phi) * v[k] for k in range(3))
+            points.append(
+                tuple(axis_point[k] + t * axis[k] + radius * radial[k] for k in range(3))
+            )
+            normals.append(radial)
+            areas.append(area / (rings * around))
+    return region_motion_moments(points, normals, areas)
+
+
+def _unit_cross(a, b):
+    c = (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+    length = math.sqrt(sum(x * x for x in c))
+    return tuple(x / length for x in c)
 
 
 def region_hash(label: str) -> str:
@@ -23,9 +81,13 @@ def plane(label, normal, point, area, *, uncertainty=None, accepted=True, reject
     offset = sum(n * p for n, p in zip(normal, point))
     lo = tuple(p - 1.0 for p in point)
     hi = tuple(p + 1.0 for p in point)
+    moments = _plane_moments(normal, point, area)
     return {
         "region_hash": region_hash(label),
         "area": area,
+        # The parser binds the moment block to the region it rides on, so the
+        # fixture states the same triangle count the block was built from.
+        "triangle_count": moments["facet_count"],
         "bounding_box": [list(lo), list(hi)],
         "fit": {
             "kind": "plane",
@@ -37,15 +99,18 @@ def plane(label, normal, point, area, *, uncertainty=None, accepted=True, reject
             "uncertainty": dict(PLANE_SIGMAS if uncertainty is None else uncertainty),
             **({"rejection": rejection} if rejection else {}),
         },
+        "motion_moments": moments,
     }
 
 
 def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
     lo = tuple(p - radius for p in axis_point)
     hi = tuple(p + radius for p in axis_point)
+    moments = _cylinder_moments(axis, axis_point, radius, area, span)
     return {
         "region_hash": region_hash(label),
         "area": area,
+        "triangle_count": moments["facet_count"],
         "bounding_box": [list(lo), list(hi)],
         "fit": {
             "kind": "cylinder",
@@ -61,7 +126,54 @@ def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
             "support": {"axial_span": span},
             "uncertainty": dict(CYLINDER_SIGMAS if uncertainty is None else uncertainty),
         },
+        "motion_moments": moments,
     }
+
+
+def _chain_id(name: str) -> str:
+    """A chain id shaped like U2's: a hex digest over the chain's own members."""
+    return hashlib.sha256(f"chain:{name}".encode("utf-8")).hexdigest()
+
+
+def _chain_block(name: str, radius: float) -> dict[str, Any]:
+    """U2's chain record for a blend: which edge it is, and that the walk kept it."""
+    return {
+        "id": _chain_id(name),
+        "members": [region_hash(name)],
+        "member_count": 1,
+        "radius_spread_rel": 0.0,
+        "max_radius_rel_spread": 0.02,
+        "mean_radius": radius,
+        "accepted": True,
+        "reason": None,
+    }
+
+
+def blend_cylinder(label, axis, axis_point, radius, area, *, between, chain=None):
+    """An accepted *partial-arc cylinder* carrying U2's fillet proposal.
+
+    The other shape a blend arrives as, and the only one a face-grouped mesh
+    actually produces.  The arc that separates an edge round from a bore is
+    measured upstream against U2's own declared ceiling; the fit record carries
+    the proposal, not the span, so nothing downstream re-measures it.
+
+    ``chain`` names the *edge* this fragment lies on, as U2's blend chaining does:
+    fragments of one round share a chain, and two rounds between the same pair of
+    faces are two chains.  It defaults to the region's own label, which is what a
+    lone fragment gets.  A record that named no chain would leave the planner
+    unable to tell one rounded edge of a face pair from the next, and it says so
+    rather than pooling them.
+    """
+    region = cylinder(label, axis, axis_point, radius, area, 8.0)
+    region["fillet_candidate"] = True
+    region["fillet"] = {
+        "radius": radius,
+        "between": [region_hash(name) for name in between],
+        "chain_id": _chain_id(chain or label),
+        "emission": "filletFeatures on the shared edge, radius = the cylinder radius over a partial arc",
+    }
+    region["fillet_chain"] = _chain_block(chain or label, radius)
+    return region
 
 
 def oriented(region, side, *, reason=None):
@@ -113,16 +225,37 @@ def torus(label, radius, minor_radius, area, *, between, candidate=True):
         region["fillet"] = {
             "radius": minor_radius,
             "between": [region_hash(name) for name in between],
+            "chain_id": _chain_id(label),
             "emission": "filletFeatures on the shared edge, radius = the torus minor radius",
         }
+        region["fillet_chain"] = _chain_block(label, minor_radius)
     return region
 
 
-def record(regions: list[dict[str, Any]], *, units: str = "mm") -> dict[str, Any]:
+def record(
+    regions: list[dict[str, Any]],
+    *,
+    units: str = "mm",
+    detected: str = "tessellation",
+    declared: str = "auto",
+) -> dict[str, Any]:
+    """A fit record shaped like U2's, regime block included.
+
+    ``declared`` is what the caller asked for and ``detected`` what the mesh
+    said; the effective regime is the declaration unless it is ``auto``, which
+    is exactly the rule `_detect_regime` applies.
+    """
     return {
         "record_version": 1,
         "dump_sha256": DUMP_SHA256,
         "units": units,
+        "regime": {
+            "regime": detected if declared == "auto" else declared,
+            "detected": detected,
+            "declared": declared,
+            "overridden": declared != "auto" and declared != detected,
+            "evidence": {},
+        },
         "total_area": sum(region["area"] for region in regions),
         "regions": regions,
     }
@@ -208,6 +341,43 @@ def spec(
         "sigma_multiple": {
             "value": 3.0,
             "rationale": "three sigma: a deviation beyond it is not explained by fit noise.",
+        },
+        "motion_evidence": {
+            "sigma_theta_deg": {
+                "value": 0.2865,
+                "rationale": (
+                    "0.005 rad of facet-normal noise, the floor a tessellated surface leaves once "
+                    "the exporter's own vertex quantization is folded in."
+                ),
+            },
+            "residual_sigma_factor": {
+                "value": 3.0,
+                "rationale": (
+                    "three sigma of that noise before 'no rigid motion leaves this surface "
+                    "invariant' is a statement about the geometry rather than about the mesh."
+                ),
+            },
+            "eigengap_min": {
+                "value": 0.005,
+                "rationale": (
+                    "half a percent of the spectrum: below it the second-smallest eigenvalue is "
+                    "indistinguishable from zero and the invariant motions are a family, not one."
+                ),
+            },
+            "translation_epsilon": {
+                "value": 0.05,
+                "rationale": (
+                    "a rotation part under a twentieth of the unit six-vector is a translation "
+                    "with rounding on it."
+                ),
+            },
+            "pitch_epsilon": {
+                "value": 0.02,
+                "rationale": (
+                    "two percent of the region's own extent per radian: below it a screw is a "
+                    "rotation and the helix is the tessellation's."
+                ),
+            },
         },
     }
     if basis == "declared-absolute":

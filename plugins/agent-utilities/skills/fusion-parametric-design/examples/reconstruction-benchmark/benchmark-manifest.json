@@ -1,0 +1,552 @@
+{
+  "benchmark": "downloaded-part reconstruction benchmark",
+  "f3d_ground_truth": {
+    "design_type": "ParametricDesignType",
+    "expressible_by_the_archetype_vocabulary": [
+      "ExtrudeFeature",
+      "FilletFeature"
+    ],
+    "feature_kinds": {
+      "CoilFeature": 1,
+      "ConstructionPlane": 4,
+      "ExtrudeFeature": 3,
+      "FilletFeature": 1,
+      "LoftFeature": 2,
+      "MoveFeature": 1,
+      "ShellFeature": 1,
+      "Sketch": 9,
+      "SplitBodyFeature": 1,
+      "SweepFeature": 2
+    },
+    "inexpressible": [
+      "CoilFeature",
+      "SweepFeature",
+      "LoftFeature",
+      "ShellFeature",
+      "SplitBodyFeature",
+      "MoveFeature"
+    ],
+    "note": "The closed archetype vocabulary is sketch-extrude, revolve, hole and fillet. Of the twelve solid features in the original timeline, four extrudes-or-fillets are expressible in kind and eight are not -- one coil, two sweeps, two lofts, a shell, a split body and a move. No revolve appears in the original at all, so the one archetype this part might have earned was never what the designer used.",
+    "source": "ground-truth/unicorn-horn-parametric-multi-v3.f3d.timeline.json",
+    "timeline_count": 25,
+    "user_parameters": [
+      {
+        "expression": "30 mm",
+        "name": "circsize"
+      },
+      {
+        "expression": "140 mm",
+        "name": "height"
+      },
+      {
+        "expression": "40 mm",
+        "name": "diameter"
+      },
+      {
+        "expression": "6 mm",
+        "name": "bottom"
+      },
+      {
+        "expression": "34 mm",
+        "name": "botDiameter"
+      },
+      {
+        "expression": "6 mm",
+        "name": "capCircle"
+      },
+      {
+        "expression": "3",
+        "name": "multiplicity"
+      },
+      {
+        "expression": "4.5 mm",
+        "name": "CenterOffset"
+      }
+    ]
+  },
+  "fixtures": [
+    {
+      "bytes": 27884,
+      "file": "parts/honeycomb-tool-organizer.stl",
+      "original_name": "honeycomb-tool-organizer.stl",
+      "pair": "honeycomb",
+      "role": "stl-input",
+      "sha256": "d352299bf79a8bef43a0309def7a66f812bced86b28b29310bddc282385a37e4"
+    },
+    {
+      "bytes": 337865,
+      "file": "parts/honeycomb-tool-organizer.step",
+      "original_name": "Honeycomb tool organizer.STEP",
+      "pair": "honeycomb",
+      "role": "step-ground-truth",
+      "sha256": "0cf70f65cc87dd3ac261afacca84265357a3bc53ba46a89a4ae088c8346326a7"
+    },
+    {
+      "bytes": 10705166,
+      "file": "parts/unicorn-horn-parametric-multi-v3.f3d",
+      "original_name": "Unicorn Horn Parametric_Multi v3.f3d",
+      "pair": "unicorn-horn",
+      "role": "f3d-ground-truth",
+      "sha256": "94dc8e66f08b490f284e69d19273bee4b11b93bcbe441dff6158703519f6ac7c"
+    },
+    {
+      "bytes": 3088022,
+      "file": "parts/unicorn-horn-4examples-v3.step",
+      "original_name": "Unicorn Horn_4examples v3.step",
+      "pair": "unicorn-horn",
+      "role": "step-ground-truth",
+      "sha256": "352d9bf656c62c62ad3f6ba6225bda4c02dc51eaaee35e9e27d3589239a32807"
+    },
+    {
+      "bytes": 5799071,
+      "file": "parts/unicorn-horn-4examples-v3.3mf",
+      "original_name": "Unicorn Horn_4examples v3.3mf",
+      "pair": "unicorn-horn",
+      "role": "3mf-input",
+      "sha256": "f5a06b02ad2ebbf6695a430464b6f145848e663b4d771013ada9c6fecac77d42"
+    },
+    {
+      "bytes": 4319784,
+      "file": "parts/tropical-leaves.stl",
+      "original_name": "tropical_leaves.stl",
+      "pair": "tropical-leaves",
+      "role": "stl-input",
+      "sha256": "995681e3801a4304d6a7c93eb249c1a8c1cd3a1826ea5adef2e01432851a6f1d"
+    },
+    {
+      "bytes": 109704,
+      "file": "parts/desktop-organiser-bambulab-v0.3mf",
+      "original_name": "desktop-organiser-bambulab-v0.3mf",
+      "pair": "desktop-organiser",
+      "role": "3mf-input",
+      "sha256": "9a9e28f371aa4c4bfd96bc4eae435740728e6b1947924b00a84f435d8c2e9954"
+    },
+    {
+      "bytes": 16161,
+      "file": "dumps/honeycomb_organizer_stl-d352299bf79a.meshdump",
+      "original_name": null,
+      "pair": "honeycomb_organizer_stl",
+      "role": "mesh-dump",
+      "sha256": "1b45117d02800951fa583e395f3c98d9d67858651ca75c4a2ff540f64f8283e3"
+    },
+    {
+      "bytes": 2473835,
+      "file": "dumps/unicorn_horn_3mf-f5a06b02ad2e.meshdump",
+      "original_name": null,
+      "pair": "unicorn_horn_3mf",
+      "role": "mesh-dump",
+      "sha256": "c93e9c96a9268cedb982766ebed07243f39c6eb6cd6ad93e1d5112616ff78504"
+    },
+    {
+      "bytes": 2419585,
+      "file": "dumps/tropical_leaves_stl-995681e3801a.meshdump",
+      "original_name": null,
+      "pair": "tropical_leaves_stl",
+      "role": "mesh-dump",
+      "sha256": "94db3ab2cd8b9ebc990f0dc81f3b055ae325a878194fbb1b6891b39bc6663238"
+    },
+    {
+      "bytes": 182648,
+      "file": "dumps/desktop_organiser_3mf-9a9e28f371aa.meshdump",
+      "original_name": null,
+      "pair": "desktop_organiser_3mf",
+      "role": "mesh-dump",
+      "sha256": "8a9ab10ee7bf089d910e5b13b3c2d3e7292d65a8da204dd495411a6ba9aa0154"
+    },
+    {
+      "bytes": 44540,
+      "file": "ground-truth/honeycomb-tool-organizer.step.brep.json",
+      "original_name": "Honeycomb tool organizer.STEP, read as a B-Rep in Fusion",
+      "pair": "honeycomb",
+      "role": "brep-ground-truth",
+      "sha256": "1b27f3ef2484c27de5e6008584898319f1177bc0070c5fb01a8de7b83723250c"
+    },
+    {
+      "bytes": 53219,
+      "file": "ground-truth/unicorn-horn-4examples-v3.step.brep.json",
+      "original_name": "Unicorn Horn_4examples v3.step, read as a B-Rep in Fusion",
+      "pair": "unicorn-horn",
+      "role": "brep-ground-truth",
+      "sha256": "4a6a7371193621b10d64e332d36ca754a2aea7b2a48c2d449328a8c31d36f761"
+    },
+    {
+      "bytes": 6510,
+      "file": "ground-truth/unicorn-horn-parametric-multi-v3.f3d.timeline.json",
+      "original_name": "Unicorn Horn Parametric_Multi v3.f3d, its timeline and user parameters read in Fusion",
+      "pair": "unicorn-horn",
+      "role": "timeline-ground-truth",
+      "sha256": "8772dff0c1b4de33a9fb8e6f4cdfe12ca549cbb6ec72b95e314052f8b63e90e2"
+    }
+  ],
+  "ground_truth": {
+    "honeycomb-tool-organizer.step.brep.json": "vendor STEP read as a B-Rep in Fusion: every face, its surface kind and its parameters",
+    "unicorn-horn-4examples-v3.step.brep.json": "vendor STEP read as a B-Rep in Fusion: every face, its surface kind and its parameters",
+    "unicorn-horn-parametric-multi-v3.f3d.timeline.json": "the native Fusion archive's own timeline and user parameters -- what parametric actually looked like before export"
+  },
+  "issue": 20,
+  "known_gaps": [
+    {
+      "diagnosis": "mesh_segmentation._sigma_dihedral states its own assumption: 'real creases are a small minority of interior edges on a mechanical part, so the median sees only the noise'. On a honeycomb that is false -- 61.5 percent of interior edges are genuine 60-degree cell creases, so the median interior dihedral is 59.99993 degrees and estimator B reports 13.1 mm of noise on a mesh whose quadric estimator reports exactly zero and whose regime is detected as an exact tessellation. sigma is taken as max(quadric, dihedral) before the regime is known, so the regime that already suppresses the noise-model-inconsistent *flag* does not suppress the *value*.",
+      "evidence": {
+        "declared_min_feature_size_mm": 1.0,
+        "exactly_coplanar_edge_fraction": 0.38489208633093525,
+        "interior_edge_count": 834,
+        "median_abs_dihedral_deg": 59.999932056004646,
+        "part_longest_extent_mm": 168.875,
+        "recoverable_feature_size_mm": 131.07963242658033,
+        "sigma_dihedral": 13.107963242658034,
+        "sigma_quadric": 0.0
+      },
+      "fixed_by": "mesh_segmentation._stage_noise_scale now detects the regime before selecting sigma. In the tessellation regime sigma is the quadric estimator alone -- the only one estimating noise there -- and the dihedral reading moves into surface_scale, where a facet turn angle belongs and where it was already arriving through sigma in both regimes, so every power floor that reads surface_scale is unchanged. In the scan regime the conservative maximum stands. Both estimators are always recorded, with noise.sigma_estimator naming the one chosen. No declared threshold value moved.",
+      "gate": "feature-scale-below-noise",
+      "id": "estimator-b-counts-real-creases-as-noise",
+      "measured_with_the_estimator_suppressed": {
+        "accepted": 45,
+        "accepted_kinds": {
+          "cylinder": 6,
+          "plane": 39
+        },
+        "covered_area_fraction": 0.47617719812946524,
+        "method": "diagnostic only, and nothing shipped changes: _sigma_dihedral forced to 0.0 so the rest of the pipeline could be measured on this part",
+        "note": "Kept as the record of how the fix was sized before it existed: _sigma_dihedral forced to 0.0 so the rest of the pipeline could be measured on this part. Its six cylinders are the second defect, now refused -- see hexagonal-pockets-fit-their-circumscribed-cylinder.",
+        "planes_matching_a_step_family": 39,
+        "regions": 45,
+        "spurious_cylinder_diagnosis": "12.990381 mm is 15 x cos(30 deg), the apothem of the hexagonal cell. Fusion groups each hex pocket's six walls into one face group and the fitter accepts a cylinder through them, so a 25.98 mm across-flats hex pocket is reported as a 25.98 mm round bore: right size, wrong kind, and the STEP proves it wrong.",
+        "spurious_cylinder_radius_mm": 12.990381,
+        "spurious_cylinders": 6,
+        "step_families_hit": 4,
+        "then_planner_refuses": {
+          "declared_frame_margin": 0.1,
+          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
+          "margin": 0.09864400512321356,
+          "refusal": "frame-ambiguous"
+        },
+        "worst_plane_normal_deviation_deg": 0.3801
+      },
+      "outcome": {
+        "covered_area_fraction": 0.4155607590145768,
+        "note": "What the diagnostic sized by forcing _sigma_dihedral to zero, now measured on the shipped build -- minus the six cylinders, which the discrete-normal gate refuses. Coverage is 41.6 rather than the diagnostic's 47.6 for exactly that reason: the hex pockets' area is unclaimed rather than wrongly claimed.",
+        "planes_matching_a_step_family": 39,
+        "regions": 45,
+        "regions_accepted": 39,
+        "spurious_cylinders": 0,
+        "step_families_hit": 4,
+        "then_planner_refuses": {
+          "declared_frame_margin": 0.1,
+          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
+          "margin": 0.09864400512321356,
+          "refusal": "frame-ambiguous"
+        },
+        "worst_plane_normal_deviation_deg": 0.3801
+      },
+      "part": "honeycomb_organizer_stl",
+      "status": "fixed"
+    },
+    {
+      "diagnosis": "A regular polygon's corners lie exactly on its circumscribed circle, so a hexagonal pocket delivered as one face group fits a cylinder of that circumradius at float-noise residual -- and a sphere through the same corners just as exactly. Every gate that reads vertices passes it, because to the vertices it really is a cylinder. The honeycomb's six hex pockets came back as six 25.98 mm across-flats round bores, and the STEP proves there is no curved surface anywhere in the part. The same defect was then found on parts nobody had suspected: 21 M3 nut pockets across five of the eleven production STLs -- 5.700 mm across flats, 12 facets each, r = 3.290896 -- were being planned as 6.58 mm round holes. A round hole where an M3 nut must not rotate is the wrong part.",
+      "evidence": {
+        "honeycomb_directions_per_turn": 7.5,
+        "honeycomb_facet_normal_directions": 5,
+        "honeycomb_spurious_cylinder_radius_mm": 12.990381,
+        "note": "Bimodal with nothing in between, measured over the eleven production dumps and this corpus: genuine tessellated cylinders carry 29.6 to 108 distinct facet-normal directions per full turn at radii from 1.15 mm to 10 mm, and every prism sits below 7.6. The declared min_cylinder_normal_directions_per_turn is 8.0, which a coarse eight-facet cylinder still clears at 9.14.",
+        "production_hex_pockets": 21,
+        "production_hex_pockets_across_flats_mm": 5.7,
+        "production_hex_pockets_directions_per_turn": 7.111,
+        "production_parts_affected": 5,
+        "step_curved_faces": 0
+      },
+      "fixed_by": "mesh_fitting._prism_of_planes reads the accumulation normal_constrained_axis already builds. When the facet normals sit within the declared cylinder_normal_perpendicular_deg of perpendicular to one axis -- which is what says they are arranged around an axis, and what excludes a real sphere -- but occupy fewer distinct directions per turn than the declared minimum, every curved fit over the group is refused cylinder-normals-discrete. It is a verdict about the group, so the sphere falls with the cylinder; support.normal_direction_spread records the facet count, the distinct directions, the arc they cover and the directions per turn it was judged on.",
+      "gate": "cylinder-normals-discrete",
+      "id": "hexagonal-pockets-fit-their-circumscribed-cylinder",
+      "outcome": {
+        "eleven_part_corpus": "1,069 regions offered and 114 fillet candidates unchanged; 619 -> 598 accepted, 251 -> 230 cylinders (all 21 removals at r = 3.290896), 66 -> 45 planned holes, 10 extrudes and 3 fillets unchanged, mean coverage 0.5597 -> 0.5566, and no part changes the gate it stops at.",
+        "honeycomb_spurious_cylinders": 0
+      },
+      "part": "honeycomb_organizer_stl",
+      "status": "fixed"
+    },
+    {
+      "diagnosis": "Fitting is honest: 31 of 958 regions accepted, 30 planes and one sphere, 18.3 percent of the area, and not one cylinder, cone or torus claimed on an organic panel. The plan reduces that to a single sketch-extrude at 5.7 percent, and emission then refuses because the section closes two loops and the mesh's winding is inconsistent (isOriented false, signed volume 0.0), so material_side is null and the inner loop cannot be held out as a hole. The refusal chain is the capture evidence, not a threshold.",
+      "gate": "profile-ambiguous",
+      "id": "tropical-leaves-cannot-close-a-profile",
+      "part": "tropical_leaves_stl",
+      "status": "open"
+    },
+    {
+      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter does accept is 9 regions covering 4.7 percent of the surface, and the planner then refuses because no plane parallel to the primary axis and no offset second axis exists, so rotation about that axis is unobservable.",
+      "gate": "frame-x-underdetermined",
+      "id": "unicorn-horn-is-not-in-the-vocabulary",
+      "part": "unicorn_horn_3mf",
+      "status": "open"
+    }
+  ],
+  "measured_with": {
+    "fusion_version": "2705.0.108",
+    "note": "Every mesh dump under dumps/ was written by the skill's own emit-mesh-face-groups and emit-mesh-extract scripts against live Fusion, and is bound to the sha256 recorded here. Everything downstream of the dump runs host-side with no Fusion at all, which is why the benchmark is reproducible from this repository alone."
+  },
+  "results": {
+    "desktop_organiser_3mf": {
+      "body_name": "desktop-organiser-bambulab-v0",
+      "dump": "desktop_organiser_3mf-9a9e28f371aa.meshdump",
+      "dump_sha256": "8a9ab10ee7bf089d910e5b13b3c2d3e7292d65a8da204dd495411a6ba9aa0154",
+      "face_groups": 790,
+      "fit": {
+        "accepted": 38,
+        "accepted_kinds": {
+          "plane": 21,
+          "sphere": 17
+        },
+        "covered_area_fraction": 0.2791666055845747,
+        "refusal": null,
+        "refusal_detail": null,
+        "regions": 130,
+        "top_gates": {
+          "parameter uncertainty: the fitted axis direction": 22,
+          "relative residual": 21,
+          "residual structure: Moran's I z =": 13,
+          "support floors: this cone is supported": 8,
+          "support floors: this plane is supported": 15
+        }
+      },
+      "mesh_file": "desktop-organiser-bambulab-v0.3mf",
+      "noise": {
+        "interior_edge_count": 9753,
+        "median_abs_dihedral_deg": 14.999740382753975,
+        "sigma": 0.13626866255184752,
+        "sigma_dihedral": 0.13626866255184752,
+        "sigma_quadric": 0.04763099381495144
+      },
+      "plan": {
+        "archetypes": {
+          "sketch-extrude": 1
+        },
+        "covered_area_fraction": 0.2757727018937475,
+        "refusal": null,
+        "unreconstructed": 109
+      },
+      "rebuild_emission": {
+        "refusal": null
+      },
+      "regime": "scan",
+      "stage_reached": "emitted",
+      "total_area_mm2": 231051.26702574792,
+      "triangles": 6502
+    },
+    "honeycomb_organizer_stl": {
+      "body_name": "honeycomb-tool-organizer",
+      "dump": "honeycomb_organizer_stl-d352299bf79a.meshdump",
+      "dump_sha256": "1b45117d02800951fa583e395f3c98d9d67858651ca75c4a2ff540f64f8283e3",
+      "face_groups": 121,
+      "fit": {
+        "accepted": 39,
+        "accepted_kinds": {
+          "plane": 39
+        },
+        "covered_area_fraction": 0.4155607590145768,
+        "refusal": null,
+        "refusal_detail": null,
+        "regions": 45,
+        "top_gates": {
+          "cylinder-normals-discrete": 6
+        }
+      },
+      "mesh_file": "honeycomb-tool-organizer.stl",
+      "noise": {
+        "interior_edge_count": 834,
+        "median_abs_dihedral_deg": 59.999932056004646,
+        "note": "The two estimators still disagree by six orders of magnitude and both are still recorded. What changed is which one sigma is taken from: the regime is detected before the selection now, and on an exact tessellation the dihedral median is a facet turn angle, so it is the discretization scale rather than the noise.",
+        "sigma": 2.9922861311151757e-05,
+        "sigma_dihedral": 13.107963242658034,
+        "sigma_estimator": "quadric",
+        "sigma_quadric": 0.0,
+        "surface_scale": 13.107963242658034,
+        "vertex_precision_floor": 2.9922861311151757e-05
+      },
+      "plan": {
+        "margin": 0.09864400512321356,
+        "message": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. Structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
+        "refusal": "frame-ambiguous"
+      },
+      "regime": "tessellation",
+      "stage_reached": "plan",
+      "total_area_mm2": 257165.51365268845,
+      "triangles": 556
+    },
+    "tropical_leaves_stl": {
+      "body_name": "tropical-leaves",
+      "dump": "tropical_leaves_stl-995681e3801a.meshdump",
+      "dump_sha256": "94db3ab2cd8b9ebc990f0dc81f3b055ae325a878194fbb1b6891b39bc6663238",
+      "face_groups": 2299,
+      "fit": {
+        "accepted": 31,
+        "accepted_kinds": {
+          "plane": 30,
+          "sphere": 1
+        },
+        "covered_area_fraction": 0.18303216796808958,
+        "refusal": null,
+        "refusal_detail": null,
+        "regions": 958,
+        "top_gates": {
+          "held-out residual": 193,
+          "held-out residual: refitting this plane on": 313,
+          "relative residual": 106,
+          "residual structure: Moran's I z =": 42,
+          "support floors: this cylinder is supported": 84
+        }
+      },
+      "mesh_file": "tropical-leaves.stl",
+      "noise": {
+        "interior_edge_count": 129589,
+        "median_abs_dihedral_deg": 7.766618597524077,
+        "sigma": 0.08410277409800189,
+        "sigma_dihedral": 0.05874407153723969,
+        "sigma_quadric": 0.08410277409800189
+      },
+      "plan": {
+        "archetypes": {
+          "sketch-extrude": 1
+        },
+        "covered_area_fraction": 0.056958866926556904,
+        "refusal": null,
+        "unreconstructed": 946
+      },
+      "rebuild_emission": {
+        "message": "the section at station 31.4476 mm closed 2 loops for sketch-extrude-13c2935b8557; a single-loop profile cannot describe it and picking one would discard the rest without saying so.",
+        "refusal": "profile-ambiguous"
+      },
+      "regime": "scan",
+      "stage_reached": "emit-rebuild",
+      "total_area_mm2": 42517.030015799144,
+      "triangles": 86394
+    },
+    "unicorn_horn_3mf": {
+      "body_name": "unicorn-horn-multi-v3",
+      "dump": "unicorn_horn_3mf-f5a06b02ad2e.meshdump",
+      "dump_sha256": "c93e9c96a9268cedb982766ebed07243f39c6eb6cd6ad93e1d5112616ff78504",
+      "face_groups": 620,
+      "fit": {
+        "accepted": 9,
+        "accepted_kinds": {
+          "cylinder": 3,
+          "plane": 6
+        },
+        "covered_area_fraction": 0.04701799375963501,
+        "refusal": null,
+        "refusal_detail": null,
+        "regions": 539,
+        "top_gates": {
+          "held-out residual": 107,
+          "held-out residual: refitting this plane on": 43,
+          "residual structure: Moran's I z =": 151,
+          "support floors: this cylinder is supported": 36,
+          "support floors: this sphere is supported": 144
+        }
+      },
+      "mesh_file": "unicorn-horn-4examples-v3.3mf",
+      "noise": {
+        "interior_edge_count": 132501,
+        "median_abs_dihedral_deg": 6.2687303170736195,
+        "sigma": 0.05046561412229853,
+        "sigma_dihedral": 0.05046561412229853,
+        "sigma_quadric": 0.0006552325417531704
+      },
+      "plan": {
+        "message": "no plane parallel to the primary axis and no second axis offset from it, so rotation about the primary axis is not observable. The global X axis is not a substitute.",
+        "refusal": "frame-x-underdetermined"
+      },
+      "regime": "scan",
+      "stage_reached": "plan",
+      "total_area_mm2": 22900.99189470306,
+      "triangles": 88334
+    }
+  },
+  "step_comparison": {
+    "honeycomb_organizer_stl": {
+      "ground_truth": "ground-truth/honeycomb-tool-organizer.step.brep.json",
+      "mesh_area_mm2": 257165.51365268845,
+      "mesh_bbox_extent_mm": [
+        152.50000227242708,
+        168.87495674006573,
+        102.00000151991844
+      ],
+      "mesh_volume_mm3": 314378.28832563106,
+      "note": "The STEP carries no cylinder, cone, sphere or torus: the whole organiser is 145 planes in exactly four directions, three vertical walls 120 degrees apart and one horizontal. Any curved primitive the reconstruction claims on this part is a claim the ground truth contradicts.",
+      "plane_match": {
+        "curved_primitives_claimed": 0,
+        "family_table_rounding_deviation_deg": 0.3800607015657995,
+        "mesh_to_step_translation_mm": [
+          76.25,
+          86.946886,
+          2.0
+        ],
+        "note": "Every accepted fit is a plane, every one of them is parallel to one of the STEP's own face normals to 0.0 degrees, and every one lands on that face's plane to 1.1e-05 mm once the single rigid translation between the imported mesh and the STEP body is applied -- the mesh arrives with its bounding-box corner at the origin, so position is only checkable through that one translation, which is measured from the two bounding boxes and recorded here. The STEP carries no curved surface at all, so 'curved primitives claimed' is a checkable zero rather than an opinion -- it was six before the discrete-normal gate. family_table_rounding_deviation_deg is not a property of the fit: it is how far the fitted normals sit from the *family table*, whose normals are rounded to three decimals, and it used to be recorded as though it were the agreement.",
+        "planes_matched": 39,
+        "step_families_hit": 4,
+        "worst_plane_normal_deviation_deg": 0.0,
+        "worst_plane_offset_mm": 1.1091710860000603e-05
+      },
+      "step_area_mm2": 257165.521966,
+      "step_bbox_extent_mm": [
+        152.5,
+        168.874953,
+        102.0
+      ],
+      "step_face_kinds": {
+        "PlaneSurfaceType": 145
+      },
+      "step_plane_families": [
+        {
+          "area_mm2": 76793.36,
+          "faces": 36,
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 66112.38,
+          "faces": 42,
+          "normal": [
+            0.5,
+            -0.866,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 66112.38,
+          "faces": 42,
+          "normal": [
+            0.5,
+            0.866,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 48147.4,
+          "faces": 25,
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "step_volume_mm3": 314378.046891
+    },
+    "unicorn_horn_3mf": {
+      "ground_truth": "ground-truth/unicorn-horn-4examples-v3.step.brep.json",
+      "mesh_volume_mm3": 16901.477,
+      "note": "43 percent of the graded body's faces are NURBS. The archetype vocabulary has no NURBS member, so that area is unreachable by construction rather than by a threshold.",
+      "step_body": "/Unicorn Horn Parametric_Multi v3:1 Body1",
+      "step_face_kinds": {
+        "CylinderSurfaceType": 8,
+        "NurbsSurfaceType": 22,
+        "PlaneSurfaceType": 19,
+        "TorusSurfaceType": 2
+      },
+      "step_volume_mm3": 16952.151337
+    }
+  }
+}

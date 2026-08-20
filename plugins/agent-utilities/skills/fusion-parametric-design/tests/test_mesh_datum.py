@@ -97,7 +97,9 @@ class ParseFitRecordTests(unittest.TestCase):
     def test_extra_upstream_keys_are_ignored_not_refused(self) -> None:
         record = fx.box_record()
         record["segmentation"] = {"source": "crease-growing"}
-        record["regions"][0]["triangle_count"] = 812
+        # Not `triangle_count` any more: the moment block is bound to it, so it
+        # is read rather than ignored.
+        record["regions"][0]["point_count"] = 812
         self.assertEqual(len(parse_fit_record(record).regions), 6)
 
     def test_missing_units_refuses_rather_than_assuming_millimetres(self) -> None:
@@ -134,6 +136,51 @@ class ParseFitRecordTests(unittest.TestCase):
         record["regions"][0]["fit"]["rms_residual"] = float("inf")
         with self.assertRaises(ReconstructionRefused):
             parse_fit_record(record)
+
+    def test_a_moment_block_that_does_not_describe_its_region_is_refused(self) -> None:
+        """Shape validation alone accepted every one of these.
+
+        The block is *summed* into a group's motion evidence and nothing
+        downstream re-derives it, so a block whose numbers came from somewhere
+        else silently changes which archetypes get emitted. Two numbers the
+        region already carries catch all of it.
+        """
+        fabrications = {
+            "matrix scaled by 1e6": lambda b, o: b.update(
+                matrix=[value * 1e06 for value in b["matrix"]]
+            ),
+            "a zero block": lambda b, o: b.update(matrix=[0.0] * 21),
+            "a centroid a kilometre away": lambda b, o: b.update(
+                centroid_sum=[value + 1e06 for value in b["centroid_sum"]]
+            ),
+            "another region's block copied over": lambda b, o: b.update(o),
+            "another region's facet count": lambda b, o: b.update(facet_count=b["facet_count"] + 1),
+            "another region's area": lambda b, o: b.update(area=b["area"] * 2.0),
+        }
+        for name, fabricate in fabrications.items():
+            with self.subTest(fabrication=name):
+                record = fx.box_record()
+                # regions[0] is a 100 mm^2 x face, regions[4] a 200 mm^2 z face.
+                fabricate(record["regions"][0]["motion_moments"], record["regions"][4]["motion_moments"])
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    parse_fit_record(record)
+                self.assertEqual(caught.exception.reason, "fit-record-moments-unbound")
+
+    def test_a_block_whose_region_states_no_triangle_count_cannot_be_bound(self) -> None:
+        record = fx.box_record()
+        del record["regions"][0]["triangle_count"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            parse_fit_record(record)
+        self.assertEqual(caught.exception.reason, "fit-record-malformed")
+        self.assertIn("triangle_count", caught.exception.message)
+
+    def test_a_record_with_no_moment_block_at_all_still_parses(self) -> None:
+        """Absent stays absent: an older record carries none and says so."""
+        record = fx.box_record()
+        for region in record["regions"]:
+            region.pop("motion_moments")
+            region.pop("triangle_count")
+        self.assertTrue(all(r.motion_moments is None for r in parse_fit_record(record).regions))
 
 
 class UncertaintyTests(unittest.TestCase):
@@ -203,6 +250,62 @@ class DatumFrameTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["margin"], 0.0)
         self.assertIn("winner", caught.exception.detail)
         self.assertIn("runner_up", caught.exception.detail)
+
+    def _walled_lid(self, x_walls, y_walls):
+        """A lid: one boss on +z, plus wall planes facing +x and +y.
+
+        Shaped after POD-A1-LID, whose primary axis was never in doubt and whose
+        X axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a
+        margin of 0.0063 -- while the stacks those two walls belong to measured
+        1008.4 mm2 against 189.6 mm2.
+        """
+        regions = [
+            fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+            fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
+        ]
+        for index, area in enumerate(x_walls):
+            regions.append(
+                fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area)
+            )
+        for index, area in enumerate(y_walls):
+            regions.append(
+                fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area)
+            )
+        return fx.record(regions)
+
+    def test_parallel_walls_pool_their_area_so_the_bigger_stack_sets_x(self) -> None:
+        # Face for face the contest is a coin toss: 95.4 against 94.8. Stack for
+        # stack it is not close, and the stack is the quantity that survives a
+        # re-tessellation, which is what the margin is protecting.
+        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
+        self.assertAlmostEqual(381.6, frame.evidence["secondary"]["score"], places=6)
+        self.assertIn("summed over 4 parallel fits", frame.evidence["secondary"]["basis"])
+        # (381.6 - 189.6) / 381.6, against a face-for-face margin of 0.0063.
+        self.assertAlmostEqual(0.50314465, frame.evidence["secondary_margin"], places=6)
+
+    def test_a_lid_whose_wall_stacks_really_do_tie_still_refuses(self) -> None:
+        # The refusal is a feature. Pooling parallel evidence must not turn a
+        # square box into a decided one.
+        record = self._walled_lid([95.4, 95.4], [95.4, 95.4])
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+        self.assertEqual(caught.exception.detail["margin"], 0.0)
+
+    def test_pooling_leaves_the_frame_identical_under_shuffled_region_order(self) -> None:
+        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
+        rng = random.Random(20260819)
+        for _ in range(12):
+            shuffled = copy.deepcopy(record)
+            rng.shuffle(shuffled["regions"])
+            self.assertEqual(
+                derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
+            )
 
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(

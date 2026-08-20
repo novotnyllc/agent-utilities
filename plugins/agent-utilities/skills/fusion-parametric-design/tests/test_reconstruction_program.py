@@ -37,6 +37,94 @@ def two_bores(radius_b: float = 3.0):
     )
 
 
+class DeclaredTokenTests(unittest.TestCase):
+    """Every named reason this planner can emit is declared, and none is a free string.
+
+    Five of the motion reasons were synthesized as
+    ``f"motion-{refusal or verdict or 'none'}"``: they existed only while the
+    program ran, so nothing could grep for them, no test could name one, and any
+    change to the router's own vocabulary renamed them silently.
+    """
+
+    def test_every_router_outcome_maps_to_a_declared_reason(self) -> None:
+        cases = {
+            ("router-ambiguous", "none"): "motion-router-ambiguous",
+            ("router-signature-conflict", "none"): "motion-router-signature-conflict",
+            (None, "extrusion"): "motion-extrusion",
+            (None, "helical"): "motion-helical",
+            (None, "none"): "motion-none",
+            (None, None): "motion-none",
+        }
+        for (refusal, verdict), expected in cases.items():
+            with self.subTest(refusal=refusal, verdict=verdict):
+                reason = rp._motion_reason({"refusal": refusal, "verdict": verdict})
+                self.assertEqual(expected, reason)
+                self.assertIn(reason, rp.MOTION_EVIDENCE_REASONS)
+
+    def test_a_router_outcome_nobody_declared_raises_rather_than_inventing_a_token(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            rp._motion_reason({"refusal": "router-went-fishing", "verdict": None})
+        self.assertIn("no declared reason", str(caught.exception))
+
+    def test_a_rotation_about_another_line_is_named_and_not_confirmed(self) -> None:
+        # `motion-axis-mismatch`: the group really is swept by a rotation, about
+        # a line 50 mm from the datum axis. A revolve here would turn the profile
+        # about an axis the geometry does not name.
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (30.0, 40.0, 4.0), 3.0, 150.0, 8.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (30.0, 40.0, 0.0), 28.0),
+            ]
+        )
+        regions = list(parse_fit_record(record).accepted())
+        frame = rp.DatumFrame(
+            origin=(0.0, 0.0, 0.0),
+            x_axis=(1.0, 0.0, 0.0),
+            y_axis=(0.0, 1.0, 0.0),
+            z_axis=(0.0, 0.0, 1.0),
+        )
+        gates = {
+            name: block["value"]
+            for name, block in fx.spec()["thresholds"]["motion_evidence"].items()
+        }
+        evidence = rp._motion_evidence(regions, frame, gates, 2.0, 0.5)
+        self.assertFalse(evidence["confirmed"])
+        self.assertEqual("motion-axis-mismatch", evidence["reason"])
+        self.assertAlmostEqual(50.0, evidence["axis_offset"], places=6)
+
+    def test_an_unprovable_revolve_names_the_gate_and_the_routers_own_reason(self) -> None:
+        # A stack of two coaxial cylinders admits a rotation *and* a translation,
+        # so the router refuses to pick one and the group is not revolved. Both
+        # tokens on that path -- the gate and the router reason inside it -- had
+        # no test naming them.
+        record = fx.record(
+            [
+                fx.oriented(
+                    fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                    "outside",
+                ),
+                fx.oriented(
+                    fx.cylinder("boss2", (0.0, 0.0, 1.0), (0.0, 0.0, 14.0), 5.0, 150.0, 8.0),
+                    "outside",
+                ),
+                fx.plane("flat", (1.0, 0.0, 0.0), (0.0, 0.0, 4.0), 12.0),
+            ]
+        )
+        program = build(record, fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("revolve-motion-unproven", gates)
+        self.assertIn("motion-router-ambiguous", gates)
+
+    def test_a_gate_token_nobody_declared_is_refused_on_the_way_into_the_program(self) -> None:
+        self.assertEqual("prose: is left alone.", rp._declared_gate("prose: is left alone."))
+        self.assertEqual(
+            "hole-axis-oblique: ...", rp._declared_gate("hole-axis-oblique: ...")
+        )
+        with self.assertRaises(ValueError):
+            rp._declared_gate("hole-axis-obliqe: a typo nothing downstream could match.")
+
+
 class SpecValidationTests(unittest.TestCase):
     def test_a_threshold_without_a_rationale_is_rejected(self) -> None:
         spec = fx.spec()
@@ -267,8 +355,15 @@ class ArchetypeTests(unittest.TestCase):
         group = program["archetypes"][0]
         self.assertEqual(len(group["regions"]), 6)
         self.assertEqual(group["operation"], "new-body")
-        self.assertEqual(group["plane"]["datum_plane"], "XZ")
-        self.assertAlmostEqual(group["extent"]["value"], 20.0)
+        # A 10 x 20 x 5 box is a legal prism in all three directions, so which
+        # one it plans as is a *rule* rather than a measurement, and the rule is
+        # the datum frame: the caps are the pair perpendicular to the primary
+        # axis, and the extrude runs along the axis every other archetype in the
+        # program is already expressed against. Under the old rule this was the
+        # box's longest dimension, which is a fact about its bounding box.
+        self.assertEqual(group["plane"]["datum_plane"], "XY")
+        self.assertEqual("datum-primary-axis", group["cap_selection"]["rule"])
+        self.assertAlmostEqual(group["extent"]["value"], 5.0)
         self.assertEqual(program["covered_area_fraction"], 1.0)
         self.assertEqual(program["unreconstructed"], [])
 
@@ -289,10 +384,68 @@ class ArchetypeTests(unittest.TestCase):
             1.0,
         )
 
+    def test_the_revolve_carries_the_motion_evidence_that_licensed_it(self) -> None:
+        # A revolve is no longer won on precedence alone. It is won on the
+        # group's own facet normals being invariant under one rotation about
+        # this very axis, and the program carries the router's record so a
+        # reviewer can see the spectrum the decision came off.
+        group = build(fx.turned_record(), fx.spec())["archetypes"][0]
+        evidence = group["motion_evidence"]
+        self.assertTrue(evidence["confirmed"], evidence)
+        self.assertEqual("motion-revolution-confirmed", evidence["reason"])
+        self.assertEqual("revolution", evidence["router"]["verdict"])
+        self.assertGreater(evidence["router"]["eigengap"], 0.005)
+        self.assertLessEqual(evidence["axis_tilt_deg"], 2.0)
+        self.assertLessEqual(evidence["axis_offset"], 0.5)
+
+    def test_without_a_declared_motion_gate_no_revolve_is_claimed(self) -> None:
+        # A revolve asserts that a whole group is swept by one rotation. The
+        # caller who declared no gate to judge that against has not licensed the
+        # assertion, and the program says so on the archetype that took the
+        # regions instead rather than quietly falling back to precedence.
+        spec = fx.spec()
+        del spec["thresholds"]["motion_evidence"]
+        program = build(fx.turned_record(), spec)
+        self.assertEqual(["sketch-extrude"], [g["kind"] for g in program["archetypes"]])
+        evidence = program["archetypes"][0]["motion_evidence"]
+        self.assertFalse(evidence["confirmed"])
+        self.assertEqual("motion-evidence-undeclared", evidence["reason"])
+        self.assertIsNone(evidence["router"])
+
+    def test_a_record_carrying_no_facet_moments_names_the_absence(self) -> None:
+        # An older fit record has no moment block, and a missing measurement is
+        # not a failed one: the refusal names what is absent and how to get it.
+        record = fx.turned_record()
+        for region in record["regions"]:
+            region.pop("motion_moments")
+        program = build(record, fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in program["archetypes"]])
+        evidence = program["archetypes"][0]["motion_evidence"]
+        self.assertEqual("motion-evidence-unavailable", evidence["reason"])
+        self.assertIn("re-run `fit-regions`", evidence["detail"])
+        self.assertEqual(3, len(evidence["regions_without_moments"]))
+
+    def test_a_partly_declared_motion_gate_is_refused_rather_than_completed(self) -> None:
+        spec = fx.spec()
+        del spec["thresholds"]["motion_evidence"]["eigengap_min"]
+        issues = rp.validate_program_spec(spec)
+        self.assertIn(
+            "program_spec.thresholds.motion_evidence.eigengap_min",
+            [issue.path for issue in issues],
+        )
+
     def test_a_rejected_fit_is_listed_with_the_gate_it_failed(self) -> None:
         record = fx.box_record()
-        record["regions"][0]["fit"]["accepted"] = False
-        record["regions"][0]["fit"]["rejection"] = "relative residual 0.4 exceeds the gate 0.02."
+        # The rejected wall is a *y* wall, not an *x* one, and that is not
+        # incidental. The box is 10 x 20 x 5, so its two x walls carry 100 each
+        # and its two y walls 50 each; the datum's X axis is now chosen by the
+        # total area facing a direction rather than by one face's area, and
+        # dropping an x wall would leave 100 against 100 -- a real tie, which
+        # the frame refuses. Dropping a y wall leaves 200 against 50 and the
+        # frame is as determined as it was with all six.
+        rejected = next(r for r in record["regions"] if r["region_hash"] == fx.region_hash("y-lo"))
+        rejected["fit"]["accepted"] = False
+        rejected["fit"]["rejection"] = "relative residual 0.4 exceeds the gate 0.02."
         program = build(record, fx.spec())
         gates = [entry["gate"] for entry in program["unreconstructed"]]
         self.assertIn("relative residual 0.4 exceeds the gate 0.02.", gates)
@@ -300,13 +453,25 @@ class ArchetypeTests(unittest.TestCase):
     def test_an_oblique_cap_plane_is_unmappable_rather_than_emitted(self) -> None:
         # Caps at 30 degrees to every datum axis: setByPlane is direct-edit-only,
         # so this plane cannot be asked for at all.
+        #
+        # `x-flat` carries more area than the *pair* of oblique faces together,
+        # which is what keeps the datum's X axis on +x. The frame now scores a
+        # direction by the total area facing it, so two 60 mm2 oblique faces
+        # would otherwise outweigh one 100 mm2 flat and the datum would rotate
+        # to meet them -- leaving nothing oblique for this gate to catch.
+        #
+        # The oblique pair is the *only* parallel pair here, and that is what
+        # this gate now needs: the caps follow the datum primary axis whenever a
+        # pair lies on it, so a body with a z pair would take that and never
+        # reach an oblique plane at all. One z face and no second one is a body
+        # whose only two parallel faces are the oblique cut, which is exactly the
+        # shape this refusal exists for.
         sqrt2 = 2.0**0.5
         oblique = (1.0 / sqrt2, 1.0 / sqrt2, 0.0)
         record = fx.record(
             [
                 fx.plane("z-lo", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 200.0),
-                fx.plane("z-hi", (0.0, 0.0, 1.0), (0.0, 0.0, 5.0), 200.0),
-                fx.plane("x-flat", (1.0, 0.0, 0.0), (5.0, 0.0, 2.5), 100.0),
+                fx.plane("x-flat", (1.0, 0.0, 0.0), (5.0, 0.0, 2.5), 150.0),
                 fx.plane("cut-lo", oblique, (0.0, 0.0, 2.5), 60.0),
                 fx.plane("cut-hi", oblique, (7.0, 7.0, 2.5), 60.0),
             ]
@@ -393,10 +558,25 @@ class HoleAndFilletTests(unittest.TestCase):
 
     def test_a_body_whose_only_turned_surface_is_a_bore_is_not_a_revolve(self) -> None:
         # Revolving a bore's own profile builds a disc where a plate belongs.
-        # The test is on positive evidence only: an unknown side still licenses
-        # the revolve exactly as it did before this unit.
-        self.assertNotIn("revolve", [g["kind"] for g in build(fx.bored_post_record("inside"), fx.spec())["archetypes"]])
-        self.assertIn("revolve", [g["kind"] for g in build(fx.bored_post_record(None), fx.spec())["archetypes"]])
+        # Neither side evidence makes this post a revolve, and the two get there
+        # by different routes, so the test names both. Known-inside: a bore is
+        # not an outward turned surface. Unknown: the side is still not the
+        # discriminator -- "unknown" is not "inward", exactly as before -- and
+        # what stops the revolve is the post's own shape. Its z faces are 12 x 10
+        # rectangles whose box centres sit 2.2 mm off the bore's axis against a
+        # declared 0.5: planes perpendicular to the axis, not annuli about it.
+        inside = build(fx.bored_post_record("inside"), fx.spec())
+        unknown = build(fx.bored_post_record(None), fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in inside["archetypes"]])
+        self.assertNotIn("revolve", [g["kind"] for g in unknown["archetypes"]])
+        # The side evidence still decides the hole, which is what it is for: a
+        # bore whose side the record states is cut out of the body, and one it
+        # does not is left in the extrude's section as an ordinary wall rather
+        # than cut on a guess.
+        self.assertIn("hole", [g["kind"] for g in inside["archetypes"]])
+        self.assertNotIn("hole", [g["kind"] for g in unknown["archetypes"]])
+        owner = {h: g for g in unknown["archetypes"] for h in g["regions"]}
+        self.assertEqual("sketch-extrude", owner[fx.region_hash("bore")]["kind"])
 
     def test_a_torus_between_two_rebuilt_features_becomes_a_fillet(self) -> None:
         blend = fx.torus("blend", 5.0, 1.0, 40.0, between=["bore", "z-lo"])
@@ -415,6 +595,171 @@ class HoleAndFilletTests(unittest.TestCase):
             "recon_fillet_1_radius", program["archetypes"][-1]["radius"]["parameter"]
         )
 
+    def test_a_partial_arc_cylinder_between_two_features_is_also_a_fillet(self) -> None:
+        # The shape a face-grouped mesh actually delivers an edge round as. This
+        # gate wanted a torus, so across the 11 benchmark parts all 114 of U2's
+        # proposals died here and no fillet was ever emitted.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (1.0, 0.0, 0.0), (6.0, 4.0, 2.0), 1.0, 40.0, between=["bore", "z-lo"]
+            ),
+            None,
+        )
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertAlmostEqual(1.0, fillets[0]["radius"]["value"])
+        self.assertEqual(2, len(set(fillets[0]["between"])))
+        self.assertEqual(fillets[0]["id"], program["order"][-1])
+
+    def test_a_blend_another_archetype_already_rebuilds_is_not_filleted_too(self) -> None:
+        # A partial-arc cylinder can be claimed where a torus never could -- here
+        # as a side of the extrude, whose section profile runs through the round
+        # already. Rounding it a second time would put the same area in two
+        # archetypes and report more of the scan covered than there is.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (0.0, 0.0, 1.0), (11.0, 9.0, 15.0), 1.0, 40.0, between=["bore", "z-lo"]
+            ),
+            None,
+        )
+        program = build(fx.bored_post_record("inside", extras=[blend]), fx.spec())
+        claimed = [
+            g["id"] for g in program["archetypes"] if fx.region_hash("blend") in g["regions"]
+        ]
+        self.assertEqual(1, len(claimed), program["archetypes"])
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        # And it names no gate, because it is not unreconstructed: the archetype
+        # that claimed it rebuilt it. There used to be a
+        # `fillet-region-already-reconstructed` string here that was built and
+        # then discarded on every run, since the unreconstructed list is exactly
+        # the regions nothing claimed.
+        self.assertEqual(
+            [], [e for e in program["unreconstructed"] if e["region_id"] == fx.region_hash("blend")]
+        )
+        self.assertAlmostEqual(
+            program["covered_area_fraction"],
+            sum(g["area_fraction"] for g in program["archetypes"]),
+        )
+
+    def _blend(self, label, between, radius=1.0, area=40.0, y=4.0, axis=(1.0, 0.0, 0.0), chain=None):
+        # The axis must not be parallel to the extrude's cap normal or the round
+        # is claimed as one of its sides and never reaches the fillet gate at all.
+        #
+        # `chain` names the edge: fragments of one round share it. Two fragments
+        # with no chain in common are two rounds on two edges, which is what a
+        # lone fragment gets by default.
+        return fx.oriented(
+            fx.blend_cylinder(
+                label, axis, (6.0, y, 2.0), radius, area, between=between, chain=chain
+            ),
+            None,
+        )
+
+    def test_a_blend_between_two_sides_of_one_extrude_is_a_fillet_on_that_edge(self) -> None:
+        # 42 of the benchmark's 114 candidates died on this: a box's own edge
+        # runs between two faces of one feature, and Fusion rounds it.
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["x-lo", "y-lo"])]),
+            fx.spec(),
+        )
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual(1, len(fillets[0]["between"]))
+        self.assertEqual("side-side", fillets[0]["edge_faces"])
+        self.assertEqual(fillets[0]["between"], fillets[0]["dependencies"])
+
+    def test_a_blend_on_a_cap_names_which_cap_so_the_emitter_can_pick_the_face_set(self) -> None:
+        # z-hi is the far cap in station order, which is the feature's endFaces.
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["z-hi", "x-lo"])]),
+            fx.spec(),
+        )
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual("end-side", fillets[0]["edge_faces"])
+
+    def test_a_blend_between_two_caps_of_one_extrude_has_no_edge_to_round(self) -> None:
+        program = build(
+            fx.bored_post_record("inside", extras=[self._blend("blend", ["z-lo", "z-hi"])]),
+            fx.spec(),
+        )
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-neighbour-shared", gates)
+        self.assertIn("face away from each other", gates)
+
+    def test_a_blend_inside_a_revolve_still_refuses_and_says_why(self) -> None:
+        # A revolve's faces come as one collection with no partition, so an edge
+        # inside it cannot be named. The refusal is the honest answer.
+        #
+        # The body has to be a *real* revolve for the refusal to be about the
+        # partition rather than about the archetype: the turned post's caps are
+        # discs centred on the boss's own axis and its facets are invariant under
+        # one rotation about it, so the revolve is earned. The blend runs between
+        # the boss and the top cap, two surfaces of that one feature.
+        blend = fx.oriented(
+            fx.blend_cylinder(
+                "blend", (1.0, 0.0, 0.0), (3.0, 0.0, 8.0), 1.0, 20.0, between=["boss", "cap-hi"]
+            ),
+            None,
+        )
+        record = fx.turned_record()
+        record["regions"].append(blend)
+        record["total_area"] = sum(region["area"] for region in record["regions"])
+        program = build(record, fx.spec())
+        owner = {h: g for g in program["archetypes"] for h in g["regions"]}
+        self.assertEqual("revolve", owner[fx.region_hash("boss")]["kind"])
+        self.assertEqual(
+            owner[fx.region_hash("boss")]["id"], owner[fx.region_hash("cap-hi")]["id"]
+        )
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("cannot partition into named sets", gates)
+
+    def test_two_fragments_of_one_round_become_one_fillet_over_both_regions(self) -> None:
+        # One edge, cut into two groups by the face grouping: U2 chained them, so
+        # they name one chain and pool into one fillet.
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0, chain="round"),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        fillets = [g for g in program["archetypes"] if g["kind"] == "fillet"]
+        self.assertEqual(1, len(fillets), program["unreconstructed"])
+        self.assertEqual(
+            sorted([fx.region_hash("left"), fx.region_hash("right")]), fillets[0]["regions"]
+        )
+        # The larger fragment's own measured radius, not a mean of the two: a
+        # mean is a number no fit ever produced.
+        self.assertAlmostEqual(1.0, fillets[0]["radius"]["value"])
+
+    def test_fragments_whose_radii_disagree_refuse_rather_than_pick_one(self) -> None:
+        # Disagreement *within one edge*: both fragments name the same chain and
+        # measured different rounds, which is the case this gate is for. Two
+        # radii on two different edges are two fillets, not a disagreement.
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=3.0, area=20.0, y=6.0, chain="round"),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-radius-disagrees", gates)
+
+    def test_pooling_fragments_needs_a_declared_equal_radius_tolerance(self) -> None:
+        # No tolerance declared is *not judged*, never "judged with a default".
+        spec = fx.spec()
+        spec["thresholds"].pop("equal_radius_tolerance")
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0, chain="round"),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.02, area=20.0, y=6.0, chain="round"),
+        ]
+        program = build(fx.bored_post_record("inside", extras=extras), spec)
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-radius-undeclared", gates)
+
     def test_a_blend_whose_neighbours_were_not_both_rebuilt_is_not_a_fillet(self) -> None:
         # A fillet rounds the edge between two features. Nothing here rebuilt
         # the second neighbour, so there is no edge to round.
@@ -430,6 +775,23 @@ class HoleAndFilletTests(unittest.TestCase):
         self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
         gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
         self.assertIn("fillet-neighbour-shared", gates)
+
+    def test_two_unchained_fragments_on_one_pair_refuse_by_name(self) -> None:
+        # The gate had no test of its own: a record that names no chain cannot
+        # say which fragments lie on one edge, and pooling or splitting them
+        # would both be a measurement nobody made.
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.0, area=20.0, y=6.0),
+        ]
+        for extra in extras:
+            extra["fillet"]["chain_id"] = None
+            extra.pop("fillet_chain")
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-edge-unidentified", gates)
+        self.assertIn("no chain id", gates)
 
     def test_every_archetype_carries_the_share_of_the_scan_it_accounts_for(self) -> None:
         program = build(fx.bored_post_record("inside"), fx.spec())
@@ -484,6 +846,34 @@ class ProgramShapeTests(unittest.TestCase):
         program = build(fx.box_record(), fx.spec())
         self.assertIsNone(program["archetypes"][0]["profile"])
         self.assertIn("cannot produce one", program["profile_note"])
+
+    def test_the_regime_crosses_the_seam_and_an_override_is_visible_in_it(self) -> None:
+        """Two programs from the same dump differed only in evidence nobody carried.
+
+        The regime sets every noise floor upstream, so a program built in the
+        scan regime and one built in the tessellation regime are different
+        claims. They used to be byte-identical, and a caller who *asserted* the
+        regime over the mesh's own reading left no trace of having done so.
+        """
+        measured = build(fx.turned_record(), fx.spec())
+        self.assertEqual(
+            {"regime": "tessellation", "declared": "auto", "overridden": False},
+            measured["regime"],
+        )
+        asserted = build(
+            fx.record(fx.turned_record()["regions"], detected="scan", declared="tessellation"),
+            fx.spec(),
+        )
+        self.assertEqual(
+            {"regime": "tessellation", "declared": "tessellation", "overridden": True},
+            asserted["regime"],
+        )
+        self.assertNotEqual(measured["program_sha256"], asserted["program_sha256"])
+
+    def test_a_record_from_before_the_regime_was_detected_still_plans(self) -> None:
+        record = fx.turned_record()
+        record.pop("regime")
+        self.assertIsNone(build(record, fx.spec())["regime"])
 
 
 class ProgramValidatorTests(unittest.TestCase):

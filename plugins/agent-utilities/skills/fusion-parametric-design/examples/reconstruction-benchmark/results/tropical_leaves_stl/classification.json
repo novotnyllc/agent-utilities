@@ -1,0 +1,13 @@
+{
+  "inputs": {
+    "brep_source_available": false,
+    "edit_kind": "dimensional",
+    "facet_count": 86394,
+    "provenance": "designed_export",
+    "source_id": "tropical_leaves_stl",
+    "source_sha256": "995681e3801a4304d6a7c93eb249c1a8c1cd3a1826ea5adef2e01432851a6f1d",
+    "watertight": true
+  },
+  "path": "parametric-rebuild",
+  "rationale": "Edit kind 'dimensional' changes the geometry itself, and no conversion recovers sketches, constraints, or feature history; rebuild only the geometry the edit requires."
+}

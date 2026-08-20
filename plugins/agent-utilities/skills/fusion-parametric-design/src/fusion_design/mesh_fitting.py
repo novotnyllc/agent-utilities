@@ -89,6 +89,50 @@ DEFAULT_HELDOUT_RESIDUAL_RATIO: float | None = None
 # decision threshold: no verdict turns on its value, it only stops 0/0.
 _ZERO_RESIDUAL_FLOOR_RATIO = 1e-9
 
+#: Every token that may appear in ``PrimitiveFit.support["checked"]``, declared
+#: in one place so a reader can enumerate the gates and a summary can be derived
+#: from the lists rather than asserted beside them.  A free string here is a
+#: gate nobody can grep for and a typo nobody can catch: the disproof census in
+#: U2 counts these tokens, so a misspelt one reads as "the gate did not run".
+#: The gates run in two modules -- the exact fitters here, the statistical ones
+#: in ``mesh_segmentation`` -- and both append through ``_passed`` below.
+FIT_GATE_TOKENS = frozenset(
+    {
+        # mesh_fitting: the exact-fit gates and the facet-normal evidence
+        "radius-ratio",
+        "bounds-margin",
+        "relative-residual",
+        "simpler-primitive",
+        "support-span",
+        "residual-structure",
+        "heldout-residual",
+        "cylinder-normal-tie-break",
+        "cylinder-normals-discrete",
+        "normal-constrained-axis",
+        # mesh_segmentation: the disproof ladder over a whole region
+        "support-span-floor",
+        "nested-kind-parsimony",
+        "kind-promotion",
+        "parameter-uncertainty",
+        "boundary-circle-corroboration",
+    }
+)
+
+
+#: Rejections this module states under a *named* token rather than in prose, so
+#: a consumer can branch on the reason instead of matching a sentence.  The
+#: prose rejections are deliberately not tokenized: a token is a promise that
+#: something downstream reads it, and nothing reads those.
+FIT_REJECTION_TOKENS = frozenset({"cylinder-normals-discrete"})
+
+
+def _passed(checked: list[str], token: str) -> None:
+    """Record that ``token``'s gate ran and passed, once, under a declared name."""
+    if not _in_closed_set(token, set(FIT_GATE_TOKENS)):
+        raise ValueError(f"gate token must be one of {', '.join(sorted(FIT_GATE_TOKENS))}.")
+    if token not in checked:
+        checked.append(token)
+
 
 # --------------------------------------------------------------------------
 # vector and linear-algebra kernel
@@ -178,15 +222,27 @@ def _solve(matrix: Sequence[Sequence[float]], rhs: Sequence[float]) -> tuple[flo
     return out if all(math.isfinite(v) for v in out) else None
 
 
-def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], tuple[Vec3, ...]]:
-    """Cyclic Jacobi on a symmetric 3x3; eigenpairs sorted by ascending value."""
+def _jacobi_eigen(
+    matrix: Sequence[Sequence[float]],
+) -> tuple[tuple[float, ...], tuple[tuple[float, ...], ...]]:
+    """Cyclic Jacobi on a symmetric n x n; eigenpairs sorted by ascending value.
+
+    The 3x3 case is the one the primitive fits use and the 6x6 case is the
+    kinematic router's; they are the same sweep over off-diagonal pairs, so
+    there is one implementation rather than two that can drift apart.
+    Eigenvectors come back normalized, and a vector that normalizes to nothing
+    comes back as the corresponding basis vector rather than as zeros, so a
+    caller never has to distinguish "degenerate" from "absent".
+    """
+    n = len(matrix)
     a = [list(row) for row in matrix]
-    v = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    pairs_to_sweep = [(p, q) for p in range(n) for q in range(p + 1, n)]
     for _ in range(64):
-        off = abs(a[0][1]) + abs(a[0][2]) + abs(a[1][2])
+        off = sum(abs(a[p][q]) for p, q in pairs_to_sweep)
         if off <= 1e-18:
             break
-        for p, q in ((0, 1), (0, 2), (1, 2)):
+        for p, q in pairs_to_sweep:
             apq = a[p][q]
             if abs(apq) <= 1e-20:
                 continue
@@ -194,24 +250,33 @@ def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ..
             t = math.copysign(1.0, theta) / (abs(theta) + math.sqrt(theta * theta + 1.0))
             c = 1.0 / math.sqrt(t * t + 1.0)
             s = t * c
-            for k in range(3):
+            for k in range(n):
                 akp, akq = a[k][p], a[k][q]
                 a[k][p], a[k][q] = c * akp - s * akq, s * akp + c * akq
-            for k in range(3):
+            for k in range(n):
                 apk, aqk = a[p][k], a[q][k]
                 a[p][k], a[q][k] = c * apk - s * aqk, s * apk + c * aqk
-            for k in range(3):
+            for k in range(n):
                 vkp, vkq = v[k][p], v[k][q]
                 v[k][p], v[k][q] = c * vkp - s * vkq, s * vkp + c * vkq
     pairs = sorted(
-        ((a[i][i], (v[0][i], v[1][i], v[2][i])) for i in range(3)),
+        ((a[i][i], tuple(v[row][i] for row in range(n))) for i in range(n)),
         key=lambda kv: kv[0],
     )
-    vectors: list[Vec3] = []
-    for _, raw in pairs:
-        unit = _unit(raw)
-        vectors.append(unit if unit is not None else (0.0, 0.0, 1.0))
+    vectors: list[tuple[float, ...]] = []
+    for index, (_value, raw) in enumerate(pairs):
+        norm = math.sqrt(sum(component * component for component in raw))
+        if not math.isfinite(norm) or norm < 1e-15:  # pragma: no cover - Jacobi keeps it unitary
+            vectors.append(tuple(1.0 if k == index else 0.0 for k in range(n)))
+            continue
+        vectors.append(tuple(component / norm for component in raw))
     return tuple(p[0] for p in pairs), tuple(vectors)
+
+
+def _symmetric_eigen(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], tuple[Vec3, ...]]:
+    """Cyclic Jacobi on a symmetric 3x3; eigenpairs sorted by ascending value."""
+    values, vectors = _jacobi_eigen(matrix)
+    return values, tuple((v[0], v[1], v[2]) for v in vectors)
 
 
 def _centroid(points: Sequence[Vec3]) -> Vec3:
@@ -933,6 +998,7 @@ def _raw_fit(
     min_taper_ratio: float,
     min_torus_major_ratio: float = DEFAULT_MIN_TORUS_MAJOR_RATIO,
     seed_axis: Vec3 | None = None,
+    fixed_axis: Vec3 | None = None,
 ) -> PrimitiveFit:
     """Least squares only: no gates, so the gates can call it without recursing."""
     if kind == "plane":
@@ -940,10 +1006,10 @@ def _raw_fit(
     if kind == "sphere":
         return _fit_sphere(points, extent)
     if kind == "cylinder":
-        return _fit_cylinder(points, extent, seed_axis)
+        return _fit_cylinder(points, extent, seed_axis, fixed_axis)
     if kind == "torus":
-        return _fit_torus(points, extent, min_torus_major_ratio, seed_axis)
-    return _fit_cone(points, extent, min_taper_ratio, seed_axis)
+        return _fit_torus(points, extent, min_torus_major_ratio, seed_axis, fixed_axis)
+    return _fit_cone(points, extent, min_taper_ratio, seed_axis, fixed_axis)
 
 
 def fit_primitive(
@@ -956,6 +1022,7 @@ def fit_primitive(
     min_taper_ratio: float = DEFAULT_MIN_TAPER_RATIO,
     min_torus_major_ratio: float = DEFAULT_MIN_TORUS_MAJOR_RATIO,
     seed_axis: Any = None,
+    fixed_axis: Any = None,
     min_support_span: float | None = DEFAULT_MIN_SUPPORT_SPAN,
     residual_structure_tolerance: float | None = DEFAULT_RESIDUAL_STRUCTURE_TOLERANCE,
     heldout_residual_ratio: float | None = DEFAULT_HELDOUT_RESIDUAL_RATIO,
@@ -1002,8 +1069,17 @@ def fit_primitive(
         raise ValueError("heldout_seed must be an integer.")
 
     axis_hint = None if seed_axis is None else _as_direction(seed_axis, "seed_axis")
+    pinned = None if fixed_axis is None else _as_direction(fixed_axis, "fixed_axis")
+    if pinned is not None and kind in ("plane", "sphere"):
+        raise ValueError("fixed_axis applies to cylinder, cone and torus; a plane and a sphere have no axis.")
     fit = _raw_fit(
-        pts, kind, extent, float(min_taper_ratio), float(min_torus_major_ratio), axis_hint
+        pts,
+        kind,
+        extent,
+        float(min_taper_ratio),
+        float(min_torus_major_ratio),
+        axis_hint,
+        pinned,
     )
     if not fit.accepted:
         return fit
@@ -1058,7 +1134,7 @@ def _apply_gates(
             "rather than reported.",
             support,
         )
-    checked.append("radius-ratio")
+    _passed(checked, "radius-ratio")
 
     box = _bbox(points)
     margin = bounds_margin_ratio * extent
@@ -1072,7 +1148,7 @@ def _apply_gates(
                 f"{bounds_margin_ratio:g}x the sampled extent {extent:.6g}.",
                 support,
             )
-    checked.append("bounds-margin")
+    _passed(checked, "bounds-margin")
 
     if fit.relative_residual > max_relative_residual:
         return _rejected(
@@ -1082,7 +1158,7 @@ def _apply_gates(
             f"{max_relative_residual:g}.",
             support,
         )
-    checked.append("relative-residual")
+    _passed(checked, "relative-residual")
 
     simpler = _SIMPLER_KINDS[fit.kind]
     for other in simpler:
@@ -1098,7 +1174,7 @@ def _apply_gates(
                 support,
             )
     if simpler:
-        checked.append("simpler-primitive")
+        _passed(checked, "simpler-primitive")
 
     # --- the three disproof gates (KTD6) ------------------------------------
     # A passing residual is not evidence.  Each of these tries to *falsify* the
@@ -1118,7 +1194,7 @@ def _apply_gates(
                 "primitive however small its residual.",
                 support,
             )
-        checked.append("support-span")
+        _passed(checked, "support-span")
 
     if residual_structure_tolerance is not None:
         structure = _residual_structure(fit, points)
@@ -1133,7 +1209,7 @@ def _apply_gates(
                 "the wrong primitive with a flattering RMS.",
                 support,
             )
-        checked.append("residual-structure")
+        _passed(checked, "residual-structure")
 
     if heldout_residual_ratio is not None:
         held = _heldout_residual(fit, points, min_taper_ratio, heldout_seed)
@@ -1160,7 +1236,7 @@ def _apply_gates(
                 "over-parameterized for the evidence.",
                 support,
             )
-        checked.append("heldout-residual")
+        _passed(checked, "heldout-residual")
 
     return PrimitiveFit(
         kind=fit.kind,
@@ -1431,6 +1507,7 @@ def _search_axis(
     evaluate,
     iterations: int = 8,
     seeds: Sequence[Vec3] | None = None,
+    fixed: Vec3 | None = None,
 ) -> PrimitiveFit | None:
     """Seed from each principal axis and keep the best-scoring fit ever seen.
 
@@ -1438,8 +1515,19 @@ def _search_axis(
     a shallow patch the per-slab circle fits are badly conditioned and the update
     can walk the axis away from a good seed; keeping the running best means the
     reported fit is never worse than the seed that produced it.
+
+    ``fixed`` pins the axis instead of searching for one, and is how a
+    normal-determined axis reaches the fit.  It is deliberately not a seed: the
+    search refines against the *vertices*, and on a bore tessellated as two rings
+    that is exactly the evidence that does not determine an axis, so refining
+    would walk a determined axis back toward an undetermined one.  With the
+    direction pinned, what is left is the module's existing exact 2-D circle fit
+    in the plane perpendicular to it.
     """
     centroid = _centroid(points)
+    if fixed is not None:
+        pinned = _unit(fixed)
+        return None if pinned is None else evaluate(centroid, pinned)
     best: PrimitiveFit | None = None
     # A caller that already has an axis estimate -- RANSAC's minimal-set
     # candidate, say -- hands it in as an extra seed rather than throwing it
@@ -1472,7 +1560,10 @@ def _search_axis(
 
 
 def _fit_cylinder(
-    points: Sequence[Vec3], extent: float, seed_axis: Vec3 | None = None
+    points: Sequence[Vec3],
+    extent: float,
+    seed_axis: Vec3 | None = None,
+    fixed_axis: Vec3 | None = None,
 ) -> PrimitiveFit:
     centroid = _centroid(points)
 
@@ -1503,7 +1594,12 @@ def _fit_cylinder(
             },
         )
 
-    best = _search_axis(points, evaluate, seeds=None if seed_axis is None else (seed_axis,))
+    best = _search_axis(
+        points,
+        evaluate,
+        seeds=None if seed_axis is None else (seed_axis,),
+        fixed=fixed_axis,
+    )
     if best is None:
         return _rejected("cylinder", extent, "no candidate axis produced a solvable circle fit.")
     return best
@@ -1519,6 +1615,7 @@ def _fit_cone(
     extent: float,
     min_taper_ratio: float,
     seed_axis: Vec3 | None = None,
+    fixed_axis: Vec3 | None = None,
 ) -> PrimitiveFit:
     saw_flat_profile = False
 
@@ -1572,7 +1669,12 @@ def _fit_cone(
             },
         )
 
-    best = _search_axis(points, evaluate, seeds=None if seed_axis is None else (seed_axis,))
+    best = _search_axis(
+        points,
+        evaluate,
+        seeds=None if seed_axis is None else (seed_axis,),
+        fixed=fixed_axis,
+    )
     if best is not None:
         return best
     if saw_flat_profile:
@@ -1614,6 +1716,7 @@ def _fit_torus(
     extent: float,
     min_torus_major_ratio: float,
     seed_axis: Vec3 | None = None,
+    fixed_axis: Vec3 | None = None,
 ) -> PrimitiveFit:
     """Lukacs, Martin and Marshall (ECCV 1998): in the axial half-plane a torus is a circle.
 
@@ -1671,7 +1774,12 @@ def _fit_torus(
             },
         )
 
-    best = _search_axis(points, evaluate, seeds=None if seed_axis is None else (seed_axis,))
+    best = _search_axis(
+        points,
+        evaluate,
+        seeds=None if seed_axis is None else (seed_axis,),
+        fixed=fixed_axis,
+    )
     if best is not None:
         return best
     if saw_degenerate:
@@ -1869,6 +1977,34 @@ def parameter_uncertainty(
     if "tilt_u" in out and "tilt_v" in out:
         out["axis_tilt_deg"] = math.hypot(out["tilt_u"], out["tilt_v"])
     out.update(_downstream_sigmas(fit.kind, out))
+    return _joint_axis_sigma(fit, out)
+
+
+def _joint_axis_sigma(fit: PrimitiveFit, out: dict[str, float]) -> dict[str, float]:
+    """Report the axis sigma from whichever system actually determined the axis.
+
+    When the fit's axis came from the facet normals, the vertex Jacobian's tilt
+    columns describe a determination that did not happen -- on a two-ring bore
+    they are computed from a matrix that is going singular, and the sigma they
+    produce is an artefact of the conditioning rather than a statement about the
+    axis.  The joint system's closed-form sigma replaces it, and the vertex
+    number is kept beside it under a name that says what it is, so a reader can
+    see the size of the difference the normals made.
+
+    Nothing is blended.  Averaging an honest number with a meaningless one gives
+    a meaningless one, and the whole point of the joint system is that it knows
+    which is which.
+    """
+    evidence = fit.support.get("axis_evidence")
+    if not isinstance(evidence, Mapping) or evidence.get("source") != "facet-normals":
+        return out
+    joint = evidence.get("axis_tilt_sigma_deg")
+    if not isinstance(joint, (int, float)) or isinstance(joint, bool) or not math.isfinite(joint):
+        return out
+    if "axis_tilt_deg" in out:
+        out["axis_tilt_vertices_deg"] = out["axis_tilt_deg"]
+    out["axis_tilt_deg"] = float(joint)
+    out["axis_direction_deg"] = float(joint)
     return out
 
 
@@ -1935,6 +2071,521 @@ def _perpendicularity_deg(normals: Sequence[Any], axis: Vec3) -> float | None:
     return worst if seen else None
 
 
+# --------------------------------------------------------------------------
+# the facet-normal system: one accumulation, three consumers
+# --------------------------------------------------------------------------
+
+
+def _normal_moments(
+    points: Sequence[Vec3],
+    normals: Sequence[Any],
+    centre: Vec3,
+    scale: float,
+    weights: Sequence[float] | None = None,
+) -> tuple[list[list[float]], int, float]:
+    """One pass over the facets, building the whole normal system at once.
+
+    Returns the 6x6 symmetric matrix over rows ``[x x n, n]`` -- Pottmann and
+    Randrup's ``n.(c_bar + c x x) = 0`` -- together with the number of usable
+    facets and the total weight.  Its lower-right 3x3 block is ``sum w n n^T``,
+    the normal second-moment matrix whose smallest eigenvector is a cylinder's
+    axis, so the router and the cylinder axis read the same accumulation rather
+    than two that can drift apart.  Positions are centred and scaled; the normal
+    block is untouched by both, which is why the cylinder path can ignore them.
+
+    Weights are facet areas divided by their own mean, so the normal block's
+    trace reads as an *effective facet count* rather than an area.  That is what
+    makes ``sigma^2 / lambda`` a variance over a count, and what makes the
+    recovered sigma fall as ``1/sqrt(N)`` the way a mean's does.  A facet whose
+    normal is unreadable is skipped and not counted -- never given a fabricated
+    direction, and never counted as evidence it did not supply.
+    """
+    if len(points) != len(normals):
+        raise ValueError("the normal system needs one normal per point.")
+    if weights is not None and len(weights) != len(normals):
+        raise ValueError("the normal system needs one weight per normal, or none at all.")
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("the normal system needs a region with a positive extent.")
+    scaled_weights: list[float] | None = None
+    if weights is not None:
+        total = sum(float(w) for w in weights)
+        if not math.isfinite(total) or total <= 0.0:
+            raise ValueError("facet weights must carry a positive finite total.")
+        mean = total / len(weights)
+        scaled_weights = [float(w) / mean for w in weights]
+
+    matrix = [[0.0] * 6 for _ in range(6)]
+    used = 0
+    weight_sum = 0.0
+    for index, (point, raw_normal) in enumerate(zip(points, normals)):
+        normal = _unit(_as_point(raw_normal, "facet_normals"))
+        if normal is None:
+            continue
+        weight = 1.0 if scaled_weights is None else scaled_weights[index]
+        if not math.isfinite(weight) or weight <= 0.0:
+            continue
+        moment = _cross(_scale(_sub(point, centre), 1.0 / scale), normal)
+        row = (moment[0], moment[1], moment[2], normal[0], normal[1], normal[2])
+        for i in range(6):
+            for j in range(i, 6):
+                matrix[i][j] += weight * row[i] * row[j]
+        used += 1
+        weight_sum += weight
+    for i in range(6):
+        for j in range(i):
+            matrix[i][j] = matrix[j][i]
+    return matrix, used, weight_sum
+
+
+def normal_constrained_axis(
+    facet_centroids: Any,
+    facet_normals: Sequence[Any],
+    *,
+    facet_areas: Sequence[float] | None = None,
+    sigma_theta_floor_deg: float = 0.0,
+) -> dict[str, Any] | None:
+    """The axis a region's facet normals determine, with its own uncertainty.
+
+    Every facet normal of a cylinder is exactly perpendicular to its axis, so
+    with ``A = sum w n n^T`` the axis is A's smallest eigenvector and ``a^T A a``
+    is the weighted sum of squared perpendicularity errors.  In the tangent
+    parameterization ``a(u, v) = normalise(a0 + u e1 + v e2)`` the Gauss-Newton
+    normal matrix is *exactly* ``diag(lambda1, lambda2)`` -- the two larger
+    eigenvalues -- so the covariance is diagonal in closed form:
+
+        sigma_theta^2 = lambda0 / (W - 2),
+        sigma_tilt    = sigma_theta * sqrt(1/lambda1 + 1/lambda2)
+
+    with ``W`` the total weight.  No Jacobian, no matrix inverse, and no
+    conditioning question: the number that decides whether the axis is
+    determined is ``lambda1`` itself, reported here as the eigengap
+    ``lambda1 / trace`` -- one half for a full turn of facets, and falling to
+    zero for a sliver, which is the honest statement that a sliver's normals do
+    not determine an axis either.
+
+    This exists because two rings of vertices do not determine an axis and the
+    facets between them do.  ``sigma_theta_floor_deg`` is the caller's
+    measurement floor: on an exact tessellation the measured residual is float
+    noise, and reporting a sigma of zero would be inventing certainty.
+
+    ``None`` when the normals are unreadable or too few: absent evidence refuses
+    rather than defaulting to an axis nobody measured.
+    """
+    pts = _as_points(facet_centroids, "facet_centroids", 1)
+    if (
+        isinstance(sigma_theta_floor_deg, bool)
+        or not isinstance(sigma_theta_floor_deg, (int, float))
+        or not math.isfinite(sigma_theta_floor_deg)
+        or sigma_theta_floor_deg < 0.0
+    ):
+        raise ValueError("sigma_theta_floor_deg must be a non-negative finite number.")
+    extent = _extent(pts)
+    if extent <= 0.0:
+        return None
+    matrix, used, weight = _normal_moments(
+        pts, facet_normals, _centroid(pts), extent, facet_areas
+    )
+    # Two tangent parameters, so the residual degrees of freedom need a third
+    # facet before a variance means anything.
+    if used < 3 or weight <= 2.0:
+        return None
+    block = [[matrix[3 + i][3 + j] for j in range(3)] for i in range(3)]
+    values, vectors = _symmetric_eigen(block)
+    lam0, lam1, lam2 = values
+    trace = lam0 + lam1 + lam2
+    if trace <= 0.0 or lam1 <= 0.0 or lam2 <= 0.0:
+        return None
+    axis = _unit(vectors[0])
+    if axis is None:  # pragma: no cover - Jacobi returns unit vectors
+        return None
+    floor_rad = math.radians(float(sigma_theta_floor_deg))
+    measured = math.sqrt(max(lam0, 0.0) / (weight - 2.0))
+    sigma_theta = max(measured, floor_rad)
+    tilt = sigma_theta * math.sqrt(1.0 / lam1 + 1.0 / lam2)
+    return {
+        "axis": _canonical_direction(axis),
+        "eigenvalues": [lam0, lam1, lam2],
+        "eigengap": lam1 / trace,
+        "facet_count": used,
+        "effective_facet_count": weight,
+        "measured_sigma_theta_deg": math.degrees(measured),
+        "sigma_theta_floor_deg": float(sigma_theta_floor_deg),
+        "sigma_theta_deg": math.degrees(sigma_theta),
+        "axis_tilt_sigma_deg": math.degrees(tilt),
+        "method": (
+            "smallest eigenvector of the area-weighted facet-normal second moment; sigma from the "
+            "closed-form Gauss-Newton covariance diag(1/lambda1, 1/lambda2) in the tangent plane"
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
+# the kinematic-surface router
+# --------------------------------------------------------------------------
+
+#: A signature that is doubly curved with the same sign cannot be swept by a
+#: translation: an extrusion is flat in the sweep direction by construction. The
+#: signature never vetoes on its own (existing doctrine), so the contradiction is
+#: recorded and routed to the *conservative* outcome rather than to either claim.
+_TRANSLATION_IMPOSSIBLE_SIGNATURES = {"peak-pit"}
+
+
+def route_kinematic_surface(
+    points: Sequence[Vec3],
+    normals: Sequence[Vec3],
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None = None,
+    facet_areas: Sequence[float] | None = None,
+) -> dict[str, Any]:
+    """Is this region swept by a one-parameter rigid motion, and which one?
+
+    Pottmann & Randrup (*Computing* 60, 1998).  A rigid motion's velocity field
+    is ``v(x) = c_bar + c x x``; a surface is swept by that motion exactly when
+    every surface normal is orthogonal to the field, ``n . v = 0`` -- which is
+    **linear in the six unknowns** ``(c, c_bar)``.  Accumulating
+    ``M = sum a a^T`` over rows ``a = [x x n, n]`` is one O(N) pass, and the
+    smallest eigenpair of the 6x6 symmetric ``M`` answers extrusion, revolution
+    and helix in one test rather than three detectors.
+
+    Points are centred on the region centroid and scaled by its extent before
+    the rows are built.  That is mandatory, not tidiness: the two halves of each
+    row otherwise carry different units and the recovered pitch comes out in
+    garbage ones.  Everything reported is un-scaled afterwards, and both the
+    scaled and the unscaled quantities are in the record so a reviewer can see
+    how close the call was.
+
+    The verdict is a *proposal*.  Nothing downstream may emit on it without its
+    own confirmation -- for an extrusion, that the sections along the direction
+    actually agree.
+    """
+    if len(points) != len(normals):
+        raise ValueError("the router needs one normal per point.")
+    if len(points) < 6:
+        raise ValueError("the router needs at least six samples for a six-parameter fit.")
+    centre = _centroid(points)
+    scale = _extent(points)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("the router needs a region with a positive extent.")
+
+    matrix, used, _weight = _normal_moments(points, normals, centre, scale, facet_areas)
+    if used < 6:
+        raise ValueError("the router needs at least six samples carrying usable normals.")
+    return _route_from_moments(
+        matrix,
+        used,
+        centre,
+        scale,
+        sigma_theta_rad=sigma_theta_rad,
+        residual_sigma_factor=residual_sigma_factor,
+        eigengap_min=eigengap_min,
+        translation_epsilon=translation_epsilon,
+        pitch_epsilon=pitch_epsilon,
+        signature=signature,
+    )
+
+
+def _route_from_moments(
+    matrix: Sequence[Sequence[float]],
+    used: int,
+    centre: Vec3,
+    scale: float,
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None,
+) -> dict[str, Any]:
+    """The verdict, from an already-accumulated ``M`` and the frame it was built in.
+
+    Split out of ``route_kinematic_surface`` so that the group router — which
+    reaches its ``M`` by summing per-region blocks rather than by walking facets
+    — reads the *same* spectrum through the *same* gates.  Two copies of this
+    ladder is how a group verdict and a region verdict start disagreeing about
+    the same geometry.
+    """
+    values, vectors = _jacobi_eigen(matrix)
+    smallest, second, largest = values[0], values[1], values[5]
+    winner = vectors[0]
+    omega = (winner[0], winner[1], winner[2])
+    u_bar = (winner[3], winner[4], winner[5])
+    residual = math.sqrt(max(smallest, 0.0) / used)
+    residual_gate = residual_sigma_factor * sigma_theta_rad
+    # How far the *second* smallest eigenvalue sits from zero, on the spectrum's
+    # own scale. It is the right quantity rather than the difference of the two
+    # smallest: what makes an eigenvector meaningless is a null space with more
+    # than one direction in it, and that is exactly `second ~ 0`.
+    spread = max(abs(largest), _ZERO_RESIDUAL_FLOOR_RATIO)
+    eigengap = second / spread
+
+    omega_magnitude = _length(omega)
+    pitch_scaled = (
+        _dot(omega, u_bar) / (omega_magnitude * omega_magnitude)
+        if omega_magnitude > 0.0
+        else math.inf
+    )
+    # Un-scale: with x = centre + scale * x', n.(u_bar + omega x x') = 0 becomes
+    # n.(scale * u_bar - omega x centre + omega x x) = 0.
+    c_vector = omega
+    c_bar = _sub(_scale(u_bar, scale), _cross(omega, centre))
+
+    record: dict[str, Any] = {
+        "verdict": "none",
+        "refusal": None,
+        "sample_count": used,
+        "eigenvalues": list(values),
+        "residual_rad": residual,
+        "residual_gate_rad": residual_gate,
+        "sigma_theta_rad": sigma_theta_rad,
+        "eigengap": eigengap,
+        "eigengap_min": eigengap_min,
+        "translation_magnitude": omega_magnitude,
+        "translation_epsilon": translation_epsilon,
+        "pitch_scaled": None if math.isinf(pitch_scaled) else pitch_scaled,
+        "pitch_epsilon": pitch_epsilon,
+        "scale": scale,
+        "centre": list(centre),
+        "c": list(c_vector),
+        "c_bar": list(c_bar),
+        "direction": None,
+        "axis_point": None,
+        "pitch": None,
+        "signature": signature,
+        "note": (
+            "n.(c_bar + c x x) = 0 over the region's own normals; the residual is an RMS of that "
+            "dot product over unit normals and unit-extent positions, so it reads as an angle in "
+            "radians and is gated against the measured normal-noise floor rather than a constant."
+        ),
+    }
+    if residual > residual_gate:
+        record["reason"] = (
+            f"no rigid motion leaves this region invariant: the best one still misses the normals "
+            f"by {residual:.6g} rad against a declared gate of {residual_gate:.6g} rad."
+        )
+        return record
+    if eigengap < eigengap_min:
+        # A plane admits a three-parameter family of invariant motions and a
+        # sphere any rotation about its centre, so a degenerate spectrum means
+        # the primitive stage and the router disagree about this region. Picking
+        # an eigenvector out of a degenerate subspace would be a guess.
+        record["refusal"] = "router-ambiguous"
+        record["reason"] = (
+            f"the second-smallest eigenvalue is {eigengap:.6g} of the spectrum against a declared "
+            f"minimum of {eigengap_min:.6g}: this region's invariant motions form a family rather "
+            "than a single one, so no eigenvector describes it."
+        )
+        return record
+
+    if omega_magnitude <= translation_epsilon:
+        direction = _unit(u_bar)
+        if direction is None:  # pragma: no cover - |omega|^2 + |u_bar|^2 == 1
+            record["refusal"] = "router-ambiguous"
+            record["reason"] = "the recovered motion has neither a rotation nor a translation part."
+            return record
+        if signature in _TRANSLATION_IMPOSSIBLE_SIGNATURES:
+            record["refusal"] = "router-signature-conflict"
+            record["reason"] = (
+                f"the normals fit a translation, and the region's dominant curvature signature is "
+                f"{signature!r} -- doubly curved with one sign, which no extrusion can be. The two "
+                "measurements contradict each other, so this falls through rather than picking one."
+            )
+            return record
+        record["verdict"] = "extrusion"
+        record["direction"] = list(_canonical_direction(direction))
+        record["reason"] = (
+            f"the recovered motion is a translation: its rotation part is {omega_magnitude:.6g} "
+            f"against a declared {translation_epsilon:.6g}."
+        )
+        return record
+
+    axis = _unit(c_vector)
+    if axis is None:  # pragma: no cover - |omega| > translation_epsilon > 0
+        record["refusal"] = "router-ambiguous"
+        record["reason"] = "the recovered motion has neither a rotation nor a translation part."
+        return record
+    magnitude_sq = _dot(c_vector, c_vector)
+    axis_point = _scale(_cross(c_vector, c_bar), 1.0 / magnitude_sq)
+    pitch = _dot(c_vector, c_bar) / magnitude_sq
+    record["direction"] = list(_canonical_direction(axis))
+    record["axis_point"] = list(axis_point)
+    record["pitch"] = pitch
+    if abs(pitch_scaled) <= pitch_epsilon:
+        record["verdict"] = "revolution"
+        record["reason"] = (
+            f"the recovered motion is a rotation: its scaled pitch is {pitch_scaled:.6g} against a "
+            f"declared {pitch_epsilon:.6g}."
+        )
+        return record
+    record["verdict"] = "helical"
+    record["reason"] = (
+        f"the recovered motion is a screw of scaled pitch {pitch_scaled:.6g}, beyond the declared "
+        f"{pitch_epsilon:.6g}. Helical geometry is reported and not emitted."
+    )
+    return record
+
+
+# --------------------------------------------------------------------------
+# carrying the router's evidence across the fit record
+#
+# The router reads facets; the archetype planner has only the fit record, which
+# carries no triangles. What crosses the seam is the *sufficient statistic*:
+# ``M_raw = sum over facets of area * b b^T`` with ``b = [x x n, n]`` in the
+# mesh's own frame. It is 21 numbers per region, additive across regions, and it
+# re-centres and re-scales by a congruence, so a group's 6x6 is recoverable from
+# its members' blocks without keeping a single triangle. "Exact" there is a
+# statement about the algebra, not about the floats: the two paths sum the same
+# terms in different orders, so they agree to *relative* rounding -- measured at
+# 2.0e-16 on the seam test's own group, which is about one ulp.
+# --------------------------------------------------------------------------
+
+#: Row-major upper triangle of a symmetric 6x6, in the order the record stores it.
+_MOMENT_TRIANGLE = tuple((i, j) for i in range(6) for j in range(i, 6))
+
+MOTION_MOMENT_FIELDS = frozenset({"matrix", "facet_count", "area", "centroid_sum"})
+
+
+def region_motion_moments(
+    points: Sequence[Vec3], normals: Sequence[Any], areas: Sequence[float]
+) -> dict[str, Any] | None:
+    """One region's raw kinematic moments, or ``None`` when it carries no usable facet.
+
+    Raw means *un-centred, un-scaled and weighted by real area*: those are the
+    three properties that make the block additive.  A block centred on its own
+    region could not be summed with its neighbour's, and one whose weights were
+    already normalized to that region's mean facet size would silently re-weight
+    the group by how finely each member happened to be tessellated.
+
+    A facet whose normal does not normalize is dropped from all four fields
+    together, so ``facet_count``, ``area``, ``centroid_sum`` and ``matrix``
+    always describe the same set of facets.
+    """
+    if not (len(points) == len(normals) == len(areas)):
+        raise ValueError("region moments need one normal and one area per facet.")
+    kept_points: list[Vec3] = []
+    kept_normals: list[Vec3] = []
+    kept_areas: list[float] = []
+    for point, raw_normal, area in zip(points, normals, areas):
+        normal = _unit(_as_point(raw_normal, "facet_normals"))
+        value = float(area)
+        if normal is None or not math.isfinite(value) or value <= 0.0:
+            continue
+        kept_points.append(_as_point(point, "facet_centroids"))
+        kept_normals.append(normal)
+        kept_areas.append(value)
+    if not kept_points:
+        return None
+    total = sum(kept_areas)
+    mean = total / len(kept_areas)
+    # `_normal_moments` divides the weights by their own mean; multiplying the
+    # result back by that mean recovers the raw area-weighted sum exactly, so
+    # there is one accumulation loop in this module rather than two.
+    matrix, used, _weight = _normal_moments(
+        kept_points, kept_normals, (0.0, 0.0, 0.0), 1.0, kept_areas
+    )
+    return {
+        "matrix": [matrix[i][j] * mean for i, j in _MOMENT_TRIANGLE],
+        "facet_count": used,
+        "area": total,
+        "centroid_sum": [
+            sum(p[0] for p in kept_points),
+            sum(p[1] for p in kept_points),
+            sum(p[2] for p in kept_points),
+        ],
+    }
+
+
+def route_kinematic_group(
+    moments: Sequence[Mapping[str, Any]],
+    extent: float,
+    *,
+    sigma_theta_rad: float,
+    residual_sigma_factor: float,
+    eigengap_min: float,
+    translation_epsilon: float,
+    pitch_epsilon: float,
+    signature: str | None = None,
+) -> dict[str, Any]:
+    """Route a *set* of regions from their carried moment blocks.
+
+    The blocks are summed in the mesh frame, then taken to the group's own
+    centred, unit-extent frame by the congruence ``M' = T M T^T`` with
+
+        T = [[I/s, -C/s], [0, I]],   C n = centre x n
+
+    which is exactly the change of variables ``x -> (x - centre) / s`` applied
+    to the rows.  The area weights are re-normalized to the *group's* mean facet
+    area, so a group's verdict does not depend on how finely each member was
+    tessellated relative to the others -- only on how much surface each supplies.
+    That re-weighting is the whole reason a 4 mm^2 corner round cannot certify a
+    2000 mm^2 plate as a solid of revolution.
+    """
+    blocks = [m for m in moments if m]
+    if not blocks:
+        raise ValueError("the group router needs at least one region's moments.")
+    count = sum(int(m["facet_count"]) for m in blocks)
+    area = sum(float(m["area"]) for m in blocks)
+    if count < 6:
+        raise ValueError("the group router needs at least six facets for a six-parameter fit.")
+    if not math.isfinite(area) or area <= 0.0:
+        raise ValueError("the group router needs a positive total facet area.")
+    if not math.isfinite(extent) or extent <= 0.0:
+        raise ValueError("the group router needs a positive extent.")
+    centre = (
+        sum(float(m["centroid_sum"][0]) for m in blocks) / count,
+        sum(float(m["centroid_sum"][1]) for m in blocks) / count,
+        sum(float(m["centroid_sum"][2]) for m in blocks) / count,
+    )
+    # sum(area_i b b^T), then to mean-one weights over the whole group.
+    factor = count / area
+    raw = [[0.0] * 6 for _ in range(6)]
+    for block in blocks:
+        entries = block["matrix"]
+        for index, (i, j) in enumerate(_MOMENT_TRIANGLE):
+            raw[i][j] += float(entries[index]) * factor
+    for i in range(6):
+        for j in range(i):
+            raw[i][j] = raw[j][i]
+    # T's rows: the moment half is (x x n)/s - (centre x n)/s, the normal half
+    # is untouched. Written as a 6x6 so the congruence is one loop.
+    cx, cy, cz = centre
+    transform = [
+        [1.0 / extent, 0.0, 0.0, 0.0, cz / extent, -cy / extent],
+        [0.0, 1.0 / extent, 0.0, -cz / extent, 0.0, cx / extent],
+        [0.0, 0.0, 1.0 / extent, cy / extent, -cx / extent, 0.0],
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    ]
+    intermediate = [
+        [sum(transform[i][k] * raw[k][j] for k in range(6)) for j in range(6)] for i in range(6)
+    ]
+    matrix = [
+        [sum(intermediate[i][k] * transform[j][k] for k in range(6)) for j in range(6)]
+        for i in range(6)
+    ]
+    record = _route_from_moments(
+        matrix,
+        count,
+        centre,
+        extent,
+        sigma_theta_rad=sigma_theta_rad,
+        residual_sigma_factor=residual_sigma_factor,
+        eigengap_min=eigengap_min,
+        translation_epsilon=translation_epsilon,
+        pitch_epsilon=pitch_epsilon,
+        signature=signature,
+    )
+    record["region_count"] = len(blocks)
+    record["facet_area"] = area
+    return record
+
+
 def _cylinder_over_sphere(
     fits: Sequence[PrimitiveFit], normals: Sequence[Any], max_perpendicular_deg: float
 ) -> tuple[PrimitiveFit, ...]:
@@ -1973,10 +2624,279 @@ def _cylinder_over_sphere(
         "sphere_relative_residual": fits[0].relative_residual,
         "cylinder_relative_residual": cylinder.relative_residual,
     }
-    checked = cylinder.support.setdefault("checked", [])
-    if "cylinder-normal-tie-break" not in checked:
-        checked.append("cylinder-normal-tie-break")
+    _passed(cylinder.support.setdefault("checked", []), "cylinder-normal-tie-break")
     return (cylinder,) + tuple(f for f in fits if f is not cylinder)
+
+
+def _normal_direction_spread(
+    normals: Sequence[Any], axis: Vec3, merge_deg: float
+) -> dict[str, Any] | None:
+    """How many distinct directions the facet normals occupy around ``axis``.
+
+    A cylinder's facet normals sweep its axis continuously: a tessellation of
+    ``n`` facets across an arc puts ``n`` distinct normals along that arc, evenly
+    spaced by the exporter's chord tolerance.  A prism's do not -- every facet on
+    one planar wall carries the *same* normal, so the distribution is a handful
+    of spikes with the wall count as its cardinality however many facets there
+    are.  Both fit the same circle through the same vertices, because a regular
+    polygon's corners lie exactly on its circumscribed circle; only the normals
+    tell them apart.
+
+    Azimuths are merged at ``merge_deg``, the caller's measurement floor on a
+    facet normal's direction, by **complete** linkage: a direction joins the
+    open cluster only while it stays within ``merge_deg`` of that cluster's
+    *first* member, so no cluster is ever wider than the floor it was merged at.
+    Single linkage -- comparing against the cluster's last member -- chains
+    instead: on a scan the floor is the mesh's own normal noise, which is
+    routinely wider than the spacing of a fine tessellation, and every azimuth
+    around the turn then falls within the floor of its predecessor and the whole
+    sweep collapses to one direction.  A genuine 360-facet cylinder measured
+    that way reported one direction, zero per turn, and was refused as a prism.
+
+    So ``merge_deg`` is a *noise* width and not a design angle: on a tessellation
+    it is float precision and only exactly parallel facets merge; on a scan it is
+    wider, and clusters of that width still leave a genuine sweep with far more
+    directions per turn than any prism has walls -- which is correct, since
+    discrete normals are a tessellation signature and a scan has none.
+
+    ``angular_coverage_deg`` is 360 minus the largest gap between adjacent
+    directions: the arc the directions actually occupy, so a partial round is
+    measured over its own arc rather than penalised for the arc it does not
+    cover.  ``None`` when a normal is unreadable -- absent evidence refuses
+    rather than defaulting to a spread nobody measured.
+    """
+    u, v = _frame(axis)
+    azimuths: list[float] = []
+    for raw in normals:
+        vector = _unit(_as_point(raw, "facet_normals"))
+        if vector is None:
+            return None
+        x, y = _dot(vector, u), _dot(vector, v)
+        if math.hypot(x, y) <= _ZERO_RESIDUAL_FLOOR_RATIO:
+            # Parallel to the axis: an end cap swept into the group, carrying no
+            # azimuth at all. Not evidence either way, so it is not counted.
+            continue
+        azimuths.append(math.degrees(math.atan2(y, x)) % 360.0)
+    if len(azimuths) < 2:
+        return None
+    azimuths.sort()
+    clusters = [[azimuths[0]]]
+    for angle in azimuths[1:]:
+        if angle - clusters[-1][0] <= merge_deg:
+            clusters[-1].append(angle)
+        else:
+            clusters.append([angle])
+    if len(clusters) > 1 and (clusters[0][-1] + 360.0) - clusters[-1][0] <= merge_deg:
+        clusters[0] = clusters.pop() + clusters[0]
+    representatives = sorted(cluster[0] for cluster in clusters)
+    directions = len(representatives)
+    if directions < 2:
+        # Every facet normal points the same way: that is one plane, and a plane
+        # has no arc to spread over.
+        return {
+            "facet_count": len(azimuths),
+            "directions": directions,
+            "angular_coverage_deg": 0.0,
+            "directions_per_turn": 0.0,
+            "largest_gap_deg": 360.0,
+            "merge_tolerance_deg": merge_deg,
+        }
+    gaps = [representatives[i + 1] - representatives[i] for i in range(directions - 1)]
+    gaps.append(representatives[0] + 360.0 - representatives[-1])
+    coverage = 360.0 - max(gaps)
+    return {
+        "facet_count": len(azimuths),
+        "directions": directions,
+        "angular_coverage_deg": coverage,
+        "directions_per_turn": directions * 360.0 / coverage if coverage > 0.0 else math.inf,
+        "largest_gap_deg": max(gaps),
+        "merge_tolerance_deg": merge_deg,
+    }
+
+
+def _prism_of_planes(
+    fits: Sequence[PrimitiveFit],
+    normals: Sequence[Any],
+    axis: Vec3,
+    max_perpendicular_deg: float,
+    minimum_per_turn: float,
+    merge_deg: float,
+) -> tuple[PrimitiveFit, ...]:
+    """Refuse a curved fit whose facet normals are a prism's spikes, not a sweep.
+
+    The measured case: a hexagonal pocket's six planar walls arrive as one face
+    group, and a regular polygon's corners lie *exactly* on its circumscribed
+    circle -- so the vertex fit returns the right radius at float-noise residual
+    and every existing gate passes it.  Six 26 mm across-corners hex pockets on
+    the honeycomb organiser came back as six 26 mm round bores, and the vendor's
+    own STEP -- 145 planar faces, not one curved surface -- says they are not.
+    Those same corners lie on a *sphere* as well, so refusing only the cylinder
+    hands the group to the sphere; the verdict is therefore about the group and
+    every curved primitive over it falls with the same named gate.
+
+    Two conditions, both from evidence this run already carries:
+
+    * the facet normals are perpendicular to a common axis, within the caller's
+      already-declared ``cylinder_normal_perpendicular_deg``.  This is what says
+      "these facets are arranged around an axis" and it is what excludes a real
+      sphere, whose normals are perpendicular to nothing;
+    * they occupy fewer distinct directions per turn than the caller declared.
+
+    The threshold is measured against the tessellation, not against a shape: a
+    genuine tessellated circle carries one normal direction per facet, and below
+    ``min_cylinder_normal_directions_per_turn`` the facets are further apart than
+    any exporter's chord tolerance would leave them.
+    """
+    curved = [f for f in fits if f.accepted and f.kind != "plane"]
+    if not curved:
+        return tuple(fits)
+    perpendicular = _perpendicularity_deg(normals, axis)
+    if perpendicular is None or perpendicular > max_perpendicular_deg:
+        # The normals are not arranged around this axis at all, so "prism" is not
+        # a claim the evidence supports either way.
+        return tuple(fits)
+    spread = _normal_direction_spread(normals, axis, merge_deg)
+    if spread is None:
+        return tuple(fits)
+    measured = dict(
+        spread,
+        min_directions_per_turn=minimum_per_turn,
+        max_deviation_from_perpendicular_deg=perpendicular,
+        declared_max_perpendicular_deg=max_perpendicular_deg,
+    )
+    out: list[PrimitiveFit] = []
+    discrete = spread["directions_per_turn"] < minimum_per_turn
+    # One direction has no arc, so saying it occupies "0 degrees of arc" reads as
+    # a measurement that refutes its own premise. It is a different sentence.
+    if spread["directions"] < 2:
+        occupancy = (
+            f"all point the same way, within the {spread['merge_tolerance_deg']:.4g} degree "
+            "measurement floor on a normal's direction: one wall, with no arc to sweep"
+        )
+    else:
+        occupancy = (
+            f"occupy only {spread['directions']} distinct directions across "
+            f"{spread['angular_coverage_deg']:.4g} degrees of arc -- "
+            f"{spread['directions_per_turn']:.4g} per full turn, below the declared "
+            f"{minimum_per_turn:g}"
+        )
+    for fit in fits:
+        if fit not in curved:
+            out.append(fit)
+            continue
+        support = dict(fit.support)
+        support["normal_direction_spread"] = dict(measured)
+        if not discrete:
+            checked = list(support.get("checked", ()))
+            _passed(checked, "cylinder-normals-discrete")
+            support["checked"] = checked
+            out.append(
+                PrimitiveFit(
+                    kind=fit.kind,
+                    accepted=True,
+                    rms_residual=fit.rms_residual,
+                    relative_residual=fit.relative_residual,
+                    extent=fit.extent,
+                    parameters=dict(fit.parameters),
+                    support=support,
+                    uncertainty=dict(fit.uncertainty),
+                )
+            )
+            continue
+        out.append(
+            _rejected(
+                fit.kind,
+                fit.extent,
+                f"cylinder-normals-discrete: the {spread['facet_count']} facet normals sit within "
+                f"{perpendicular:.4g} degrees of perpendicular to one axis but "
+                f"{occupancy}. A curved surface's normals sweep; these are the spikes of "
+                "a prism of planar walls whose corners happen to lie on the circle -- and on the "
+                f"sphere -- this {fit.kind} fits.",
+                support,
+            )
+        )
+    return tuple(out)
+
+
+def _normal_constrained_cylinder(
+    fits: Sequence[PrimitiveFit],
+    points: Sequence[Vec3],
+    evidence: Mapping[str, Any],
+    eigengap_min: float,
+    gates: Mapping[str, Any],
+) -> tuple[PrimitiveFit, ...]:
+    """Refit the winning cylinder about the axis its facet normals determined.
+
+    The vertices of a bore tessellated as two rings determine a radius and not an
+    axis; the facets between them determine the axis and not much else.  So the
+    two halves are taken from the evidence that carries each: the direction from
+    the normal second moment, and then -- with the direction pinned -- the radius
+    and the axis point from the module's existing exact 2-D circle fit.
+
+    The axis tilt sigma is *replaced*, not blended, by the joint system's.  The
+    vertex-side Jacobian for a two-ring group reports a tilt sigma computed from a
+    matrix that is going singular, and averaging an honest number with a
+    meaningless one produces a meaningless one.  ``uncertainty`` records both,
+    under names that say which is which.
+
+    A normal system whose eigengap is below the declared floor changes nothing:
+    the normals were consulted, they did not determine an axis either, and the
+    record says so rather than silently keeping the vertex answer as though it
+    had been confirmed.
+    """
+    ordered = list(fits)
+    cylinder = next((f for f in ordered if f.accepted and f.kind == "cylinder"), None)
+    if cylinder is None or ordered[0] is not cylinder:
+        return tuple(ordered)
+    measured = {
+        "eigengap": evidence["eigengap"],
+        "eigengap_min": eigengap_min,
+        "axis_tilt_sigma_deg": evidence["axis_tilt_sigma_deg"],
+        "sigma_theta_deg": evidence["sigma_theta_deg"],
+        "measured_sigma_theta_deg": evidence["measured_sigma_theta_deg"],
+        "sigma_theta_floor_deg": evidence["sigma_theta_floor_deg"],
+        "effective_facet_count": evidence["effective_facet_count"],
+        "facet_count": evidence["facet_count"],
+        "method": evidence["method"],
+    }
+    if evidence["eigengap"] < eigengap_min:
+        cylinder.support["axis_evidence"] = dict(
+            measured,
+            source="vertices",
+            reason=(
+                f"the facet normals span an eigengap of {evidence['eigengap']:.4g}, below the "
+                f"declared {eigengap_min:g}; they do not determine an axis either, so the vertex "
+                "fit stands unchanged rather than being confirmed by evidence that did not confirm "
+                "it."
+            ),
+        )
+        return tuple(ordered)
+
+    refit = fit_primitive(points, "cylinder", fixed_axis=evidence["axis"], **dict(gates))
+    if not refit.accepted:
+        cylinder.support["axis_evidence"] = dict(
+            measured,
+            source="vertices",
+            reason=(
+                "the normal-determined axis was refused by the same gates the vertex fit passed "
+                f"({refit.rejection}); the vertex fit stands and this is recorded rather than "
+                "silently discarded."
+            ),
+        )
+        return tuple(ordered)
+
+    refit.support["axis_evidence"] = dict(
+        measured,
+        source="facet-normals",
+        vertex_axis_direction=list(cylinder.parameters["axis_direction"]),
+        vertex_relative_residual=cylinder.relative_residual,
+        reason=(
+            "the axis came from the facet normals, which are perpendicular to it by construction, "
+            "and the radius and axis point from the exact circle fit in the plane that axis defines."
+        ),
+    )
+    _passed(refit.support.setdefault("checked", []), "normal-constrained-axis")
+    return (refit,) + tuple(f for f in ordered if f is not cylinder)
 
 
 def fit_face_group(
@@ -1985,6 +2905,11 @@ def fit_face_group(
     kinds: Iterable[str] = ("plane", "cylinder", "cone", "sphere"),
     facet_normals: Sequence[Any] | None = None,
     cylinder_perpendicular_deg: float | None = None,
+    facet_centroids: Sequence[Any] | None = None,
+    facet_areas: Sequence[float] | None = None,
+    normal_axis_eigengap_min: float | None = None,
+    normal_sigma_theta_floor_deg: float | None = None,
+    min_cylinder_normal_directions_per_turn: float | None = None,
     **gates: Any,
 ) -> tuple[PrimitiveFit, ...]:
     """Fit each requested primitive, accepted fits first by relative residual.
@@ -1997,6 +2922,14 @@ def fit_face_group(
     caller-declared ``cylinder_perpendicular_deg`` enable the sphere/cylinder
     tie-break above.  Both are needed: a caller that supplies neither gets the
     residual ranking unchanged, which is what every caller got before.
+
+    ``facet_centroids``, ``facet_areas`` and the caller-declared
+    ``normal_axis_eigengap_min`` / ``normal_sigma_theta_floor_deg`` /
+    ``min_cylinder_normal_directions_per_turn`` additionally turn those normals
+    from a tie-break into *fit data*: a winning cylinder is refitted about the
+    axis they determine, with the joint uncertainty that determination carries,
+    and a cylinder whose normals are a prism's discrete spikes rather than a
+    sweep is refused.  All five are declared together or not at all.
     """
     requested = list(kinds)
     for kind in requested:
@@ -2010,11 +2943,67 @@ def fit_face_group(
         )
     if cylinder_perpendicular_deg is not None:
         _as_tolerance(cylinder_perpendicular_deg, "cylinder_perpendicular_deg")
-    fits = [fit_primitive(points, kind, **gates) for kind in requested]
+    constrained = (
+        facet_centroids,
+        facet_areas,
+        normal_axis_eigengap_min,
+        normal_sigma_theta_floor_deg,
+        min_cylinder_normal_directions_per_turn,
+    )
+    if any(part is not None for part in constrained):
+        if any(part is None for part in constrained) or facet_normals is None:
+            raise ValueError(
+                "normal-constrained fitting needs facet_normals, facet_centroids, facet_areas, "
+                "normal_axis_eigengap_min, normal_sigma_theta_floor_deg and "
+                "min_cylinder_normal_directions_per_turn together; a partial set would need this "
+                "module to invent the rest."
+            )
+        _as_tolerance(normal_axis_eigengap_min, "normal_axis_eigengap_min")
+        _as_tolerance(
+            min_cylinder_normal_directions_per_turn, "min_cylinder_normal_directions_per_turn"
+        )
+
+    pts = _as_points(points, "points", 4)
+    fits = [fit_primitive(pts, kind, **gates) for kind in requested]
     ordered = sorted(fits, key=lambda f: (not f.accepted, f.relative_residual))
     if facet_normals is None:
         return tuple(ordered)
-    return _cylinder_over_sphere(ordered, facet_normals, float(cylinder_perpendicular_deg))
+    ordered = list(
+        _cylinder_over_sphere(ordered, facet_normals, float(cylinder_perpendicular_deg))
+    )
+    if facet_centroids is None:
+        return tuple(ordered)
+    evidence = normal_constrained_axis(
+        facet_centroids,
+        facet_normals,
+        facet_areas=facet_areas,
+        sigma_theta_floor_deg=float(normal_sigma_theta_floor_deg),
+    )
+    if evidence is None:
+        return tuple(ordered)
+    ordered = list(
+        _normal_constrained_cylinder(ordered, pts, evidence, float(normal_axis_eigengap_min), gates)
+    )
+    # Last, so it reads the axis the refit settled on rather than one it is about
+    # to replace. The same accumulation, read a fourth way: its smallest
+    # eigenvector is the axis the normals are perpendicular to, and how those
+    # normals are spread *around* it says whether there is a curved surface there
+    # at all. Stable on acceptance alone: a newly refused fit moves behind the
+    # accepted ones and the tie-break's ordering among those survives, which
+    # re-sorting by residual would silently undo.
+    return tuple(
+        sorted(
+            _prism_of_planes(
+                ordered,
+                facet_normals,
+                evidence["axis"],
+                float(cylinder_perpendicular_deg),
+                float(min_cylinder_normal_directions_per_turn),
+                float(normal_sigma_theta_floor_deg),
+            ),
+            key=lambda f: not f.accepted,
+        )
+    )
 
 
 def best_fit(points: Any, **kwargs: Any) -> PrimitiveFit | None:

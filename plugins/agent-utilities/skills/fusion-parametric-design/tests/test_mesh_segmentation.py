@@ -20,6 +20,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import unittest
 
@@ -193,6 +194,201 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
     return vertices, triangles, [0] * len(triangles)
 
 
+def rounded_plinth_mesh(
+    width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
+    post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6, post_inward=False,
+    post_centre=None, back_radius=0.0,
+):
+    """A closed plinth whose top-front edge is rounded, under a coaxial post.
+
+    Built for the fillet seam, and every part of it earns its place:
+
+    * the **round** is a partial-arc cylinder -- the shape a face-grouped mesh
+      actually delivers an edge round as -- and it is cut into *three* groups
+      along its length, the way Fusion's grouping cuts a real one. Only the
+      middle fragment touches exactly two faces; the outer two also touch a side
+      plane, so they are chains against three primaries and the producer refuses
+      them. That discipline is reproduced here rather than asserted.
+    * the round's axis runs along **x** while the plinth is deeper than it is
+      wide, so the extrude's caps are the front and back faces and the round is
+      not one of the extrude's sides. A round claimed as a side is already
+      rebuilt by the section profile and must not also be filleted.
+    * the **post** is what licenses a revolve, which is what puts the top face in
+      a *different* archetype from the front face -- and a fillet needs an edge
+      between two archetypes.
+
+    ``post_inward`` sinks the post into the body as a blind bore instead. Nothing
+    else about the shape changes and the round is still the same round, but the
+    part stops being a revolve: a bore is not an outward turned surface, so the
+    top face joins the *extrude* that already owns the front face, and the round
+    then sits between two faces of one feature -- a side and a cap. That is the
+    same-feature edge, on a real mesh rather than a fixture of one.
+
+    ``back_radius`` rounds the *back*-top edge as well, to a different radius.
+    Both rounds then lie between the same two face sets of the same extrude --
+    the top cap and a side wall -- which is the shape a lid arrives as: POD-A1-LID
+    carries twenty-four rounds on that one pair of face sets at four radii, and
+    what has to come out is one fillet per edge carrying that edge's own radius.
+
+    Closed and outward-wound, because the rebuild sections the dump for its
+    profiles and an open surface has no section to give.
+    """
+    post_sign = -1.0 if post_inward else 1.0
+    # The post sits on the top face's centre unless the caller moves it. Moving
+    # it is what turns this plinth into the acceptance run's plate: the top face
+    # stops being an annulus about the post's axis and becomes a rectangle that
+    # merely happens to be perpendicular to it.
+    post_x, post_y = post_centre or (width / 2.0, (radius + depth) / 2.0)
+    vertices: list[tuple[float, float, float]] = []
+    index: dict[tuple, int] = {}
+
+    def node(key, point):
+        if key not in index:
+            index[key] = len(vertices)
+            vertices.append(point)
+        return index[key]
+
+    triangles: list[tuple[int, int, int]] = []
+    groups: list[int] = []
+
+    def quad(a, b, c, d, group):
+        triangles.append((a, b, c))
+        groups.append(group)
+        triangles.append((a, c, d))
+        groups.append(group)
+
+    def span(lo, hi, steps, i):
+        return lo + (hi - lo) * i / steps
+
+    def round_point(a, r=None):
+        # The endpoints are written exactly rather than evaluated: cos(pi/2) is
+        # 6e-17 and not 0, and the 4e-16 gap that follows is enough to cost the
+        # round its adjacency to the top face, which is the whole point here.
+        r = radius if r is None else r
+        if a == 0:
+            return 0.0, height - r
+        if a == arc:
+            return r, height
+        angle = math.pi / 2 * a / arc
+        return r * (1.0 - math.cos(angle)), height - r * (1.0 - math.sin(angle))
+
+    def bottom(i, j):
+        return node(("b", i, j), (span(0.0, width, nx, i), span(0.0, depth, ny, j), 0.0))
+
+    def top(i, j):
+        return node(
+            ("t", i, j),
+            (span(0.0, width, nx, i), span(radius, depth - back_radius, ny, j), height),
+        )
+
+    def front(i, k):
+        return node(("f", i, k), (span(0.0, width, nx, i), 0.0, span(0.0, height - radius, nz, k)))
+
+    def back(i, k):
+        return node(
+            ("k", i, k),
+            (span(0.0, width, nx, i), depth, span(0.0, height - back_radius, nz, k)),
+        )
+
+    def blend(i, a):
+        y, z = round_point(a)
+        return node(("r", i, a), (span(0.0, width, nx, i), y, z))
+
+    def back_blend(i, a):
+        y, z = round_point(a, back_radius)
+        return node(("q", i, a), (span(0.0, width, nx, i), depth - y, z))
+
+    def rim(level, s):
+        angle = 2.0 * math.pi * (s % post_sides) / post_sides
+        return node(
+            ("p", level, s % post_sides),
+            (
+                post_x + post_radius * math.cos(angle),
+                post_y + post_radius * math.sin(angle),
+                height + post_sign * post_height * level / post_stacks,
+            ),
+        )
+
+    for i in range(nx):
+        for j in range(ny):
+            quad(bottom(i, j), bottom(i, j + 1), bottom(i + 1, j + 1), bottom(i + 1, j), 0)
+    for i in range(nx):
+        for k in range(nz):
+            quad(front(i, k), front(i + 1, k), front(i + 1, k + 1), front(i, k + 1), 2)
+            quad(back(i, k), back(i, k + 1), back(i + 1, k + 1), back(i + 1, k), 3)
+        for a in range(arc):
+            band = min(2, i // (nx // 3))
+            quad(blend(i, a), blend(i + 1, a), blend(i + 1, a + 1), blend(i, a + 1), 6 + band)
+            if back_radius > 0.0:
+                quad(
+                    back_blend(i, a),
+                    back_blend(i, a + 1),
+                    back_blend(i + 1, a + 1),
+                    back_blend(i + 1, a),
+                    11 + band,
+                )
+
+    # The two side faces, fanned from an interior hub over a boundary ring that
+    # reuses its neighbours' own nodes -- so every edge of the ring is an edge
+    # some other face already owns, and the adjacency the fillet is read from is
+    # real rather than nearly real.
+    for column, group in ((0, 4), (nx, 5)):
+        ring = (
+            [bottom(column, j) for j in range(ny)]
+            + [back(column, k) for k in range(nz)]
+            + ([back_blend(column, a) for a in range(arc)] if back_radius > 0.0 else [])
+            + [top(column, ny - j) for j in range(ny)]
+            + [blend(column, arc - a) for a in range(arc)]
+            + [front(column, nz - k) for k in range(nz)]
+        )
+        hub = node(("c", column), (span(0.0, width, nx, column), depth / 2.0, height / 2.0))
+        for m, first in enumerate(ring):
+            second = ring[(m + 1) % len(ring)]
+            triangles.append((hub, second, first) if column else (hub, first, second))
+            groups.append(group)
+
+    # The top face is a rectangle with the post's footprint cut out of it: two
+    # closed loops, stitched by walking both in step.
+    outer = (
+        [top(i, 0) for i in range(nx)]
+        + [top(nx, j) for j in range(ny)]
+        + [top(nx - i, ny) for i in range(nx)]
+        + [top(0, ny - j) for j in range(ny)]
+    )
+    # Both loops run counter-clockwise seen from +z, and the inner one starts at
+    # the rim point nearest the outer one's start. Without that alignment the
+    # walk below is monotone in each loop's own parameter but not in angle, and
+    # it stitches triangles straight across the hole.
+    start = math.atan2(radius - post_y, -post_x)
+    offset = round(start / (2.0 * math.pi) * post_sides)
+    inner = [rim(0, offset + s) for s in range(post_sides)]
+    i = j = 0
+    while i < len(outer) or j < len(inner):
+        if j >= len(inner) or (
+            i < len(outer) and (i + 1) / len(outer) <= (j + 1) / len(inner)
+        ):
+            triangles.append((outer[i], outer[(i + 1) % len(outer)], inner[j % len(inner)]))
+            i += 1
+        else:
+            triangles.append((outer[i % len(outer)], inner[(j + 1) % len(inner)], inner[j % len(inner)]))
+            j += 1
+        groups.append(1)
+
+    # One winding serves both cases, and that is not an oversight: sinking the
+    # post mirrors it in z, and mirroring a surface reverses the normal its
+    # unchanged winding implies. A boss's wall faces away from its axis and a
+    # bore's faces toward it, so the same triangles describe both -- which is
+    # what lets the fit read the sunk one's material_side as `inside`.
+    for k in range(post_stacks):
+        for s in range(post_sides):
+            quad(rim(k, s), rim(k, s + 1), rim(k + 1, s + 1), rim(k + 1, s), 9)
+    cap = node(("pc",), (post_x, post_y, height + post_sign * post_height))
+    for s in range(post_sides):
+        triangles.append((cap, rim(post_stacks, s), rim(post_stacks, s + 1)))
+        groups.append(10)
+    return vertices, triangles, groups
+
+
 def unweld(vertices, triangles, groups=None, jitter=1e-7, seed=9):
     """Explode a welded mesh: every triangle gets its own three nodes.
 
@@ -215,6 +411,8 @@ def unweld(vertices, triangles, groups=None, jitter=1e-7, seed=9):
 # the reference spec
 # --------------------------------------------------------------------------
 
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
 REFERENCE = {
     "max_triangles": (200000, "the density above which extra triangles are noise samples, not information"),
     "weld_tolerance": (0.0, "this fixture is exported from a solid modeller, so exact duplicates are the only duplicates"),
@@ -222,6 +420,14 @@ REFERENCE = {
     "normal_alpha_deg": (25.0, "loose on purpose: the normal check separates surfaces, it does not re-segment"),
     "curvature_dead_zone_sigmas": (2.0, "two estimator sigmas of curvature is indistinguishable from flat"),
     "cylinder_normal_perpendicular_deg": (5.0, "every one of the 367 measured two-ring bores held its facet normals inside five degrees of perpendicular, and no sphere's do"),
+    "regime": ("auto", "let the mesh's own dihedral distribution and measured sigma decide, and report which"),
+    "vertex_precision_rel": (1.2e-07, "a binary STL stores float32, so a vertex is quantized to about a ten-millionth of its own magnitude"),
+    "tessellation_sigma_over_extent": (1e-9, "an exporter's vertices sit on the analytic surface to float precision; a scan's never do"),
+    "min_normal_axis_eigengap": (0.05, "a twentieth of the normal spectrum away from the axis is a full ring of facets, not a sliver"),
+    "normal_sigma_theta_floor_deg": (1e-06, "double precision over a millimetre-scale part leaves about a microdegree of normal direction"),
+    "min_cylinder_normal_directions_per_turn": (8.0, "a tessellated circle carries one normal direction per facet; at eight per turn a facet already spans 45 degrees, coarser than any exporter's chord tolerance, so below it the group is a prism of walls -- measured, the 230 genuine cylinders in the 11-part corpus carry 29.6 per turn or more and the hexagonal pockets carry 7.2"),
+    "max_fillet_radius_rel_spread": (0.02, "a constant-radius round is constant; two percent is the tessellation's own radius wobble"),
+    "boundary_circle_sigmas": (3.0, "three joint sigmas before an independent boundary circle counts as disagreeing"),
     "max_fillet_arc_deg": (180.0, "a bore or a boss closes on itself; an edge round never sweeps past a half turn"),
     "max_relative_residual": (0.02, "two percent of the sampled extent is the residual gate this skill already uses"),
     "max_radius_ratio": (5.0, "a radius beyond five extents is the near-flat-strip pathology"),
@@ -356,10 +562,84 @@ class WeldTests(unittest.TestCase):
 
 
 class NoiseTests(unittest.TestCase):
-    def test_a_clean_mesh_measures_essentially_zero_noise(self) -> None:
+    def test_a_clean_mesh_measures_noise_down_to_its_own_storage_precision(self) -> None:
+        """Both estimators read zero, and sigma still stops at the declared floor.
+
+        No estimator can see below the precision the coordinates are *stored* at,
+        and a sigma of zero would divide every downstream standard error by
+        nothing -- which is how a float32 STL's quantization comes to read as
+        systematic residual structure. The record says which of the two it is
+        reporting.
+        """
         dump = make_dump(*box_mesh())
         record = seg.fit_regions(dump, spec())
+        noise = record["noise"]
+        self.assertEqual(0.0, noise["sigma_quadric"])
+        self.assertEqual(0.0, noise["sigma_dihedral"])
+        self.assertTrue(noise["precision_floor_binds"])
+        self.assertEqual(noise["vertex_precision_floor"], noise["sigma"])
+        self.assertAlmostEqual(1.2e-07, noise["sigma_over_extent"])
+
+    def test_a_declared_precision_floor_of_zero_is_still_honoured_as_declared(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec(vertex_precision_rel=1e-15))
         self.assertLess(record["noise"]["sigma"], 1e-9)
+
+    def test_the_declared_precision_is_bounded_above_because_it_floors_sigma(self) -> None:
+        """A declaration only bounded below can silence every gate above it.
+
+        At 1e-04 a 100 mm part carries a 0.01 mm noise floor -- a printed
+        feature's layer height -- and the residual-structure gates spend their
+        power on the declaration instead of the mesh.
+        """
+        self.assertEqual(1e-04, spec(vertex_precision_rel=1e-04).value("vertex_precision_rel"))
+        with self.assertRaises(seg.SegmentationSpecError):
+            spec(vertex_precision_rel=1.1e-04)
+
+    def test_the_storage_precision_is_measured_and_not_only_declared(self) -> None:
+        """`vertex_precision_rel` is a claim about the file, and the file can answer it.
+
+        A coordinate that arrived through float32 survives a float32 round trip
+        exactly. These fixtures are float64 by construction, so the honest answer
+        is that they carry more precision than the declaration assumes -- which
+        is reported, not enforced: a conservative floor is not a malformed record.
+        """
+        measured = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]["vertex_precision"]
+        self.assertFalse(measured["reads_as_float32"])
+        self.assertGreater(measured["max_float32_round_trip"], 0.0)
+        self.assertEqual(1.2e-07, measured["declared_precision_rel"])
+        # And a mesh whose coordinates really did come through float32 says so,
+        # and reports the format's own relative precision rather than a residual.
+        import struct
+
+        vertices, triangles, groups = box_mesh()
+        quantized = [
+            tuple(struct.unpack("<f", struct.pack("<f", value))[0] for value in vertex)
+            for vertex in vertices
+        ]
+        f32 = seg.fit_regions(make_dump(quantized, triangles, face_groups=groups), spec())
+        self.assertTrue(f32["noise"]["vertex_precision"]["reads_as_float32"])
+        self.assertEqual(0.0, f32["noise"]["vertex_precision"]["max_float32_round_trip"])
+        self.assertAlmostEqual(
+            1.1920929e-07, f32["noise"]["vertex_precision"]["measured_precision_rel"], places=12
+        )
+
+    def test_surface_scale_says_what_it_is_a_scale_of(self) -> None:
+        """On a tessellation it is the facet turn angle, which is the part's geometry.
+
+        The honeycomb's cell walls meet at 60 degrees, and the dihedral estimator
+        read 13.108 mm of "discretization" on a 249 mm part from exactly that.
+        The number is the right power floor either way -- nothing to test below
+        the scale at which the surface turns -- so what changed is that the
+        record says which it is instead of leaving it to be read as noise.
+        """
+        exact = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]
+        self.assertEqual("tessellation", exact["regime"])
+        self.assertEqual("facet-turn-angle", exact["surface_scale_basis"])
+        scanned = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )["noise"]
+        self.assertEqual("scan", scanned["regime"])
+        self.assertEqual("measurement-noise", scanned["surface_scale_basis"])
 
     def test_noise_estimators_recover_the_injected_sigma_on_flat_surface(self) -> None:
         """Calibration, checked where curvature cannot contaminate it.
@@ -518,7 +798,23 @@ class DetectionTests(unittest.TestCase):
             [r["triangle_indices"] for r in first["regions"]],
             [r["triangle_indices"] for r in second["regions"]],
         )
-        payload = json.dumps(second)
+        # Scanned with the measured floats and the content hashes replaced
+        # first: both are digit strings, so a raw substring search over the whole
+        # record collides with arithmetic and passes or fails by luck. What is
+        # left is every name, key and integer the record actually carries, and no
+        # temp id may appear among them.
+        def scrubbed(value):
+            if isinstance(value, float):
+                return "<measured>"
+            if isinstance(value, str):
+                return "<digest>" if _SHA256.fullmatch(value) else value
+            if isinstance(value, dict):
+                return {key: scrubbed(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [scrubbed(item) for item in value]
+            return value
+
+        payload = json.dumps(scrubbed(second))
         for temp_id in sorted({901 + 7 * g for g in groups}):
             self.assertNotIn(str(temp_id), payload, temp_id)
         self.assertNotEqual(low.sha256, high.sha256)
@@ -633,6 +929,7 @@ class TorusTests(unittest.TestCase):
             "region_hash": name,
             "triangle_indices": [index],
             "welded_triangle_indices": [index],
+            "area": 1.0,
             "fit": fit,
         }
 
@@ -646,7 +943,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         blend = accepted[2]
         self.assertTrue(blend["fillet_candidate"])
         self.assertEqual(2.0, blend["fillet"]["radius"])
@@ -666,7 +963,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         blend = accepted[2]
         self.assertTrue(blend["fillet_candidate"])
         self.assertEqual(2.0, blend["fillet"]["radius"])
@@ -683,7 +980,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[2]["fillet_candidate"])
         self.assertNotIn("fillet", accepted[2])
 
@@ -698,7 +995,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[2], [2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[2]["fillet_candidate"])
 
     def test_a_blend_needs_two_non_blend_neighbours(self) -> None:
@@ -712,7 +1009,7 @@ class TorusTests(unittest.TestCase):
         class _Topo:
             tri_neighbours = [[1, 2], [0, 2], [0, 1]]
 
-        seg._mark_fillet_candidates(accepted, _Topo(), 180.0)
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
         self.assertFalse(accepted[1]["fillet_candidate"])
         self.assertFalse(accepted[2]["fillet_candidate"])
 
@@ -734,6 +1031,33 @@ class DisproofTests(unittest.TestCase):
         for region in record["regions"]:
             if region["fit"]["kind"] == "cylinder":
                 self.assertFalse(region["accepted"], region["fit"].get("rejection"))
+
+    def test_the_power_floor_is_bound_before_any_branch_that_can_clear_accepted(self) -> None:
+        """The support-floors-fail-first path reaches a read of `power_floor`.
+
+        It is safe today only because `and` short-circuits on `accepted` before
+        the read, which is an operand order and not an invariant: reorder that
+        one condition, or set `accepted` back to true anywhere between, and the
+        result is an UnboundLocalError that `fit_regions` turns into
+        `fit-record-stage-failed` for the whole mesh. Asserted on the source
+        because the failure is latent -- no input reaches it while the ordering
+        happens to hold, which is exactly why it needs pinning.
+        """
+        import inspect
+
+        source = inspect.getsource(seg._stage_disproof)
+        bound = source.index("power_floor = max(")
+        refuses = source.index("accepted, rejection = False, (")
+        reads = source.index("fit.rms_residual <= power_floor")
+        self.assertLess(bound, refuses, "power_floor is bound after a branch that can skip it")
+        self.assertLess(bound, reads)
+        # And the arc patch is the input that walks it: support floors refuse it
+        # first, and the stage still completes with a named region refusal.
+        record = seg.fit_regions(
+            make_dump(*arc_patch_mesh(sweep_deg=20.0)), spec()
+        )
+        self.assertIsNone(record["refusal"])
+        self.assertEqual([], [r for r in record["regions"] if r["accepted"]])
 
     def test_the_span_gate_measures_the_arc_it_rejects(self) -> None:
         vertices, _triangles, _groups = arc_patch_mesh(sweep_deg=20.0)
@@ -783,6 +1107,47 @@ class DisproofTests(unittest.TestCase):
                 self.assertLess(support["ratio"], 1.5)
                 return
         self.skipTest("no region reached the held-out gate on this fixture")
+
+    def test_a_region_below_the_power_floor_says_so_and_does_not_claim_the_gate(self) -> None:
+        """The held-out floor, pinned by name rather than by a fillet test's side effect.
+
+        An exact tessellation fits its planes at float noise, and a held-out
+        refit of residuals orders inside the measurement noise compares two
+        quantization patterns. The block reports that and deliberately does not
+        append `heldout-residual`, so a reader can tell "passed" from "had
+        nothing to test".
+        """
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        accepted = [r for r in record["regions"] if r["accepted"]]
+        self.assertEqual(6, len(accepted))
+        for region in accepted:
+            support = region["fit"]["support"]
+            self.assertIn("no power here", support["heldout_unavailable_reason"])
+            self.assertNotIn("heldout-residual", support["checked"])
+            self.assertNotIn("residual-structure", support["checked"])
+
+    def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
+        """The note claimed all four gates ran on every accepted fit; two ran on none."""
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        disproof = record["disproof"]
+        self.assertEqual(6, disproof["accepted_fits"])
+        gates = disproof["gates"]
+        for token in ("support-span-floor", "nested-kind-parsimony"):
+            self.assertEqual(6, gates[token]["ran"])
+            self.assertEqual({}, gates[token]["skip_reasons"])
+        for token in ("residual-structure", "heldout-residual"):
+            self.assertEqual(0, gates[token]["ran"])
+            self.assertEqual(6, gates[token]["skipped"])
+            self.assertEqual([6], list(gates[token]["skip_reasons"].values()))
+            self.assertIn("no power here", next(iter(gates[token]["skip_reasons"])))
+        # And the counts are the lists', not a second opinion about them.
+        for token, gate in gates.items():
+            ran = sum(
+                1
+                for region in record["regions"]
+                if region["accepted"] and token in region["fit"]["support"]["checked"]
+            )
+            self.assertEqual(ran, gate["ran"], token)
 
     def test_the_parsimony_test_refuses_a_richer_kind_that_did_not_earn_it(self) -> None:
         vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20, noise=0.02)
@@ -1216,6 +1581,487 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 "triangle-budget-exceeded", _json.loads(out.getvalue())["refusal"]["reason"]
             )
+
+
+# --------------------------------------------------------------------------
+# normals as fit data, the measurement regime, and the evidence they unlock
+#
+# The measured failure these exist for: across 11 production STLs, 85 full-turn
+# bores were refused because two rings of vertices carry no axial baseline. The
+# facets between the rings carry the axis exactly, and none of the declared
+# thresholds moves.
+# --------------------------------------------------------------------------
+
+
+class NormalConstrainedRegionTests(unittest.TestCase):
+    def _shallow_bore(self):
+        # One stack: two rings of vertices and nothing between them, which is how
+        # a solid modeller tessellates a shallow bore.
+        return make_dump(*cylinder_mesh(radius=5.0, height=2.0, sides=48, stacks=1))
+
+    def test_a_shallow_two_ring_bore_is_accepted_on_its_facet_normals(self) -> None:
+        record = seg.fit_regions(self._shallow_bore(), spec())
+        cylinders = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"]
+        self.assertTrue(cylinders, record["refusal"] or record["unfitted_regions"])
+        support = cylinders[0]["fit"]["support"]
+        self.assertEqual("facet-normals", support["axis_evidence"]["source"])
+        self.assertEqual("facet-normals", support["axis_determined_by"])
+        self.assertFalse(support["axial_span_floor_applied"])
+        # The floor was still *measured*, and the bore is still short of it. What
+        # changed is which evidence the fit rests on, not the number.
+        self.assertLess(support["axial_span"], support["axial_span_floor"])
+        self.assertAlmostEqual(5.0, cylinders[0]["fit"]["parameters"]["radius"], places=6)
+
+    def test_the_same_bore_is_refused_when_the_normals_do_not_determine_it_either(self) -> None:
+        """The floor is not loosened; it is applied to whatever determined the axis.
+
+        Declaring an eigengap floor no facet ring can reach takes the normals out
+        of the determination, and the vertex evidence then faces exactly the
+        floor it always faced -- at exactly the same value.
+        """
+        dump = self._shallow_bore()
+        passed = seg.fit_regions(dump, spec())
+        refused = seg.fit_regions(dump, spec(min_normal_axis_eigengap=0.9))
+        cylinder = [r for r in refused["regions"] if r["fit"]["kind"] == "cylinder"][0]
+        self.assertFalse(cylinder["accepted"])
+        self.assertIn("support floors", cylinder["fit"]["rejection"])
+        self.assertEqual("vertices", cylinder["fit"]["support"]["axis_determined_by"])
+        self.assertTrue(cylinder["fit"]["support"]["axial_span_floor_applied"])
+        # Same declared floor, same measured span, opposite verdict -- and the
+        # only difference between the two runs is which evidence was allowed to
+        # determine the axis.
+        accepted = [r for r in passed["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"][0]
+        for key in ("axial_span", "axial_span_floor"):
+            self.assertAlmostEqual(
+                accepted["fit"]["support"][key], cylinder["fit"]["support"][key], places=9
+            )
+        self.assertEqual(
+            passed["thresholds"]["min_axial_span_ratio"],
+            refused["thresholds"]["min_axial_span_ratio"],
+        )
+
+    def test_a_bore_is_corroborated_by_the_circle_its_own_boundary_traces(self) -> None:
+        record = seg.fit_regions(self._shallow_bore(), spec())
+        cylinder = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"][0]
+        boundary = cylinder["fit"]["support"]["boundary_circle"]
+        self.assertAlmostEqual(5.0, boundary["loop_radius"], places=6)
+        self.assertIsNone(boundary["flag"])
+        self.assertTrue(boundary["agrees_on_radius"])
+        self.assertLess(boundary["loop_normal_to_axis_deg"], 1e-06)
+        self.assertIn("boundary-circle-corroboration", cylinder["fit"]["support"]["checked"])
+        # Corroboration is reported beside the fit, never folded into it: the
+        # parameters still carry the surface fit's own radius and the loop's is a
+        # second, separately named number.
+        self.assertEqual(cylinder["fit"]["parameters"]["radius"], boundary["fitted_radius"])
+        self.assertIn("loop_radius", boundary)
+
+    def test_a_boundary_circle_that_disagrees_is_flagged_and_moves_nothing(self) -> None:
+        """The other half of the corroboration, which had no test naming it.
+
+        The same bore, judged against a fit whose radius is half a millimetre
+        out. The loop still measures 5.0, the disagreement is far beyond the
+        joint uncertainty, and the flag says so -- while the fit's own radius is
+        left exactly where it was, because corroboration that quietly moved the
+        answer would stop being corroboration.
+        """
+        dump = self._shallow_bore()
+        welded = seg.weld_dump(dump, 1e-09)
+        topo = seg._build_topology(welded)
+        record = seg.fit_regions(dump, spec())
+        cylinder = [
+            r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"
+        ][0]
+        parameters = dict(cylinder["fit"]["parameters"])
+        parameters["radius"] = parameters["radius"] + 0.5
+        wrong = seg.PrimitiveFit(
+            kind="cylinder",
+            accepted=True,
+            rms_residual=cylinder["fit"]["rms_residual"],
+            relative_residual=cylinder["fit"]["relative_residual"],
+            extent=cylinder["fit"]["extent"],
+            parameters={
+                key: tuple(value) if isinstance(value, list) else value
+                for key, value in parameters.items()
+            },
+        )
+        measured = seg._boundary_corroboration(
+            wrong,
+            cylinder["fit"]["uncertainty"],
+            cylinder["welded_triangle_indices"],
+            welded,
+            topo,
+            3.0,
+            record["noise"]["surface_scale"],
+        )
+        self.assertEqual("boundary-circle-disagrees", measured["flag"])
+        self.assertFalse(measured["agrees_on_radius"])
+        self.assertAlmostEqual(5.0, measured["loop_radius"], places=6)
+        self.assertAlmostEqual(-0.5, measured["radius_delta"], places=6)
+        self.assertEqual(wrong.parameters["radius"], measured["fitted_radius"])
+
+    def test_a_cone_is_corroborated_at_the_station_its_own_loop_sits_at(self) -> None:
+        """`_AXIS_KINDS` names cone, and a cone never reached this check.
+
+        The guard read a dead `anchor` local matching `axis_point` or `center`;
+        a cone's anchor key is `apex`, so `anchor` was always None and the
+        function returned before looking at a single loop. A cone's radius also
+        varies along its axis, so the number a loop is comparable to is the
+        cone's radius *at that loop's station* -- apex to loop centre along the
+        axis, times the taper -- and not one constant it does not have.
+        """
+        record = seg.fit_regions(
+            make_dump(*shallow_cone_mesh(taper=0.5)), spec(min_feature_size=3.0)
+        )
+        cone = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cone"][0]
+        boundary = cone["fit"]["support"]["boundary_circle"]
+        self.assertIn("boundary-circle-corroboration", cone["fit"]["support"]["checked"])
+        # The fixture's base ring: radius 8.0 at z = 0, and the cone's own radius
+        # there to a tenth of a percent.
+        self.assertAlmostEqual(8.0, boundary["loop_radius"], places=9)
+        self.assertAlmostEqual(8.0, boundary["fitted_radius"], delta=0.05)
+        self.assertLess(abs(boundary["radius_delta"]), 0.05)
+        self.assertTrue(boundary["agrees_on_axis"])
+        self.assertIsNone(boundary["flag"])
+        # A cone carries no radius sigma, so the radius reading is reported and
+        # explicitly unsized rather than counted as agreement.
+        self.assertIsNone(boundary["radius_sigma"])
+        self.assertIsNone(boundary["agrees_on_radius"])
+
+    def test_a_closed_surface_has_no_boundary_to_be_corroborated_by(self) -> None:
+        """Absent evidence is absent, not agreement."""
+        record = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=3.0))
+        tori = [r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "torus"]
+        self.assertTrue(tori, record["refusal"])
+        support = tori[0]["fit"]["support"]
+        self.assertNotIn("boundary_circle", support)
+        self.assertNotIn("boundary-circle-corroboration", support["checked"])
+
+
+def plate_with_pockets(*, sides, radius=6.0, depth=12.0, stacks=3, plate=60.0):
+    """A tessellated plate with one prismatic/cylindrical pocket standing beside it.
+
+    The plate is what makes this a *tessellation*: its faces put the tenth
+    percentile of the quadric residual at exactly zero and its coplanar interior
+    edges make the dihedral distribution bimodal, which is the honeycomb's
+    situation and not a bare tube's.  ``sides`` is the pocket's wall count, and
+    the whole point is that the vertices cannot tell six walls from six facets:
+    a regular polygon's corners lie exactly on its circumscribed circle.
+    """
+    vertices, triangles, groups = box_mesh(size=plate, divisions=6)
+    vertices, triangles, groups = list(vertices), list(triangles), list(groups)
+    offset = len(vertices)
+    for k in range(stacks + 1):
+        z = 10.0 + depth * k / stacks
+        for i in range(sides):
+            angle = 2.0 * math.pi * i / sides
+            vertices.append((30.0 + radius * math.cos(angle), 90.0 + radius * math.sin(angle), z))
+    for k in range(stacks):
+        for i in range(sides):
+            a = offset + k * sides + i
+            b = offset + k * sides + (i + 1) % sides
+            c = offset + (k + 1) * sides + (i + 1) % sides
+            d = offset + (k + 1) * sides + i
+            triangles.append((a, b, c))
+            triangles.append((a, c, d))
+            # The box's six analytic faces are groups 0..5; the pocket is the
+            # seventh, exactly as Fusion delivers a pocket's walls: one group.
+            groups.extend([6, 6])
+    return vertices, triangles, groups
+
+
+class DiscreteNormalTests(unittest.TestCase):
+    """The hex pocket that fits its own circumscribed cylinder, and the coarse bore that does not.
+
+    Measured on the honeycomb organiser: six hexagonal pockets came back as six
+    round bores of radius 15*cos(30) at float-noise residual, because a regular
+    hexagon's six corners lie *exactly* on that circle.  Every gate that reads
+    vertices passed them.  The facet normals are the only evidence that separates
+    the two, and the two sides of this test are the two sides of the declared
+    threshold.
+    """
+
+    def _pocket(self, sides, **declared):
+        """The record, and the one region that is the pocket's walls."""
+        record = seg.fit_regions(
+            make_dump(*plate_with_pockets(sides=sides)),
+            spec(min_feature_size=1.0, **declared),
+        )
+        self.assertIsNone(record["refusal"], record["refusal"])
+        walls = [r for r in record["regions"] if r["triangle_count"] == 6 * sides]
+        self.assertEqual(1, len(walls), [r["triangle_count"] for r in record["regions"]])
+        return record, walls[0]
+
+    def test_a_hexagonal_pocket_is_refused_as_a_cylinder_by_its_own_facet_normals(self) -> None:
+        _record, region = self._pocket(6)
+        self.assertFalse(region["accepted"])
+        self.assertIn("cylinder-normals-discrete", region["fit"]["rejection"])
+
+    def test_the_refusal_records_the_cluster_count_and_the_arc_they_cover(self) -> None:
+        """A named refusal that does not say what it measured is folklore."""
+        _record, region = self._pocket(6)
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(6, spread["directions"])
+        self.assertEqual(36, spread["facet_count"])
+        self.assertAlmostEqual(300.0, spread["angular_coverage_deg"], places=6)
+        self.assertAlmostEqual(7.2, spread["directions_per_turn"], places=6)
+        self.assertEqual(8.0, spread["min_directions_per_turn"])
+        # The other half of the claim: these normals really are arranged around
+        # an axis. Without that the group could be a sphere, and refusing it as a
+        # prism would be an assertion about evidence nobody produced.
+        self.assertLess(spread["max_deviation_from_perpendicular_deg"], 1e-09)
+
+    def test_a_coarse_eight_facet_bore_still_passes_the_same_gate(self) -> None:
+        """The boundary, from the other side: the threshold is where the caller put it."""
+        _record, region = self._pocket(8)
+        self.assertTrue(region["accepted"], region["fit"].get("rejection"))
+        self.assertEqual("cylinder", region["fit"]["kind"])
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(8, spread["directions"])
+        self.assertGreater(spread["directions_per_turn"], 8.0)
+        self.assertIn("cylinder-normals-discrete", region["fit"]["support"]["checked"])
+
+    def test_a_finely_tessellated_bore_is_nowhere_near_the_gate(self) -> None:
+        _record, region = self._pocket(48)
+        self.assertTrue(region["accepted"], region["fit"].get("rejection"))
+        spread = region["fit"]["support"]["normal_direction_spread"]
+        self.assertEqual(48, spread["directions"])
+        self.assertGreater(spread["directions_per_turn"], 40.0)
+
+    def test_the_declared_minimum_is_what_decides_and_nothing_else_moves(self) -> None:
+        """Raise the caller's threshold past the coarse bore and it goes too."""
+        _record, region = self._pocket(8, min_cylinder_normal_directions_per_turn=16.0)
+        self.assertFalse(region["accepted"])
+        self.assertIn("cylinder-normals-discrete", region["fit"]["rejection"])
+
+
+class SigmaSelectionTests(unittest.TestCase):
+    """Which estimator sigma comes from is the regime's decision, not the maximum's.
+
+    The honeycomb is the case: 61.5% of its interior edges are genuine 60-degree
+    cell walls, so the dihedral estimator -- whose stated assumption is that real
+    creases are a small minority -- reported 13.108 mm of noise on a mesh whose
+    quadric estimator reported exactly 0.0.  `sigma = max(...)` ran before the
+    regime was known, so the regime check that already suppressed the
+    *noise-model-inconsistent flag* never saw the *value*, and a 169 mm part
+    refused `feature-scale-below-noise` claiming 131 mm was unrecoverable.
+    """
+
+    def test_a_tessellation_takes_sigma_from_the_quadric_estimator(self) -> None:
+        """The torus is the lever: a tessellated tube's dihedral is 2.2x its quadric.
+
+        The disagreement is the same one the honeycomb has and the same one the
+        record already flags -- only larger there, because a honeycomb's creases
+        are 60 degrees and a fine torus's facet turns are five. Declaring the
+        regime is what isolates the *selection* from the detection.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        self.assertEqual("scan", auto["noise"]["regime"])
+        self.assertEqual("dihedral", auto["noise"]["sigma_estimator"])
+        self.assertEqual("tessellation", declared["noise"]["regime"])
+        self.assertEqual("quadric", declared["noise"]["sigma_estimator"])
+        # Both estimators are recorded in both runs -- the cross-check stays
+        # honest, and it is only the selection that respects the regime.
+        for record in (auto, declared):
+            self.assertEqual(auto["noise"]["sigma_quadric"], record["noise"]["sigma_quadric"])
+            self.assertEqual(auto["noise"]["sigma_dihedral"], record["noise"]["sigma_dihedral"])
+        self.assertEqual(declared["noise"]["sigma_quadric"], declared["noise"]["sigma"])
+        self.assertLess(declared["noise"]["sigma"], auto["noise"]["sigma"])
+
+    def test_the_dihedral_reading_becomes_the_discretization_scale(self) -> None:
+        """It is not discarded: on a tessellation a dihedral is a facet turn angle.
+
+        `surface_scale` is what sizes the power floor under the residual-structure
+        and held-out tests, and the dihedral reading was already reaching it
+        through `sigma` in both regimes. Moving it here is what leaves every one
+        of those gates exactly where it was -- measured over the 11-part corpus,
+        every accepted region, archetype and coverage figure is unchanged.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        self.assertEqual(auto["noise"]["surface_scale"], declared["noise"]["surface_scale"])
+        self.assertGreaterEqual(declared["noise"]["surface_scale"], declared["noise"]["sigma_dihedral"])
+        self.assertGreater(
+            declared["noise"]["discretization_scale"], auto["noise"]["discretization_scale"]
+        )
+
+    def test_a_quiet_tessellation_falls_to_the_vertex_precision_floor(self) -> None:
+        """With both estimators at zero the floor is the only thing left, and it binds."""
+        noise = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]
+        self.assertEqual("tessellation", noise["regime"])
+        self.assertEqual("quadric", noise["sigma_estimator"])
+        self.assertEqual(noise["vertex_precision_floor"], noise["sigma"])
+        self.assertTrue(noise["precision_floor_binds"])
+
+    def test_a_scan_still_takes_the_conservative_larger_of_the_two(self) -> None:
+        noise = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )["noise"]
+        self.assertEqual("scan", noise["regime"])
+        self.assertAlmostEqual(
+            max(noise["sigma_quadric"], noise["sigma_dihedral"]), noise["sigma"], places=12
+        )
+        self.assertEqual(
+            "quadric" if noise["sigma_quadric"] >= noise["sigma_dihedral"] else "dihedral",
+            noise["sigma_estimator"],
+        )
+
+    def test_the_feature_scale_budget_is_the_thing_the_selection_moves(self) -> None:
+        """`feature-scale-below-noise` is the refusal the honeycomb hit, and it reads sigma.
+
+        Ten sigma is the recoverable feature size, so an estimator measuring the
+        part's own creases prices the whole part out: 13.108 mm of "noise" on the
+        honeycomb put the recoverable feature at 131 mm of a 169 mm part. Here is
+        the same arithmetic, on one mesh, under the two regimes.
+        """
+        auto = seg.fit_regions(make_dump(*torus_mesh(major=12.0, minor=3.0)), spec(min_feature_size=1.0))
+        declared = seg.fit_regions(
+            make_dump(*torus_mesh(major=12.0, minor=3.0)),
+            spec(min_feature_size=1.0, regime="tessellation"),
+        )
+        for record in (auto, declared):
+            self.assertAlmostEqual(
+                10.0 * record["noise"]["sigma"],
+                record["feature_scale"]["recoverable_feature_size"],
+                places=12,
+            )
+        self.assertLess(
+            declared["feature_scale"]["recoverable_feature_size"],
+            auto["feature_scale"]["recoverable_feature_size"],
+        )
+
+
+class RegimeTests(unittest.TestCase):
+    def test_an_exact_tessellation_is_detected_and_stops_the_noise_flag(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        regime = record["regime"]
+        self.assertEqual("tessellation", regime["regime"])
+        self.assertEqual("tessellation", regime["detected"])
+        self.assertTrue(regime["evidence"]["vertices_read_as_exact"])
+        self.assertTrue(regime["evidence"]["dihedral_reads_as_bimodal"])
+        self.assertNotIn("noise-model-inconsistent", record["flags"])
+
+    def test_a_noisy_mesh_reads_as_a_scan(self) -> None:
+        record = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )
+        self.assertEqual("scan", record["regime"]["regime"])
+        self.assertFalse(record["regime"]["evidence"]["vertices_read_as_exact"])
+
+    def test_a_declared_regime_overrides_the_detection_and_records_both(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec(regime="scan"))
+        self.assertEqual("scan", record["regime"]["regime"])
+        self.assertEqual("tessellation", record["regime"]["detected"])
+        self.assertTrue(record["regime"]["overridden"])
+
+    def test_a_regime_outside_the_vocabulary_is_refused_at_spec_load(self) -> None:
+        with self.assertRaises(seg.SegmentationSpecError):
+            spec(regime="exact")
+
+    def test_coplanar_facets_from_different_vertex_triples_still_read_as_exact(self) -> None:
+        """The coplanarity test is `acos` at 1e-09 degrees, below what acos resolves.
+
+        One ulp off a unit dot product already reads 1.2e-06 degrees, so this
+        comparison is really "did the dot product round to exactly 1.0" -- and
+        the question is whether facets generated from one analytic face, whose
+        normals come from *different vertex triples*, do. Measured here: they do,
+        every one of them, so the band between 0 and the threshold is empty and
+        the regime does not turn on where inside it the line sits. A mesh that
+        ever populated that band would read `scan`, which is the conservative
+        side and needs every coplanar pair on the whole mesh to miss, because
+        `dihedral_reads_as_bimodal` needs a single exact pair.
+        """
+        welded = seg.weld_dump(make_dump(*box_mesh(size=20.0, divisions=6)), 1e-09)
+        dihedral = seg._dihedral_degrees(seg._build_topology(welded))
+        exact = [angle for angle in dihedral if abs(angle) < seg._EXACT_COPLANAR_DEG]
+        near_miss = [angle for angle in dihedral if 0.0 < angle < 1e-03]
+        self.assertGreater(len(exact), 0)
+        self.assertEqual([0.0], sorted(set(exact)))
+        self.assertEqual([], near_miss, "coplanar facets landed inside acos's own resolution")
+
+
+class FilletChainTests(unittest.TestCase):
+    def _blend(self, name, index, radius, span=90.0):
+        return {
+            "region_hash": name,
+            "triangle_indices": [index],
+            "welded_triangle_indices": [index],
+            "area": 1.0,
+            "fit": {
+                "kind": "cylinder",
+                "parameters": {"radius": radius},
+                "support": {"angular_span_deg": span},
+            },
+        }
+
+    def _face(self, name, index):
+        return {
+            "region_hash": name,
+            "triangle_indices": [index],
+            "welded_triangle_indices": [index],
+            "area": 1.0,
+            "fit": {"kind": "plane", "parameters": {}},
+        }
+
+    def test_a_run_of_blends_along_one_edge_is_one_fillet_not_three(self) -> None:
+        """The 298-group bucket: a round cut into fragments is still one round."""
+        accepted = [
+            self._face("a", 0),
+            self._face("b", 1),
+            self._blend("r1", 2, 2.0),
+            self._blend("r2", 3, 2.01),
+            self._blend("r3", 4, 1.99),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2, 3, 4], [2, 3, 4], [0, 1, 3], [0, 1, 2, 4], [0, 1, 3]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        blends = accepted[2:]
+        self.assertTrue(all(r["fillet_candidate"] for r in blends))
+        self.assertEqual(1, len({r["fillet"]["chain_id"] for r in blends}))
+        self.assertEqual([3], sorted({r["fillet"]["chain_member_count"] for r in blends}))
+        self.assertEqual(["a", "b"], blends[0]["fillet"]["between"])
+        self.assertAlmostEqual(2.0, blends[0]["fillet"]["radius"], places=9)
+
+    def test_a_chain_whose_radius_drifts_is_not_one_constant_radius_round(self) -> None:
+        accepted = [
+            self._face("a", 0),
+            self._face("b", 1),
+            self._blend("r1", 2, 2.0),
+            self._blend("r2", 3, 3.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[2, 3], [2, 3], [0, 1, 3], [0, 1, 2]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        for region in accepted[2:]:
+            self.assertFalse(region["fillet_candidate"])
+            self.assertFalse(region["fillet_chain"]["accepted"])
+            self.assertIn("spread", region["fillet_chain"]["reason"])
+
+    def test_a_chain_is_still_refused_without_two_accepted_primaries(self) -> None:
+        accepted = [
+            self._face("a", 0),
+            self._blend("r1", 1, 2.0),
+            self._blend("r2", 2, 2.0),
+        ]
+
+        class _Topo:
+            tri_neighbours = [[1, 2], [0, 2], [0, 1]]
+
+        seg._mark_fillet_candidates(accepted, _Topo(), 180.0, 0.02)
+        for region in accepted[1:]:
+            self.assertFalse(region["fillet_candidate"])
+            self.assertIn("exactly two", region["fillet_chain"]["reason"])
+
 
 
 if __name__ == "__main__":

@@ -43,9 +43,15 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import re
 from typing import Any, Callable, Mapping, Sequence
 
-from .manifest import ManifestValidationError, ValidationIssue, _reject_unknown_fields
+from .manifest import (
+    ManifestValidationError,
+    ValidationIssue,
+    _in_closed_set,
+    _reject_unknown_fields,
+)
 from .mesh_datum import (
     DATUM_REFUSALS,
     REFUSAL_ALTERNATIVES,
@@ -59,6 +65,7 @@ from .mesh_datum import (
     require_uncertainty,
 )
 from .mesh_fitting import (
+    FIT_REJECTION_TOKENS,
     INTENT_KINDS,
     IntentProposal,
     PrimitiveFit,
@@ -71,6 +78,7 @@ from .mesh_fitting import (
     _sub,
     _unit,
     propose_design_intent,
+    route_kinematic_group,
 )
 
 
@@ -82,6 +90,13 @@ PROGRAM_VERSION = 1
 # not an archetype: it is a separate list, so a region that was not rebuilt can
 # never be counted as one that was.
 ARCHETYPE_KINDS = {"sketch-extrude", "revolve", "hole", "fillet"}
+
+# The fit kinds a fillet proposal may sit on.  A torus is the textbook blend; a
+# partial-arc cylinder is what a face-grouped mesh actually delivers an edge
+# round as, and U2 measures the arc that separates one from a bore.  This planner
+# does not re-measure it -- the fit record carries no angular span -- so the list
+# is a vocabulary check on U2's proposal, not a second opinion about the shape.
+BLEND_FIT_KINDS = frozenset({"torus", "cylinder"})
 
 ADOPTION_TARGETS = {"parameter", "constraint"}
 
@@ -105,6 +120,10 @@ THRESHOLD_FIELDS = {
     "sigma_multiple",
     "absolute_angle_tolerance_deg",
     "absolute_length_tolerance",
+    # The kinematic router's five gates, nested because they are one decision:
+    # they judge a candidate revolve's own motion, and none of them means
+    # anything without the other four.
+    "motion_evidence",
 }
 
 # Every threshold that is a declared number carrying its own rationale.
@@ -626,15 +645,250 @@ def reconcile(
 def _is_coaxial_with(
     region: RegionFit, origin: Vec3, z: Vec3, angle_tol: float, offset_tol: float
 ) -> bool:
+    """Is this region a surface of revolution about the axis, on its own evidence?
+
+    A *turned* surface answers with its fitted axis: same direction, same line.
+
+    A **plane** cannot answer with its normal, and this is where the planner used
+    to go wrong: a plane perpendicular to the axis was taken as a surface of
+    revolution about it, so every cap, ledge and rectangular plate in the part
+    joined the revolve.  A plane's normal field genuinely cannot tell an annulus
+    from a rectangular plate -- both are ``+-z`` everywhere -- so the normals are
+    not the evidence to ask.  Its *footprint* is: a disc or an annulus swept
+    about the axis is centred on the axis, and its axis-aligned bounding box is
+    centred on it exactly.  A plate whose axis passes near one corner is not, and
+    the offset is metres of millimetres rather than tolerance-sized -- measured
+    over the eleven-part benchmark, every large coaxial plane's box centre sat
+    23 to 160 mm off the candidate axis, and not one of them was turned.
+
+    The tolerance is the caller's already-declared ``offset_tolerance``, which is
+    the same question it was declared for: how far off the axis a thing may sit
+    before it is not on the axis.  A partial annulus -- a shoulder with a flat
+    milled across it -- fails this and joins the extrude instead, which is the
+    conservative direction: it is left out of a revolve rather than dragging a
+    revolve into existence.
+    """
     direction, anchor = region.direction(), region.anchor()
     if direction is None or anchor is None or region.fit is None:
         return False
     if region.fit.kind == "plane":
-        # A plane perpendicular to the axis is a surface of revolution about it.
-        return _angle_deg(direction, z) <= angle_tol
+        if _angle_deg(direction, z) > angle_tol:
+            return False
+        lo, hi = region.bounding_box
+        centre = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0)
+        return _distance_to_line(centre, origin, z) <= offset_tol
     if _angle_deg(direction, z) > angle_tol:
         return False
     return _distance_to_line(anchor, origin, z) <= offset_tol
+
+
+# The router's gates, as this planner names them in a program spec. Declared
+# together or not at all: four of the five are meaningless without the fifth,
+# and a partially declared router would run against numbers nobody chose.
+MOTION_GATE_FIELDS = (
+    "sigma_theta_deg",
+    "residual_sigma_factor",
+    "eigengap_min",
+    "translation_epsilon",
+    "pitch_epsilon",
+)
+
+# Every named gate this planner can leave a region unreconstructed under. The
+# gate string is "token: prose", and the token is what a reader greps, counts
+# and asserts on; the prose is for the human. Declared here so that adding a
+# gate is a decision rather than a typo, and enforced by `_declared_gate` on the
+# way into the program. A gate whose prefix is *not* token-shaped -- "support
+# floors: ...", a fitter's own prose rejection passed through -- is left alone:
+# those name no token because nothing downstream branches on them.
+UNRECONSTRUCTED_GATES = {
+    "plane-unmappable",
+    "hole-base-ambiguous",
+    "hole-base-not-extruded",
+    "hole-axis-oblique",
+    "hole-not-contained",
+    "hole-radius-absent",
+    "fillet-fit-unaccepted",
+    "fillet-neighbour-unreconstructed",
+    "fillet-neighbour-shared",
+    "fillet-edge-unidentified",
+    "fillet-radius-undeclared",
+    "fillet-radius-disagrees",
+    "revolve-motion-unproven",
+    "material-side-unavailable",
+}
+
+_GATE_TOKEN_RE = re.compile(r"\A[a-z0-9]+(-[a-z0-9]+)+\Z")
+
+
+def _declared_gate(gate: str) -> str:
+    """A gate string, refused if it opens with a token nobody declared."""
+    token = gate.split(":", 1)[0]
+    if _GATE_TOKEN_RE.match(token) and not (
+        _in_closed_set(token, UNRECONSTRUCTED_GATES)
+        or _in_closed_set(token, set(FIT_REJECTION_TOKENS))
+    ):
+        raise ValueError(
+            f"{token!r} is not a declared unreconstructed gate; add it to UNRECONSTRUCTED_GATES "
+            "with what a reader is meant to do about it."
+        )
+    return gate
+
+
+# What the router's own outcome is called where a program reports it.  Five of
+# these used to be synthesized as f"motion-{refusal or verdict or 'none'}",
+# which meant they existed only at runtime: not greppable, not assertable, and
+# silently renamed by any change to the router's vocabulary.  The mapping is
+# explicit so that a new router outcome fails here, loudly, instead of inventing
+# a token nobody declared.
+MOTION_ROUTER_REASONS = {
+    "router-ambiguous": "motion-router-ambiguous",
+    "router-signature-conflict": "motion-router-signature-conflict",
+}
+MOTION_VERDICT_REASONS = {
+    "extrusion": "motion-extrusion",
+    "helical": "motion-helical",
+    "none": "motion-none",
+    "revolution": "motion-revolution-confirmed",
+}
+MOTION_EVIDENCE_REASONS = (
+    set(MOTION_ROUTER_REASONS.values())
+    | set(MOTION_VERDICT_REASONS.values())
+    | {"motion-evidence-undeclared", "motion-evidence-unavailable", "motion-axis-mismatch"}
+)
+
+
+def _motion_reason(router: Mapping[str, Any]) -> str:
+    """The declared token for a router outcome that was not a confirmed revolve."""
+    refusal, verdict = router.get("refusal"), router.get("verdict")
+    reason = (
+        MOTION_ROUTER_REASONS.get(str(refusal))
+        if refusal
+        else MOTION_VERDICT_REASONS.get(str(verdict or "none"))
+    )
+    if not _in_closed_set(reason, MOTION_EVIDENCE_REASONS):
+        raise ValueError(
+            f"the router returned refusal {refusal!r} and verdict {verdict!r}, which this planner "
+            f"has no declared reason for; add it to MOTION_ROUTER_REASONS or MOTION_VERDICT_REASONS."
+        )
+    return str(reason)
+
+
+def _motion_evidence(
+    regions: Sequence[RegionFit],
+    frame: DatumFrame,
+    gates: Mapping[str, float] | None,
+    angle_tolerance_deg: float,
+    offset_tolerance: float,
+) -> dict[str, Any]:
+    """Does this candidate group's own motion certify a rotation about the datum axis?
+
+    ``mesh_fitting.route_kinematic_surface`` answers extrusion, revolution and
+    helix from one 6x6 eigenproblem over the facet normals, and every region
+    carries the raw block for its own facets, so the group's system is the sum
+    of its members'.  Three things make this a real discriminator rather than a
+    restatement of the group's membership:
+
+    * the weights are **areas**, re-normalized over the group, so a 4 mm^2
+      corner round contributes 4 mm^2 of evidence against a 2000 mm^2 plate --
+      which is why a plate with one small coaxial round comes back ambiguous
+      rather than "a solid of revolution";
+    * the eigengap gate asks whether the invariant motion is *unique*.  A stack
+      of coaxial cylinders admits a rotation and a translation both, and picking
+      the rotation out of that two-parameter family is a guess;
+    * the recovered axis is checked against the datum axis this program would
+      actually revolve about, so a rotation about some *other* line never
+      licenses a revolve about this one.
+
+    Returns the decision as data, always.  ``confirmed`` false is never silence:
+    it carries the router's own record, or the named reason the router could not
+    be run at all.
+    """
+    if gates is None:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-undeclared",
+            "detail": (
+                "no motion_evidence thresholds were declared, so this program has no gate to judge "
+                "a candidate revolve's motion against. A revolve asserts that the whole group is "
+                "swept by one rotation, and that assertion is not made on an undeclared gate."
+            ),
+            "router": None,
+        }
+    missing = [region.region_hash for region in regions if region.motion_moments is None]
+    if missing:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-unavailable",
+            "detail": (
+                f"{len(missing)} of this group's {len(regions)} regions carry no facet moment block, "
+                "so the group's invariant motion cannot be measured. An older fit record carries "
+                "none; re-run `fit-regions` against the same dump to add them."
+            ),
+            "router": None,
+            "regions_without_moments": sorted(missing),
+        }
+    lo = [min(r.bounding_box[0][i] for r in regions) for i in range(3)]
+    hi = [max(r.bounding_box[1][i] for r in regions) for i in range(3)]
+    extent = _length((hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]))
+    try:
+        router = route_kinematic_group(
+            [region.motion_moments for region in regions],  # type: ignore[misc]
+            extent,
+            sigma_theta_rad=math.radians(gates["sigma_theta_deg"]),
+            residual_sigma_factor=gates["residual_sigma_factor"],
+            eigengap_min=gates["eigengap_min"],
+            translation_epsilon=gates["translation_epsilon"],
+            pitch_epsilon=gates["pitch_epsilon"],
+        )
+    except ValueError as error:
+        return {
+            "confirmed": False,
+            "reason": "motion-evidence-unavailable",
+            "detail": f"the router could not be run over this group: {error}",
+            "router": None,
+        }
+    if router["verdict"] != "revolution":
+        return {
+            "confirmed": False,
+            "reason": _motion_reason(router),
+            "detail": (
+                "this group's own facets do not show it swept by a rotation: "
+                + str(router.get("reason", "the router reached no verdict."))
+                + " A perpendicular cap is consistent with a revolve and is not evidence for one, "
+                "so the group falls through to the next archetype in the precedence."
+            ),
+            "router": router,
+        }
+    direction = _unit(tuple(router["direction"]))  # type: ignore[arg-type]
+    axis_point = tuple(router["axis_point"])  # type: ignore[assignment]
+    tilt = 180.0 if direction is None else _angle_deg(direction, frame.z_axis)
+    offset = _distance_to_line(axis_point, frame.origin, frame.z_axis)  # type: ignore[arg-type]
+    if tilt > angle_tolerance_deg or offset > offset_tolerance:
+        return {
+            "confirmed": False,
+            "reason": "motion-axis-mismatch",
+            "detail": (
+                f"the group is swept by a rotation, but about a line {tilt:.6g} degrees from the "
+                f"datum Z axis and {offset:.6g} away from it, against declared tolerances of "
+                f"{angle_tolerance_deg:.6g} and {offset_tolerance:.6g}. A revolve here would turn "
+                "the profile about an axis the geometry does not name."
+            ),
+            "router": router,
+            "axis_tilt_deg": tilt,
+            "axis_offset": offset,
+        }
+    return {
+        "confirmed": True,
+        "reason": "motion-revolution-confirmed",
+        "detail": (
+            "the group's facet normals are invariant under a single rotation about the datum Z "
+            "axis, and under no other one-parameter motion: that is affirmative evidence of a "
+            "surface of revolution, not merely consistency with one."
+        ),
+        "router": router,
+        "axis_tilt_deg": tilt,
+        "axis_offset": offset,
+    }
 
 
 def _datum_plane_for_normal(frame: DatumFrame, normal: Vec3, angle_tol: float) -> str | None:
@@ -679,34 +933,91 @@ def _cap_station(region: RegionFit, normal: Vec3) -> float:
 
 
 def _extrude_caps(
-    regions: Sequence[RegionFit], angle_tolerance_deg: float
-) -> tuple[RegionFit, RegionFit, Vec3] | None:
-    """The most separated pair of parallel planes, chosen deterministically."""
+    regions: Sequence[RegionFit], angle_tolerance_deg: float, axis: Vec3
+) -> tuple[RegionFit, RegionFit, Vec3, dict[str, Any]] | None:
+    """The caps of the extrude: a parallel plane pair, most separated, on the datum axis.
+
+    Separation alone was the whole rule and it is a fact about the part's
+    *bounding box* rather than about how the part was built.  On POD-A1-LID --
+    140 x 95 x 6.6 with thirteen bores down it -- the most separated parallel
+    pair is two 70 mm2 facelets on the +-y side walls 59 mm apart, so the extrude
+    came out sideways on datum YZ and all thirteen bores read
+    ``hole-axis-oblique`` against it.  Measured over the eleven-part benchmark,
+    separation alone picked the part's own principal axis on three parts of
+    eleven.
+
+    So the *direction* comes from the datum frame and separation only ranks the
+    pairs on it.  The datum primary axis is not a new measurement and carries no
+    new threshold: ``derive_datum_frame`` already picked it from the accepted
+    fits by radius x axial span, already refused ``frame-ambiguous`` when its
+    two best candidates were within the caller's declared ``frame_margin``, and
+    every other archetype in this program is already expressed against it -- a
+    revolve turns about datum Z, a hole is placed on a datum plane.  An extrude
+    that ran across it would be the one feature in the program built in some
+    other frame.
+
+    When no parallel plane pair is perpendicular to that axis, this falls back to
+    the old rule over every direction: the frame names a direction the *caps* do
+    not exist for, and refusing to plan an extrude at all would lose a body over
+    a preference.  ``cap_selection`` records which of the two happened.
+    """
     planes = [
         region
         for region in regions
         if region.fit is not None and region.fit.kind == "plane" and region.anchor() is not None
     ]
-    best: tuple[Any, ...] | None = None
-    for index, first in enumerate(planes):
-        for second in planes[index + 1 :]:
-            a, b = first.direction(), second.direction()
-            if a is None or b is None or _angle_deg(a, b) > angle_tolerance_deg:
-                continue
-            separation = abs(_cap_station(second, a) - _cap_station(first, a))
-            if separation <= 0.0:
-                continue
-            key = (-separation, first.region_hash, second.region_hash)
-            if best is None or key < best[0]:
-                low, high = (
-                    (first, second)
-                    if _cap_station(first, a) <= _cap_station(second, a)
-                    else (second, first)
-                )
-                best = (key, low, high, a)
+
+    def most_separated(on_axis: bool) -> tuple[Any, ...] | None:
+        best: tuple[Any, ...] | None = None
+        for index, first in enumerate(planes):
+            for second in planes[index + 1 :]:
+                a, b = first.direction(), second.direction()
+                if a is None or b is None or _angle_deg(a, b) > angle_tolerance_deg:
+                    continue
+                if on_axis and _angle_deg(a, axis) > angle_tolerance_deg:
+                    continue
+                separation = abs(_cap_station(second, a) - _cap_station(first, a))
+                if separation <= 0.0:
+                    continue
+                key = (-separation, first.region_hash, second.region_hash)
+                if best is None or key < best[0]:
+                    low, high = (
+                        (first, second)
+                        if _cap_station(first, a) <= _cap_station(second, a)
+                        else (second, first)
+                    )
+                    best = (key, low, high, a)
+        return best
+
+    best = most_separated(True)
+    if best is not None:
+        selection = {
+            "rule": "datum-primary-axis",
+            "direction": list(axis),
+            "separation": -best[0][0],
+            "cap_area": best[1].area + best[2].area,
+            "detail": (
+                "the caps are the most separated parallel plane pair perpendicular to the datum "
+                "primary axis, which the frame derived from this part's own accepted fits. The "
+                "extrude runs along the axis the rest of the program is expressed against."
+            ),
+        }
+        return best[1], best[2], best[3], selection
+    best = most_separated(False)
     if best is None:
         return None
-    return best[1], best[2], best[3]
+    selection = {
+        "rule": "max-separation",
+        "direction": None,
+        "separation": -best[0][0],
+        "cap_area": best[1].area + best[2].area,
+        "detail": (
+            "no parallel plane pair is perpendicular to the datum primary axis, so there are no "
+            "caps on it. The most separated pair over every direction is taken instead, and the "
+            "extrude runs across the frame the rest of the program is expressed against."
+        ),
+    }
+    return best[1], best[2], best[3], selection
 
 
 def _is_extrude_side(region: RegionFit, normal: Vec3, angle_tolerance_deg: float) -> bool:
@@ -854,31 +1165,123 @@ def _plan_holes(
     return holes, gates
 
 
-def _plan_fillets(
-    regions: Sequence[RegionFit], groups: Sequence[Mapping[str, Any]]
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Turn U2's two-neighbour torus proposals into fillet features, or gate them.
+def _same_feature_edge(
+    group: Mapping[str, Any], first: str, second: str
+) -> tuple[str | None, str | None]:
+    """Which pair of one archetype's own face sets a blend sits between.
 
-    U2 marks a torus adjacent to exactly two non-torus primaries.  What it cannot
-    know is whether those two neighbours were themselves rebuilt: a fillet is an
-    operation on the edge *between two features*, so a blend whose neighbours did
-    not both become features has no edge to sit on and is not emitted.
+    Fusion rounds an edge between two faces of a single feature as readily as one
+    between two features, so a blend whose neighbours share an owner is not
+    automatically unroundable -- but the *edge* still has to be nameable, and the
+    only archetype whose faces come partitioned is the extrude:
+    ``ExtrudeFeature`` hands back ``startFaces``, ``endFaces`` and ``sideFaces``,
+    and this program already recorded which of its regions were caps and in which
+    station order.  A revolve's faces carry no such partition, so a blend inside
+    one names no edge and keeps its refusal.
+
+    Returns ``(selector, None)`` or ``(None, reason)``; the selector is the pair
+    of face sets ``_build_fillet`` intersects.
+    """
+    if group.get("kind") != "sketch-extrude":
+        return None, (
+            f"both of this blend's neighbours are surfaces of {group['id']}, a "
+            f"{group['kind']}, whose faces this emitter cannot partition into named sets. "
+            "An edge inside it is not nameable, so no fillet is claimed here."
+        )
+    caps = list(group.get("cap_regions") or ())
+    roles = tuple(
+        "start" if h == caps[0] else "end" if h == caps[-1] else "side" for h in (first, second)
+    )
+    if roles == ("side", "side"):
+        return "side-side", None
+    if "side" not in roles:
+        return None, (
+            f"both of this blend's neighbours are cap planes of {group['id']}, which face away "
+            "from each other and share no edge."
+        )
+    cap = roles[0] if roles[0] != "side" else roles[1]
+    return f"{cap}-side", None
+
+
+def _plan_fillets(
+    regions: Sequence[RegionFit],
+    groups: Sequence[Mapping[str, Any]],
+    frame: DatumFrame,
+    *,
+    equal_radius_tolerance: float | None,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Turn U2's two-neighbour blend proposals into fillet features, or gate them.
+
+    U2 marks a *blend* adjacent to exactly two non-blend primaries.  Two surfaces
+    qualify as a blend and both arrive here: a torus, whose minor radius is the
+    round, and a **partial-arc cylinder**, which is what Fusion's face grouping
+    actually delivers an edge round as -- the measured segmentation put every one
+    of the benchmark's blends in that bucket and not one torus.  Requiring a torus
+    here was pre-pivot: it refused the only shape the producer emits.  The arc is
+    measured upstream, by U2, against the caller's declared ceiling; nothing is
+    re-derived from shape here, because the fit record does not carry the angular
+    span and a planner that guessed it would be inventing the measurement.
+
+    What U2 cannot know is whether those two neighbours were themselves rebuilt:
+    a fillet needs an edge to sit on, so a blend whose neighbours did not both
+    become features is not emitted.  Nor can it know whether the blend surface
+    was itself claimed by another archetype -- a partial-arc cylinder can be,
+    where a torus never was -- and a region rebuilt twice is counted twice in the
+    coverage account.
+
+    Two neighbours *sharing* an owner is not by itself a reason to refuse.  A
+    box's own top edge runs between two faces of one extrude and Fusion rounds it
+    without complaint; what this stage has to establish is that the edge is
+    **nameable**, which for an extrude it is -- ``_same_feature_edge`` picks the
+    pair of face sets -- and for a revolve it is not.
+
+    Blends landing on the same face-set pair are one fillet **per edge**, and the
+    edge is what the pooling key has to name.  A lid's outer wall meets its top
+    cap along twenty-four separate rounds -- four corners at 12 mm, tabs at 2 mm,
+    steps at 8.45 and 9.65 -- and every one of them is a ``side-side`` pair of the
+    same extrude.  Keyed on the face-set pair alone they pool into one fillet
+    carrying four different radii, and the honest refusal that follows
+    (``fillet-radius-disagrees``) is a refusal of the *key*, not of the geometry.
+    Which fragments lie on one edge is not re-derived here: U2 already walked
+    group adjacency to chain a run of partial-arc cylinders into one round, and
+    ``fillet.chain_id`` is that walk's answer -- adjacent, agreeing in radius, and
+    between the same two primaries.  One chain is one edge, so the key carries it.
+
+    Within a chain the radius check stays: fragments that measured one round must
+    agree to within the caller's declared ``equal_radius_tolerance``, and a chain
+    whose members disagree is still not one round.
     """
     gates: dict[str, str] = {}
     owner: dict[str, str] = {}
+    by_id = {str(group["id"]): group for group in groups}
     for group in groups:
         for region_hash in group["regions"]:
             owner[str(region_hash)] = str(group["id"])
+    pooled: dict[tuple[tuple[str, ...], str | None, str | None], list[RegionFit]] = {}
 
     fillets: list[dict[str, Any]] = []
     for region in regions:
         if region.fillet is None:
             continue
-        if not region.accepted or region.fit is None or region.fit.kind != "torus":
+        if not region.accepted or region.fit is None or region.fit.kind not in BLEND_FIT_KINDS:
             gates[region.region_hash] = (
                 "fillet-fit-unaccepted: the record proposes a fillet here and the region carries no "
-                "accepted torus fit, so there is no measured blend surface behind the proposal."
+                f"accepted {' or '.join(sorted(BLEND_FIT_KINDS))} fit, so there is no measured blend "
+                "surface behind the proposal."
             )
+            continue
+        if region.region_hash in owner:
+            # The blend surface is already rebuilt -- as a side of an extrude
+            # whose section runs through the round, or as the wall of a bore.
+            # Rounding it again would put the same area in two archetypes, and
+            # the coverage account would report more than the scan.
+            #
+            # No gate is recorded, and there used to be one
+            # (`fillet-region-already-reconstructed`): every region an archetype
+            # owns is `claimed`, and the unreconstructed list is built from the
+            # regions nothing claimed, so that string was constructed and then
+            # discarded on every run. A named gate nobody can ever read is a
+            # check this planner appears to report and does not.
             continue
         first, second = region.fillet["between"]
         owners = sorted({owner.get(first), owner.get(second)} - {None})
@@ -889,39 +1292,144 @@ def _plan_fillets(
                 "round."
             )
             continue
+        selector: str | None = None
         if len(owners) != 2:
-            gates[region.region_hash] = (
-                "fillet-neighbour-shared: both of this blend's neighbours are surfaces of the same "
-                f"archetype ({owners[0]}), so the blend lies inside one feature rather than on an "
-                "edge between two."
-            )
+            selector, refusal = _same_feature_edge(by_id[owners[0]], first, second)
+            if selector is None:
+                gates[region.region_hash] = "fillet-neighbour-shared: " + str(refusal)
+                continue
+        pooled.setdefault(
+            (tuple(owners), selector, region.fillet["chain_id"]), []
+        ).append(region)
+
+    # How many *edges* each face-set pair carries, so a record that names no
+    # chain can say what it is unable to tell apart rather than pooling blindly.
+    per_pair: dict[tuple[tuple[str, ...], str | None], int] = {}
+    for (owners_key, selector, _chain), members in pooled.items():
+        per_pair[(owners_key, selector)] = per_pair.get((owners_key, selector), 0) + len(members)
+
+    for (owners_key, selector, chain_id), members in sorted(
+        pooled.items(), key=lambda item: (item[0][0], item[0][1] or "", item[0][2] or "")
+    ):
+        if chain_id is None and per_pair[(owners_key, selector)] > 1:
+            # Without a chain id the record does not say which fragments lie on
+            # one edge, and this pair carries more than one fragment. Pooling
+            # them would round several edges as one; splitting them would round
+            # one edge several times. Neither is a measurement.
+            for region in members:
+                gates[region.region_hash] = (
+                    "fillet-edge-unidentified: "
+                    f"{per_pair[(owners_key, selector)]} blend fragments lie between the same faces "
+                    f"of {', '.join(owners_key)} and the fit record carries no chain id for them, so "
+                    "which of them lie on one edge is not stated. Re-run `fit-regions` against the "
+                    "same dump to chain the blends."
+                )
             continue
-        fillets.append(
-            {
-                "id": _archetype_id("fillet", [region.region_hash]),
-                "kind": "fillet",
-                # Neither new-body, join nor cut: a fillet on a convex edge
-                # removes material and one on a concave edge adds it, and the
-                # program does not measure which. Naming it a cut would assert
-                # the half it did not establish.
-                "operation": "finish",
-                "regions": [region.region_hash],
-                "plane": None,
-                "radius": {"parameter": None, "value": region.fillet["radius"]},
-                "between": [str(item) for item in owners],
-                "profile": None,
-                "profile_source": None,
-                "constraints": [],
-                "dependencies": list(owners),
-                "reason": (
-                    "an accepted torus adjacent to exactly two non-torus primaries, both of which "
-                    f"this program rebuilds ({owners[0]}, {owners[1]}). Emitted as a fillet radius "
-                    "on their shared edge -- parametric and editable -- rather than as torus "
-                    "surface geometry, which Fusion has no editable home for."
-                ),
-            }
-        )
+        # Largest fragment first: its measured radius is the one emitted, so the
+        # program carries a radius something actually measured rather than a mean
+        # of several, which no fit ever produced.
+        members.sort(key=lambda r: (-r.area, r.region_hash))
+        radius = members[0].fillet["radius"]
+        spread = max(abs(r.fillet["radius"] - radius) for r in members)
+        if len(members) > 1 and equal_radius_tolerance is None:
+            for region in members:
+                gates[region.region_hash] = (
+                    f"fillet-radius-undeclared: {len(members)} blend fragments land on the same edge "
+                    f"of {', '.join(owners_key)}, and whether they measured one round or several "
+                    "turns on an equal_radius_tolerance this caller did not declare."
+                )
+            continue
+        if len(members) > 1 and spread > equal_radius_tolerance:
+            for region in members:
+                gates[region.region_hash] = (
+                    f"fillet-radius-disagrees: {len(members)} blend fragments land on the same edge "
+                    f"of {', '.join(owners_key)} carrying radii that spread by {spread:.4g}, beyond "
+                    f"the declared equal_radius_tolerance {equal_radius_tolerance:g}. They do not "
+                    "describe one round, and this stage does not choose between them."
+                )
+            continue
+        fillets.append(_fillet_archetype(members, list(owners_key), selector, frame))
     return fillets, gates
+
+
+def _edge_evidence(members: Sequence[RegionFit], frame: DatumFrame) -> dict[str, Any]:
+    """Where this round's fragments sit, in the datum frame the rebuild is built in.
+
+    One face-set pair can carry many rounded edges -- a lid's outer wall meets its
+    top cap along twenty-four of them -- and the emitter's ``_internal_edges`` and
+    ``_shared_edges`` hand back *every* edge that pair shares.  Something has to
+    say which one this fillet's radius belongs on, and the only thing that can is
+    where the fragments were measured.
+
+    The box is stated in datum-frame stations, not mesh coordinates: the rebuilt
+    body is placed in the datum frame, so a box in mesh coordinates would be
+    comparing the scan's frame against the model's.  All eight corners of each
+    fragment's axis-aligned box are projected, because the box is axis-aligned in
+    *mesh* coordinates and the datum axes need not be.
+    """
+    axes = (frame.x_axis, frame.y_axis, frame.z_axis)
+    spans = [
+        [_station_range(frame, axis, region.bounding_box) for region in members] for axis in axes
+    ]
+    total = sum(region.area for region in members) or 1.0
+    return {
+        "frame": "datum",
+        "box_min": [min(low for low, _ in axis_spans) for axis_spans in spans],
+        "box_max": [max(high for _, high in axis_spans) for axis_spans in spans],
+        "centroid": [
+            sum(region.area * (low + high) / 2.0 for region, (low, high) in zip(members, axis_spans))
+            / total
+            for axis_spans in spans
+        ],
+        "note": (
+            "The datum-frame extent of this round's blend fragments, area-weighted at the centroid. "
+            "It identifies which of a face-set pair's edges carries this radius; it is evidence for "
+            "selection, never geometry the rebuild sketches."
+        ),
+    }
+
+
+def _fillet_archetype(
+    members: Sequence[RegionFit],
+    owners: Sequence[str],
+    edge_faces: str | None,
+    frame: DatumFrame,
+) -> dict[str, Any]:
+    hashes = sorted(region.region_hash for region in members)
+    if edge_faces is None:
+        reason = (
+            f"an accepted {members[0].fit.kind} blend adjacent to exactly two non-blend "
+            f"primaries, both of which this program rebuilds ({owners[0]}, {owners[1]}). "
+            "Emitted as a fillet radius on their shared edge -- parametric and editable -- "
+            "rather than as blend surface geometry, which Fusion has no editable home for."
+        )
+    else:
+        reason = (
+            f"{len(members)} accepted blend fragment(s) adjacent to two non-blend primaries that "
+            f"are both surfaces of {owners[0]}, one a {edge_faces.split('-')[0]} face and one a "
+            "side face. Emitted as a fillet radius on the edge those two face sets share -- "
+            "parametric and editable -- rather than as blend surface geometry."
+        )
+    return {
+        "id": _archetype_id("fillet", hashes),
+        "kind": "fillet",
+        # Neither new-body, join nor cut: a fillet on a convex edge
+        # removes material and one on a concave edge adds it, and the
+        # program does not measure which. Naming it a cut would assert
+        # the half it did not establish.
+        "operation": "finish",
+        "regions": hashes,
+        "plane": None,
+        "radius": {"parameter": None, "value": members[0].fillet["radius"]},
+        "between": [str(item) for item in owners],
+        "edge_faces": edge_faces,
+        "edge_evidence": _edge_evidence(members, frame),
+        "profile": None,
+        "profile_source": None,
+        "constraints": [],
+        "dependencies": [str(item) for item in owners],
+        "reason": reason,
+    }
 
 
 def plan_archetypes(
@@ -930,6 +1438,8 @@ def plan_archetypes(
     *,
     angle_tolerance_deg: float,
     offset_tolerance: float,
+    equal_radius_tolerance: float | None = None,
+    motion_gates: Mapping[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Assign regions to the archetypes U4 emits; declare everything else.
 
@@ -939,6 +1449,18 @@ def plan_archetypes(
     rather than whichever test happened to run first.  Revolve wins because it
     rebuilds the whole coaxial stack as one feature.
 
+    Precedence decides between two archetypes that the evidence *both* supports.
+    It is not a licence to claim one the evidence does not support at all, and
+    that is the distinction this stage used to miss: any plane perpendicular to
+    the primary axis counted as a surface of revolution, so a rectangular plate
+    with one small coaxial round planned as a 360-degree revolve of that round's
+    radius.  A revolve now has to be earned before precedence is consulted —
+    ``_motion_evidence`` puts the candidate group's own facet normals through
+    the kinematic router and requires an affirmative *rotation about this axis*.
+    A group whose motion is a translation, or whose invariant motions form a
+    family rather than a single one, falls through to ``sketch-extrude`` with
+    the router's record carried on whichever archetype ends up claiming it.
+
     ``hole`` and ``fillet`` are assigned from evidence U2 measures and this stage
     reads, never from shape alone.  A cylinder becomes a **hole** only when its
     ``material_side`` is ``"inside"`` — the mesh's own winding putting solid on
@@ -946,8 +1468,10 @@ def plan_archetypes(
     boss.  ``material_side`` is ``None`` on an open or inconsistently wound mesh
     and on every plane; when it is ``None`` the region stays unreconstructed
     carrying U2's own reason for the absence.  A **fillet** is assigned only
-    where U2 marked an accepted torus adjacent to exactly two non-torus
-    primaries *and* both neighbours became features here.
+    where U2 marked an accepted blend -- a torus, or a cylinder whose measured
+    arc is short enough to be an edge round rather than a bore -- adjacent to
+    exactly two non-blend primaries, *and* both neighbours became features here,
+    *and* the blend surface was not already claimed by one of them.
 
     Bores are classified **before** the extrude group chooses its sides, because
     an inward cylinder piercing a plate is a hole through it, not a wall of it —
@@ -978,7 +1502,12 @@ def plan_archetypes(
     # only: a cylinder whose side the record does not state still licenses the
     # revolve exactly as it did before, because "unknown" is not "inward".
     outward_turned = [r for r in turned if r.material_side != "inside"]
+    motion: dict[str, Any] | None = None
     if outward_turned and len(revolve) >= 2:
+        motion = _motion_evidence(
+            revolve, frame, motion_gates, angle_tolerance_deg, offset_tolerance
+        )
+    if motion is not None and motion["confirmed"]:
         members = sorted(region.region_hash for region in revolve)
         claimed.update(members)
         radius = max(
@@ -1008,9 +1537,12 @@ def plan_archetypes(
                 "radius": {"parameter": None, "value": radius},
                 "constraints": [],
                 "dependencies": [],
+                "motion_evidence": motion,
                 "reason": (
                     f"{len(revolve)} accepted fits are coaxial about the primary axis, including "
-                    f"{len(turned)} turned surface(s); one revolve rebuilds the stack."
+                    f"{len(turned)} turned surface(s), and the kinematic router finds their facet "
+                    "normals invariant under a single rotation about that axis and under no other "
+                    "one-parameter motion; one revolve rebuilds the stack."
                 ),
             }
         )
@@ -1024,13 +1556,21 @@ def plan_archetypes(
         if region.fit is not None
         and region.fit.kind == "cylinder"
         and region.material_side == "inside"
+        # A bore closes on itself; an edge round never sweeps past the half turn
+        # U2 measured it against. An inward cylinder U2 measured as a round is a
+        # concave blend in a pocket corner, and cutting a *full* cylinder there
+        # would remove the 180-plus degrees of material nobody measured. It goes
+        # to the fillet path, which is the archetype its arc supports -- and the
+        # *shape* decides rather than the accepted proposal, because a round
+        # whose chain was refused over its neighbours is still a round.
+        and not region.blend_shaped
     ]
     bore_hashes = {region.region_hash for region in bores}
     remaining = [region for region in remaining if region.region_hash not in bore_hashes]
 
-    caps = _extrude_caps(remaining, angle_tolerance_deg)
+    caps = _extrude_caps(remaining, angle_tolerance_deg, z)
     if caps is not None:
-        low, high, normal = caps
+        low, high, normal, cap_selection = caps
         sides = [
             region
             for region in remaining
@@ -1054,13 +1594,11 @@ def plan_archetypes(
             # datum frame the offset is expressed in. Handing over the far cap
             # made U4 refuse `cap-order-inverted` on a plain rectangular box: the
             # emitter had documented this exact inversion as U3's to fix.
-            stations = sorted(
-                (
-                    _frame_station(frame, axis, low.anchor()),
-                    _frame_station(frame, axis, high.anchor()),
-                )
+            ordered = sorted(
+                ((_frame_station(frame, axis, cap.anchor()), cap) for cap in (low, high)),
+                key=lambda pair: pair[0],
             )
-            low_station, high_station = stations
+            (low_station, low), (high_station, high) = ordered
             members = sorted(region.region_hash for region in (low, high, *sides))
             claimed.update(members)
             groups.append(
@@ -1074,7 +1612,14 @@ def plan_archetypes(
                         "offset": low_station,
                         "rotation": None,
                     },
-                    "cap_regions": sorted([low.region_hash, high.region_hash]),
+                    # Which rule chose these caps, and on what evidence. A reader
+                    # asking why the extrude runs the way it does gets the answer
+                    # here rather than re-deriving it from the region list.
+                    "cap_selection": cap_selection,
+                    # Station order, not hash order: the low cap is the one the
+                    # sketch sits on, which is the feature's `startFaces`, and a
+                    # fillet on a cap-to-side edge has to name which cap.
+                    "cap_regions": [low.region_hash, high.region_hash],
                     "profile": None,
                     "profile_source": "mesh-section",
                     "extent": {
@@ -1084,11 +1629,26 @@ def plan_archetypes(
                     },
                     "constraints": [],
                     "dependencies": [],
+                    # Carried here, not only on a revolve: when a candidate
+                    # revolve was refused, these are the very regions it wanted,
+                    # and the reader of this extrude is the one who needs to see
+                    # why they are not a revolve. Null when no group was ever a
+                    # revolve candidate, which is not the same as "refused".
+                    "motion_evidence": None if motion is None or motion["confirmed"] else motion,
                     "reason": (
                         f"two parallel cap planes {abs(high_station - low_station):.6g} apart on datum "
                         f"{datum_plane}, with {len(sides)} side surface(s) perpendicular to them."
                     ),
                 }
+            )
+
+    if motion is not None and not motion["confirmed"]:
+        # Only reaches a region no archetype claimed: `unmappable` is consulted
+        # for unclaimed regions alone, so an extrude that took these caps hides
+        # this gate rather than contradicting it.
+        for region in revolve:
+            unmappable[region.region_hash] = (
+                f"revolve-motion-unproven: {motion['reason']} -- {motion['detail']}"
             )
 
     holes, hole_gates = _plan_holes(
@@ -1101,7 +1661,9 @@ def plan_archetypes(
 
     # Fillets last: they depend on the features they round, so they can only be
     # judged once every base, cut and hole has claimed its regions.
-    fillets, fillet_gates = _plan_fillets(regions, groups)
+    fillets, fillet_gates = _plan_fillets(
+        regions, groups, frame, equal_radius_tolerance=equal_radius_tolerance
+    )
     for group in fillets:
         claimed.update(group["regions"])
     groups.extend(fillets)
@@ -1143,7 +1705,7 @@ def plan_archetypes(
                 "area": region.area,
                 "area_fraction": None,
                 "bounding_box": [list(region.bounding_box[0]), list(region.bounding_box[1])],
-                "gate": gate,
+                "gate": _declared_gate(gate),
             }
         )
     return groups, unreconstructed
@@ -1314,8 +1876,13 @@ def _user_parameters(
                         "is convex or concave."
                     ),
                     "rationale": (
-                        f"minor radius of the torus fitted to {group['id']}'s blend surface, "
-                        f"rounding the edge between {group['between'][0]} and {group['between'][1]}."
+                        f"the blend radius U2 measured on {group['id']}'s surface -- a torus's "
+                        "minor radius, or a partial-arc cylinder's radius -- rounding the edge "
+                        + (
+                            f"between {group['between'][0]} and {group['between'][1]}."
+                            if len(group["between"]) == 2
+                            else f"between the {group['edge_faces']} faces of {group['between'][0]}."
+                        )
                     ),
                     "driving_archetypes": [group["id"]],
                 }
@@ -1482,6 +2049,34 @@ def validate_program_spec(spec: Any) -> list[ValidationIssue]:
         elif basis == "declared-absolute":
             for name in ("absolute_angle_tolerance_deg", "absolute_length_tolerance"):
                 _declared_number(issues, thresholds.get(name), f"program_spec.thresholds.{name}")
+        motion = thresholds.get("motion_evidence")
+        # Absent is a decision this stage acts on -- no revolve is claimed
+        # without a declared gate to judge its motion against -- so it is not an
+        # issue here. Present and partial is, because four of the five gates
+        # cannot judge a spectrum on their own.
+        if motion is not None:
+            if not isinstance(motion, dict):
+                issues.append(
+                    ValidationIssue(
+                        "program-spec-invalid-thresholds",
+                        "program_spec.thresholds.motion_evidence",
+                        "motion_evidence must be an object carrying the kinematic router's five "
+                        f"declared gates: {', '.join(MOTION_GATE_FIELDS)}.",
+                    )
+                )
+            else:
+                _reject_unknown_fields(
+                    issues,
+                    motion,
+                    set(MOTION_GATE_FIELDS),
+                    "program_spec.thresholds.motion_evidence",
+                )
+                for name in MOTION_GATE_FIELDS:
+                    _declared_number(
+                        issues,
+                        motion.get(name),
+                        f"program_spec.thresholds.motion_evidence.{name}",
+                    )
 
     adopted = spec.get("adopted")
     if not isinstance(adopted, list):
@@ -1551,6 +2146,13 @@ def _proposal_id(proposal: IntentProposal) -> str:
 def _threshold(thresholds: Mapping[str, Any], name: str) -> float | None:
     entry = thresholds.get(name)
     return None if entry is None else float(entry["value"])
+
+
+def _motion_gates(thresholds: Mapping[str, Any]) -> dict[str, float] | None:
+    entry = thresholds.get("motion_evidence")
+    if not isinstance(entry, dict):
+        return None
+    return {name: float(entry[name]["value"]) for name in MOTION_GATE_FIELDS}
 
 
 def program_sha256(program: Mapping[str, Any]) -> str:
@@ -1675,6 +2277,8 @@ def build_reconstruction_program(
         frame,
         angle_tolerance_deg=_threshold(thresholds, "angle_tolerance_deg"),
         offset_tolerance=_threshold(thresholds, "offset_tolerance"),
+        equal_radius_tolerance=_threshold(thresholds, "equal_radius_tolerance"),
+        motion_gates=_motion_gates(thresholds),
     )
     _attach_constraints(groups, adoptions)
     parameters = _user_parameters(groups, adoptions, fit_record.units)
@@ -1700,6 +2304,12 @@ def build_reconstruction_program(
         "dump_sha256": fit_record.dump_sha256,
         "manifest_sha256": manifest_sha256,
         "units": fit_record.units,
+        # Beside the units, for the same reason: both say what the numbers under
+        # them mean. The regime sets the noise floors every upstream gate was
+        # judged against, and `overridden` says whether the mesh was measured or
+        # the caller asserted it -- without which two programs from the same dump
+        # are byte-identical either way.
+        "regime": fit_record.regime,
         "thresholds": {key: value for key, value in thresholds.items()},
         "datum": frame.to_dict(),
         "user_parameters": parameters,
@@ -1756,6 +2366,7 @@ _PROGRAM_FIELDS = {
     "dump_sha256",
     "manifest_sha256",
     "units",
+    "regime",
     "thresholds",
     "datum",
     "user_parameters",
@@ -1780,6 +2391,10 @@ _ARCHETYPE_FIELDS = {
     "plane",
     "axis",
     "cap_regions",
+    # sketch-extrude only: which rule chose the caps -- the direction the group's
+    # own turned walls measure it as swept along, or the most separated parallel
+    # pair when no wall names a direction -- and the evidence behind it.
+    "cap_selection",
     "profile",
     "profile_source",
     "extent",
@@ -1792,8 +2407,19 @@ _ARCHETYPE_FIELDS = {
     "area_fraction",
     # hole only: the diameter and the in-plane position of its placement point.
     "hole",
-    # fillet only: the two archetype ids whose shared edge it rounds.
+    # fillet only: the archetype ids whose shared edge it rounds -- two of them,
+    # or one when the edge runs between two face sets of a single feature.
     "between",
+    # fillet only: which pair of that single feature's face sets, when `between`
+    # names one archetype; null when it names two.
+    "edge_faces",
+    # fillet only: where this round's blend fragments sit in the datum frame, so
+    # the emitter can tell one rounded edge of a face-set pair from the next.
+    "edge_evidence",
+    # revolve and sketch-extrude: the kinematic router's verdict on the revolve
+    # candidate group -- what licensed a revolve, or what refused one and sent
+    # these regions here instead. Null when no revolve was ever a candidate.
+    "motion_evidence",
 }
 
 OPERATIONS = {"new-body", "join", "cut", "finish"}

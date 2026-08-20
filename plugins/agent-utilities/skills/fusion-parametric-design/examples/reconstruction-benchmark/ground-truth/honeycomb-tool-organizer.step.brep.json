@@ -1,0 +1,2204 @@
+{
+  "bodies": [
+    {
+      "area_mm2": 257165.521966,
+      "bbox_max_mm": [
+        76.25,
+        81.928067,
+        100.0
+      ],
+      "bbox_min_mm": [
+        -76.25,
+        -86.946886,
+        -2.0
+      ],
+      "component_path": "",
+      "edge_count": 420,
+      "face_count": 145,
+      "faces": [
+        {
+          "area_mm2": 1558.845727,
+          "index": 0,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -65.296251,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1529.978213,
+          "index": 1,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            50.0,
+            -65.296251,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 2251.66605,
+          "index": 2,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -9.225894,
+            15.979717,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2222.798536,
+          "index": 3,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -15.774106,
+            -27.321553,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2222.798536,
+          "index": 4,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            3.274106,
+            -5.670918,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2222.798536,
+          "index": 5,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -3.274106,
+            -5.670918,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2222.798536,
+          "index": 6,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            15.774106,
+            -27.321553,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2251.66605,
+          "index": 7,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            9.225894,
+            15.979717,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2684.678752,
+          "index": 8,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            3.274106,
+            -5.670918,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2684.678752,
+          "index": 9,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -3.274106,
+            -5.670918,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2771.281292,
+          "index": 10,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            9.225894,
+            15.979717,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2771.281292,
+          "index": 11,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -9.225894,
+            15.979717,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2771.281292,
+          "index": 12,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            21.725894,
+            37.630352,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 10857.071812,
+          "index": 13,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            76.25,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 3091.710692,
+          "index": 14,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            47.975894,
+            83.096686,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2944.486373,
+          "index": 15,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -22.975894,
+            39.795415,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2944.486373,
+          "index": 16,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            35.475894,
+            61.446051,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2944.486373,
+          "index": 17,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -35.475894,
+            61.446051,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2944.486373,
+          "index": 18,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            22.975894,
+            39.795415,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 3091.710692,
+          "index": 19,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -47.975894,
+            83.096686,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 10857.071812,
+          "index": 20,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -76.25,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 21,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            2.024106,
+            -3.505855,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 22,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            22.975894,
+            39.795415,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 23,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            26.25,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 24,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -21.725894,
+            37.630352,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 25,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            46.725894,
+            80.931622,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 26,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -10.475894,
+            18.14478,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 27,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            10.475894,
+            18.14478,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 28,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -23.75,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 29,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -34.225894,
+            59.280987,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 30,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            34.225894,
+            59.280987,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 31,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -22.975894,
+            39.795415,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 32,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -2.024106,
+            -3.505855,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 33,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 34,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -46.725894,
+            80.931622,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 35,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            21.725894,
+            37.630352,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 36,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            73.75,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 37,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            23.75,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2742.413779,
+          "index": 38,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -26.25,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2771.281292,
+          "index": 39,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -21.725894,
+            37.630352,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 1143.875221,
+          "index": 40,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            100.0
+          ]
+        },
+        {
+          "area_mm2": 2078.460969,
+          "index": 41,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -10.475894,
+            18.14478,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 4272.391992,
+          "index": 42,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 4272.391992,
+          "index": 43,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            73.75,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2078.460969,
+          "index": 44,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            10.475894,
+            18.14478,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 45,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            51.25,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 46,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            48.75,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 47,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            14.524106,
+            -25.15649,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 48,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -2.024106,
+            -3.505855,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 49,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            1.25,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 50,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -1.25,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 51,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            2.024106,
+            -3.505855,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 52,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -14.524106,
+            -25.15649,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 53,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -48.75,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 2193.931023,
+          "index": 54,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -51.25,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 914.739333,
+          "index": 55,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            80.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 56,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -26.25,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 57,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -50.0,
+            -62.4095,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 58,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 59,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            -21.273293,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1529.978213,
+          "index": 60,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -76.25,
+            -50.140807,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1558.845727,
+          "index": 61,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -50.0,
+            -65.296251,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1558.845727,
+          "index": 62,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -25.0,
+            -50.862495,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1558.845727,
+          "index": 63,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            25.0,
+            -50.862495,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 64,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            73.75,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 65,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            50.0,
+            -62.4095,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 66,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            26.25,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 67,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            26.25,
+            -21.273293,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 68,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "origin_mm": [
+            23.75,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 69,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -0.0,
+            -62.4095,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 70,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -23.75,
+            -48.697431,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 1645.448267,
+          "index": 71,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -23.75,
+            -21.273293,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 703.645641,
+          "index": 72,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            60.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 73,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -34.524106,
+            -59.797506,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 74,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -26.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 75,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            27.024106,
+            -46.807125,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 76,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -45.774106,
+            -79.283078,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 77,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -48.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 78,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -51.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 79,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            20.774106,
+            -35.981807,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 80,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -52.024106,
+            -90.108395,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 81,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 82,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            9.524106,
+            -16.496236,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 404.145188,
+          "index": 83,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            8.274106,
+            -14.331172,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 404.145188,
+          "index": 84,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -73.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 666.839561,
+          "index": 85,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -53.274106,
+            -92.273459,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 86,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            22.024106,
+            -38.146871,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 87,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -47.024106,
+            -81.448141,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 88,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            28.274106,
+            -48.972188,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 89,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -40.774106,
+            -70.622824,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 90,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            34.524106,
+            -59.797506,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 91,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -34.524106,
+            -59.797506,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 92,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            40.774106,
+            -70.622824,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 93,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -28.274106,
+            -48.972188,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 94,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            47.024106,
+            -81.448141,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 606.217783,
+          "index": 95,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -22.024106,
+            -38.146871,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 666.839561,
+          "index": 96,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            53.274106,
+            -92.273459,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 404.145188,
+          "index": 97,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            73.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 404.145188,
+          "index": 98,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -8.274106,
+            -14.331172,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 99,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -9.524106,
+            -16.496236,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 100,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            73.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 101,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            52.024106,
+            -90.108395,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 102,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -20.774106,
+            -35.981807,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 103,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            51.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 104,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            48.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 105,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            45.774106,
+            -79.283078,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 106,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -27.024106,
+            -46.807125,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 107,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            26.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 108,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            34.524106,
+            -59.797506,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 461.880215,
+          "index": 109,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            33.274106,
+            -57.632442,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 461.880215,
+          "index": 110,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -20.774106,
+            -35.981807,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 111,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -22.024106,
+            -38.146871,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 112,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            23.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 113,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            39.524106,
+            -68.45776,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 114,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -33.274106,
+            -57.632442,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 115,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            1.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 116,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "origin_mm": [
+            -1.25,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 117,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            33.274106,
+            -57.632442,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 118,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            0.866025404,
+            -0.0
+          ],
+          "origin_mm": [
+            -39.524106,
+            -68.45776,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 119,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            1.0,
+            0.0,
+            -0.0
+          ],
+          "origin_mm": [
+            -23.75,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 519.615242,
+          "index": 120,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            22.024106,
+            -38.146871,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 461.880215,
+          "index": 121,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            20.774106,
+            -35.981807,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 461.880215,
+          "index": 122,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.5,
+            -0.866025404,
+            0.0
+          ],
+          "origin_mm": [
+            -33.274106,
+            -57.632442,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 911.130894,
+          "index": 123,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            40.0
+          ]
+        },
+        {
+          "area_mm2": 115.470054,
+          "index": 124,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 125,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 126,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 115.470054,
+          "index": 127,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 128,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 129,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 44.20338,
+          "index": 130,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 24073.702006,
+          "index": 131,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            -2.0
+          ]
+        },
+        {
+          "area_mm2": 44.20338,
+          "index": 132,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 133,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 438.425361,
+          "index": 134,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 135,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 136,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 137,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 909.326674,
+          "index": 138,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 139,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 140,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 909.326674,
+          "index": 141,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 142,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 143,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "area_mm2": 1953.969817,
+          "index": 144,
+          "kind": "PlaneSurfaceType",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "is_solid": true,
+      "name": "Body1",
+      "vertex_count": 280,
+      "volume_mm3": 314378.046891
+    }
+  ],
+  "fusion_version": "2705.0.108",
+  "source": "honeycomb-tool-organizer.step",
+  "units": "mm"
+}
