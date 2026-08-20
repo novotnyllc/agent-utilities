@@ -1,0 +1,630 @@
+---
+title: "design: scan-regime segmentation — panel verdict and synthesis (issue #20)"
+date: 2026-08-20
+artifact_contract: ce-unified-plan/v1
+artifact_readiness: implementation-ready
+execution: code
+origin: https://github.com/novotnyllc/agent-utilities/issues/20
+builds_on: docs/plans/2026-08-19-007-research-reconstruction-algorithms.md,
+  docs/plans/2026-08-19-010-design-fusion-native-architecture.md
+inputs: "panel proposals A (algorithms literature), B (reverse-engineering practice),
+  C (systems architecture); run artifacts for Dig-Next-2 (fit.json, fit-diag.json,
+  coverage.json, fg-histogram.json, fit-spec.json, rebuild-refusal.json)"
+status: judged synthesis — scoring, winning design, and PR sequence; no production
+  code in this document
+---
+
+# Scan segmentation: verdict and synthesis
+
+Judge's charge: score the panel's candidates against declared criteria, synthesize
+the winning design, and sequence it into PRs an implementation worker executes one
+at a time, each leaving the tree green and something measured better.
+
+Module paths below are relative to
+`plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/`.
+
+---
+
+## 1. Verified facts vs assumptions
+
+### 1.1 Verified (re-checked against the artifacts during judging, not taken from the proposals)
+
+- **F1.** Dig-Next-2: 524,614 triangles / 262,271 vertices, welded, manifold,
+  158 boundary edges, median |dihedral| 2.66°, p90 13.22° (`mesh-extract-report.json`).
+- **F2.** GFG produced 4,532 groups; the largest is 448,122 triangles = 78.97% of
+  area; 2,347 groups under 10 triangles (`fg-histogram.json`, `fit.json.regions`).
+- **F3.** The mega-group's best fit is a **plane, rejected** at relative residual
+  0.0484 vs the 0.02 gate (`fit-diag.json` largest region, 12,715.7 mm², accepted:
+  false). It is the board's two faces 1.6 mm apart plus the edge band — B's area
+  arithmetic (two faces ≈ 11,054 mm² of 16,102 mm² total) is consistent.
+- **F4.** `covered_area_fraction = 0.0388`; 443 accepted fits, all planes, all
+  ≤ 99 triangles (`fit.json`).
+- **F5.** σ was taken from the dihedral estimator at **0.005366 mm** with
+  `estimators_disagree: true` (quadric said 0.0022), while the parallel lane
+  measures true form error on flat faces at **0.033–0.076 mm rms** — σ is 6–14×
+  too small and every σ-derived band inherited that (`fit.json.noise`; A §0).
+- **F6.** Refusal census, re-tallied from `coverage.json` (n = 2,605):
+  **1,598 held-out ratio failures, 609 held-out blocked-no-fit, 286
+  residual-structure (Moran), 54 support-floors, 10 parameter-uncertainty, ~48
+  relative-residual**. This **corrects proposal A**, which attributed ~2,255 to
+  blocked-no-fit: the underpowered-vs-disproved power floor addresses 609
+  regions, not 2,255; the other 1,598 are genuine ratio failures that the σ fix
+  (shipment 1) addresses. A's "power floor may double accepted planes on its
+  own" is therefore overstated; the σ fix carries most of that weight.
+- **F7.** B's Moran-vs-area trend is real and monotone: z = 54.1 at 83.1 mm²
+  (rejected), 34.6 at 31.4 mm² (rejected), 19.8 at 13.8 mm² (rejected), 15.8 at
+  18.9 mm² (**accepted**) — the accept boundary on this part sits between
+  z ≈ 16 and z ≈ 20, and the gate already bites two orders of magnitude below
+  board-face area (`fit-diag.json`). B's extrapolation (board face z ≈ 440
+  under the iid null) stands.
+- **F8.** The relationships enumerator is an unguarded upper-triangle pair loop
+  over all accepted fits (`mesh_fitting.py:propose_design_intent`, sorted names,
+  `for second in names[index+1:]`), 2° angle tolerance, offset tolerance 2% of
+  extent, no spatial gate on parallel/perpendicular/symmetric — 104,014 proposals,
+  156.6 MB, no downstream consumer (verified in source and `program.json` size).
+- **F9.** Regime detection (`_detect_regime`) correctly said "scan" — but it runs
+  inside the fit stage, downstream of the segmentation it should have dispatched
+  (C §2.3; verified at `mesh_segmentation.py:1652,1849`).
+- **F10.** `rebuild-refusal.json`: the section at z = 5.173 mm closed 15 loops,
+  0 matched to holes, `delivered_area_fraction = 0.0`. This is the 2.5D
+  multi-loop emitter lane's scope (PR 3 pending there), **not this design's**.
+- **F11.** Declared thresholds in `fit-spec.json` as the proposals quote them:
+  `min_feature_size = 1.6`, `min_angular_span_deg = 60`, `moran_z_max = 6`,
+  `max_relative_residual = 0.02`, `normal_alpha_deg = 25`.
+- **F12.** Patents (B, taken at B's word on the reading, flagged for FTO
+  routing): **US11017535B2 (Carestream/Dental Imaging, granted, live)** claims
+  fit → remove accepted → run a **modified segmentation procedure** on the
+  residual → repeat. **US20070285425A1** covers 2D section segmentation, not 3D
+  auto-segment — the prior-art doc `2026-08-19-008` misreads it (follow-up, §11).
+
+### 1.2 Assumptions (labelled, each with the measurement that settles it)
+
+- **A1.** B's percolation arithmetic (leak-free wall needs ≈ 13°; percolation
+  ceiling ≈ 2.66°; even textbook 3.75° gives p ≈ 0.66 > p_c = 0.5 on the
+  3-regular dual) is a model, not a measurement. Settled by the **ε-sweep
+  experiment** (PR 3 pre-work): CC size histogram at ε ∈ {5,8,10,13,20,30,45,60}°.
+- **A2.** The board's two faces sit 21σ_form apart along the datum normal and
+  bow < ~1.2 mm. Settled by the station KDE itself on the first cross-cut run.
+- **A3.** Shipment 1 (branch `feat/scan-sigma-closure`, in flight) moves the
+  small-region refusal population; its measured re-run is the decisive
+  experiment. Both outcomes are planned for (§5).
+- **A4.** Scanner arc coverage on the cans is 180–300°, clearing the 60° span
+  gate. Settled by the first post-cross-cut fit record.
+
+---
+
+## 2. Scoring
+
+Criteria (declared): **O** = predicted Dig-Next-2 outcome (board one region per
+face; cans and holes fittable) · **σR** = robustness to σ mis-estimation (it will
+be wrong again) · **P** = percolation immunity (B's no-overlap proof is the bar)
+· **RT** = runtime/memory at 500k–2M · **SZ** = implementation size and reuse ·
+**EC** = evidence-chain compatibility · **G** = failure modes our gates catch vs
+slip through. Scale 0–5; †marks a contested cell argued in §2.1.
+
+| candidate | O | σR | P | RT | SZ | EC | G | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **B cross-cut** (dihedral CC × datum cells, then peel) | 5† | **5** | **5** | 5 (~5 s/pass, no derived mesh) | 5 (~250–350 loc, reuses datum + event machinery) | **5** (labels only, zero derived meshes) | 4† | **winning first splitter** |
+| **C region tree** (containing architecture) | n/a — not a segmenter | n/a | n/a | 5 (d_max whole-mesh-pass bound; permutation storage 9× RSS cut) | 3 (~1,000 loc for the segmentation-relevant core) | **5** (partition invariant is what keeps coverage honest) | **5** (per-node failure isolation; T1–T5 named) | **adopted as the frame, unconditionally** |
+| A1 (filtered normals labels-only → proxy growing → HFP) | 4 (45–65% predicted) | 2† (ε, α, filter σ_r all σ-derived) | 4† (immune *conditional on ε correct*) | 4 (1.5–4 min) | 2 (~600 loc + filter) | 3† (in-memory derived label mesh; params must be recorded) | 3† (filter can *fabricate* a crease — the only candidate with a fabrication mode) | refinement-only, inside cells; filter dropped (§3.2) |
+| A1+A3 (Efficient RANSAC on residual) | +5–12% coverage | 3 (fixed ε = 3σ_form) | 4 (bitmap bridging bounded at β = 0.35 mm, not eliminated) | 3 (30–90 s on 100k residual) | 1 (600–800 loc, restores deleted code) | 4 | 4 (explicitly a gate-stress test) | conditional last escalation (PR 6), FTO-gated |
+| A2 (vectorized hybrid VSA) | 3† (no convergence guarantee; 85% clutter is the bad case) | 2 (energy is σ-normalized) | 4 | 3 (60–120 s + A1 stages) | 1 (A1 + 300–400 loc) | 3 | 3 (argmin tie non-determinism risk) | rejected; shelf note only |
+| B multi-scale GFG on sub-mesh | 0 (B predicts one group again; mechanism-free) | n/a | 0 (same criterion, same field) | 5 | 5 (~20 loc) | 5 | n/a | **run as 20-min falsification with prediction on record; never plan on it** |
+| decimate-for-segmentation | 1 (kills confetti; the blob is form waviness, which resampling does not touch) | 3 | 2 | 4 | 2 (+ permanent derived-mesh audit obligation) | 1† (no `derived_from` schema exists — C found the hole) | 2 | rejected for Dig-Next-2; `derived_from` schema ships anyway (§4.6) |
+
+### 2.1 Contested cells, argued
+
+**Cross-cut O = 5, with one judge's correction to B.** Board top/bottom as two
+regions: high confidence (21σ slab margin, F3). Holes and cans: B's "radial
+normal family (distinct cell)" is **wrong as written** — the argmax over six
+signed datum directions *fragments* a cylinder wall into up to four azimuthal
+quadrant cells plus ambiguous wedges at the quadrant boundaries, because wall
+normals sweep all azimuths. A 90° quadrant arc clears `min_angular_span_deg = 60`
+only marginally and wastes evidence. **Fix (one line): within a slab, all four
+lateral families plus the ambiguous family collapse into a single `lateral`
+super-cell before CC** — the three holes and three cans are spatially
+disconnected, so CC isolates each wall whole. With that fix B's 3/3 holes
+(~490 triangles each, full 360°) and 3/3 can predictions stand; C's caution is
+retained for *emission*: on an open mesh `material_side` is unavailable, so
+hole/bore classification downstream still refuses even when the cylinder *fit*
+is accepted (see follow-up §11.3 on A's winding observation).
+
+**Cross-cut σR = 5 — the decisive column.** The judge's brief said σ will be
+wrong again, and it will. The cross-cut's parameters are: ε from an **empirical
+quantile of measured in-plane dihedrals** (not from σ at all), family assignment
+by **threshold-free argmax** (the ambiguity band is a σ, not a choice), and
+station KDE bandwidth = σ_form, where a 2–3× σ error against a 21σ margin merely
+widens peaks. A1 puts σ into ε, α, and the filter's range kernel; a repeat of
+the 6–14× σ failure re-breaks A1 and leaves the cross-cut standing. This single
+column decides first place.
+
+**Cross-cut G = 4, not 5.** Failure modes: warped board widens stations
+(degrades gracefully, KDE still finds two peaks below ~1.2 mm bow — A2 in §1.2);
+cell explosion (support floors catch it; measure, don't pre-solve); first-pass ε
+circularity (the 443 planes are gate-accepted noise samples regardless of how
+they were found; pass 2 re-derives — self-correcting). The docked point: a
+mis-assigned ambiguous wedge becomes unclaimed area, which is honest but shows
+up as coverage left on the table, and no gate distinguishes "wedge was genuinely
+ambiguous" from "family margin was mis-derived". Recorded, not blocking.
+
+**A1 percolation is conditional, not constructive.** A's own load-bearing
+sentence — a proxy comparison cannot percolate — is right, but the guarantee is
+"cannot leak onto anything standing more than ε proud", and ε is 3σ_form. If σ
+is next wrong *high* by 2×, ε = 0.3 mm absorbs 0402 components by A's own
+absorption rule; wrong *low*, the board top under-claims and shatters. B's slab
+cut has no such conditionality: no workable ε changes which slab a triangle's
+centroid projects into. B's bar is met by B and only conditionally by A.
+
+**A2's O = 3.** A's own author ranks it below A1 (Lloyd local-minimum risk on
+85% clutter, no convergence guarantee), and B independently rejects VSA for
+having no noise parameter. No expert advocates it as first choice. Rejected
+with a shelf note: escalation only if the grower proves order-sensitive at
+contested boundaries *and* HFP-over-regions doesn't cure it.
+
+---
+
+## 3. Rulings where the experts contradict
+
+### 3.1 A's HFP agglomeration vs B's "datum cells make agglomeration unnecessary"
+
+**Ruling: B, for the first shipment; A's HFP-over-regions is retained as a
+named, conditional escalation.** The cross-cut's cells plus the existing support
+floors handle first-order merge needs, and the house rule (every threshold
+declared or derived) favours shipping no merge machinery until a measurement
+shows over-segmentation: specifically, cells that individually fail support
+floors but whose union passes a joint fit. If that census (emitted from PR 3's
+first run) shows > a declared area fraction in such fragments, HFP over the
+~500 regions (O(m²) ≈ free, threshold-free, cut licensed by the existing
+parsimony-F gate — A's genuinely good idea) enters as a small follow-on. It is
+the *cheapest* good idea in A's survey precisely because it works on regions,
+not triangles, so deferring it costs nothing.
+
+### 3.2 A's guided normal filtering vs B's smoothing rejection
+
+**Ruling: B. The filter is out of the winning path entirely.** Three
+independent grounds: (1) B's mechanism argument — a feature-preserving filter
+preserves creases by *detecting* them with a normal/dihedral criterion, which is
+the criterion the percolation proof just killed on this mesh; the smoother needs
+the segmentation it is meant to enable. (2) A's own least-confident claim is
+exactly this: Zheng/Zhang are validated on iid noise, and under correlated
+waviness with kernel ≈ correlation length the range kernel can lock onto a
+waviness crest and *sharpen a ripple into a crease* — the only failure mode on
+the table that fabricates rather than misses. (3) C's finding that no
+`derived_from` schema exists means any derived signal is currently
+unrecordable. **What survives is A's discipline, adopted as doctrine
+(KTD-5): wherever any filtered or derived signal ever appears, it produces
+labels only; every fit, residual, covariance, and gate runs on original
+vertices; the deriving operation's parameters are recorded.** The doctrine
+binds future work (including HFP joint fits and any later filter revival); the
+filter itself waits until a measured boundary-quality deficit licenses it.
+
+### 3.3 A's "cans 3/3" vs C's "cylinders will mostly still refuse"
+
+**Ruling: split the claim.** Cylinder *fits* on can and hole walls: plausible
+accepts (A and B, with the §2.1 lateral-super-cell fix; span gate arithmetic
+favours 180–300° visible arc over the 60° floor — A4 in §1.2). Hole/bore
+*classification and emission*: C is right — open mesh, no `material_side`,
+downstream refuses, and `delivered_area_fraction` stays 0.0 until the 2.5D
+multi-loop lane lands (F10). The report must lead with that label so the
+cross-cut's success is not misread, and this design deliberately does not touch
+emission.
+
+### 3.4 A's refusal-tally reading
+
+**Ruling: corrected by measurement (F6).** 609 blocked-no-fit, not ~2,255. The
+held-out power floor is still right (conflating disproved with underpowered is a
+licence defect) and ships in shipment 1, but its expected yield is modest; the
+σ fix carries the 1,598 ratio failures.
+
+### 3.5 Sequencing: "relationships fix in the same cycle" 
+
+**Ruling: stronger than the brief — the relationships rewrite must land
+*before* the cross-cut, not merely in the same cycle.** The cross-cut is what
+takes accepted fits from 443 toward 600–1,000+ (C projects 2,083 fits →
+2.76 GB program.json under the current pair loop). Shipping the splitter first
+would make its own decisive experiment emit a multi-GB artifact. PR 2 is
+therefore the relationship rewrite, and it is independently measurable at
+today's 443 fits (156.6 MB → < 0.5 MB).
+
+---
+
+## 4. The winning design
+
+**C's region tree is the frame; B's cross-cut is the first splitter plugged
+into it; A's proxy-distance criterion is the refinement inside cells and the
+no-datum fallback; the Moran correlated-noise null and the relationships
+equivalence-class rewrite ship in the same cycle.** The judge's incoming read
+survives contact with the evidence, with the amendments in §3 (filter dropped,
+HFP deferred, relationships promoted ahead of the splitter, lateral super-cell
+fix).
+
+### 4.1 Frame (C, adopted whole for the segmentation-relevant core)
+
+Regions become a tree; terminal nodes are a **checked partition** of the mesh;
+a node splits when its best fit is **rejected above the split floor** (never on
+size); T1–T5 terminal rules; P1 (strict partition, asserted every level), P2
+(strict decrease), P3 (floor), P4 (productivity — a split none of whose
+children improves the parent's residual by a declared margin is
+`split-unproductive`, capping useless work at one level). Work bound: ≤ d_max
+whole-mesh fitting passes regardless of splitter. Storage: one int32
+permutation + node table; a region is `(offset, count)`. New flags join
+`REGION_FLAGS` (`split-ineffective`, `split-unproductive`,
+`split-depth-exhausted`, `region-fit-failed`); `REFUSAL_REASONS` stays reserved
+for aborts. Regime detection moves from the fit stage into `anchor` and the
+dispatch **degenerates into the containment rule**: GFG always runs (it is
+free, 0.02 s measured); if its groups fit they are the partition whatever the
+regime label says; a failing over-floor group is split whatever the regime
+says. Tessellation corpus behaviour is byte-identical (frontier empties at
+level 0). Coverage sums over terminal nodes only and **names its partition**
+(`partition_checked`, `terminal_regions`, `triangles_in_terminal_regions`) —
+C's flattering-direction risk is closed by one assert and one definition.
+
+Determinism: every seeded choice inside a node derives from that node's
+existing content-addressed `_region_hash`; numpy/BLAS build recorded in the
+stage record (a reassociated reduction can flip a marginal accept and silently
+miss the resume cache).
+
+### 4.2 First splitter: the cross-cut (B, with the §2.1 fix)
+
+Per node: `label_local` = connected components of the dual graph keeping edges
+with |dihedral| < ε; `label_cell` = (normal-family, slab-station) per triangle,
+with the four lateral families + ambiguous collapsed to one `lateral`
+super-cell per slab; region = `np.unique` over the pair. The two label sources
+fail in opposite directions (local leaks / cell merges) and share no failure
+mode. Parameters: ε = quantile of the measured in-plane dihedral distribution
+(from the 443 gate-accepted planes) at 1 − 1/L_max, L_max = measured perimeter
+/ mean edge ≈ 1,230 — deliberately loose, percolation intended and neutralized
+by the cell cut; family assignment threshold-free argmax with ambiguity band =
+derived facet-noise tilt (1.76°); stations by 1-D KDE at bandwidth σ_form
+reusing the existing `event_stations`/`event_sigmas` machinery, peaks separated
+by the declared `min_feature_size = 1.6`. **No derived mesh; no constant
+chosen.** Peel: accepted terminal regions leave the frontier; stations
+re-estimated on the residual; **the same procedure every pass, no parameter
+escalation** — which is also what keeps the loop off US11017535B2's
+modified-procedure limitation (F12). Peel removes whole cells, not inlier sets
+(B's fringe-confetti mitigation). Termination: monotone, bounded below,
+expected 2–3 passes.
+
+### 4.3 Bootstrap order and the no-datum fallback (A's role)
+
+The cross-cut needs a datum. The measured bootstrap on this very part: pass 0 =
+GFG confetti + existing fitters yields small accepted planes (443 here) →
+datum recovery from their normal families (0.13°) → cross-cut passes 1..n. On
+a part where pass 0 yields no accepted fits, the fallback ladder is: (1)
+three-axis offset-histogram seeding on trimmed-PCA normals (A's measured-Hough,
+~20 lines) to recover families directly; (2) if no orthogonal frame emerges,
+named flag `datum-unavailable` and **A1's proxy region grower runs as the
+standalone splitter** (layered frontier growth against the region's own fitted
+proxy, refit on raw vertices every K layers) — order-independent of the
+cross-cut because it plugs into the same `split(node)` socket. A's
+proxy-distance criterion is also the designated **refinement splitter inside
+cells**: a cell whose joint fit is rejected (two nearly-coplanar component tops
+sharing a cell, adjacent within ε) re-splits by proxy growing seeded at the
+cell's two worst-residual poles — deferred until PR 3's census shows it is
+needed (§3.1 logic; same escalation discipline).
+
+### 4.4 Gates in the same cycle: the Moran correlated-noise null (B §6.3)
+
+F7 makes this non-optional: the residual-structure gate already rejects at
+83 mm² on this part, and board faces are 66× larger. Fix: estimate the waviness
+correlation length from the σ_form lane's estimator, **block-bootstrap the
+Moran null** at that length, and add an n-aware practical-significance floor
+(structure must exceed a declared multiple of σ_form, not merely be
+statistically nonzero at n = 10⁵). Never by raising `moran_z_max`. Bootstrap
+block size and replicate count are declared numbers with rationales. Held-out
+and parsimony gates still run unchanged — the bootstrap loosens exactly one
+null, in exactly the direction the physics says the iid assumption is false.
+
+### 4.5 Relationships: equivalence classes + pruning census (B + C)
+
+`parallel`/`coaxial`/`concentric`/`equal_radius` are equivalence relations on a
+parameter: cluster, emit **one proposal per class with a member list**
+(hub-and-spoke; 443 fits → ~14 records; `implied_pairs` recorded;
+`pairs_unexamined: 0`). Non-transitivity at the 2° window is handled by
+enumerating `contested_split`/`contested_join` in full (~30 pairs here, and
+that number is measured in advance: 46,695 = C(306,2) + 30). `perpendicular`
+becomes class-pairs. `symmetric` becomes clustered-candidate generation with a
+joint statistic (plan-007 §8.3's own shape — the design knew; the
+implementation enumerated). `tangent`/`distance` get a derived locality reach
+(3σ̂ + both positional sigmas) over the existing uniform-grid choice, then
+top-k with `worst_dropped_deviation` vs `best_adopted_deviation` recorded.
+Dispositions use **C's two classes and they must never blur**: `not-omitted`
+(lossless reduction, every pair's verdict reconstructible) vs `not-tested` (we
+chose not to look; rule, derived parameter, and counts recorded). Coverage
+cites the pruning census so silence cannot read as judgment. Record slimming
+(license prose declared once; hash carried once; jsonl streaming for bulk) is
+worth 60% independently. The codebase already argues the principle against
+itself — `_symmetry_proposal` excludes sphere pairs for exactly this reason;
+this applies the existing argument to the missing case.
+
+### 4.6 Preprocessing discipline
+
+`derived_from` schema (source id, parent digest, operation, operation-spec
+hash, label-map hash, rationale; `provenance: "derived"`) ships **before any
+derived mesh exists** (~15 lines of schema + validation), per C: the closed
+`MESH_SOURCE_FIELDS` set means today's tempted path is "register it as a fresh
+unlinked source", which is the evidence-chain hole. The decimator itself is
+**not built** — decimation attacks the wrong noise scale for this failure
+(B §5.3) and the other fixes already pay off its cost.
+
+### 4.7 Prior-art notes (fold-in, per F12)
+
+- **US11017535B2 (granted, live)** recites fit → remove → *modified
+  segmentation procedure* on the residual → repeat. The cross-cut peel runs the
+  identical procedure each pass with stations re-estimated from the residual —
+  no procedure switch, no sensitivity escalation — and does not read on the
+  distinguishing limitation. **PR 6 (RANSAC on the residual) is exactly the
+  claim's shape** (different procedure on the residual after a first
+  segmentation): route to the FTO owner before PR 6 is implemented.
+  Mitigations on record: Design X `Preserve Existing Region` and Schnabel 2007
+  fit-remove-repeat predate the 2016 priority date.
+- **US20070285425A1** (abandoned) is 2D-section segmentation with constraint
+  snapping, not 3D mesh auto-segment; `2026-08-19-008` treats it as the Design
+  X Auto Segment lineage spec, which is wrong. The closest disclosure is
+  **DE102007021711A1** (withdrawn). Doc correction is follow-up §11.1.
+
+---
+
+## 5. Shipment-1 conditioning (both branches, as charged)
+
+Shipment 1 (`feat/scan-sigma-closure`: σ_form through ε and all gates,
+held-out power floor, HK dead zone at feature scale, local closure licence,
+report tee) re-runs the scan with existing GFG. What its result changes:
+
+**Branch "moves a lot"** (coverage 0.039 → ~0.10–0.17; ceiling anchored by the
+diagnostic run's permissive 16.78%): confirms A's §0 diagnosis for the small
+regions. It cannot exceed that band, because ~79% of area sits in the
+mega-group, which fails as a *two-parallel-planes* blob at any σ (F3) — **no σ
+outcome removes the need for the splitter**. PRs 1–3 unchanged. PR 4's scope
+depends on the Moran readout within this branch (below).
+
+**Branch "barely moves"**: implicates the gates rather than σ — the held-out
+ratio failures were not σ-starvation, and the Moran null is the standing
+suspect. PRs 1–3 still unchanged (the splitter is need-driven by F3, not by
+σ); PR 4 escalates to co-blocking and should be pulled forward to land with
+PR 3, because otherwise the cross-cut's first run reports near-0 coverage and
+the cause gets misattributed to segmentation (B's explicitly recorded warning).
+
+**The single shipment-1 result that would most change this design** (as
+charged): **the measured Moran z on the largest re-fitted regions — whether the
+83.1 mm² / 31.4 mm² diagnostic planes flip to accepted under σ_form + the
+AR-style n_eff inflation.** If they flip, the board faces have a fighting
+chance under existing gates, PR 4 shrinks to a calibration pass, and coverage
+credit lands in PR 3. If they still fail, the iid-null defect is confirmed
+structural at exactly board-face scale, PR 4 is a hard prerequisite for any
+coverage movement, and it merges with PR 3 into one cycle. Every other
+shipment-1 number adjusts predictions; this one reorders the plan.
+
+---
+
+## 6. PR sequence
+
+One opus worker, one PR at a time, tree green after each, each PR names the
+measured claim it must move and re-runs the Dig-Next-2 artifacts to prove it.
+All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
+
+### PR 1 — region tree skeleton, partition invariant, record slimming
+
+- **Files:** `src/fusion_design/mesh_segmentation.py` (node table, permutation,
+  T1–T5, flags, dispatch record; regime detection relocated to anchor),
+  `src/fusion_design/mesh_source.py` + schema (`derived_from`, ~15 lines),
+  `reconstruction_coverage` consumer (partition citation), tests (+ the 60-line
+  adversarial-splitter property check: k=1, child==parent, dropped triangle,
+  double-assigned triangle).
+- **Size:** ~550–650 added, ~150 deleted (index-list region records → ranges).
+- **Splitter plugged:** trivial L0 = GFG groups (no new splitting yet; the
+  mega-group becomes a terminal-unfitted node with its named gate, as today).
+- **Measured claim:** tessellation corpus (11 parts, 71%) byte-identical
+  fit/coverage results; `fit.json` 32.6 MB → ~1.5 MB + permutation sidecar;
+  coverage record carries `partition_checked: true` naming its partition.
+- **Risks:** record-schema churn breaking downstream readers (mitigated: same
+  top-level vocabulary, ranges are additive); silent coverage drift (mitigated:
+  the byte-identical corpus check *is* the gate).
+
+### PR 2 — relationships equivalence-class rewrite + pruning census
+
+- **Files:** `src/fusion_design/mesh_fitting.py` (delete the pair loop
+  `propose_design_intent` interior, ~180 lines; add clustering, class records,
+  locality reach, symmetric candidate clustering),
+  `src/fusion_design/reconstruction_program.py` (pruning census sibling, jsonl
+  streaming, license-base/table record slimming, thresholds through
+  `_declared_number`), tests.
+- **Size:** ~500–650 added, ~300 deleted.
+- **Measured claim:** on the existing 443-fit record, `program.json`
+  156.6 MB → < 0.5 MB; proposals 104,014 → ~10³; `pairs_unexamined: 0` for
+  every equivalence kind; contested lists enumerated in full (~30 expected);
+  plan stage wall clock unchanged or better.
+- **Risks:** non-transitive clustering choice hidden (mitigated: contested
+  lists are the design's own honesty device); a downstream consumer of
+  `relationships.proposals` appearing later (mitigated: verified none exists
+  today, F8; jsonl retains full information).
+
+### PR 3 — cross-cut splitter + peel
+
+- **Pre-work, recorded in the PR's evidence with predictions on record:**
+  (a) ε-sweep CC histogram (~10 lines over the existing dump; prediction: no ε
+  yields a good histogram — falsifies or confirms the percolation proof);
+  (b) mega-group sub-mesh GFG re-run (~20 min; prediction: one group again).
+  A surprise in either cancels or reshapes this PR — that is the point.
+- **Files:** `src/fusion_design/mesh_segmentation.py` (cross-cut
+  `split(node)`: dual-graph CC at derived ε, argmax families with lateral
+  super-cell, station KDE reusing event machinery, cell×CC intersect, peel
+  driver; datum-bootstrap ladder incl. `datum-unavailable`), spec block with
+  every derivation, tests.
+- **Size:** ~300–400 added.
+- **Measured claim (gate-independent by design):** the 448,122-triangle group
+  splits; board top and bottom emerge as two ~180k-triangle regions, each
+  attracting a plane fit whose *offset difference recovers 1.6 ± 0.1 mm*
+  (measurable even if acceptance is still gated); holes/cans isolated as whole
+  walls (census of lateral regions); refusal census shifts from one blob gate
+  to named per-region reasons. Segmentation wall clock ≤ ~10 s/full peel.
+- **Risks:** Moran gate rejects the board faces and coverage stays near 0 —
+  **expected, not a failure of this PR** (the claim above is region-level, and
+  PR 4 exists precisely for this); warped-board station widening (degrades
+  gracefully; KDE peak record shows it); cell explosion (measured census, not
+  pre-solved).
+
+### PR 4 — Moran correlated-noise null (block bootstrap)
+
+- **Files:** `src/fusion_design/mesh_fitting.py` (residual-structure gate:
+  block-bootstrap null at the measured waviness correlation length from the
+  σ_form lane; n-aware practical-significance floor; declared
+  `bootstrap_block_length` / `bootstrap_replicates` with rationales), tests
+  with a synthetic correlated-noise fixture.
+- **Size:** ~200–300 added.
+- **Sequencing switch:** lands after PR 3 by default; **merges into PR 3's
+  cycle if shipment 1's readout shows the 83/31 mm² planes still failing**
+  (§5). Never resolves by raising `moran_z_max`.
+- **Measured claim:** `covered_area_fraction` 0.039 → **≥ 0.25** (C's
+  conservative band 0.25–0.35; B's optimistic 60–85% recorded as the upper
+  case), with each large-region verdict naming a physical reason; the
+  83.1 mm²/31.4 mm² diagnostic planes' verdicts flip or their refusals name
+  structure exceeding the physical floor.
+- **Risks:** over-permissive null (mitigated: held-out + parsimony unchanged;
+  bootstrap parameters declared and recorded); correlation length itself
+  mis-estimated (mitigated: it comes from the same measured estimator lane as
+  σ_form, and the gate records the length it used).
+
+### PR 5 (conditional) — refinement inside cells: proxy grower, HFP merge
+
+- **Escalation gate (declared, from PR 3/4's census):** run only if
+  (a) mixed-cell area — cells whose joint fit fails with multi-surface residual
+  signatures — exceeds a declared fraction, or (b) fragment area — adjacent
+  cells individually under support floors whose union fits — exceeds one.
+  (a) licenses A's proxy grower inside cells; (b) licenses HFP-over-regions
+  (threshold-free, cut by the existing parsimony-F gate).
+- **Files:** `mesh_segmentation.py` (layered proxy grower as a second
+  registered splitter; HFP merge pass over terminal regions), tests.
+- **Size:** ~250–350 (grower) + ~90 (HFP).
+- **Measured claim:** the specific census population that licensed it converts
+  — +N accepted fits / +X% coverage in component geometry, numbers set by the
+  census that triggered the PR.
+- **Risks:** order-sensitivity at contested boundaries (recorded; A2 VSA is
+  the named shelf escalation if measured); ε-band absorption of sub-0402
+  features (declared absorption rule, reported).
+
+### PR 6 (conditional) — Efficient RANSAC on the residual
+
+- **Escalation gate:** post-PR-5 unclaimed area with fittable HK signatures
+  (at the corrected h_κ = 1.5 mm dead zone from shipment 1) above a declared
+  floor — i.e., evidence that non-axis-aligned or cone/torus surfaces exist
+  that no deterministic stage can seed. **Plus FTO clearance on US11017535B2
+  first (§4.7) — this PR, not the peel, is the one shaped like the claim.**
+- **Files:** restore the deleted detection engine under `mesh_fitting.py` /
+  `mesh_segmentation.py` with A3's four corrections (σ = σ_form; σ_θ-law
+  neighbourhoods; β = min(2ℓ_med, declared `min_feature_height` = 0.35 mm);
+  HK ranking at h_κ), seeded from region hashes.
+- **Size:** ~600–800.
+- **Measured claim:** +5–12% coverage; and — explicitly a good outcome —
+  spurious candidates proposed *and gated*, exercising the disproof gates.
+- **Risks:** re-litigates the deleted design (mitigated: falsifiable
+  prediction required up front, per A); reproducible-under-seed rather than
+  deterministic-by-construction (recorded as the weakest C4 in the pipeline).
+
+Sequence rationale in one line each: PR 1 makes every later split *checkable*;
+PR 2 must precede the fit-count explosion PR 3 causes (§3.5); PR 3 is the
+splitter the mega-group's own fit record demands; PR 4 is what lets the
+splitter's output through the gates honestly; PRs 5–6 spend effort only where a
+measured residual licenses it.
+
+---
+
+## 7. Key technical decisions
+
+- **KTD-1 — Region tree as the containing architecture; split on rejection,
+  never size.** Rationale: a rejected fit above the floor is evidence of more
+  than one surface; the partition invariant is the only thing that keeps
+  `covered_area_fraction` meaningful under a hierarchy, and it fails in the
+  flattering direction without the assert (C §8). Tessellation path
+  byte-identical by construction.
+- **KTD-2 — Cross-cut as first splitter.** Rationale: the only candidate whose
+  discriminator survives σ being wrong again (empirical-quantile ε,
+  threshold-free argmax, 21σ slab margin) and whose two label sources provably
+  share no failure mode; ~300 lines, ~5 s, zero derived meshes. Includes the
+  lateral super-cell correction (§2.1).
+- **KTD-3 — Relationships as equivalence classes with a two-class pruning
+  census (`not-omitted` / `not-tested`), landing before the splitter.**
+  Rationale: it is a modelling error, not a scaling problem; top-k-first would
+  silently drop evidence; the fit-count explosion PR 3 causes would otherwise
+  emit multi-GB artifacts (§3.5).
+- **KTD-4 — Moran null by block bootstrap at the measured correlation length;
+  `moran_z_max` untouched.** Rationale: F7 shows the iid null already rejecting
+  at 83 mm²; matching the null to the physics is a fix, raising the threshold
+  is a rubber stamp.
+- **KTD-5 — Labels-only doctrine for every derived signal; `derived_from`
+  schema ships before any derived mesh; no smoothing, no decimation for this
+  part.** Rationale: §3.2; C's schema-hole finding; coverage computed in
+  parent area so derivation can never inflate it.
+- **KTD-6 — Peel is procedure-invariant (same cross-cut every pass); RANSAC
+  escalation is FTO-gated.** Rationale: US11017535B2 (F12).
+- **KTD-7 — Every new threshold through `_declared_number` with rationale or
+  derived from a measurement named in the record** (ε quantile + L_max, KDE
+  bandwidth, bootstrap block length, escalation census floors,
+  `min_feature_height`). Rationale: house rule; "a bare number is a module
+  constant with extra steps."
+- **KTD-8 — Determinism by content-addressed seeds** (`_region_hash`-derived
+  per node; BLAS/numpy build recorded). Rationale: resume cache correctness
+  and the house determinism rule.
+
+## 8. Rejected / deferred register (so nobody re-proposes silently)
+
+| item | status | licence to revisit |
+| --- | --- | --- |
+| Guided/bilateral normal filtering | rejected from path (§3.2) | measured boundary-quality deficit after PR 5, and only under KTD-5 |
+| A2 vectorized VSA | rejected | measured grower order-sensitivity that HFP doesn't cure |
+| Decimate-for-segmentation | rejected for Dig-Next-2 | a part whose failure is sampling noise, not form waviness; schema already in place |
+| Multi-scale GFG on sub-mesh | run once as falsification (PR 3 pre-work) | a surprise result |
+| Watershed on curvature, spectral/n-cut | rejected (κ is noise at this sampling; scale/objective mismatch) | — |
+| HFP-over-regions | deferred (§3.1) | PR 5 gate (b) |
+| RANSAC-on-residual | deferred | PR 6 gate + FTO clearance |
+| Smoothing as mesh prep | rejected outright | — |
+
+## 9. Verification contract
+
+- Every PR re-runs the Dig-Next-2 artifact set host-side (`fit-regions` path —
+  no Fusion required for PRs 1–6) and commits the measured numbers it claimed
+  into its PR description; a claim without its number does not merge.
+- PR 1's adversarial-splitter property check runs in the standard suite
+  thereafter; any splitter registered later must pass it unmodified.
+- Tessellation-corpus regression (11 parts) green on every PR; PR 1
+  byte-identical, later PRs identical-or-explained.
+- The falsification experiments (ε-sweep, sub-mesh GFG) carry written
+  predictions *before* they run; outcomes recorded either way.
+- Coverage records must cite: their partition (KTD-1), the pruning census
+  (KTD-3), and — until the 2.5D lane's PR 3 lands — the
+  `delivered_area_fraction = 0.0` label with `reconstruction-refused` /
+  `claims_not_made`, so covered-vs-delivered cannot be conflated (F10).
+- One live-Fusion writer at a time is unaffected by PRs 1–6 (all host-side over
+  the hash-bound dump); any later in-Fusion stage inherits plan-010's nonce
+  discipline plus C's `.fusion.lock` when that work is scheduled.
+
+## 10. Definition of done
+
+1. PRs 1–4 merged; PRs 5–6 either merged under their census gates or their
+   gates recorded as not met.
+2. On Dig-Next-2: mega-group split into named terminal regions; board top and
+   bottom fitted as planes with the 1.6 mm offset recovered inside its stated
+   uncertainty; `covered_area_fraction ≥ 0.25` with every large-region verdict
+   naming a physical reason; holes/cans present as whole-wall cylinder regions
+   with accept/refuse reasons from the declared gate set.
+3. `program.json` under 1 MB at the new fit count; `pairs_unexamined = 0` for
+   equivalence kinds; contested lists enumerated.
+4. Tessellation corpus unchanged (71%, 85/85 bores).
+5. Shipment-1 readout incorporated: the §5 branch taken is recorded in the
+   PR 4 description, with the Moran-vs-area numbers that decided it.
+
+## 11. Follow-ups (outside this design's PRs)
+
+1. **Correct `docs/plans/2026-08-19-008-research-prior-art-landscape.md`:**
+   US20070285425A1 is 2D-section segmentation, not 3D Auto Segment; the closest
+   free disclosure is DE102007021711A1 (withdrawn). Small doc PR.
+2. **FTO review of US11017535B2** before PR 6 (owner: whoever holds the FTO
+   question; mitigating prior art listed in §4.7).
+3. **`material_side` precondition audit** (from A §3.5): the mesh is globally
+   oriented, manifold, 0.02% boundary edges; inward/outward for a fitted
+   cylinder needs consistent winding, not closedness. If the audit agrees,
+   loosening the precondition un-discards the three mounting holes at the
+   emission step — but that lands in the 2.5D/emission lane, not here.
+4. **Emission dependency:** scan `delivered_area_fraction` stays 0.0 until the
+   2.5D multi-loop emitter lane's PR 3 lands; this design must not duplicate
+   that scope and does not.
