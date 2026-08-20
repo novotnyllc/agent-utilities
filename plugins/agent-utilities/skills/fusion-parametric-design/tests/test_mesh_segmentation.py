@@ -194,6 +194,51 @@ def torus_mesh(major=12.0, minor=3.0, major_steps=48, minor_steps=16, noise=0.0,
     return vertices, triangles, [0] * len(triangles)
 
 
+def quantized_bore_mesh(offset=130.0, size=120.0, divisions=20, radius=1.7, height=6.0,
+                        sides=64, stacks=8):
+    """A float32-quantized bore beside a plate, grouped by face, as an STL stores it.
+
+    Every vertex is put through a float32 round trip, which is what a binary STL
+    does to it, and the bore sits far enough from the origin that the resulting
+    lattice is coarse: at 130 mm a float32 ulp is 1.5e-05 mm, so the bore's
+    radial residuals land at 4.3e-06 mm -- above a tenth of the mesh's precision
+    floor, and well below the floor itself.  That narrow band is where the nine
+    production bores lived.
+
+    The plate is what makes the noise model read the way a real part's does: it
+    is planar and it outnumbers the bore, so the quadric estimator reports
+    exactly 0.0 and sigma falls to the precision floor.  A cylinder-only fixture
+    reports its own chord error as noise instead and never enters the band.
+
+    Returns the two components as one dump with one face group per planar face
+    and one for the bore -- the shape Fusion's accurate grouping delivers.
+    """
+    import struct
+
+    def f32(value):
+        return struct.unpack("<f", struct.pack("<f", value))[0]
+
+    plate_v, plate_t, _ = box_mesh(size=size, divisions=divisions)
+    bore_v, bore_t, _ = cylinder_mesh(radius=radius, height=height, sides=sides, stacks=stacks)
+    base = len(plate_v)
+    vertices = [tuple(f32(c) for c in p) for p in plate_v]
+    vertices += [tuple(f32(c + offset) for c in p) for p in bore_v]
+    triangles = list(plate_t) + [tuple(i + base for i in t) for t in bore_t]
+
+    def facet_normal(triangle):
+        a, b, c = (vertices[i] for i in triangle)
+        u = [b[i] - a[i] for i in range(3)]
+        v = [c[i] - a[i] for i in range(3)]
+        n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+        length = math.sqrt(sum(x * x for x in n)) or 1.0
+        return tuple(round(x / length, 3) for x in n)
+
+    faces: dict[tuple[float, ...], int] = {}
+    groups = [faces.setdefault(facet_normal(t), len(faces)) for t in plate_t]
+    groups += [len(faces)] * len(bore_t)
+    return vertices, triangles, groups
+
+
 def rounded_plinth_mesh(
     width=20.0, depth=30.0, height=12.0, radius=4.0, nx=12, ny=8, nz=6, arc=10,
     post_radius=5.0, post_height=9.0, post_sides=36, post_stacks=6, post_inward=False,
@@ -1116,15 +1161,58 @@ class DisproofTests(unittest.TestCase):
         quantization patterns. The block reports that and deliberately does not
         append `heldout-residual`, so a reader can tell "passed" from "had
         nothing to test".
+
+        Two preconditions can say so, and this fixture trips both: residuals
+        below a tenth of the surface scale, and residuals below the precision
+        the coordinates are *stored* at. The second is the more specific claim
+        -- it names the lattice rather than the noise -- so it is the reason
+        recorded when both hold.
         """
         record = seg.fit_regions(make_dump(*box_mesh()), spec())
         accepted = [r for r in record["regions"] if r["accepted"]]
         self.assertEqual(6, len(accepted))
         for region in accepted:
             support = region["fit"]["support"]
-            self.assertIn("no power here", support["heldout_unavailable_reason"])
+            self.assertIn("vertex precision floor", support["heldout_unavailable_reason"])
             self.assertNotIn("heldout-residual", support["checked"])
             self.assertNotIn("residual-structure", support["checked"])
+
+    def test_a_bore_whose_residuals_are_the_float32_lattice_is_not_refused_for_structure(self) -> None:
+        """The gates were testing the file format, and said so with a z of 10.5.
+
+        Measured over the eleven production STLs, nine of the eighty-five
+        genuine full-turn bores were refused this way: seven for residual
+        structure and two for a held-out ratio, all on residual fields at the
+        float32 quantization scale of about 2e-06 mm.  Quantization is
+        deterministic, therefore systematically signed, which is exactly the
+        signature both gates test for -- so on a quiet tessellation they spend
+        their power on the lattice the coordinates are stored on.
+
+        The existing power floor does not catch it: it is a tenth of the surface
+        scale, and these residuals sit *above* that tenth and below the floor
+        itself.  This fixture reproduces that band, and the fit is now accepted
+        with both gates recording that they had nothing to judge.  No declared
+        threshold moved to get here.
+        """
+        record = seg.fit_regions(make_dump(*quantized_bore_mesh()), spec(min_feature_size=1.0))
+        noise = record["noise"]
+        floor = noise["vertex_precision_floor"]
+        self.assertEqual(0.0, noise["sigma_quadric"])
+        self.assertTrue(noise["precision_floor_binds"])
+        bore, = [r for r in record["regions"] if r["fit"]["kind"] == "cylinder"]
+        # The band the nine lived in: above a tenth of the surface scale, below
+        # the precision floor. Asserted, because a fixture that drifted out of
+        # it would pass this test while testing nothing.
+        self.assertLess(0.1 * noise["surface_scale"], bore["fit"]["rms_residual"])
+        self.assertLessEqual(bore["fit"]["rms_residual"], floor)
+        self.assertTrue(bore["accepted"], bore["fit"].get("rejection"))
+        support = bore["fit"]["support"]
+        self.assertIsNone(support["moran_z"])
+        self.assertIsNone(support["directional_structure"])
+        for key in ("moran_unavailable_reason", "heldout_unavailable_reason"):
+            self.assertIn("vertex precision floor", support[key])
+        for token in ("residual-structure", "heldout-residual"):
+            self.assertNotIn(token, support["checked"])
 
     def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
         """The note claimed all four gates ran on every accepted fit; two ran on none."""
@@ -1139,7 +1227,7 @@ class DisproofTests(unittest.TestCase):
             self.assertEqual(0, gates[token]["ran"])
             self.assertEqual(6, gates[token]["skipped"])
             self.assertEqual([6], list(gates[token]["skip_reasons"].values()))
-            self.assertIn("no power here", next(iter(gates[token]["skip_reasons"])))
+            self.assertIn("vertex precision floor", next(iter(gates[token]["skip_reasons"])))
         # And the counts are the lists', not a second opinion about them.
         for token, gate in gates.items():
             ran = sum(

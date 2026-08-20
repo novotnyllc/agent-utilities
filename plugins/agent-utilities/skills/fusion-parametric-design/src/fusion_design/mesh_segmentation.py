@@ -2025,6 +2025,15 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         # The ladder, so the gates can read it at each region's own extent
         # rather than at the one scale this record reports.
         "form_error_table": form_table,
+        # `vertex_precision_floor` crosses into the disproof stage as well as
+        # into the record: it is the scale of the *file format's* quantization
+        # lattice, and the residual-structure gates need it as a precondition on
+        # their own input, not only as a floor under sigma. It is a different
+        # question from `structure_scale` above and neither replaces the other:
+        # the form error asks how far this surface departs from its nominal
+        # shape, the precision floor asks how finely the coordinates describing
+        # it were stored.
+        "vertex_precision_floor": precision_floor,
     }
     # The flag says the *noise model* is inconsistent, and that claim only means
     # something where both estimators are estimating noise. On an exact
@@ -2429,6 +2438,9 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
     groups: dict[int, list[int]] = state["regions_by_label"]
     surface_scale = state["noise"]["surface_scale"]
     form_table = state["noise"]["form_error_table"]
+    # The scale of the coordinates' own quantization lattice: see the
+    # precondition on the residual-structure and held-out gates below.
+    precision_floor = state["noise"]["vertex_precision_floor"]
     grid: _Grid = state["grid"]
     gates = spec.fit_gates()
     perpendicular = float(spec.value("cylinder_normal_perpendicular_deg"))
@@ -2538,6 +2550,15 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             support["form_error"] = form_error
             support["power_floor"] = power_floor
             support["power_floor_basis"] = floor_basis
+            # Bound here for the same reason `power_floor` is: three blocks
+            # below read it, and the last of them is guarded by an `and` whose
+            # short-circuit is an operand order rather than an invariant.
+            #
+            # A separate precondition from the floors above, and a narrower one:
+            # those ask whether a residual is inside the *surface's* own error,
+            # this asks whether it is inside the precision the coordinates were
+            # stored at. Both suppress a verdict; neither is the other.
+            below_precision = fit.rms_residual <= precision_floor
             passed, measured = _support_floors(fit, points, spec, topo.median_edge)
             support.update(measured)
             if not passed:
@@ -2554,15 +2575,32 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # synthetic fit it would be reading float noise. Say so rather
                 # than pass or fail on it -- and do not claim the check in
                 # `checked`, because it did not run. `power_floor` is bound above.
+                # And a second precondition, on the *quantization* scale rather
+                # than the noise scale. A residual field that lies entirely
+                # inside the precision the coordinates are stored at is the
+                # file format's lattice: a binary STL holds float32, so a
+                # perfectly round bore on a 100 mm part comes back with
+                # residuals of a couple of microns arranged in a pattern that
+                # is deterministic and therefore systematically signed -- which
+                # is the exact signature these gates test for. Measured over the
+                # eleven production STLs, 9 of the 85 genuine full-turn bores
+                # were refused on residual fields at that scale. This is a
+                # statement about what the gates *can* judge, not a change to
+                # what they judge it against: no declared threshold moves, and
+                # the skip is recorded under its own reason rather than passing.
                 structure = (
                     _moran_i(residuals, point_indices, topo)
-                    if fit.rms_residual > power_floor
+                    if fit.rms_residual > power_floor and not below_precision
                     else None
                 )
                 if structure is None:
                     support["moran_z"] = None
                     support["moran_unavailable_reason"] = (
-                        f"residuals are below {floor_basis}, so a spatial-autocorrelation "
+                        "the residual field lies entirely inside the vertex precision floor "
+                        f"({precision_floor:.6g}), so its structure is the coordinates' own "
+                        "quantization lattice rather than the surface's"
+                        if below_precision
+                        else f"residuals are below {floor_basis}, so a spatial-autocorrelation "
                         "test has no power here"
                         if fit.rms_residual <= power_floor
                         else "too few connected inliers for the variance formula to mean anything"
@@ -2591,7 +2629,15 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                             "RMS."
                         )
                 support["n_eff"] = n_eff
-                if accepted:
+                if accepted and below_precision:
+                    # The directional test is the other half of the same gate
+                    # and reads the same residuals, so the same precondition
+                    # binds it: a per-bin mean of two microns is a lattice, and
+                    # naming the coordinate it runs along would name the
+                    # coordinate the *file format* quantizes along.
+                    support["directional_structure"] = None
+                    support["directional_coordinate"] = None
+                elif accepted:
                     structured, coordinate, magnitude = _directional_bins(
                         fit,
                         points,
@@ -2615,7 +2661,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     elif structure is not None:
                         _passed(checked, "residual-structure")
 
-            if accepted and fit.rms_residual <= noise_floor:
+            if accepted and (fit.rms_residual <= noise_floor or below_precision):
                 # The same rule the Moran block above already states, applied to
                 # its sibling: a test has no power against residuals an order of
                 # magnitude inside the measurement noise. Held-out residuals of
@@ -2625,8 +2671,12 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # as unavailable, and deliberately *not* appended to `checked`,
                 # because the check did not run.
                 support["heldout_unavailable_reason"] = (
-                    "residuals are below the measurement noise, so a held-out comparison has no "
-                    "power here"
+                    "the residual field lies entirely inside the vertex precision floor "
+                    f"({precision_floor:.6g}), so a held-out comparison would compare two "
+                    "quantization patterns"
+                    if below_precision
+                    else "residuals are below the measurement noise, so a held-out comparison has "
+                    "no power here"
                 )
             elif accepted:
                 # Unlike the two structure tests above, this one is *not* skipped

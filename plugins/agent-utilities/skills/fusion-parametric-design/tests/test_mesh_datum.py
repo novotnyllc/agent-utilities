@@ -6,6 +6,7 @@ import unittest
 
 from fusion_design.mesh_datum import (
     DATUM_REFUSALS,
+    FRAME_CHOICES,
     REFUSAL_ALTERNATIVES,
     ReconstructionRefused,
     derive_datum_frame,
@@ -17,6 +18,30 @@ import fixtures_fit_record as fx
 
 
 FRAME_ARGS = dict(frame_margin=0.1, angle_tolerance_deg=2.0, offset_tolerance=0.5)
+
+
+def _walled_lid(x_walls, y_walls):
+    """A lid: one boss on +z, plus wall planes facing +x and +y.
+
+    Shaped after POD-A1-LID, whose primary axis was never in doubt and whose X
+    axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a margin of
+    0.0063 -- while the stacks those two walls belong to measured 1008.4 mm2
+    against 189.6 mm2.
+    """
+    regions = [
+        fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+        fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
+    ]
+    for index, area in enumerate(x_walls):
+        regions.append(fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area))
+    for index, area in enumerate(y_walls):
+        regions.append(fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area))
+    return fx.record(regions)
+
+
+def _tied_lid():
+    """The square lid: two wall stacks of identical area, a dead tie on X."""
+    return _walled_lid([95.4, 95.4], [95.4, 95.4])
 
 
 def _regions(record):
@@ -196,6 +221,18 @@ class UncertaintyTests(unittest.TestCase):
         for reason in DATUM_REFUSALS:
             self.assertTrue(REFUSAL_ALTERNATIVES.get(reason, "").strip(), reason)
 
+    def test_every_frame_choice_a_frame_can_carry_is_in_the_closed_set(self) -> None:
+        # `frame_choice` is read to decide whether the datum is a measurement or
+        # a convention, so a token outside the vocabulary would be read as
+        # neither. Both paths are exercised here rather than the set restated.
+        seen = set()
+        for record in (fx.box_record(), _tied_lid()):
+            evidence = derive_datum_frame(_regions(record), **FRAME_ARGS).evidence
+            seen.add(evidence["frame_choice"])
+            for axis in ("primary", "secondary"):
+                seen.add(evidence[f"{axis}_choice"]["basis"])
+        self.assertEqual(FRAME_CHOICES, seen)
+
 
 class DatumFrameTests(unittest.TestCase):
     def test_a_cylinder_beats_planes_and_sets_the_primary_axis(self) -> None:
@@ -236,48 +273,71 @@ class DatumFrameTests(unittest.TestCase):
             rng.shuffle(shuffled["regions"])
             self.assertEqual(derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference)
 
-    def test_two_equally_good_perpendicular_cylinders_refuse_rather_than_pick(self) -> None:
-        record = fx.record(
+    def _crossed_cylinders(self, uncertainty=None):
+        """Two cylinders of identical score at right angles: a dead score tie."""
+        return fx.record(
             [
-                fx.cylinder("a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
-                fx.cylinder("b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0),
+                fx.cylinder(
+                    "a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0, uncertainty=uncertainty
+                ),
+                fx.cylinder(
+                    "b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0, uncertainty=uncertainty
+                ),
                 fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
             ]
+        )
+
+    def test_two_equally_good_perpendicular_cylinders_pick_canonically(self) -> None:
+        # The scores are equal to the last bit, so no evidence separates them.
+        # A reconstruction does not need the designer's axis, only a
+        # reproducible one -- so the tie is settled on the quantized canonical
+        # directions and *labelled* as the convention it is.
+        frame = derive_datum_frame(_regions(self._crossed_cylinders()), **FRAME_ARGS)
+        choice = frame.evidence["primary_choice"]
+        self.assertEqual(frame.evidence["frame_choice"], "arbitrary-canonical")
+        self.assertEqual(choice["basis"], "arbitrary-canonical")
+        self.assertEqual(frame.evidence["primary_margin"], 0.0)
+        self.assertEqual(choice["quantization_grid_deg"], 2.0)
+        self.assertEqual(2, len(choice["tied"]))
+        self.assertEqual({24.0}, {entry["score"] for entry in choice["tied"]})  # radius 3 x span 8
+        # (0,0,1) and (1,0,0) quantize to (0,0,29) and (29,0,0); the smaller
+        # cell is the first, so Z is the +x cylinder's axis.
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        self.assertEqual([0, 0, 29], choice["canonical_cell"])
+
+    def test_a_tie_the_uncertainties_cannot_resolve_still_refuses(self) -> None:
+        # The boundary the refusal still protects: directions known only to a
+        # sigma that reaches the quantization grid could quantize either way on
+        # a re-tessellation, so no canonical rule over them is reproducible.
+        record = self._crossed_cylinders(
+            uncertainty=dict(fx.CYLINDER_SIGMAS, axis_direction_deg=1.0)
         )
         with self.assertRaises(ReconstructionRefused) as caught:
             derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
         self.assertEqual(caught.exception.detail["margin"], 0.0)
+        self.assertEqual(caught.exception.detail["quantization_grid_deg"], 2.0)
         self.assertIn("winner", caught.exception.detail)
         self.assertIn("runner_up", caught.exception.detail)
+        self.assertEqual(2, len(caught.exception.detail["tied"]))
 
-    def _walled_lid(self, x_walls, y_walls):
-        """A lid: one boss on +z, plus wall planes facing +x and +y.
-
-        Shaped after POD-A1-LID, whose primary axis was never in doubt and whose
-        X axis was decided between two walls of 95.40 mm2 and 94.80 mm2 -- a
-        margin of 0.0063 -- while the stacks those two walls belong to measured
-        1008.4 mm2 against 189.6 mm2.
-        """
-        regions = [
-            fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
-            fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 900.0),
-        ]
-        for index, area in enumerate(x_walls):
-            regions.append(
-                fx.plane(f"x{index}", (1.0, 0.0, 0.0), (float(index), 0.0, 4.0), area)
+    def test_the_canonical_choice_is_identical_under_shuffled_region_order(self) -> None:
+        record = self._crossed_cylinders()
+        reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
+        self.assertEqual(reference["evidence"]["frame_choice"], "arbitrary-canonical")
+        rng = random.Random(20260819)
+        for _ in range(12):
+            shuffled = copy.deepcopy(record)
+            rng.shuffle(shuffled["regions"])
+            self.assertEqual(
+                derive_datum_frame(_regions(shuffled), **FRAME_ARGS).to_dict(), reference
             )
-        for index, area in enumerate(y_walls):
-            regions.append(
-                fx.plane(f"y{index}", (0.0, 1.0, 0.0), (0.0, float(index), 4.0), area)
-            )
-        return fx.record(regions)
 
     def test_parallel_walls_pool_their_area_so_the_bigger_stack_sets_x(self) -> None:
         # Face for face the contest is a coin toss: 95.4 against 94.8. Stack for
         # stack it is not close, and the stack is the quantity that survives a
         # re-tessellation, which is what the margin is protecting.
-        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        record = _walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
         frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
         self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
@@ -286,10 +346,29 @@ class DatumFrameTests(unittest.TestCase):
         # (381.6 - 189.6) / 381.6, against a face-for-face margin of 0.0063.
         self.assertAlmostEqual(0.50314465, frame.evidence["secondary_margin"], places=6)
 
-    def test_a_lid_whose_wall_stacks_really_do_tie_still_refuses(self) -> None:
-        # The refusal is a feature. Pooling parallel evidence must not turn a
-        # square box into a decided one.
-        record = self._walled_lid([95.4, 95.4], [95.4, 95.4])
+    def test_a_lid_whose_wall_stacks_really_do_tie_is_settled_canonically(self) -> None:
+        # Pooling parallel evidence must not turn a square box into a *decided*
+        # one -- and it does not: the tie is recorded as a tie, and what changes
+        # is that the frame is still built, from a stated convention.
+        record = _tied_lid()
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        choice = frame.evidence["secondary_choice"]
+        self.assertEqual(frame.evidence["frame_choice"], "arbitrary-canonical")
+        self.assertEqual(choice["axis"], "secondary")
+        self.assertEqual(choice["basis"], "arbitrary-canonical")
+        self.assertEqual(frame.evidence["secondary_margin"], 0.0)
+        self.assertEqual(frame.evidence["primary_choice"]["basis"], "evidence")
+        self.assertEqual(2, len(choice["tied"]))
+        # The primary axis is measured; only the rotation about it is convention.
+        self.assertEqual(frame.z_axis, (0.0, 0.0, 1.0))
+        # (0,1,0) quantizes to (0,29,0) against the +x stack's (29,0,0).
+        self.assertEqual(frame.x_axis, (0.0, 1.0, 0.0))
+
+    def test_a_tied_lid_whose_walls_are_too_uncertain_still_refuses(self) -> None:
+        record = _tied_lid()
+        for region in record["regions"]:
+            if region["fit"]["kind"] == "plane":
+                region["fit"]["uncertainty"]["normal_deg"] = 1.5
         with self.assertRaises(ReconstructionRefused) as caught:
             derive_datum_frame(_regions(record), **FRAME_ARGS)
         self.assertEqual(caught.exception.reason, "frame-ambiguous")
@@ -297,7 +376,7 @@ class DatumFrameTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["margin"], 0.0)
 
     def test_pooling_leaves_the_frame_identical_under_shuffled_region_order(self) -> None:
-        record = self._walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
+        record = _walled_lid([94.8, 47.4, 47.4], [95.4, 95.4, 95.4, 95.4])
         reference = derive_datum_frame(_regions(record), **FRAME_ARGS).to_dict()
         rng = random.Random(20260819)
         for _ in range(12):

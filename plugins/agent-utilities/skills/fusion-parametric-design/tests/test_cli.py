@@ -63,10 +63,19 @@ class PlanReconstructionCliTests(unittest.TestCase):
     def test_a_refusal_prints_its_named_reason_and_alternative_and_exits_two(self) -> None:
         import fixtures_fit_record as fx
 
+        # Two cylinders of identical score at right angles, whose axis directions
+        # are measured only to a degree against a two-degree quantization grid.
+        # The score tie alone is settled canonically now; what still refuses is a
+        # tie the *directions* cannot break reproducibly either.
+        loose = dict(fx.CYLINDER_SIGMAS, axis_direction_deg=1.0)
         record = fx.record(
             [
-                fx.cylinder("a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
-                fx.cylinder("b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0),
+                fx.cylinder(
+                    "a", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0, uncertainty=loose
+                ),
+                fx.cylinder(
+                    "b", (1.0, 0.0, 0.0), (4.0, 0.0, 0.0), 3.0, 150.0, 8.0, uncertainty=loose
+                ),
                 fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
             ]
         )

@@ -36,11 +36,14 @@ repository alone, and why `tests/test_reconstruction_benchmark.py` can assert it
 ## The result
 
 **No part in this corpus reaches a built reconstruction, and each stops at a
-different named gate.** That is the finding, not a preamble to one.
+named gate.** That is the finding, not a preamble to one. Two of the four now
+stop at the same one — a section that closes more than one loop — which is what
+the corpus looks like once the datum frame stops being the first thing in the
+way.
 
 | part | triangles | face groups | regime | accepted fits | fit coverage | stops at | gate |
 | --- | ---: | ---: | --- | --- | ---: | --- | --- |
-| honeycomb organiser (STL) | 556 | 121 | tessellation | 39 — 39 planes | 41.6% | plan | `frame-ambiguous` |
+| honeycomb organiser (STL) | 556 | 121 | tessellation | 39 — 39 planes | 41.6% | emit-rebuild | `profile-ambiguous` |
 | unicorn horn (3MF) | 88,334 | 620 | scan | 9 — 6 planes, 3 cylinders | 4.7% | plan | `frame-x-underdetermined` |
 | tropical leaves (STL) | 86,394 | 2,299 | scan | 31 — 30 planes, 1 sphere | 18.3% | emit-rebuild | `profile-ambiguous` |
 | desktop organiser (3MF) | 6,502 | 790 | scan | 38 — 21 planes, 17 spheres | 27.9% | — | emitted; 1 `sketch-extrude`, 27.6% planned |
@@ -107,11 +110,31 @@ The same defect was then found on parts nobody had suspected: **21 M3 nut pocket
 across five of the eleven production STLs** (5.700 mm across flats, 12 facets
 each) were being planned as 6.58 mm round holes.
 
-The planner still refuses, with `frame-ambiguous`: the three wall directions
-carry 21,714 mm² and 19,572 mm², a margin of 0.0986 against a declared
+The planner used to refuse here, with `frame-ambiguous`: the three wall
+directions carry 21,714 mm² and 19,572 mm², a margin of 0.0986 against a declared
 `frame_margin` of 0.1. That one is structural rather than a threshold — a
 hexagonal part has no distinguishable secondary datum, and a smaller margin would
 pick a winner the geometry does not prefer.
+
+It is no longer refused, because a reconstruction does not need the designer's
+preferred frame; it needs a *deterministic* one, and every archetype in the
+program is expressed against the datum. When the scores tie, the axis is settled
+on the tied candidates' **canonical directions quantized to the declared
+`angle_tolerance_deg` grid**, smallest cell first — the directions being what a
+re-tessellation does not move, unlike the two near-equal areas. The program says
+which happened: `datum.evidence.frame_choice` is `arbitrary-canonical` here
+against `evidence` on a part whose frame was measured, and the tied candidates,
+their scores, the margin, the grid and the cell each quantized to are all
+recorded beside it. The refusal survives for the case it still protects — a tie
+whose candidates carry direction uncertainty reaching that grid, where the choice
+really could flip on a re-tessellation. The honeycomb's three walls carry
+1.2e-06° and less, against a 2° grid.
+
+The part then plans **one `sketch-extrude`, 33.5% of the area, 23 regions
+unreconstructed** (17 planes no archetype covers, 6 hex pockets refused
+`cylinder-normals-discrete`) and refuses at *emission* instead:
+`profile-ambiguous`, because the section at station 51 mm closes eleven loops and
+a single-loop profile cannot describe a honeycomb.
 
 ### The unicorn horn, which the F3D grades
 

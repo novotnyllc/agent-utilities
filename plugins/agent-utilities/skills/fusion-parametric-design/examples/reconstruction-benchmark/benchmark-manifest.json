@@ -219,7 +219,8 @@
           "declared_frame_margin": 0.1,
           "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
           "margin": 0.09864400512321356,
-          "refusal": "frame-ambiguous"
+          "refusal": "frame-ambiguous",
+          "superseded": "This is what the planner did at the time of that diagnostic. The frame is no longer refused on a tie: see outcome.then_planner below."
         },
         "worst_plane_normal_deviation_deg": 0.3801
       },
@@ -231,11 +232,12 @@
         "regions_accepted": 39,
         "spurious_cylinders": 0,
         "step_families_hit": 4,
-        "then_planner_refuses": {
+        "then_planner": {
           "declared_frame_margin": 0.1,
-          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. This one is structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
-          "margin": 0.09864400512321356,
-          "refusal": "frame-ambiguous"
+          "diagnosis": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable by evidence. It is structural rather than a threshold, which is why a smaller frame_margin was never the answer: the axis is now settled by the canonical quantized-direction rule and recorded as arbitrary-canonical, and the part plans one sketch-extrude before emission refuses profile-ambiguous on its eleven-loop section.",
+          "frame_choice": "arbitrary-canonical",
+          "refusal": null,
+          "secondary_margin": 0.09864400512321356
         },
         "worst_plane_normal_deviation_deg": 0.3801
       },
@@ -367,13 +369,23 @@
         "vertex_precision_floor": 2.9922861311151757e-05
       },
       "plan": {
-        "margin": 0.09864400512321356,
-        "message": "the three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres, so no secondary datum is distinguishable. Structural, not a threshold: a smaller frame_margin would pick a winner the geometry does not prefer.",
-        "refusal": "frame-ambiguous"
+        "archetypes": {
+          "sketch-extrude": 1
+        },
+        "covered_area_fraction": 0.33471078106478247,
+        "frame_choice": "arbitrary-canonical",
+        "note": "The three wall directions of a hexagonal part are 120 degrees apart and carry 21714 and 19572 square millimetres: a margin of 0.0986 against a declared 0.1, which is the part's own symmetry rather than a threshold set too tight. The secondary axis is therefore settled canonically -- the tied candidates' directions quantized to the declared 2-degree grid, lexicographically smallest cell taken -- and the frame is labelled arbitrary-canonical so no reader mistakes the convention for a measurement. Every archetype is expressed against that datum, so the rebuild is correct whichever of the three walls it names.",
+        "refusal": null,
+        "secondary_margin": 0.09864400512321356,
+        "unreconstructed": 23
+      },
+      "rebuild_emission": {
+        "message": "the section at station 51 mm closed 11 loops for sketch-extrude-004e58281151, of which 0 are bores this program cuts; a single-loop profile cannot describe what is left and picking one would discard the rest without saying so.",
+        "refusal": "profile-ambiguous"
       },
       "re_measured": "Unchanged, and asserted so: this is the one part in the corpus the regime detector calls an exact tessellation, where the form-error estimator is recorded and never taken, and where the power floor already skipped both structure gates on all 39 accepted planes.",
       "regime": "tessellation",
-      "stage_reached": "plan",
+      "stage_reached": "emit-rebuild",
       "total_area_mm2": 257165.51365268845,
       "triangles": 556
     },
