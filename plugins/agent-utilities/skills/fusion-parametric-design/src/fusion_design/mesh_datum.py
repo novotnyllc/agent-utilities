@@ -929,6 +929,66 @@ def _decide_axis(
         "margin": margin,
         "frame_margin": frame_margin,
     }
+    # Whether a candidate is *in* that set is itself an angular measurement
+    # against `angle_tolerance_deg`, and it decides the outcome. A candidate
+    # 1.99 deg from the winner is read as a re-measurement of the same axis and
+    # excluded; the same candidate at 2.01 deg joins the set, and its cell can
+    # be lexicographically smaller -- selecting a different X on a difference
+    # smaller than the sigmas both directions state. The cell test below asks
+    # whether a tied candidate's *direction* is stable; this asks whether its
+    # membership is, which is the same question one step earlier.
+    #
+    # ponytail: only a candidate whose separation is provably near the boundary
+    # refuses. One whose direction states no sigma is left to the cell test,
+    # which refuses if it reaches the tie set -- upgrade to refusing here too
+    # if a record ever ships a scored candidate with no direction sigma.
+    for candidate in candidates:
+        if candidate is winner:
+            continue
+        if _relative_margin(winner.score, candidate.score) >= frame_margin:
+            continue
+        if (
+            sigma_multiple is None
+            or candidate.direction_sigma_deg is None
+            or winner.direction_sigma_deg is None
+        ):
+            continue
+        bound = (
+            sigma_multiple
+            * math.hypot(candidate.direction_sigma_deg, winner.direction_sigma_deg)
+            + candidate.direction_spread_deg
+            + winner.direction_spread_deg
+        )
+        separation = _angle_deg(candidate.direction, winner.direction)
+        if separation > angle_tolerance_deg:
+            # In the tie set, where the cell tests below already refuse
+            # whatever they cannot separate reproducibly.
+            continue
+        if angle_tolerance_deg - separation > bound:
+            continue
+        raise _refuse(
+            "frame-ambiguous",
+            f"the {axis}-axis winner is separated from candidate "
+            f"{candidate.region_hash[:12]} by less than the declared margin {frame_margin:g} in "
+            "score, and the two are not reproducibly the same axis or different ones: candidate "
+            f"{candidate.region_hash[:12]} sits {separation:.4g} deg from the winner, within "
+            f"{bound:.4g} deg of the {angle_tolerance_deg:g} deg line that decides whether it "
+            "is the same axis re-measured or a rival in the tie, so a re-tessellation can move "
+            "it across and change the axis this rule selects.",
+            {
+                "axis": axis,
+                "winner": winner.to_dict(),
+                "runner_up": None if rival is None else rival.to_dict(),
+                "margin": margin,
+                "frame_margin": frame_margin,
+                "quantization_grid_deg": angle_tolerance_deg,
+                "unstable_membership": {
+                    "candidate": candidate.to_dict(),
+                    "separation_deg": separation,
+                    "bound_deg": bound,
+                },
+            },
+        )
     if margin is None or margin >= frame_margin:
         return winner, record
 

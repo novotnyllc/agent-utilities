@@ -351,6 +351,60 @@ class DatumFrameTests(unittest.TestCase):
         cells = [entry["canonical_cell"] for entry in caught.exception.detail["tied"]]
         self.assertEqual([[0, 0, 29], [0, 0, 29]], cells)
 
+    def test_a_candidate_on_the_same_axis_line_refuses_rather_than_selecting(self) -> None:
+        """Whether a candidate is *in* the tie set is a measurement too.
+
+        `angle_tolerance_deg` decides whether a second candidate is this axis
+        re-measured or a rival in the tie, and the two readings do not give the
+        same answer: excluded, the winner is settled by evidence; included, the
+        canonical rule can select the other one. These two cylinders have equal
+        scores and state 0.05 deg of direction sigma each, so at three sigma the
+        line is worth 0.21 deg -- and anywhere inside that, which reading
+        applies is not reproducible.
+        """
+
+        def refusal(separation_deg: float):
+            tilt = math.tan(math.radians(separation_deg / 2.0)) / math.sqrt(2.0)
+            norm = math.sqrt(1.0 + 2.0 * tilt * tilt)
+            record = fx.record(
+                [
+                    fx.cylinder(
+                        "a",
+                        (tilt / norm, tilt / norm, 1.0 / norm),
+                        (0.0, 0.0, 4.0),
+                        3.0,
+                        150.0,
+                        8.0,
+                    ),
+                    fx.cylinder(
+                        "b",
+                        (-tilt / norm, -tilt / norm, 1.0 / norm),
+                        (4.0, 0.0, 0.0),
+                        3.0,
+                        150.0,
+                        8.0,
+                    ),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
+            )
+            try:
+                derive_datum_frame(_regions(record), **FRAME_ARGS)
+            except ReconstructionRefused as caught:
+                return caught
+            return None
+
+        # Clear of the line by more than its own bound: the two are the same
+        # axis measured twice, and the frame is settled on the evidence.
+        self.assertIsNone(refusal(1.5))
+        # Inside the bound: which reading applies is not reproducible.
+        caught = refusal(1.99)
+        self.assertIsNotNone(caught)
+        self.assertEqual(caught.reason, "frame-ambiguous")
+        unstable = caught.detail["unstable_membership"]
+        self.assertAlmostEqual(1.99, unstable["separation_deg"], places=6)
+        self.assertAlmostEqual(3.0 * math.hypot(0.05, 0.05), unstable["bound_deg"], places=12)
+        self.assertIn("same axis re-measured or a rival", caught.message)
+
     def test_the_secondary_sigma_carries_the_primary_axis_uncertainty_too(self) -> None:
         # A secondary direction is a plane normal orthogonalised against the
         # measured primary axis, so the plane's own sigma is a lower bound on
