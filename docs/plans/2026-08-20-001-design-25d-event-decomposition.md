@@ -771,17 +771,22 @@ its **track** predecessor, not "the previous slab" globally. §C's dependency
 rule ("each slab depends on its predecessor — join needs a body") is
 superseded accordingly: dependencies follow track edges.
 
-The slab record carries the graph into emission: `track_id`,
+The slab record carries the graph into emission: `track_id` and
 `track_predecessors` (a list serializing **every** incoming edge — empty at
 `birth`, one element for `continuation` and for each `branch` successor,
-one per merging track at `merge`) and `track_state` (§A.1's closed set)
-join the schema, and §C's "slab 0 is `new-body`, every later slab `join`" is
-superseded — the emitted operation derives from track state: `birth` →
-`new-body`; `continuation` → `join` into the track's body; `merge` → `join`
-of **all** evidenced-contact predecessor bodies named in
-`track_predecessors`, which thereafter share one track body; `branch` →
-each successor keeps joining the shared body; `death` ends the track's
-dependencies; `temporary-disconnection` → the track **suspends**: no
+one per merging track at `merge`) join the schema. §A.1's track states are
+**transition facts recorded on the event records at their stations**
+(§A.2's `topology-changing-event`), not a single per-slab enum — a
+one-slab protrusion is born at its lower event and dies at its upper event
+and both facts survive, each on its own event; a `temporary-disconnection`
+likewise lives on the event records spanning the gap, where no slab exists
+to carry it. §C's "slab 0 is `new-body`, every later slab `join`" is
+superseded — the emitted operation derives from the slab's incoming edges:
+no predecessor → `new-body`; one predecessor → `join` into the track's
+body; several predecessors (a `merge`) → `join` of **all** evidenced-
+contact predecessor bodies named in `track_predecessors`, which thereafter
+share one track body; a `death` transition ends the track's dependencies at
+its event. Across a `temporary-disconnection` the track **suspends**: no
 operation is emitted for the gap stations, the track's body identity
 persists, and the resuming slab depends on the track's last emitted slab
 and joins the track body only when contact is evidenced at the resumption

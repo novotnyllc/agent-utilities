@@ -849,11 +849,15 @@ blocked PRs name their gate.
   assignment coverage ≥ 0.80; every residual island itemized; **the
   detection census published** (numerator side; the C denominator comes
   from the independent human-reviewed evident-things table, per R4 as
-  amended). The **physical C score** is computed separately and
-  status-aware: only detections carrying `physical-thing-evidenced` count,
-  each matched one-to-one to an annotation in the table (unmatched
-  detections and unmatched annotations both enumerated) — a run may pass
-  the geometric floor while headline C is honestly 0. 11-part corpus:
+  amended). The status-aware match census — `physical-thing-evidenced`
+  detections matched one-to-one to annotations, unmatched entries on both
+  sides enumerated — is published as a **detection metric** (recall against
+  the table), never as C: §1.4's numerator counts *emitted* Fusion
+  components with placement transforms, and this stage emits none, so C-4
+  moves no C value at any claim level; physical C is computed only after
+  matched detections have been delivered as placed components (C2, PR
+  C-5). A run may pass the geometric floor while headline C stays honestly
+  0. 11-part corpus:
   geometry byte-identical; census lines additive (`things: 0,
   decomposition-not-triggered` + witness numbers).
 - **Risk:** δ mis-estimation (A4 — visible as band-area growth, a census
@@ -869,12 +873,16 @@ blocked PRs name their gate.
   sub-mesh extractor is C-4's, per §4.1; this stage consumes the sub-meshes
   and their recorded digests rather than producing them.)
 - **Size:** ~150–250 added.
-- **Measured claim (Dig-Next-2):** the C cell's **raw counts and
-  `C-geometric`** move 0 → 1 base + ≥ 8 placed occurrences (§7 C2 row) —
-  these are C1-licensed geometric subobjects, so headline (physical) C
-  stays 0 or `unmeasured` until `physical-thing-evidenced` detections are
-  matched to the reviewed evident-things table (003 §1.4; C-4 as amended),
-  and this run claims no positive physical score; every component's mesh
+- **Measured claim (Dig-Next-2):** the C cell's **raw counts** move 0 → 1
+  base + ≥ 8 placed occurrences (§7 C2 row) — C1-licensed geometric
+  subobjects, delivered. `C-geometric` stays `unmeasured` unless an
+  independent reviewed table of evident *geometric subobjects* is added
+  (003 §1.4 — the physical evident-things table is the wrong denominator
+  for it, and the detector's own census would be circular), and headline
+  (physical) C stays 0 or `unmeasured` until `physical-thing-evidenced`
+  detections have been emitted as placed components and matched to the
+  reviewed evident-things table (003 §1.4; C-4 as amended) — this run
+  claims no positive C score at any claim level; every component's mesh
   slice re-hashes to its
   recorded digest; occurrence-move check passes on ≥ 1 real thing; H: every
   non-thing square millimetre named (residual + below-support + interface
