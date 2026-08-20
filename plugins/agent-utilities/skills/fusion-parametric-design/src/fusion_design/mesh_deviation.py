@@ -31,6 +31,7 @@ DEVIATION_FAILURES = frozenset(
         "sign-convention-unestablished",
         "invented-material",
         "invented-material-unclassified",
+        "deviation-frames-differ",
     }
 )
 
@@ -194,14 +195,56 @@ VERDICT_NOTE = (
 
 def _target_component(design, component_path):
     if not component_path:
-        return design.rootComponent, None
+        return design.rootComponent, None, None
     _, occurrence_map, duplicate_semantic_paths = _root_context_occurrence_map(design.rootComponent)
     if component_path in duplicate_semantic_paths:
-        return None, "duplicate-semantic-path"
+        return None, "duplicate-semantic-path", None
     occurrence = occurrence_map.get(component_path)
     if occurrence is None:
-        return None, "component-path-missing"
-    return occurrence.component, None
+        return None, "component-path-missing", None
+    return occurrence.component, None, occurrence
+
+
+_IDENTITY_MATRIX = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+)
+
+
+def _non_identity_transform(holder, attribute):
+    """``holder.<attribute>`` as a flat matrix when it is not the identity.
+
+    Both sets of coordinates this verdict compares are read in their own body's
+    local frame -- ``PolygonMesh.nodeCoordinates`` and the tessellation of the
+    reconstruction -- and ``BRepBody.pointContainment`` takes points in the
+    body's own frame too. An occurrence transform or a mesh body's own transform
+    puts those frames somewhere else, and nothing here composes them: two
+    occurrences with identical local geometry and different assembly positions
+    would compare as a perfect match, and two physically aligned bodies in
+    different local frames would fail. So a transform that is not the identity
+    is *detected* and refused rather than silently ignored.
+    """
+    matrix = getattr(holder, attribute, None)
+    if matrix is None:
+        return None
+    values = getattr(matrix, "asArray", None)
+    if values is None:
+        return None
+    try:
+        flat = [float(value) for value in values()]
+    except Exception:
+        return None
+    if len(flat) != 16:
+        return flat
+    # A tenth of a micron on the translation terms and 1e-9 on the rest: this
+    # is guarding float noise in a matrix Fusion built, not admitting a shift.
+    for index, (measured, expected) in enumerate(zip(flat, _IDENTITY_MATRIX)):
+        tolerance = 1e-05 if index in (3, 7, 11) else 1e-09
+        if abs(measured - expected) > tolerance:
+            return flat
+    return None
 
 
 def _named_body(component, body_name):
@@ -582,13 +625,19 @@ def _tessellate(body, max_side_mm, surface_tolerance_mm, record):
     return vertices, triangles
 
 
-def _largest_triangle(vertices, triangles, epsilon_mm):
-    """The biggest tessellation facet whose inradius clears the probe step.
+def _largest_triangle(vertices, triangles):
+    """The biggest non-degenerate tessellation facet, with its inradius.
 
-    The straddle probe steps epsilon off a facet's centroid, so the facet has to
-    be wide enough that no neighbouring facet is the nearer boundary at that
-    distance; the inradius is exactly that width, and requiring twice epsilon
-    leaves the answer unambiguous.
+    The straddle probe steps off this facet's centroid, and the inradius is how
+    far it can step before a neighbouring facet becomes the nearer boundary. The
+    step is chosen from that inradius by the caller rather than from the
+    declared threshold: the probe proves which enum means *inside*, which is a
+    question about sign and not about magnitude. Tying it to the threshold made
+    verification impossible on exactly the captures this is for -- ``_tessellate``
+    caps each side at the source's median edge, a triangle's inradius is at most
+    about 0.289 of its longest side, so demanding twice the threshold refused
+    every facet as soon as the declared threshold reached about 14.5% of the
+    median edge, and every such run failed `sign-convention-unestablished`.
     """
     best = None
     for offset in range(0, len(triangles) - 2, 3):
@@ -617,7 +666,7 @@ def _largest_triangle(vertices, triangles, epsilon_mm):
         if perimeter <= 0.0:
             continue
         inradius = 2.0 * area / perimeter
-        if inradius <= 2.0 * epsilon_mm:
+        if inradius <= 0.0:
             continue
         if best is None or area > best[0]:
             centroid = [
@@ -654,7 +703,6 @@ def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, 
     # so the tolerance is only guarding float noise, not admitting a wrong answer.
     evidence = {
         "epsilon_mm": epsilon_mm,
-        "tolerance_mm": max(0.01 * epsilon_mm, 1e-6),
         "convention": CONTAINMENT_CONVENTION,
     }
     box = body.boundingBox
@@ -669,16 +717,23 @@ def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, 
     evidence["far_point_mm"] = [far.x * 10.0, far.y * 10.0, far.z * 10.0]
     evidence["far_point_reads_outside"] = body.pointContainment(far) == outside_enum
     evidence["on_boundary_enum_present"] = on_enum is not None
-    facet = _largest_triangle(vertices, triangles, epsilon_mm)
+    facet = _largest_triangle(vertices, triangles)
     if facet is None:
         evidence["rejected"] = (
-            "No tessellation facet is wide enough to step " + str(epsilon_mm)
-            + " mm off without another facet becoming the nearer boundary, so the probe has "
-            "no unambiguous answer to check against."
+            "The reconstruction's tessellation carries no facet with a positive inradius, so the "
+            "probe has nothing to straddle."
         )
         return False, evidence
     _, centroid, normal, inradius = facet
-    step = epsilon_mm / 10.0
+    # Half the inradius, and never more than the declared threshold: far enough
+    # inside the facet that no neighbour is the nearer boundary, and no further
+    # out than the distance the verdict itself cares about. The probe is a
+    # question about *sign*, so this is a facet-derived step rather than a
+    # threshold-sized one -- see `_largest_triangle`.
+    step_mm = min(epsilon_mm, inradius / 2.0)
+    evidence["probe_step_mm"] = step_mm
+    evidence["tolerance_mm"] = max(0.01 * step_mm, 1e-6)
+    step = step_mm / 10.0
     forward = adsk.core.Point3D.create(
         centroid[0] / 10.0 + normal[0] * step,
         centroid[1] / 10.0 + normal[1] * step,
@@ -725,10 +780,10 @@ def _verify_containment_convention(body, grid, vertices, triangles, epsilon_mm, 
         probe["rejected"] = "the point-to-triangle measurement returned nothing"
         return False, evidence
     if (
-        abs(inside_distance - epsilon_mm) > tolerance
-        or abs(outside_distance - epsilon_mm) > tolerance
+        abs(inside_distance - step_mm) > tolerance
+        or abs(outside_distance - step_mm) > tolerance
     ):
-        probe["rejected"] = "a point stepped epsilon off the boundary did not measure epsilon"
+        probe["rejected"] = "a point stepped off the boundary did not measure that step back to it"
         return False, evidence
     if not evidence["far_point_reads_outside"]:
         probe["rejected"] = "a point far beyond the bounding box did not read outside"
@@ -766,8 +821,10 @@ def run(context):
             "verdict_note": VERDICT_NOTE,
         }
 
-        source_component, source_error = _target_component(design, DEVIATION_SPECS["source"]["component_path"])
-        recon_component, recon_error = _target_component(
+        source_component, source_error, source_occurrence = _target_component(
+            design, DEVIATION_SPECS["source"]["component_path"]
+        )
+        recon_component, recon_error, recon_occurrence = _target_component(
             design, DEVIATION_SPECS["reconstruction"]["component_path"]
         )
         if source_component is None or recon_component is None:
@@ -790,6 +847,35 @@ def run(context):
             report_attempted = True
             _emit(report)
             raise RuntimeError("Deviation verdict failed closed: body-not-found")
+
+        # Both sides are read in their own body's local frame and the
+        # containment query takes points in the reconstruction's. Nothing here
+        # composes an occurrence transform or a mesh body's own transform, so a
+        # non-identity one is named and refused rather than quietly measured
+        # across two unrelated coordinate systems.
+        frames = {
+            "source_occurrence_transform": _non_identity_transform(source_occurrence, "transform2"),
+            "source_body_transform": _non_identity_transform(source_body, "transform"),
+            "reconstruction_occurrence_transform": _non_identity_transform(
+                recon_occurrence, "transform2"
+            ),
+            "reconstruction_body_transform": _non_identity_transform(recon_body, "transform"),
+        }
+        if any(value is not None for value in frames.values()):
+            report["failures"] = ["deviation-frames-differ"]
+            report["frames"] = frames
+            report["unsupported"] = (
+                "One of the two bindings resolves through a transform this transaction does not "
+                "compose: node coordinates, the reconstruction's tessellation and "
+                "BRepBody.pointContainment are each read in their own body's local frame, so a "
+                "non-identity occurrence or body transform would have them compared across "
+                "unrelated coordinate systems -- two identical parts in different assembly "
+                "positions reading as a perfect match. The matrices are recorded above. Bind both "
+                "bodies in a frame where they are already coincident, or ground the occurrence."
+            )
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError("Deviation verdict failed closed: deviation-frames-differ")
 
         # Every capability below is hard. A missing one that read as a default
         # would turn "we could not look" into "we looked and found nothing", and
@@ -1006,16 +1092,36 @@ def run(context):
         # a B-Rep reconstruction it is structurally unavailable, and the report
         # says so by name rather than leaving a reader to wonder.
         recon_polygon_mesh = _polygon_mesh(recon_body)
-        if recon_polygon_mesh is None or not hasattr(source_mesh, "compareWith"):
+        source_can_compare = hasattr(source_mesh, "compareWith")
+        if recon_polygon_mesh is None or not source_can_compare:
             report["corroboration"] = {
                 "api": "PolygonMesh.compareWith",
                 "available": False,
-                "reason": (
-                    "compareWith is defined on PolygonMesh. A BRepBody exposes only "
-                    "meshManager.displayMeshes.bestMesh, which is a TriangleMesh and carries no "
-                    "compareWith, so the preview comparison cannot grade a B-Rep reconstruction. The "
-                    "verdict above does not depend on it."
+                # Two different causes reach this branch and they are not the
+                # same news: one is structural and permanent, the other is this
+                # Fusion. Blaming the reconstruction for a member the source
+                # mesh does not expose would send a reader to the wrong place.
+                "cause": (
+                    "reconstruction-is-not-a-polygon-mesh"
+                    if recon_polygon_mesh is None
+                    else "source-polygon-mesh-has-no-comparewith"
                 ),
+                "reason": (
+                    (
+                        "compareWith is defined on PolygonMesh. A BRepBody exposes only "
+                        "meshManager.displayMeshes.bestMesh, which is a TriangleMesh and carries "
+                        "no compareWith, so the preview comparison cannot grade a B-Rep "
+                        "reconstruction."
+                    )
+                    if recon_polygon_mesh is None
+                    else (
+                        "The source body's PolygonMesh does not expose compareWith on Fusion "
+                        + str(fusion_version)
+                        + ". compareWith is a preview API and this connected version does not "
+                        "carry it, so the corroboration cannot run."
+                    )
+                )
+                + " The verdict above does not depend on it.",
             }
         else:
             report["preview_apis"] = ["PolygonMesh.compareWith"]
@@ -1080,7 +1186,22 @@ def run(context):
                                "any material was invented. The absence of invented material is NOT "
                                "established by this run.",
                 },
-                "omitted_detail": omitted,
+                # `outside_gaps` is populated only where pointContainment
+                # answered `outside`, so on this path the classification behind
+                # every one of these counts is the premise that was just
+                # rejected. A green severity derived from a rejected premise is
+                # the same defect as a passing invented-material verdict, one
+                # field over.
+                "omitted_detail": dict(
+                    omitted,
+                    severity="not-established",
+                    meaning=(
+                        "Not established: omitted detail is counted from the scanned vertices that "
+                        "read OUTSIDE the reconstruction, and this run did not establish which "
+                        "enum means outside. The count and the worst points are reported as the "
+                        "measurement they are, and neither is a verdict."
+                    ),
+                ),
             }
             report_attempted = True
             _emit(report)

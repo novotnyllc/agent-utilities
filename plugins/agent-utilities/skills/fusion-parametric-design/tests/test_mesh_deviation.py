@@ -263,9 +263,7 @@ def _competing_facet_calculator(calculator, namespace, epsilon_mm, gap_mm):
         mesh = inner()
         vertices = [value * MM_PER_CM for value in mesh.nodeCoordinatesAsDouble]
         triangles = list(mesh.nodeIndices)
-        _, centroid, normal, _ = namespace["_largest_triangle"](
-            vertices, triangles, epsilon_mm
-        )
+        _, centroid, normal, _ = namespace["_largest_triangle"](vertices, triangles)
         smallest = min(range(3), key=lambda index: abs(normal[index]))
         axis = [0.0, 0.0, 0.0]
         axis[smallest] = 1.0
@@ -556,8 +554,98 @@ class DeviationVerdictTests(unittest.TestCase):
         self.assertEqual(
             "not-established", report["verdict"]["invented_material"]["severity"]
         )
+        # Omitted detail is counted from the vertices that read OUTSIDE, and
+        # which enum means outside is the premise this run just rejected. A
+        # green severity there is the same defect one field over.
+        omitted = report["verdict"]["omitted_detail"]
+        self.assertEqual("not-established", omitted["severity"])
+        self.assertIn("did not establish which", omitted["meaning"])
         probe = report["containment_convention"]["straddle_probe"]
         self.assertIn("did not straddle the facet", probe["rejected"])
+
+    def test_a_transformed_body_fails_closed_instead_of_comparing_two_frames(self) -> None:
+        """Nothing here composes a transform, so a transform is refused, not ignored.
+
+        Node coordinates, the reconstruction's tessellation and
+        `pointContainment` are each read in their own body's local frame. Two
+        occurrences with identical local geometry in different assembly
+        positions would compare as a perfect match, and two physically aligned
+        bodies in different local frames would fail.
+        """
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
+        reconstruction.transform = SimpleNamespace(
+            asArray=lambda: [
+                1.0, 0.0, 0.0, 5.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]
+        )
+        report = self._run(
+            self._namespace(mesh=self._scan(), reconstruction=reconstruction),
+            failure="deviation-frames-differ",
+        )[0]
+        self.assertEqual(["deviation-frames-differ"], report["failures"])
+        self.assertEqual(5.0, report["frames"]["reconstruction_body_transform"][3])
+        self.assertIsNone(report["frames"]["source_body_transform"])
+        self.assertIn("unrelated coordinate systems", report["unsupported"])
+        # Nothing was measured, so nothing is reported as a zero.
+        self.assertNotIn("verdict", report)
+
+    def test_an_identity_transform_is_not_a_transform(self) -> None:
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
+        reconstruction.transform = SimpleNamespace(
+            asArray=lambda: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]
+        )
+        report = self._run(self._namespace(mesh=self._scan(), reconstruction=reconstruction))[0]
+        self.assertTrue(report["ok"])
+
+    def test_the_probe_step_comes_from_the_facet_not_the_declared_threshold(self) -> None:
+        """A dense scan must not make its own verdict unverifiable.
+
+        `_tessellate` caps each side at the source's median edge and a
+        triangle's inradius is at most about 0.289 of its longest side, so
+        demanding a facet wide enough for twice the declared threshold refused
+        every facet as soon as that threshold reached about 14.5% of the median
+        edge -- and every such run failed `sign-convention-unestablished`. Here
+        the scan is sampled at 0.2 mm against a 0.05 mm threshold, which is
+        squarely inside that band: the facet inradius is about 0.059 mm, under
+        the 0.1 mm the old rule wanted.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 0.2)
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(vertices, triangles),
+                reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0)),
+            )
+        )[0]
+        self.assertTrue(report["ok"], report.get("failures"))
+        convention = report["containment_convention"]
+        probe = convention["straddle_probe"]
+        self.assertTrue(probe["accepted"])
+        # The step is half the facet's inradius, and under the threshold.
+        self.assertLess(convention["probe_step_mm"], convention["epsilon_mm"])
+        self.assertAlmostEqual(
+            probe["facet_inradius_mm"] / 2.0, convention["probe_step_mm"], places=12
+        )
+        self.assertLess(probe["facet_inradius_mm"], 2.0 * convention["epsilon_mm"])
+
+    def test_compare_with_missing_from_this_fusion_blames_the_source_not_the_rebuild(self) -> None:
+        # Two causes reach the same branch and they are not the same news: a
+        # B-Rep reconstruction can never carry a PolygonMesh, while a source
+        # PolygonMesh without `compareWith` is this Fusion's preview surface.
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
+        reconstruction.mesh = _PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0)))
+        report = self._run(self._namespace(mesh=self._scan(), reconstruction=reconstruction))[0]
+        corroboration = report["corroboration"]
+        self.assertFalse(corroboration["available"])
+        self.assertEqual("source-polygon-mesh-has-no-comparewith", corroboration["cause"])
+        self.assertIn("does not expose compareWith", corroboration["reason"])
 
     def test_a_boundary_nearer_than_the_probe_step_is_not_verified(self) -> None:
         # The facet is straddled correctly, but the tessellation puts a surface
@@ -577,7 +665,7 @@ class DeviationVerdictTests(unittest.TestCase):
         namespace_holder["namespace"] = namespace
         report = self._run(namespace, failure="sign-convention-unestablished")[0]
         probe = report["containment_convention"]["straddle_probe"]
-        self.assertIn("did not measure epsilon", probe["rejected"])
+        self.assertIn("did not measure that step back to it", probe["rejected"])
         # Whichever way the facet normal points, one of the two sides reads 0.04.
         measured = sorted([probe["inside_measured_mm"], probe["outside_measured_mm"]])
         self.assertAlmostEqual(0.04, measured[0], places=9)

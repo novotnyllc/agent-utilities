@@ -118,16 +118,20 @@ So the transaction proves it on the actual body before reading a side, against t
 
 The probe, its epsilon, its tolerance and its measured numbers are recorded under `containment_convention`, with `sign_convention_verified`. When it does not reproduce, the run fails closed.
 
-Four fail-closed cases produce no verdict rather than a number:
+These fail-closed cases stop before anything is measured and emit **no `verdict` key at all** — an absent verdict is the one thing that cannot be misread as a zero:
 
+- **`body-not-found`** — a declared component path or body name does not resolve.
+- **`deviation-frames-differ`** — one of the two bindings resolves through a non-identity occurrence or body transform. Node coordinates, the reconstruction's tessellation and `pointContainment` are each read in their own body's local frame and nothing here composes a transform, so two identical parts in different assembly positions would compare as a perfect match. The matrices are recorded and the run refuses.
 - **`deviation-capability`** — `BRepBody.pointContainment`, all three `PointContainment` members, `BRepBody.meshManager` and `MeshManager.createMeshCalculator` are each hard capabilities. A missing enum must never read as "nothing was outside", so each is checked by name and never conditionally. The refusal names the API and the connected Fusion version.
 - **`tessellation-failed`** — the reconstruction's boundary could not be produced, so there is nothing to measure against and nothing here is a zero.
 - **`deviation-comparison-empty`** — the source carries no vertices, no triangles, or no measurable edge.
-- **`sign-convention-unestablished`** — the containment probe did not reproduce its known answers on this body.
+- **`containment-query-failed`** — `pointContainment` raised on a point this run had to classify.
 
-In all of them the invented-material verdict is `not-established`, never a pass, and it carries no `count` or `max_mm` that could be misread as a zero.
+One case does emit a verdict, because it got far enough to measure and then found its premise unproven:
 
-A fifth case is the same refusal for a different reason. **`invented-material-unclassified`** — the signed direction reads scanned *vertices*, and a scan carries only the ones it captured, so material invented *between* two of them leaves each one on the reconstruction's boundary and every signed depth at zero. The reverse direction is measured over the reconstruction's own tessellation and does see it. That direction is unsigned — it cannot tell invented material from deliberate simplification, so it never reports a failure — but when it puts samples past the `invented_material` threshold while no scanned vertex is inside, the absence of invented material is not established, and the verdict says so with `unclassified_reconstruction_samples` rather than passing. Classifying those samples against a closed source mesh is what would settle it.
+- **`sign-convention-unestablished`** — the containment probe did not reproduce its known answers on this body. Both halves of the verdict are reported `not-established`: invented material carries no `count` or `max_mm`, and omitted detail is `not-established` too, because it is counted from the vertices that read OUTSIDE and which enum means outside is exactly what was not established.
+
+And one more is a refusal for a different reason again. **`invented-material-unclassified`** — the signed direction reads scanned *vertices*, and a scan carries only the ones it captured, so material invented *between* two of them leaves each one on the reconstruction's boundary and every signed depth at zero. The reverse direction is measured over the reconstruction's own tessellation and does see it. That direction is unsigned — it cannot tell invented material from deliberate simplification, so it never reports a failure — but when it puts samples past the `invented_material` threshold while no scanned vertex is inside, the absence of invented material is not established, and the verdict says so with `unclassified_reconstruction_samples` rather than passing. Classifying those samples against a closed source mesh is what would settle it.
 
 ## What the reconstruction pipeline builds
 
