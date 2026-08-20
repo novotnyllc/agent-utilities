@@ -1138,6 +1138,41 @@ class EventLinkageTests(unittest.TestCase):
         self.assertTrue(verdict["agrees"], verdict)
         self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
 
+    def test_a_blend_outside_its_owner_slab_is_refused_not_rounded(self) -> None:
+        """A slab's claim is a coverage partition, not physical ownership.
+
+        A wall spanning three slabs is measured by all three and claimed by
+        one, so a blend at a boundary away from the claiming slab names an edge
+        that slab does not carry -- the nearest candidate on an adjacent slab
+        is its *interface*, and a non-adjacent one shares no edge at all.
+        Which slab builds which face is not in the partition, so the case is
+        refused by name.
+        """
+        record = parse_fit_record(fx.turned_record())
+        frame = rp.derive_datum_frame(
+            record.regions,
+            frame_margin=0.1,
+            angle_tolerance_deg=2.0,
+            offset_tolerance=0.5,
+            sigma_multiple=3.0,
+        )
+        blend = next(region for region in record.regions if region.axial_span)
+        owner = {
+            "id": "sketch-extrude-a-s0",
+            "plane": {"datum_plane": "XY"},
+            "slab": {"station_lo": 900.0, "station_hi": 950.0},
+        }
+        reason = rp._blend_outside_its_owners(blend, frame, [owner])
+        self.assertIsNotNone(reason)
+        self.assertIn("outside the range of every slab", reason)
+        # Inside it, nothing is refused; and a group that is not a slab at all
+        # owns every region it claims outright, so it is never wrong this way.
+        inside = dict(owner, slab={"station_lo": -1000.0, "station_hi": 1000.0})
+        self.assertIsNone(rp._blend_outside_its_owners(blend, frame, [inside]))
+        self.assertIsNone(
+            rp._blend_outside_its_owners(blend, frame, [{"id": "e", "slab": None}])
+        )
+
     def test_a_cap_slot_is_named_by_position_not_by_list_order(self) -> None:
         """`cap_regions` says what exists; the fillet path needs which slot.
 

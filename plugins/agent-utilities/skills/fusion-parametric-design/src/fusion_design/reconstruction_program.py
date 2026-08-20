@@ -730,6 +730,7 @@ UNRECONSTRUCTED_GATES = {
     "hole-radius-absent",
     "fillet-fit-unaccepted",
     "fillet-neighbour-unreconstructed",
+    "fillet-edge-owner-ambiguous",
     "fillet-neighbour-shared",
     "fillet-edge-unidentified",
     "fillet-radius-undeclared",
@@ -1284,6 +1285,43 @@ def _same_feature_edge(
     return f"{cap}-side", None
 
 
+def _blend_outside_its_owners(
+    region: RegionFit,
+    frame: DatumFrame,
+    owners: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Why this blend's edge cannot be named from the coverage partition, or ``None``.
+
+    Only slab groups can be wrong this way. A single extrude owns every region
+    it claims outright, so its faces and its claims are the same set; a slab
+    stack's claims are a partition over a stack that shares its walls, and a
+    blend sitting outside the claiming slab's own station range is an edge that
+    slab does not carry.
+    """
+    slabs = [group for group in owners if group.get("slab") is not None]
+    if not slabs:
+        return None
+    plane = slabs[0].get("plane") or {}
+    axis = _plane_axis(frame, str(plane.get("datum_plane") or "XY"))
+    low, high = _station_range(frame, axis, region.bounding_box)
+    middle = (low + high) / 2.0
+    for group in slabs:
+        block = group["slab"]
+        if block["station_lo"] <= middle <= block["station_hi"]:
+            return None
+    ranges = ", ".join(
+        f"{group['id']} [{group['slab']['station_lo']:.6g}, {group['slab']['station_hi']:.6g}]"
+        for group in slabs
+    )
+    return (
+        f"this blend sits at station {middle:.6g} on the datum axis, outside the range of every "
+        f"slab that claims its neighbours ({ranges}). A slab stack shares its walls, so which "
+        "slab *builds* the face this edge runs along is not what the coverage partition records, "
+        "and rounding the claiming slab's nearest edge would round a slab interface instead of "
+        "this blend."
+    )
+
+
 def _plan_fillets(
     regions: Sequence[RegionFit],
     groups: Sequence[Mapping[str, Any]],
@@ -1372,6 +1410,20 @@ def _plan_fillets(
                 "and this blend's neighbours did not both become features. There is no edge to "
                 "round."
             )
+            continue
+        # On the slab path an owner is a *coverage* partition, not the feature
+        # that produces this edge: a wall spanning three slabs is measured by
+        # all three and claimed by one, and the fillet path was reading that
+        # claim as physical ownership. A blend at a boundary away from the
+        # claiming slab then names an edge of the wrong extrude -- the nearest
+        # candidate on an adjacent slab is its *interface*, and a non-adjacent
+        # one shares no edge at all. Nothing here can re-point it: which slab
+        # carries which face is a fact the emitter learns from Fusion, and the
+        # partition deliberately does not record it. So the case is refused by
+        # name rather than rounded on a guess.
+        stray = _blend_outside_its_owners(region, frame, [by_id[o] for o in owners])
+        if stray is not None:
+            gates[region.region_hash] = "fillet-edge-owner-ambiguous: " + stray
             continue
         selector: str | None = None
         if len(owners) != 2:
