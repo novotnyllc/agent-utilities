@@ -671,6 +671,30 @@ def _entities_2d(
     return out
 
 
+def _arc_span(
+    centre: Sequence[float],
+    start: Sequence[float],
+    end: Sequence[float],
+    sweep_through: Sequence[float] | None = None,
+) -> float:
+    """One arc's signed sweep, taking the way round its recorded mid point.
+
+    Shared by the sampler and the sampling allowance, because they have to agree
+    about which way round the arc goes: an arc classified through its mid point
+    can sweep more than half a turn, and normalising to the minor arc made the
+    allowance about 27 times too small for a 270 deg arc -- small enough to fail
+    a profile whose tolerances were fine.
+    """
+    first = math.atan2(start[1] - centre[1], start[0] - centre[0])
+    last = math.atan2(end[1] - centre[1], end[0] - centre[0])
+    if sweep_through is None:
+        return (last - first + math.pi) % (2.0 * math.pi) - math.pi
+    middle = math.atan2(sweep_through[1] - centre[1], sweep_through[0] - centre[0])
+    forward = (middle - first) % (2.0 * math.pi)
+    whole = (last - first) % (2.0 * math.pi)
+    return whole if forward <= whole else whole - 2.0 * math.pi
+
+
 def _sampled_entities(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> list[tuple[float, float]]:
     """One loop's classified entities as a dense polyline, in the sketch plane.
 
@@ -684,14 +708,7 @@ def _sampled_entities(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -> 
 
     def arc(centre, radius, start, end, sweep_through=None):
         first = math.atan2(start[1] - centre[1], start[0] - centre[0])
-        last = math.atan2(end[1] - centre[1], end[0] - centre[0])
-        span = last - first
-        if sweep_through is not None:
-            middle = math.atan2(sweep_through[1] - centre[1], sweep_through[0] - centre[0])
-            # Take the way round that passes through the recorded mid point.
-            forward = (middle - first) % (2.0 * math.pi)
-            whole = (last - first) % (2.0 * math.pi)
-            span = whole if forward <= whole else whole - 2.0 * math.pi
+        span = _arc_span(centre, start, end, sweep_through)
         for step in range(per_arc):
             angle = first + span * step / per_arc
             points.append((centre[0] + radius * math.cos(angle), centre[1] + radius * math.sin(angle)))
@@ -739,10 +756,12 @@ def _sampling_shortfall(rows: Sequence[Mapping[str, Any]], per_arc: int = 256) -
         if row["kind"] == "circle" and isinstance(radius, (int, float)):
             sweep = 2.0 * math.pi
         elif row["kind"] == "arc" and isinstance(radius, (int, float)) and "center_mm" in row:
-            centre = row["center_mm"]
-            first = math.atan2(row["start_mm"][1] - centre[1], row["start_mm"][0] - centre[0])
-            last = math.atan2(row["end_mm"][1] - centre[1], row["end_mm"][0] - centre[0])
-            sweep = abs((last - first + math.pi) % (2.0 * math.pi) - math.pi)
+            # Through the mid point, exactly as the sampler goes round it.
+            sweep = abs(
+                _arc_span(
+                    row["center_mm"], row["start_mm"], row["end_mm"], row.get("mid_mm")
+                )
+            )
         else:
             continue
         if sweep <= 0.0:
@@ -2505,6 +2524,18 @@ def _profile_set(sketch, step, planned):
             centroid_window = tolerance + displacement * (
                 1.0 + (perimeter * extent / area if area > 0.0 else 0.0)
             )
+            # The same sampling difference again, and it moves the centroid for
+            # the same reason a snap does: the area the 256-segment
+            # approximation leaves out is real area, sitting at a lever of at
+            # most the region's own extent, over the whole area. Symmetric
+            # regions cancel it and asymmetric ones do not, so the area
+            # allowance above does not cover this and a large-radius arc under
+            # a tight declared tolerance was refused on arithmetic rather than
+            # on geometry.
+            if area > 0.0:
+                centroid_window += (
+                    float(region.get("area_sampling_cm2") or 0.0) * extent / area
+                )
             if gap <= centroid_window and (
                 abs(entry["area"] - region["area_cm2"]) <= area_window
             ):

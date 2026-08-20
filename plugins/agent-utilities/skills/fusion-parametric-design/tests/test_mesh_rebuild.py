@@ -720,6 +720,51 @@ class MultiLoopSketchTests(unittest.TestCase):
         # which is the error that used to reach the matcher.
         self.assertGreater((exact - chorded) / exact, 0.09)
 
+    def test_the_sampling_allowance_follows_the_arc_the_sampler_walked(self):
+        """A major arc's allowance was computed for the minor one.
+
+        `_sampled_entities` takes the way round that passes through the
+        recorded mid point, so a classified arc can sweep more than half a
+        turn. The allowance normalised the endpoint difference to the minor
+        sweep regardless -- about 27 times too small for a 270 degree arc, and
+        the shortfall it is meant to cover is what the executor's window adds,
+        so a large-radius profile with perfectly valid tolerances failed
+        `profile-set-mismatch` on arithmetic rather than on geometry.
+        """
+        from fusion_design.mesh_rebuild import _sampling_shortfall
+
+        radius, per_arc = 20.0, 256
+        # Start at 0 deg, end at 270 deg, through 135 deg: the major way round.
+        row = {
+            "kind": "arc",
+            "center_mm": [0.0, 0.0],
+            "radius_mm": radius,
+            "start_mm": [radius, 0.0],
+            "mid_mm": [
+                radius * math.cos(math.radians(135.0)),
+                radius * math.sin(math.radians(135.0)),
+            ],
+            "end_mm": [0.0, -radius],
+            "residual_mm": 0.0,
+        }
+
+        def shortfall(sweep):
+            return (radius**2 / 2.0) * (sweep - per_arc * math.sin(sweep / per_arc))
+
+        self.assertAlmostEqual(
+            shortfall(3.0 * math.pi / 2.0), _sampling_shortfall([row]), places=12
+        )
+        # And that is 27 times the number the minor-arc reading produced.
+        self.assertGreater(
+            _sampling_shortfall([row]) / shortfall(math.pi / 2.0), 26.0
+        )
+        # Dropping the mid point leaves the minor arc, which is the honest
+        # reading when nothing recorded which way round it goes.
+        del row["mid_mm"]
+        self.assertAlmostEqual(
+            shortfall(math.pi / 2.0), _sampling_shortfall([row]), places=12
+        )
+
     def test_a_single_loop_step_carries_no_loop_key_and_is_unchanged(self):
         namespace = self._namespace()
         sketch = fakes.FakeSketch(fakes.make_design(), None, {})

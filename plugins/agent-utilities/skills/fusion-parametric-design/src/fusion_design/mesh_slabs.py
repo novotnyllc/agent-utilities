@@ -491,6 +491,15 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
             child_centre = polygon_centroid(loops[child])
             area -= child_area
             moment = [moment[k] - child_centre[k] * child_area for k in range(2)]
+        # The region's own centroid -- area-weighted, holes subtracted -- and
+        # the extent is measured from *it*, over its holes' boundaries as well
+        # as its own. The boundary loop's centroid is a different point as soon
+        # as a hole sits off-centre, and measuring the lever arms from it
+        # understates the extent, narrowing the very centroid window this
+        # number exists to widen.
+        region_centroid = (
+            [moment[k] / area for k in range(2)] if area > 0.0 else list(centre)
+        )
         regions.append(
             {
                 "boundary_loop": index,
@@ -511,14 +520,14 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
                 # displacement does not bound it -- on a long thin region a
                 # 0.05 mm move of half one edge shifts the centroid by tenths.
                 "extent_mm": max(
-                    (math.dist(point, centre) for point in points),
+                    (
+                        math.dist(point, region_centroid)
+                        for loop in [points] + [loops[child] for child in children]
+                        for point in loop
+                    ),
                     default=0.0,
                 ),
-                "centroid_mm": (
-                    [moment[k] / area for k in range(2)]
-                    if area > 0.0
-                    else list(polygon_centroid(points))
-                ),
+                "centroid_mm": region_centroid,
             }
         )
     return regions
@@ -688,6 +697,9 @@ def classify_loops(
                 "parity_agrees": loop["parity_agrees"],
                 "signed_area_mm2": loop["signed_area_mm2"],
                 "perimeter_mm": loop["perimeter_mm"],
+                # Where this loop's own area sits, so a consumer can ask
+                # whether two sections share a centroid and not only an area.
+                "centroid_mm": list(polygon_centroid(projected[index])),
                 "point_count": loop["point_count"],
                 "wall_regions": loop["wall_regions"],
                 "gates": loop["gates"],

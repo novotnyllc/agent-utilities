@@ -2146,7 +2146,14 @@ OBSERVABLE_FOR_QUANTITY = {
     "position": "centroid",
 }
 
-OBSERVABLES = {"volume", "centroid", "bbox"}
+#: ``none`` is not an observable; it is the declaration that this vocabulary
+#: has none for a parameter, which is a different statement from any of the
+#: three and the only honest one for an interface between two sections that
+#: agree in area *and* in centroid. A parameter carrying it is emitted with the
+#: reason on it, and an editability spec must decline to exercise it rather
+#: than perturb it and record `parameter-inert` against a station that drives
+#: real geometry.
+OBSERVABLES = {"volume", "centroid", "bbox", "none"}
 
 
 def _sections_differ_in_area(
@@ -2175,6 +2182,51 @@ def _sections_differ_in_area(
         return lower != upper
     perimeter = max(_section_perimeter(below), _section_perimeter(above))
     return abs(lower - upper) > float(tolerance) * max(perimeter, 1.0)
+
+
+def _section_material_centroid(slab: Mapping[str, Any]) -> list[float] | None:
+    """Where one slab's own section carries its material area, or ``None``.
+
+    Same sign convention as `_section_material_area` -- outer and islands add,
+    cavities subtract, bores are absent because their holes are cut later -- so
+    the two numbers describe the same figure. ``None`` when a loop states no
+    centroid or the areas cancel, which is a section this comparison cannot
+    speak about.
+    """
+    total = 0.0
+    moment = [0.0, 0.0]
+    for loop in slab.get("loops") or ():
+        role = loop.get("role")
+        if role not in ("outer", "island", "cavity"):
+            continue
+        centre = loop.get("centroid_mm")
+        if not isinstance(centre, (list, tuple)) or len(centre) != 2:
+            return None
+        area = abs(float(loop.get("signed_area_mm2") or 0.0))
+        signed = -area if role == "cavity" else area
+        total += signed
+        for axis in range(2):
+            moment[axis] += float(centre[axis]) * signed
+    if total <= 0.0:
+        return None
+    return [moment[axis] / total for axis in range(2)]
+
+
+def _sections_differ_in_centroid(
+    below: Mapping[str, Any], above: Mapping[str, Any], tolerance: float | None
+) -> bool:
+    """Do these two sections carry their material about measurably different points?
+
+    A length against a length: the declared ``slab_constancy_tolerance_mm`` is
+    how far this stage already accepts a boundary having moved, so a centroid
+    that moved less than it moved by nothing this stage can measure. Unknown
+    reads as *different*, because the equal-centroid branch is the one that
+    declines to name an observable and it may only be reached on evidence.
+    """
+    here, there = _section_material_centroid(below), _section_material_centroid(above)
+    if here is None or there is None or tolerance is None:
+        return True
+    return math.dist(here, there) > float(tolerance)
 
 
 def _section_perimeter(slab: Mapping[str, Any]) -> float:
@@ -2295,6 +2347,23 @@ def _user_parameters(
                 "boundary displaced by the declared slab_constancy_tolerance_mm would sweep -- so "
                 "moving it grows one slab and shrinks the other by different amounts and the "
                 "solid's volume moves."
+            )
+        elif not _sections_differ_in_centroid(
+            below["slab"], above["slab"], section_tolerance
+        ):
+            observable = "none"
+            observable_rationale = (
+                "This station separates two sections that agree in area and in centroid "
+                f"({_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2, centroids within the declared "
+                "slab_constancy_tolerance_mm) while not being congruent -- concentric equal-area "
+                "shapes are the case. Moving it trades material of one shape for material of the "
+                "other at the same rate and about the same point, so the volume, the centroid and "
+                "the bounding box are all unchanged: no observable in this vocabulary sees it. "
+                "The station still drives real geometry, so it is named as unobservable rather "
+                "than declared against something that does not move -- perturbing it would report "
+                "`parameter-inert` against a correct parameter, which is the over-claim in the "
+                "other direction."
             )
         else:
             observable = "centroid"

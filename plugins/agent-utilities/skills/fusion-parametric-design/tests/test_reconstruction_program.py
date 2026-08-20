@@ -1381,7 +1381,7 @@ class StationObservableTests(unittest.TestCase):
     correct station as `parameter-inert`.
     """
 
-    def _stack(self, upper_area, tolerance=0.05):
+    def _stack(self, upper_area, tolerance=0.05, centroids=None):
         groups = []
         for index, (low, high, area) in enumerate(
             ((0.0, 4.0, 100.0), (4.0, 8.0, upper_area))
@@ -1409,6 +1409,7 @@ class StationObservableTests(unittest.TestCase):
                                 # the tolerance would sweep.
                                 "perimeter_mm": 40.0,
                             }
+                            | ({} if centroids is None else {"centroid_mm": centroids[index]})
                         ],
                     },
                 }
@@ -1431,6 +1432,68 @@ class StationObservableTests(unittest.TestCase):
         self.assertIn("leaving the volume exactly unchanged", interior["observable_rationale"])
         # And the honest caveat is on the record rather than left to be found.
         self.assertIn("report this station inert", interior["observable_rationale"])
+
+    def test_a_regions_extent_is_measured_from_the_regions_own_centroid(self) -> None:
+        """The comment said "its own centroid" and the code used the loop's.
+
+        `centroid_mm` is area-weighted with the holes subtracted, so an
+        off-centre hole moves it away from the boundary loop's centroid.
+        Measuring the lever arms from the boundary's centroid understates the
+        extent, which narrows the centroid window this number exists to widen
+        and refuses `profile-set-mismatch` on an accepted displacement.
+        """
+        from fusion_design import mesh_slabs as ms
+
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        hole = [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0), (1.0, 4.0)]
+        region = next(
+            row for row in ms.profile_regions([square, hole]) if row["boundary_loop"] == 0
+        )
+        centre = region["centroid_mm"]
+        # The hole in the bottom-left corner pushes the region's centroid up
+        # and right of the square's own (5, 5).
+        self.assertGreater(centre[0], 5.0)
+        self.assertGreater(centre[1], 5.0)
+        expected = max(
+            math.dist(point, centre) for loop in (square, hole) for point in loop
+        )
+        self.assertAlmostEqual(expected, region["extent_mm"], places=12)
+        # Strictly more than the boundary loop's own centroid would have given.
+        self.assertGreater(
+            region["extent_mm"],
+            max(math.dist(point, (5.0, 5.0)) for point in square),
+        )
+
+    def test_two_sections_about_the_same_point_declare_no_observable(self) -> None:
+        """Equal area *and* equal centroid: nothing in this vocabulary moves.
+
+        Concentric equal-area shapes are the case -- moving the station trades
+        material of one shape for material of the other at the same rate and
+        about the same point, so volume, centroid and bounding box are all
+        unchanged. Declaring `centroid` there makes the perturbation proof
+        report `parameter-inert` against a station that drives real geometry,
+        which is the over-claim in the other direction. It is named instead.
+        """
+        interior = self._stack(100.0, centroids=[[3.0, 4.0], [3.0, 4.0]])[
+            "recon_station_1"
+        ]
+        self.assertEqual("none", interior["expected_observable"])
+        self.assertIn("no observable in this vocabulary sees it", interior["observable_rationale"])
+        # Equal areas about *different* points still move the centroid.
+        moved = self._stack(100.0, centroids=[[3.0, 4.0], [3.0, 9.0]])["recon_station_1"]
+        self.assertEqual("centroid", moved["expected_observable"])
+        # And an unstated centroid reads as different rather than as equal: the
+        # branch that declines to name an observable is only reached on evidence.
+        self.assertEqual("centroid", self._stack(100.0)["recon_station_1"]["expected_observable"])
+
+    def test_a_spec_may_not_perturb_a_parameter_with_no_observable(self) -> None:
+        from fusion_design import mesh_editability as me
+        import test_mesh_editability as te
+
+        spec = te.spec()
+        spec["parameters"][0]["expected_observable"] = "none"
+        codes = {issue.code for issue in me.validate_editability_spec(spec)}
+        self.assertIn("editability-spec-invalid-parameters", codes)
 
     def test_float_noise_is_not_a_difference_in_area(self) -> None:
         """`!=` on measured areas made the equal-area branch unreachable.
