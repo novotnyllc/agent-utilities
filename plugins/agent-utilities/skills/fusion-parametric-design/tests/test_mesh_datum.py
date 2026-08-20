@@ -97,7 +97,9 @@ class ParseFitRecordTests(unittest.TestCase):
     def test_extra_upstream_keys_are_ignored_not_refused(self) -> None:
         record = fx.box_record()
         record["segmentation"] = {"source": "crease-growing"}
-        record["regions"][0]["triangle_count"] = 812
+        # Not `triangle_count` any more: the moment block is bound to it, so it
+        # is read rather than ignored.
+        record["regions"][0]["point_count"] = 812
         self.assertEqual(len(parse_fit_record(record).regions), 6)
 
     def test_missing_units_refuses_rather_than_assuming_millimetres(self) -> None:
@@ -134,6 +136,51 @@ class ParseFitRecordTests(unittest.TestCase):
         record["regions"][0]["fit"]["rms_residual"] = float("inf")
         with self.assertRaises(ReconstructionRefused):
             parse_fit_record(record)
+
+    def test_a_moment_block_that_does_not_describe_its_region_is_refused(self) -> None:
+        """Shape validation alone accepted every one of these.
+
+        The block is *summed* into a group's motion evidence and nothing
+        downstream re-derives it, so a block whose numbers came from somewhere
+        else silently changes which archetypes get emitted. Two numbers the
+        region already carries catch all of it.
+        """
+        fabrications = {
+            "matrix scaled by 1e6": lambda b, o: b.update(
+                matrix=[value * 1e06 for value in b["matrix"]]
+            ),
+            "a zero block": lambda b, o: b.update(matrix=[0.0] * 21),
+            "a centroid a kilometre away": lambda b, o: b.update(
+                centroid_sum=[value + 1e06 for value in b["centroid_sum"]]
+            ),
+            "another region's block copied over": lambda b, o: b.update(o),
+            "another region's facet count": lambda b, o: b.update(facet_count=b["facet_count"] + 1),
+            "another region's area": lambda b, o: b.update(area=b["area"] * 2.0),
+        }
+        for name, fabricate in fabrications.items():
+            with self.subTest(fabrication=name):
+                record = fx.box_record()
+                # regions[0] is a 100 mm^2 x face, regions[4] a 200 mm^2 z face.
+                fabricate(record["regions"][0]["motion_moments"], record["regions"][4]["motion_moments"])
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    parse_fit_record(record)
+                self.assertEqual(caught.exception.reason, "fit-record-moments-unbound")
+
+    def test_a_block_whose_region_states_no_triangle_count_cannot_be_bound(self) -> None:
+        record = fx.box_record()
+        del record["regions"][0]["triangle_count"]
+        with self.assertRaises(ReconstructionRefused) as caught:
+            parse_fit_record(record)
+        self.assertEqual(caught.exception.reason, "fit-record-malformed")
+        self.assertIn("triangle_count", caught.exception.message)
+
+    def test_a_record_with_no_moment_block_at_all_still_parses(self) -> None:
+        """Absent stays absent: an older record carries none and says so."""
+        record = fx.box_record()
+        for region in record["regions"]:
+            region.pop("motion_moments")
+            region.pop("triangle_count")
+        self.assertTrue(all(r.motion_moments is None for r in parse_fit_record(record).regions))
 
 
 class UncertaintyTests(unittest.TestCase):

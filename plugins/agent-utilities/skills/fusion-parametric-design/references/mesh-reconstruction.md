@@ -136,7 +136,7 @@ a hexagon's corners lie exactly on its circumscribed circle. They are refused
 regions offered, 114 fillet candidates, 3 fillets and 10 extrudes are unchanged
 and no part changes the gate it stops at.
 
-So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
+So the segmentation layer is deleted and the grouping is the input. What survives untouched is the part Fusion has no opinion about: support floors, Moran's I on the mesh graph, the spatially blocked held-out refit, the nested-kind parsimony F test, and the parameter-uncertainty gate all still run on every group, and a group that fails one is recorded with the gate that killed it. *Run* is not assumed: both structure gates have a power floor — against residuals an order of magnitude inside the measurement noise they have nothing to test, and they say so instead of passing — so `disproof.gates` counts, per gate, how many accepted fits it actually judged and why it skipped the rest, derived from each region's own `checked` list rather than asserted beside it. On the honeycomb organiser that floor skipped Moran and the held-out refit on all 39 accepted planes. That gap between 1,069 fitted and 268 accepted is the gates doing their job, not a loss: `fit_primitive` alone accepts nearly everything, and the disproof gates are the difference between a fit and a *justified* fit. A dump that carries no grouping is refused `face-groups-absent` rather than segmented by a fallback nobody measured.
 
 **Two things the vertices cannot decide, and what decides them.** On a bore or a round tessellated with two vertex rings and no intermediate samples, every vertex lies exactly on a sphere as well as on the cylinder — the shield's r=2.0 corner rounds fit a sphere of radius 2.15407 at rms 0.0 — so ranking by residual hands 367 of 367 such groups to the sphere, and all 367 are cylinders. The facet normals settle it: every one is within 5 degrees of perpendicular to the cylinder axis, which no sphere's are, and the angle is caller-declared as `cylinder_normal_perpendicular_deg`. Re-measured against the live grouping of all 11 parts: 367 groups ranked a sphere first, a cylinder was accepted on every one of them, and the tie-break moved all 367 — the worst facet normal in the set sits 0.0 degrees off perpendicular, and radii collapse from the sqrt(2)-inflated sphere values to clean nominals (4.2426 to 3.0, 10.084 to 10.0, 6.4288 to 6.2). Most of those cylinders are then still refused for support span: two rings of vertices carry the *radius* but not enough axial evidence to determine an axis. The tie-break fixes the kind; it does not manufacture evidence, and it was never meant to. Separately, the grouping delivers edge rounds as **partial-arc cylinders** rather than tori, so a fillet candidate is now a torus *or* a cylinder whose measured `angular_span_deg` is inside the declared `max_fillet_arc_deg` — a bore closes on itself and a round never does. The evidence discipline is unchanged: either way a fillet still needs two accepted neighbours that are themselves features.
 
@@ -224,7 +224,17 @@ one normal direction per facet, and at eight per turn a facet already spans 45°
 coarser than any exporter's chord tolerance. Measured over the eleven parts the
 distribution is bimodal with nothing in between — the 230 genuine cylinders carry
 29.6 to 108 directions per turn at radii from 1.15 mm to 10 mm, and the 21 hex
-pockets carry 7.2.
+pockets carry 7.2. Either side of the declared 8.0 the nearest measurements are
+13% away — a 7-sided prism carries 8.17 and passes, an 8-sided one 9.14 — and
+that band is asserted in the tests rather than left to be discovered by a part.
+
+Directions are merged at the run's own floor on a facet normal's direction, by
+**complete** linkage: a direction joins the open cluster only while it stays
+within the floor of that cluster's *first* member, so no cluster is ever wider
+than the floor it was merged at. Single linkage chains instead — in the scan
+regime the floor is the mesh's own normal noise, routinely wider than the azimuth
+spacing of a fine tessellation, and a genuine 360-facet cylinder collapsed into
+one direction, zero per turn, and was refused as a prism.
 
 **Group boundaries are free evidence.** The loop between a bore and the face it
 breaks through is a circle, and it is shared with the neighbouring group rather

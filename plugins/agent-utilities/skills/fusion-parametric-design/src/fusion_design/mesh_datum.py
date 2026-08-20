@@ -25,6 +25,7 @@ import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from .manifest import _in_closed_set
 from .mesh_fitting import (
     MOTION_MOMENT_FIELDS,
     PRIMITIVE_KINDS,
@@ -49,6 +50,7 @@ _HEX64_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 # it cannot be mistaken for a considered "no".
 DATUM_REFUSALS = {
     "fit-record-malformed",
+    "fit-record-moments-unbound",
     "fit-record-missing-axial-span",
     "fit-record-missing-uncertainty",
     "frame-no-accepted-fits",
@@ -61,6 +63,11 @@ DATUM_REFUSALS = {
 REFUSAL_ALTERNATIVES = {
     "fit-record-malformed": (
         "Re-run the fitting stage; this record cannot be read and nothing downstream may guess at it."
+    ),
+    "fit-record-moments-unbound": (
+        "This region's moment block does not describe this region's facets: its facet count or its "
+        "area disagrees with the region's own. Re-run the fitting stage against the same dump, "
+        "which writes both from the same triangles."
     ),
     "fit-record-missing-axial-span": (
         "Re-run the fitting stage so each cylinder and cone carries its supporting axial span, or "
@@ -102,6 +109,15 @@ FIT_UNCERTAINTY_KEYS = {
 }
 
 TOLERANCE_BASES = {"uncertainty", "declared-absolute"}
+
+#: The measurement regimes U2 can settle on, and what a caller may declare.
+#: Carried across this seam because the regime changes what the numbers on the
+#: far side of it *mean* -- the noise floors, the normal-direction merge width,
+#: which estimator is estimating noise at all -- and a program that does not say
+#: which regime produced it is byte-identical whether the mesh was measured or
+#: the caller overrode the measurement.
+MEASUREMENT_REGIMES = {"tessellation", "scan"}
+DECLARABLE_REGIMES = MEASUREMENT_REGIMES | {"auto"}
 
 
 class ReconstructionRefused(ValueError):
@@ -273,6 +289,12 @@ class FitRecord:
     units: str
     total_area: float
     regions: tuple[RegionFit, ...]
+    #: U2's measurement regime: ``{"regime", "declared", "overridden"}``, or
+    #: ``None`` on a record written before the regime was detected.  The
+    #: evidence stays in the fit record; what crosses this seam is the verdict,
+    #: whether the caller overrode it, and what they declared -- enough for a
+    #: reader of the *program* to tell a measured regime from an asserted one.
+    regime: dict[str, Any] | None = None
 
     def accepted(self) -> tuple[RegionFit, ...]:
         return tuple(region for region in self.regions if region.accepted)
@@ -420,14 +442,31 @@ def _parse_fillet(raw_region: Mapping[str, Any], path: str) -> dict[str, Any] | 
     }
 
 
-def _parse_motion_moments(raw: Any, path: str) -> dict[str, Any] | None:
-    """U2's kinematic moment block, kept only when it arrives whole.
+def _parse_motion_moments(
+    raw: Any, path: str, triangle_count: Any, region_area: float, box: tuple[Vec3, Vec3]
+) -> dict[str, Any] | None:
+    """U2's kinematic moment block, kept only when it describes *this* region.
 
     Absent is not malformed — a record written before this field existed simply
     does not carry one, and a region whose facets carried no readable normal
-    honestly has none.  *Present and incomplete* refuses, because a block whose
-    ``matrix`` and ``facet_count`` disagree would sum into a group's evidence as
-    a measurement nobody made.
+    honestly has none.
+
+    Present, the block is bound to the region it rides on.  Shape validation
+    alone let fabricated blocks through — a matrix scaled by 1e6, a zero block,
+    a centroid a kilometre away, another region's block copied over — and each
+    one silently changed which archetypes the planner emitted, because a block
+    is *summed* into a group's evidence and nothing downstream re-derives it.
+    Three checks, all against numbers the record already carries:
+
+    * ``facet_count`` equals the region's ``triangle_count`` and ``area`` its
+      ``area``: U2 writes both from the same triangles in the same loop, so a
+      block from anywhere else disagrees with one or the other;
+    * the trace of the matrix's normal block is that same area.  ``M`` is
+      ``sum(area_i * b b^T)`` with ``b = [x x n, n]`` and ``n`` a *unit* normal,
+      so those three diagonal entries sum to ``sum(area_i)`` identically.  That
+      is what ties the 21 numbers to the area rather than only the header;
+    * the mean facet centroid lies inside the region's own bounding box, which
+      it must, being an average of points that are all inside it.
     """
     if raw is None:
         return None
@@ -455,6 +494,50 @@ def _parse_motion_moments(raw: Any, path: str) -> dict[str, Any] | None:
     centroid = _vector(raw.get("centroid_sum"))
     if centroid is None:
         raise _malformed(f"{path}.centroid_sum", "three finite numbers")
+    if isinstance(triangle_count, bool) or not isinstance(triangle_count, int):
+        raise _malformed(
+            f"{path}: the region carrying a moment block",
+            "a triangle_count the block can be bound to; a block whose region does not say how "
+            "many triangles it has cannot be checked against anything",
+        )
+    # (3,3), (4,4) and (5,5) of the row-major upper triangle: the normal block's
+    # diagonal.
+    normal_trace = float(values[15] + values[18] + values[20])  # type: ignore[operator]
+    lo, hi = box
+    mean = tuple(component / count for component in centroid)
+    slack = 1e-06 * max(1.0, max(hi[i] - lo[i] for i in range(3)))
+    disagreements = []
+    if int(count) != int(triangle_count):
+        disagreements.append(f"it counts {count} facets where the region has {triangle_count}")
+    if not math.isclose(float(area), float(region_area), rel_tol=1e-09, abs_tol=0.0):
+        disagreements.append(f"its area is {area:.6g} where the region's is {region_area:.6g}")
+    if not math.isclose(normal_trace, float(area), rel_tol=1e-06, abs_tol=0.0):
+        disagreements.append(
+            f"the trace of its normal block is {normal_trace:.6g}, which for unit normals is the "
+            f"area it also states as {area:.6g}"
+        )
+    if any(not (lo[i] - slack <= mean[i] <= hi[i] + slack) for i in range(3)):
+        disagreements.append(
+            f"its mean facet centroid {tuple(round(c, 6) for c in mean)} is outside the region's "
+            f"own bounding box"
+        )
+    if disagreements:
+        raise _refuse(
+            "fit-record-moments-unbound",
+            f"{path} does not describe this region's facets: {'; and '.join(disagreements)}. The "
+            "block is summed into a group's motion evidence as-is, so one that does not describe "
+            "this region's own facets is a measurement nobody made.",
+            {
+                "path": path,
+                "block_facet_count": int(count),
+                "region_triangle_count": triangle_count,
+                "block_area": float(area),
+                "region_area": float(region_area),
+                "normal_block_trace": normal_trace,
+                "mean_facet_centroid": list(mean),
+                "region_bounding_box": [list(lo), list(hi)],
+            },
+        )
     return {
         "matrix": [float(v) for v in values],  # type: ignore[arg-type]
         "facet_count": int(count),
@@ -541,7 +624,11 @@ def parse_fit_record(raw: Any) -> FitRecord:
                 # chain's neighbours or its radius spread.
                 blend_shaped=isinstance(raw_region.get("fillet_chain"), dict),
                 motion_moments=_parse_motion_moments(
-                    raw_region.get("motion_moments"), f"{path}.motion_moments"
+                    raw_region.get("motion_moments"),
+                    f"{path}.motion_moments",
+                    raw_region.get("triangle_count"),
+                    area,
+                    (lo, hi),
                 ),
             )
         )
@@ -550,7 +637,31 @@ def parse_fit_record(raw: Any) -> FitRecord:
         units=units.strip(),
         total_area=total_area,
         regions=tuple(regions),
+        regime=_parse_regime(raw.get("regime")),
     )
+
+
+def _parse_regime(raw: Any) -> dict[str, Any] | None:
+    """U2's regime verdict, or ``None`` on a record written before there was one.
+
+    Only the three fields a reader of the program needs are carried: which
+    regime the run was in, what the caller declared, and whether that declaration
+    overrode what the mesh said.  The evidence behind the detection stays in the
+    fit record, which is where a reader can already find it by dump hash.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _malformed("fit_record.regime", "an object when present")
+    regime, declared = raw.get("regime"), raw.get("declared")
+    overridden = raw.get("overridden")
+    if not _in_closed_set(regime, MEASUREMENT_REGIMES):
+        raise _malformed("fit_record.regime.regime", f"one of {sorted(MEASUREMENT_REGIMES)}")
+    if not _in_closed_set(declared, DECLARABLE_REGIMES):
+        raise _malformed("fit_record.regime.declared", f"one of {sorted(DECLARABLE_REGIMES)}")
+    if not isinstance(overridden, bool):
+        raise _malformed("fit_record.regime.overridden", "a boolean")
+    return {"regime": regime, "declared": declared, "overridden": overridden}
 
 
 def require_uncertainty(regions: Iterable[RegionFit]) -> None:

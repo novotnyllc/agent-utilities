@@ -89,6 +89,50 @@ DEFAULT_HELDOUT_RESIDUAL_RATIO: float | None = None
 # decision threshold: no verdict turns on its value, it only stops 0/0.
 _ZERO_RESIDUAL_FLOOR_RATIO = 1e-9
 
+#: Every token that may appear in ``PrimitiveFit.support["checked"]``, declared
+#: in one place so a reader can enumerate the gates and a summary can be derived
+#: from the lists rather than asserted beside them.  A free string here is a
+#: gate nobody can grep for and a typo nobody can catch: the disproof census in
+#: U2 counts these tokens, so a misspelt one reads as "the gate did not run".
+#: The gates run in two modules -- the exact fitters here, the statistical ones
+#: in ``mesh_segmentation`` -- and both append through ``_passed`` below.
+FIT_GATE_TOKENS = frozenset(
+    {
+        # mesh_fitting: the exact-fit gates and the facet-normal evidence
+        "radius-ratio",
+        "bounds-margin",
+        "relative-residual",
+        "simpler-primitive",
+        "support-span",
+        "residual-structure",
+        "heldout-residual",
+        "cylinder-normal-tie-break",
+        "cylinder-normals-discrete",
+        "normal-constrained-axis",
+        # mesh_segmentation: the disproof ladder over a whole region
+        "support-span-floor",
+        "nested-kind-parsimony",
+        "kind-promotion",
+        "parameter-uncertainty",
+        "boundary-circle-corroboration",
+    }
+)
+
+
+#: Rejections this module states under a *named* token rather than in prose, so
+#: a consumer can branch on the reason instead of matching a sentence.  The
+#: prose rejections are deliberately not tokenized: a token is a promise that
+#: something downstream reads it, and nothing reads those.
+FIT_REJECTION_TOKENS = frozenset({"cylinder-normals-discrete"})
+
+
+def _passed(checked: list[str], token: str) -> None:
+    """Record that ``token``'s gate ran and passed, once, under a declared name."""
+    if not _in_closed_set(token, set(FIT_GATE_TOKENS)):
+        raise ValueError(f"gate token must be one of {', '.join(sorted(FIT_GATE_TOKENS))}.")
+    if token not in checked:
+        checked.append(token)
+
 
 # --------------------------------------------------------------------------
 # vector and linear-algebra kernel
@@ -1090,7 +1134,7 @@ def _apply_gates(
             "rather than reported.",
             support,
         )
-    checked.append("radius-ratio")
+    _passed(checked, "radius-ratio")
 
     box = _bbox(points)
     margin = bounds_margin_ratio * extent
@@ -1104,7 +1148,7 @@ def _apply_gates(
                 f"{bounds_margin_ratio:g}x the sampled extent {extent:.6g}.",
                 support,
             )
-    checked.append("bounds-margin")
+    _passed(checked, "bounds-margin")
 
     if fit.relative_residual > max_relative_residual:
         return _rejected(
@@ -1114,7 +1158,7 @@ def _apply_gates(
             f"{max_relative_residual:g}.",
             support,
         )
-    checked.append("relative-residual")
+    _passed(checked, "relative-residual")
 
     simpler = _SIMPLER_KINDS[fit.kind]
     for other in simpler:
@@ -1130,7 +1174,7 @@ def _apply_gates(
                 support,
             )
     if simpler:
-        checked.append("simpler-primitive")
+        _passed(checked, "simpler-primitive")
 
     # --- the three disproof gates (KTD6) ------------------------------------
     # A passing residual is not evidence.  Each of these tries to *falsify* the
@@ -1150,7 +1194,7 @@ def _apply_gates(
                 "primitive however small its residual.",
                 support,
             )
-        checked.append("support-span")
+        _passed(checked, "support-span")
 
     if residual_structure_tolerance is not None:
         structure = _residual_structure(fit, points)
@@ -1165,7 +1209,7 @@ def _apply_gates(
                 "the wrong primitive with a flattering RMS.",
                 support,
             )
-        checked.append("residual-structure")
+        _passed(checked, "residual-structure")
 
     if heldout_residual_ratio is not None:
         held = _heldout_residual(fit, points, min_taper_ratio, heldout_seed)
@@ -1192,7 +1236,7 @@ def _apply_gates(
                 "over-parameterized for the evidence.",
                 support,
             )
-        checked.append("heldout-residual")
+        _passed(checked, "heldout-residual")
 
     return PrimitiveFit(
         kind=fit.kind,
@@ -2577,9 +2621,7 @@ def _cylinder_over_sphere(
         "sphere_relative_residual": fits[0].relative_residual,
         "cylinder_relative_residual": cylinder.relative_residual,
     }
-    checked = cylinder.support.setdefault("checked", [])
-    if "cylinder-normal-tie-break" not in checked:
-        checked.append("cylinder-normal-tie-break")
+    _passed(cylinder.support.setdefault("checked", []), "cylinder-normal-tie-break")
     return (cylinder,) + tuple(f for f in fits if f is not cylinder)
 
 
@@ -2598,11 +2640,21 @@ def _normal_direction_spread(
     tell them apart.
 
     Azimuths are merged at ``merge_deg``, the caller's measurement floor on a
-    facet normal's direction.  That is deliberately a *noise* width and not a
-    design angle: on a tessellation it is float precision, so only exactly
-    parallel facets merge, and on a scan every facet is its own direction and
-    this measurement cannot refuse anything -- which is correct, since discrete
-    normals are a tessellation signature and a scan has none.
+    facet normal's direction, by **complete** linkage: a direction joins the
+    open cluster only while it stays within ``merge_deg`` of that cluster's
+    *first* member, so no cluster is ever wider than the floor it was merged at.
+    Single linkage -- comparing against the cluster's last member -- chains
+    instead: on a scan the floor is the mesh's own normal noise, which is
+    routinely wider than the spacing of a fine tessellation, and every azimuth
+    around the turn then falls within the floor of its predecessor and the whole
+    sweep collapses to one direction.  A genuine 360-facet cylinder measured
+    that way reported one direction, zero per turn, and was refused as a prism.
+
+    So ``merge_deg`` is a *noise* width and not a design angle: on a tessellation
+    it is float precision and only exactly parallel facets merge; on a scan it is
+    wider, and clusters of that width still leave a genuine sweep with far more
+    directions per turn than any prism has walls -- which is correct, since
+    discrete normals are a tessellation signature and a scan has none.
 
     ``angular_coverage_deg`` is 360 minus the largest gap between adjacent
     directions: the arc the directions actually occupy, so a partial round is
@@ -2627,11 +2679,11 @@ def _normal_direction_spread(
     azimuths.sort()
     clusters = [[azimuths[0]]]
     for angle in azimuths[1:]:
-        if angle - clusters[-1][-1] <= merge_deg:
+        if angle - clusters[-1][0] <= merge_deg:
             clusters[-1].append(angle)
         else:
             clusters.append([angle])
-    if len(clusters) > 1 and (azimuths[0] + 360.0) - clusters[-1][-1] <= merge_deg:
+    if len(clusters) > 1 and (clusters[0][-1] + 360.0) - clusters[-1][0] <= merge_deg:
         clusters[0] = clusters.pop() + clusters[0]
     representatives = sorted(cluster[0] for cluster in clusters)
     directions = len(representatives)
@@ -2711,6 +2763,20 @@ def _prism_of_planes(
     )
     out: list[PrimitiveFit] = []
     discrete = spread["directions_per_turn"] < minimum_per_turn
+    # One direction has no arc, so saying it occupies "0 degrees of arc" reads as
+    # a measurement that refutes its own premise. It is a different sentence.
+    if spread["directions"] < 2:
+        occupancy = (
+            f"all point the same way, within the {spread['merge_tolerance_deg']:.4g} degree "
+            "measurement floor on a normal's direction: one wall, with no arc to sweep"
+        )
+    else:
+        occupancy = (
+            f"occupy only {spread['directions']} distinct directions across "
+            f"{spread['angular_coverage_deg']:.4g} degrees of arc -- "
+            f"{spread['directions_per_turn']:.4g} per full turn, below the declared "
+            f"{minimum_per_turn:g}"
+        )
     for fit in fits:
         if fit not in curved:
             out.append(fit)
@@ -2719,8 +2785,7 @@ def _prism_of_planes(
         support["normal_direction_spread"] = dict(measured)
         if not discrete:
             checked = list(support.get("checked", ()))
-            if "cylinder-normals-discrete" not in checked:
-                checked.append("cylinder-normals-discrete")
+            _passed(checked, "cylinder-normals-discrete")
             support["checked"] = checked
             out.append(
                 PrimitiveFit(
@@ -2740,11 +2805,8 @@ def _prism_of_planes(
                 fit.kind,
                 fit.extent,
                 f"cylinder-normals-discrete: the {spread['facet_count']} facet normals sit within "
-                f"{perpendicular:.4g} degrees of perpendicular to one axis but occupy only "
-                f"{spread['directions']} distinct directions across "
-                f"{spread['angular_coverage_deg']:.4g} degrees of arc -- "
-                f"{spread['directions_per_turn']:.4g} per full turn, below the declared "
-                f"{minimum_per_turn:g}. A curved surface's normals sweep; these are the spikes of "
+                f"{perpendicular:.4g} degrees of perpendicular to one axis but "
+                f"{occupancy}. A curved surface's normals sweep; these are the spikes of "
                 "a prism of planar walls whose corners happen to lie on the circle -- and on the "
                 f"sphere -- this {fit.kind} fits.",
                 support,
@@ -2830,9 +2892,7 @@ def _normal_constrained_cylinder(
             "and the radius and axis point from the exact circle fit in the plane that axis defines."
         ),
     )
-    checked = refit.support.setdefault("checked", [])
-    if "normal-constrained-axis" not in checked:
-        checked.append("normal-constrained-axis")
+    _passed(refit.support.setdefault("checked", []), "normal-constrained-axis")
     return (refit,) + tuple(f for f in ordered if f is not cylinder)
 
 

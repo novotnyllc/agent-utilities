@@ -63,6 +63,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import math
+import struct
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .manifest import ValidationIssue, _in_closed_set, _reject_unknown_fields
@@ -79,6 +80,7 @@ from .mesh_fitting import (
     _fit_circle_2d,
     _frame,
     _length,
+    _passed,
     _raw_fit,
     _residuals,
     _rms,
@@ -112,8 +114,19 @@ REFUSAL_REASONS = {
 #: Flags: measured facts that qualify every verdict downstream but do not stop
 #: the run. ``noise-model-inconsistent`` says the two independent noise
 #: estimators disagreed by more than 2x, so the iid assumption every statistical
-#: gate is calibrated against does not hold and its verdicts are approximate.
-RECORD_FLAGS = {"noise-model-inconsistent", "normals-unoriented", "angular-resolution-degraded"}
+#: gate is calibrated against does not hold and its verdicts are approximate;
+#: ``angular-resolution-degraded`` says the normals are too coarse to separate
+#: the features the caller asked for. A declared flag no stage can raise reads
+#: as a check this module performs and does not, so ``normals-unoriented`` was
+#: deleted rather than left standing: the mesh's winding is reported per region
+#: in ``orientation`` and per part in ``mesh_orientation``, each with the reason
+#: it is unavailable, which is the same fact with a measurement behind it.
+RECORD_FLAGS = {"noise-model-inconsistent", "angular-resolution-degraded"}
+
+#: Flags a *region* can carry, as opposed to the record. Declared here so the
+#: token is greppable from the one place that sets it.
+BOUNDARY_CIRCLE_DISAGREES = "boundary-circle-disagrees"
+REGION_FLAGS = {BOUNDARY_CIRCLE_DISAGREES}
 
 #: The two measurement regimes, plus the caller's "decide it from the mesh".
 #: An exact tessellation exported from CAD has vertices on the analytic surface
@@ -215,6 +228,14 @@ def _unit_fraction(value: Any) -> bool:
     return 0.0 < value <= 1.0
 
 
+#: The coarsest storage precision a caller may declare, relative to the part's
+#: own extent. Three orders above float32's own 1.2e-07 leaves room for a coarser
+#: format nobody has met yet; a decade above this is 1 part in 1000 of the part,
+#: at which the "precision floor" is larger than the features being fitted and
+#: every statistical gate is judging the declaration instead of the mesh.
+_MAX_VERTEX_PRECISION_REL = 1e-04
+
+
 #: name -> (json type, predicate, what the rationale must be about).
 #: Every one is declared by the caller. None has a default here, and validation
 #: rejects a threshold whose rationale is missing or empty -- a number nobody
@@ -268,10 +289,14 @@ THRESHOLDS: dict[str, tuple[str, Callable[[Any], bool], str]] = {
     ),
     "vertex_precision_rel": (
         "float",
-        _positive,
+        lambda v: 0.0 < v <= _MAX_VERTEX_PRECISION_REL,
         "the relative precision the vertex coordinates are *stored* at -- a binary STL holds "
         "float32, so about 1.2e-07 of the coordinate magnitude -- below which a residual is "
-        "quantization rather than geometry",
+        "quantization rather than geometry. Bounded above at 1e-04 because this floors sigma: "
+        "declared at 1e-04 a 100 mm part carries a 0.01 mm noise floor, which is already the "
+        "layer height of a printed feature, and every gate above it stops testing the geometry "
+        "and starts testing the declaration. The measured answer is recorded beside it in "
+        "noise.vertex_precision, from a float32 round trip over the coordinates themselves",
     ),
     "tessellation_sigma_over_extent": (
         "float",
@@ -1657,9 +1682,17 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     # 85 full-turn bores for "azimuthal structure" that was the quantization of a
     # perfectly round hole. The floor binds only where the mesh is quiet enough
     # for it to matter; on a scan the estimators are orders of magnitude above it.
-    precision_floor = float(state["spec"].value("vertex_precision_rel")) * topo.extent
+    declared_precision = float(state["spec"].value("vertex_precision_rel"))
+    precision_floor = declared_precision * topo.extent
     selected = sigma
     sigma = max(sigma, precision_floor)
+    # And the declaration is *checked* against the coordinates themselves. It is
+    # a claim about the file format, which the file can answer: a coordinate that
+    # came through float32 survives a float32 round trip exactly, and one that
+    # did not, does not. Declared and measured are both recorded; they are not
+    # reconciled here, because which one is right is the caller's to say -- a
+    # mesh may honestly carry finer coordinates than the floor they declared.
+    measured_precision = _measured_vertex_precision(mesh.vertices, topo.extent, declared_precision)
     # What the dihedral estimator measures on a tessellation is the facet turn
     # angle, and that *is* the discretization scale -- so it moves here rather
     # than being discarded. It was already reaching this line through `sigma` in
@@ -1684,6 +1717,7 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "regime": regime["regime"],
         "estimators_disagree": disagree,
         "vertex_precision_floor": precision_floor,
+        "vertex_precision": measured_precision,
         "precision_floor_binds": precision_floor >= selected,
         "sigma": sigma,
         "sigma_quadric": sigma_quadric,
@@ -1692,6 +1726,19 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "sigma_estimator_reason": why,
         "surface_scale": surface_scale,
         "discretization_scale": discretization,
+        # What `surface_scale` and `discretization_scale` are a scale *of*, which
+        # the regime decides and the names do not say. On a scan both are lengths
+        # over which the surface is uncertain. On a tessellation the mesh carries
+        # no noise, `sigma_dihedral` is the median facet turn angle, and a
+        # honeycomb's turn angles are its own 60-degree cell walls: the 13.108 mm
+        # it reported on a 249 mm part is the scale of the part's *features*, not
+        # of any discretization. The number is unchanged -- it is the right power
+        # floor either way, since a residual-structure test has nothing to test
+        # below the scale at which the surface itself turns -- and it is now
+        # labelled with what it measures rather than left to be read as noise.
+        "surface_scale_basis": (
+            "facet-turn-angle" if regime["regime"] == "tessellation" else "measurement-noise"
+        ),
         "sigma_over_extent": sigma / topo.extent if topo.extent > 0.0 else math.inf,
         "sigma_over_median_edge": sigma / topo.median_edge if topo.median_edge > 0.0 else math.inf,
         "median_abs_dihedral_deg": _median(dihedral) if dihedral else None,
@@ -1704,7 +1751,12 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
             "from and sigma_estimator_reason says why, because the regime decides which of them is "
             "estimating noise at all. surface_scale adds the mesh's own discretization; it sizes "
             "the power floor below which the residual-structure test has nothing to test. Neither "
-            "decides whether to give up: that is the feature-scale budget."
+            "decides whether to give up: that is the feature-scale budget. surface_scale_basis "
+            "says what surface_scale is a scale of: on a scan it is measurement noise, and on a "
+            "tessellation it is the facet turn angle -- the scale at which the surface itself "
+            "turns, which on a part whose walls meet at 60 degrees is the part's own geometry and "
+            "not a discretization. discretization_scale is surface_scale with sigma taken out of "
+            "it and carries the same meaning."
         ),
     }
     return None
@@ -1715,6 +1767,62 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
 #: facets were generated from one analytic face, and a tessellator's answer is
 #: exact while a scanner's is never within a billionth of a degree of it.
 _EXACT_COPLANAR_DEG = 1e-9
+
+
+#: One ulp of float32 at 1.0, doubled: the worst relative spacing anywhere in
+#: the format, and therefore the precision a float32 coordinate carries.
+_FLOAT32_PRECISION_REL = 2.0 * 2.0**-24
+
+
+def _measured_vertex_precision(
+    vertices: Sequence[Vec3], extent: float, declared: float, limit: int = 4096
+) -> dict[str, Any]:
+    """Is ``vertex_precision_rel`` the precision these coordinates were stored at?
+
+    The declaration is a statement about the file the dump came from -- "a binary
+    STL holds float32" -- and it sets a floor under sigma, so declaring it too
+    coarse silences the residual-structure gates and declaring it too fine hands
+    them the file format to test.  It is also a statement the coordinates can
+    answer: a value that arrived through float32 is exactly representable in
+    float32 and survives ``struct.pack``/``unpack`` unchanged, and one that did
+    not, does not.
+
+    Sampled at a fixed stride rather than exhaustively -- a mesh is millions of
+    numbers and this is a question about the format, not about any one vertex.
+    Reported, never enforced: a mesh that carries finer coordinates than the
+    caller declared is a conservative declaration, not a malformed record.
+    """
+    if not vertices:
+        return {"sampled_vertices": 0, "reads_as_float32": None}
+    step = max(1, len(vertices) // limit)
+    sampled = vertices[::step]
+    worst = 0.0
+    for vertex in sampled:
+        for value in vertex:
+            round_trip = struct.unpack("<f", struct.pack("<f", float(value)))[0]
+            worst = max(worst, abs(float(value) - round_trip))
+    exact = worst == 0.0
+    return {
+        "sampled_vertices": len(sampled),
+        "max_float32_round_trip": worst,
+        "reads_as_float32": exact,
+        # What the coordinates say their own precision is: float32's own relative
+        # spacing where they round-trip through it, and otherwise the round trip
+        # they failed by, which is a lower bound on the precision they carry.
+        "measured_precision_rel": (
+            _FLOAT32_PRECISION_REL if exact else (worst / extent if extent > 0.0 else math.inf)
+        ),
+        "declared_precision_rel": declared,
+        "note": (
+            "float32 if every sampled coordinate survives a float32 round trip exactly, which is "
+            "what a binary STL guarantees and what the declared floor assumes. Finer coordinates "
+            "mean the declaration is conservative; coarser ones mean the floor is under-declared "
+            "and the residual-structure gates are testing the file format."
+            if exact
+            else "these coordinates do not round-trip through float32, so they carry more "
+            "precision than a binary STL does and the declared floor is a conservative one."
+        ),
+    }
 
 
 def _detect_regime(
@@ -2030,7 +2138,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     f"for its parameters to be determined ({measured})."
                 )
             else:
-                checked.append("support-span-floor")
+                _passed(checked, "support-span-floor")
 
             if accepted:
                 # A test has no power against residuals that sit an order of
@@ -2093,7 +2201,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                             "errors over adjacent bins."
                         )
                     elif structure is not None:
-                        checked.append("residual-structure")
+                        _passed(checked, "residual-structure")
 
             if accepted and fit.rms_residual <= power_floor:
                 # The same rule the Moran block above already states, applied to
@@ -2125,7 +2233,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                             "evidence."
                         )
                     else:
-                        checked.append("heldout-residual")
+                        _passed(checked, "heldout-residual")
 
             if accepted:
                 earned, detail = _parsimony(fit, points, spec, support.get("n_eff", len(points)))
@@ -2137,7 +2245,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                         f"{fit.kind}, and the F test does not justify the extra parameters."
                     )
                 else:
-                    checked.append("nested-kind-parsimony")
+                    _passed(checked, "nested-kind-parsimony")
 
         if not accepted and fit.accepted and fit.kind in _RICHER_KINDS:
             promoted = _promote(fit, points, spec, support.get("n_eff", float(len(points))))
@@ -2148,7 +2256,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 checked = list(support.get("checked", ()))
                 support["checked"] = checked
                 support["promoted_from"] = refused_kind
-                checked.append("kind-promotion")
+                _passed(checked, "kind-promotion")
 
         uncertainty: dict[str, float] = {}
         if accepted:
@@ -2159,7 +2267,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             if failure is not None:
                 accepted, rejection = False, failure
             else:
-                checked.append("parameter-uncertainty")
+                _passed(checked, "parameter-uncertainty")
 
         if accepted and fit.kind in _AXIS_KINDS:
             corroboration = _boundary_corroboration(
@@ -2173,7 +2281,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             )
             if corroboration is not None:
                 support["boundary_circle"] = corroboration
-                checked.append("boundary-circle-corroboration")
+                _passed(checked, "boundary-circle-corroboration")
 
         region_hash = _region_hash(mesh.dump_sha256, triangles)
         recorded = PrimitiveFit(
@@ -2220,16 +2328,74 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
         )
 
     state["regions"] = regions
-    state["record"]["disproof"] = {
-        "moran_plane_baseline_z": plane_baseline,
+    state["record"]["disproof"] = dict(
+        _disproof_gate_census(regions),
+        moran_plane_baseline_z=plane_baseline,
+    )
+    return None
+
+
+#: Each disproof gate, by the token its block appends to ``checked`` once it has
+#: run and passed, with where that block records why it did not run.
+_DISPROOF_GATES = (
+    ("support-span-floor", None),
+    ("residual-structure", "moran_unavailable_reason"),
+    ("heldout-residual", "heldout_unavailable_reason"),
+    ("nested-kind-parsimony", None),
+)
+
+
+def _disproof_gate_census(regions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What actually ran, counted from the per-region ``checked`` lists.
+
+    The note here used to claim that every accepted fit had survived all four
+    gates.  It had not: both structure gates carry a power floor -- against
+    residuals an order of magnitude inside the measurement noise they have
+    nothing to test -- and on the honeycomb organiser that floor skipped Moran
+    and the held-out refit on all 39 accepted planes.  Kind promotion is a third
+    path: a promoted fit is accepted on the promotion's own evidence and carries
+    the promoted fit's ``checked``, not the refused one's.
+
+    The per-region lists were honest throughout, so the summary is derived from
+    them rather than written alongside them.  A gate is counted as *run* only
+    where its own block appended its token, and every skip is counted under the
+    reason that block recorded.
+    """
+    accepted = [region for region in regions if region["accepted"]]
+    gates: dict[str, Any] = {}
+    for token, reason_key in _DISPROOF_GATES:
+        ran, reasons = 0, {}
+        for region in accepted:
+            support = region["fit"].get("support", {})
+            if token in support.get("checked", ()):
+                ran += 1
+                continue
+            reason = support.get(reason_key) if reason_key else None
+            if reason is None:
+                reason = (
+                    "the fit was promoted to another kind, and carries the promoted fit's gates"
+                    if "promoted_from" in support
+                    else "the gate did not run on this region and recorded no reason"
+                )
+            reasons[reason] = reasons.get(reason, 0) + 1
+        gates[token] = {
+            "ran": ran,
+            "skipped": len(accepted) - ran,
+            "skip_reasons": dict(sorted(reasons.items())),
+        }
+    return {
+        "accepted_fits": len(accepted),
+        "gates": gates,
         "note": (
-            "Every accepted fit survived support floors, Moran's I on the mesh graph, a spatially "
-            "blocked held-out refit, and a nested-kind parsimony F test. Fusion supplied the "
-            "regions; it has no opinion about whether a fit is justified, so a face group that "
-            "failed a gate is kept with the gate that killed it, never dropped."
+            "Counted from each region's own `checked` list, which is appended only by the block "
+            "that ran the gate: `ran` is how many accepted fits that gate actually judged, and "
+            "every skip is counted under the reason the skipping block recorded. A gate with no "
+            "power against residuals inside the measurement noise reports that rather than "
+            "passing. Fusion supplied the regions; it has no opinion about whether a fit is "
+            "justified, so a face group that failed a gate is kept with the gate that killed it, "
+            "never dropped."
         ),
     }
-    return None
 
 
 def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
@@ -2557,7 +2723,7 @@ def _boundary_corroboration(
             "flag": (
                 None
                 if agrees_radius is not False and agrees_axis is not False
-                else "boundary-circle-disagrees"
+                else BOUNDARY_CIRCLE_DISAGREES
             ),
             "note": (
                 "the boundary loop between this group and its neighbour, fitted as a circle in its "

@@ -405,10 +405,11 @@ the named gate rather than producing an approximate feature:
    (`fillet-radius-undeclared`, `fillet-radius-disagrees`). A record that names no
    chain for a pair carrying more than one fragment cannot say which fragments
    share an edge and is refused (`fillet-edge-unidentified`). **Or whose
-   own blend surface another archetype already rebuilds**
-   (`fillet-region-already-reconstructed`) — a partial-arc cylinder can be a side
-   of an extrude or the wall of a bore, where a torus never could, and a region
-   rebuilt twice is counted twice in the coverage account.
+   own blend surface another archetype already rebuilds** — a partial-arc
+   cylinder can be a side of an extrude or the wall of a bore, where a torus
+   never could, and a region rebuilt twice is counted twice in the coverage
+   account. That last case names no gate: the region *is* reconstructed, by the
+   archetype that claimed it, so it never reaches `unreconstructed` at all.
 6. **A fillet whose parent features share no edge in the built solid.** Recorded
    in the rebuild report's `fillets_skipped` and subtracted from coverage. The
    blend fit said the two surfaces meet and the built solid says they do not;

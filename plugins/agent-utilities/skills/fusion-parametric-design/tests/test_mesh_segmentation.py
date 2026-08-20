@@ -584,6 +584,63 @@ class NoiseTests(unittest.TestCase):
         record = seg.fit_regions(make_dump(*box_mesh()), spec(vertex_precision_rel=1e-15))
         self.assertLess(record["noise"]["sigma"], 1e-9)
 
+    def test_the_declared_precision_is_bounded_above_because_it_floors_sigma(self) -> None:
+        """A declaration only bounded below can silence every gate above it.
+
+        At 1e-04 a 100 mm part carries a 0.01 mm noise floor -- a printed
+        feature's layer height -- and the residual-structure gates spend their
+        power on the declaration instead of the mesh.
+        """
+        self.assertEqual(1e-04, spec(vertex_precision_rel=1e-04).value("vertex_precision_rel"))
+        with self.assertRaises(seg.SegmentationSpecError):
+            spec(vertex_precision_rel=1.1e-04)
+
+    def test_the_storage_precision_is_measured_and_not_only_declared(self) -> None:
+        """`vertex_precision_rel` is a claim about the file, and the file can answer it.
+
+        A coordinate that arrived through float32 survives a float32 round trip
+        exactly. These fixtures are float64 by construction, so the honest answer
+        is that they carry more precision than the declaration assumes -- which
+        is reported, not enforced: a conservative floor is not a malformed record.
+        """
+        measured = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]["vertex_precision"]
+        self.assertFalse(measured["reads_as_float32"])
+        self.assertGreater(measured["max_float32_round_trip"], 0.0)
+        self.assertEqual(1.2e-07, measured["declared_precision_rel"])
+        # And a mesh whose coordinates really did come through float32 says so,
+        # and reports the format's own relative precision rather than a residual.
+        import struct
+
+        vertices, triangles, groups = box_mesh()
+        quantized = [
+            tuple(struct.unpack("<f", struct.pack("<f", value))[0] for value in vertex)
+            for vertex in vertices
+        ]
+        f32 = seg.fit_regions(make_dump(quantized, triangles, face_groups=groups), spec())
+        self.assertTrue(f32["noise"]["vertex_precision"]["reads_as_float32"])
+        self.assertEqual(0.0, f32["noise"]["vertex_precision"]["max_float32_round_trip"])
+        self.assertAlmostEqual(
+            1.1920929e-07, f32["noise"]["vertex_precision"]["measured_precision_rel"], places=12
+        )
+
+    def test_surface_scale_says_what_it_is_a_scale_of(self) -> None:
+        """On a tessellation it is the facet turn angle, which is the part's geometry.
+
+        The honeycomb's cell walls meet at 60 degrees, and the dihedral estimator
+        read 13.108 mm of "discretization" on a 249 mm part from exactly that.
+        The number is the right power floor either way -- nothing to test below
+        the scale at which the surface turns -- so what changed is that the
+        record says which it is instead of leaving it to be read as noise.
+        """
+        exact = seg.fit_regions(make_dump(*box_mesh()), spec())["noise"]
+        self.assertEqual("tessellation", exact["regime"])
+        self.assertEqual("facet-turn-angle", exact["surface_scale_basis"])
+        scanned = seg.fit_regions(
+            make_dump(*box_mesh(size=20.0, divisions=14, noise=0.05)), spec(min_feature_size=5.0)
+        )["noise"]
+        self.assertEqual("scan", scanned["regime"])
+        self.assertEqual("measurement-noise", scanned["surface_scale_basis"])
+
     def test_noise_estimators_recover_the_injected_sigma_on_flat_surface(self) -> None:
         """Calibration, checked where curvature cannot contaminate it.
 
@@ -1023,6 +1080,47 @@ class DisproofTests(unittest.TestCase):
                 self.assertLess(support["ratio"], 1.5)
                 return
         self.skipTest("no region reached the held-out gate on this fixture")
+
+    def test_a_region_below_the_power_floor_says_so_and_does_not_claim_the_gate(self) -> None:
+        """The held-out floor, pinned by name rather than by a fillet test's side effect.
+
+        An exact tessellation fits its planes at float noise, and a held-out
+        refit of residuals orders inside the measurement noise compares two
+        quantization patterns. The block reports that and deliberately does not
+        append `heldout-residual`, so a reader can tell "passed" from "had
+        nothing to test".
+        """
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        accepted = [r for r in record["regions"] if r["accepted"]]
+        self.assertEqual(6, len(accepted))
+        for region in accepted:
+            support = region["fit"]["support"]
+            self.assertIn("no power here", support["heldout_unavailable_reason"])
+            self.assertNotIn("heldout-residual", support["checked"])
+            self.assertNotIn("residual-structure", support["checked"])
+
+    def test_the_disproof_note_is_derived_from_the_checked_lists_not_asserted(self) -> None:
+        """The note claimed all four gates ran on every accepted fit; two ran on none."""
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        disproof = record["disproof"]
+        self.assertEqual(6, disproof["accepted_fits"])
+        gates = disproof["gates"]
+        for token in ("support-span-floor", "nested-kind-parsimony"):
+            self.assertEqual(6, gates[token]["ran"])
+            self.assertEqual({}, gates[token]["skip_reasons"])
+        for token in ("residual-structure", "heldout-residual"):
+            self.assertEqual(0, gates[token]["ran"])
+            self.assertEqual(6, gates[token]["skipped"])
+            self.assertEqual([6], list(gates[token]["skip_reasons"].values()))
+            self.assertIn("no power here", next(iter(gates[token]["skip_reasons"])))
+        # And the counts are the lists', not a second opinion about them.
+        for token, gate in gates.items():
+            ran = sum(
+                1
+                for region in record["regions"]
+                if region["accepted"] and token in region["fit"]["support"]["checked"]
+            )
+            self.assertEqual(ran, gate["ran"], token)
 
     def test_the_parsimony_test_refuses_a_richer_kind_that_did_not_earn_it(self) -> None:
         vertices, _triangles, _groups = cylinder_mesh(sides=64, stacks=20, noise=0.02)
@@ -1529,6 +1627,50 @@ class NormalConstrainedRegionTests(unittest.TestCase):
         # second, separately named number.
         self.assertEqual(cylinder["fit"]["parameters"]["radius"], boundary["fitted_radius"])
         self.assertIn("loop_radius", boundary)
+
+    def test_a_boundary_circle_that_disagrees_is_flagged_and_moves_nothing(self) -> None:
+        """The other half of the corroboration, which had no test naming it.
+
+        The same bore, judged against a fit whose radius is half a millimetre
+        out. The loop still measures 5.0, the disagreement is far beyond the
+        joint uncertainty, and the flag says so -- while the fit's own radius is
+        left exactly where it was, because corroboration that quietly moved the
+        answer would stop being corroboration.
+        """
+        dump = self._shallow_bore()
+        welded = seg.weld_dump(dump, 1e-09)
+        topo = seg._build_topology(welded)
+        record = seg.fit_regions(dump, spec())
+        cylinder = [
+            r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] == "cylinder"
+        ][0]
+        parameters = dict(cylinder["fit"]["parameters"])
+        parameters["radius"] = parameters["radius"] + 0.5
+        wrong = seg.PrimitiveFit(
+            kind="cylinder",
+            accepted=True,
+            rms_residual=cylinder["fit"]["rms_residual"],
+            relative_residual=cylinder["fit"]["relative_residual"],
+            extent=cylinder["fit"]["extent"],
+            parameters={
+                key: tuple(value) if isinstance(value, list) else value
+                for key, value in parameters.items()
+            },
+        )
+        measured = seg._boundary_corroboration(
+            wrong,
+            cylinder["fit"]["uncertainty"],
+            cylinder["welded_triangle_indices"],
+            welded,
+            topo,
+            3.0,
+            record["noise"]["surface_scale"],
+        )
+        self.assertEqual("boundary-circle-disagrees", measured["flag"])
+        self.assertFalse(measured["agrees_on_radius"])
+        self.assertAlmostEqual(5.0, measured["loop_radius"], places=6)
+        self.assertAlmostEqual(-0.5, measured["radius_delta"], places=6)
+        self.assertEqual(wrong.parameters["radius"], measured["fitted_radius"])
 
     def test_a_closed_surface_has_no_boundary_to_be_corroborated_by(self) -> None:
         """Absent evidence is absent, not agreement."""

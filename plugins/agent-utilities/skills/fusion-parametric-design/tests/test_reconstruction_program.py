@@ -37,6 +37,94 @@ def two_bores(radius_b: float = 3.0):
     )
 
 
+class DeclaredTokenTests(unittest.TestCase):
+    """Every named reason this planner can emit is declared, and none is a free string.
+
+    Five of the motion reasons were synthesized as
+    ``f"motion-{refusal or verdict or 'none'}"``: they existed only while the
+    program ran, so nothing could grep for them, no test could name one, and any
+    change to the router's own vocabulary renamed them silently.
+    """
+
+    def test_every_router_outcome_maps_to_a_declared_reason(self) -> None:
+        cases = {
+            ("router-ambiguous", "none"): "motion-router-ambiguous",
+            ("router-signature-conflict", "none"): "motion-router-signature-conflict",
+            (None, "extrusion"): "motion-extrusion",
+            (None, "helical"): "motion-helical",
+            (None, "none"): "motion-none",
+            (None, None): "motion-none",
+        }
+        for (refusal, verdict), expected in cases.items():
+            with self.subTest(refusal=refusal, verdict=verdict):
+                reason = rp._motion_reason({"refusal": refusal, "verdict": verdict})
+                self.assertEqual(expected, reason)
+                self.assertIn(reason, rp.MOTION_EVIDENCE_REASONS)
+
+    def test_a_router_outcome_nobody_declared_raises_rather_than_inventing_a_token(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            rp._motion_reason({"refusal": "router-went-fishing", "verdict": None})
+        self.assertIn("no declared reason", str(caught.exception))
+
+    def test_a_rotation_about_another_line_is_named_and_not_confirmed(self) -> None:
+        # `motion-axis-mismatch`: the group really is swept by a rotation, about
+        # a line 50 mm from the datum axis. A revolve here would turn the profile
+        # about an axis the geometry does not name.
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (30.0, 40.0, 4.0), 3.0, 150.0, 8.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (30.0, 40.0, 0.0), 28.0),
+            ]
+        )
+        regions = list(parse_fit_record(record).accepted())
+        frame = rp.DatumFrame(
+            origin=(0.0, 0.0, 0.0),
+            x_axis=(1.0, 0.0, 0.0),
+            y_axis=(0.0, 1.0, 0.0),
+            z_axis=(0.0, 0.0, 1.0),
+        )
+        gates = {
+            name: block["value"]
+            for name, block in fx.spec()["thresholds"]["motion_evidence"].items()
+        }
+        evidence = rp._motion_evidence(regions, frame, gates, 2.0, 0.5)
+        self.assertFalse(evidence["confirmed"])
+        self.assertEqual("motion-axis-mismatch", evidence["reason"])
+        self.assertAlmostEqual(50.0, evidence["axis_offset"], places=6)
+
+    def test_an_unprovable_revolve_names_the_gate_and_the_routers_own_reason(self) -> None:
+        # A stack of two coaxial cylinders admits a rotation *and* a translation,
+        # so the router refuses to pick one and the group is not revolved. Both
+        # tokens on that path -- the gate and the router reason inside it -- had
+        # no test naming them.
+        record = fx.record(
+            [
+                fx.oriented(
+                    fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                    "outside",
+                ),
+                fx.oriented(
+                    fx.cylinder("boss2", (0.0, 0.0, 1.0), (0.0, 0.0, 14.0), 5.0, 150.0, 8.0),
+                    "outside",
+                ),
+                fx.plane("flat", (1.0, 0.0, 0.0), (0.0, 0.0, 4.0), 12.0),
+            ]
+        )
+        program = build(record, fx.spec())
+        self.assertNotIn("revolve", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("revolve-motion-unproven", gates)
+        self.assertIn("motion-router-ambiguous", gates)
+
+    def test_a_gate_token_nobody_declared_is_refused_on_the_way_into_the_program(self) -> None:
+        self.assertEqual("prose: is left alone.", rp._declared_gate("prose: is left alone."))
+        self.assertEqual(
+            "hole-axis-oblique: ...", rp._declared_gate("hole-axis-oblique: ...")
+        )
+        with self.assertRaises(ValueError):
+            rp._declared_gate("hole-axis-obliqe: a typo nothing downstream could match.")
+
+
 class SpecValidationTests(unittest.TestCase):
     def test_a_threshold_without_a_rationale_is_rejected(self) -> None:
         spec = fx.spec()
@@ -541,6 +629,14 @@ class HoleAndFilletTests(unittest.TestCase):
         ]
         self.assertEqual(1, len(claimed), program["archetypes"])
         self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        # And it names no gate, because it is not unreconstructed: the archetype
+        # that claimed it rebuilt it. There used to be a
+        # `fillet-region-already-reconstructed` string here that was built and
+        # then discarded on every run, since the unreconstructed list is exactly
+        # the regions nothing claimed.
+        self.assertEqual(
+            [], [e for e in program["unreconstructed"] if e["region_id"] == fx.region_hash("blend")]
+        )
         self.assertAlmostEqual(
             program["covered_area_fraction"],
             sum(g["area_fraction"] for g in program["archetypes"]),
@@ -680,6 +776,23 @@ class HoleAndFilletTests(unittest.TestCase):
         gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
         self.assertIn("fillet-neighbour-shared", gates)
 
+    def test_two_unchained_fragments_on_one_pair_refuse_by_name(self) -> None:
+        # The gate had no test of its own: a record that names no chain cannot
+        # say which fragments lie on one edge, and pooling or splitting them
+        # would both be a measurement nobody made.
+        extras = [
+            self._blend("left", ["x-lo", "y-lo"], radius=1.0, area=40.0),
+            self._blend("right", ["x-lo", "y-lo"], radius=1.0, area=20.0, y=6.0),
+        ]
+        for extra in extras:
+            extra["fillet"]["chain_id"] = None
+            extra.pop("fillet_chain")
+        program = build(fx.bored_post_record("inside", extras=extras), fx.spec())
+        self.assertNotIn("fillet", [g["kind"] for g in program["archetypes"]])
+        gates = " ".join(entry["gate"] for entry in program["unreconstructed"])
+        self.assertIn("fillet-edge-unidentified", gates)
+        self.assertIn("no chain id", gates)
+
     def test_every_archetype_carries_the_share_of_the_scan_it_accounts_for(self) -> None:
         program = build(fx.bored_post_record("inside"), fx.spec())
         total = sum(g["area_fraction"] for g in program["archetypes"])
@@ -733,6 +846,34 @@ class ProgramShapeTests(unittest.TestCase):
         program = build(fx.box_record(), fx.spec())
         self.assertIsNone(program["archetypes"][0]["profile"])
         self.assertIn("cannot produce one", program["profile_note"])
+
+    def test_the_regime_crosses_the_seam_and_an_override_is_visible_in_it(self) -> None:
+        """Two programs from the same dump differed only in evidence nobody carried.
+
+        The regime sets every noise floor upstream, so a program built in the
+        scan regime and one built in the tessellation regime are different
+        claims. They used to be byte-identical, and a caller who *asserted* the
+        regime over the mesh's own reading left no trace of having done so.
+        """
+        measured = build(fx.turned_record(), fx.spec())
+        self.assertEqual(
+            {"regime": "tessellation", "declared": "auto", "overridden": False},
+            measured["regime"],
+        )
+        asserted = build(
+            fx.record(fx.turned_record()["regions"], detected="scan", declared="tessellation"),
+            fx.spec(),
+        )
+        self.assertEqual(
+            {"regime": "tessellation", "declared": "tessellation", "overridden": True},
+            asserted["regime"],
+        )
+        self.assertNotEqual(measured["program_sha256"], asserted["program_sha256"])
+
+    def test_a_record_from_before_the_regime_was_detected_still_plans(self) -> None:
+        record = fx.turned_record()
+        record.pop("regime")
+        self.assertIsNone(build(record, fx.spec())["regime"])
 
 
 class ProgramValidatorTests(unittest.TestCase):

@@ -129,6 +129,21 @@ class FitToPlanSeamTests(unittest.TestCase):
             places=6,
         )
 
+    def test_the_regime_the_fitter_measured_reaches_the_program(self) -> None:
+        """Producer against consumer, so the two cannot drift on this block either.
+
+        `fit-regions` detects the regime and every noise floor it applied hangs
+        off that verdict; the program is what a rebuild is judged against. The
+        block was written and then dropped at `parse_fit_record`, so no fixture
+        on either side could have caught it.
+        """
+        program = planned(self.record, build_manifest())
+        self.assertEqual("tessellation", self.record["regime"]["regime"])
+        self.assertEqual(
+            {"regime": "tessellation", "declared": "auto", "overridden": False},
+            program["regime"],
+        )
+
     def test_the_two_clis_connect_through_files_on_disk(self) -> None:
         """The seam as a user runs it: one command's output file, the next's input."""
         dump = brick_dump()

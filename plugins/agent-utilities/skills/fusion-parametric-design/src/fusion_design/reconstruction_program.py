@@ -43,9 +43,15 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import re
 from typing import Any, Callable, Mapping, Sequence
 
-from .manifest import ManifestValidationError, ValidationIssue, _reject_unknown_fields
+from .manifest import (
+    ManifestValidationError,
+    ValidationIssue,
+    _in_closed_set,
+    _reject_unknown_fields,
+)
 from .mesh_datum import (
     DATUM_REFUSALS,
     REFUSAL_ALTERNATIVES,
@@ -59,6 +65,7 @@ from .mesh_datum import (
     require_uncertainty,
 )
 from .mesh_fitting import (
+    FIT_REJECTION_TOKENS,
     INTENT_KINDS,
     IntentProposal,
     PrimitiveFit,
@@ -686,6 +693,85 @@ MOTION_GATE_FIELDS = (
     "pitch_epsilon",
 )
 
+# Every named gate this planner can leave a region unreconstructed under. The
+# gate string is "token: prose", and the token is what a reader greps, counts
+# and asserts on; the prose is for the human. Declared here so that adding a
+# gate is a decision rather than a typo, and enforced by `_declared_gate` on the
+# way into the program. A gate whose prefix is *not* token-shaped -- "support
+# floors: ...", a fitter's own prose rejection passed through -- is left alone:
+# those name no token because nothing downstream branches on them.
+UNRECONSTRUCTED_GATES = {
+    "plane-unmappable",
+    "hole-base-ambiguous",
+    "hole-base-not-extruded",
+    "hole-axis-oblique",
+    "hole-not-contained",
+    "hole-radius-absent",
+    "fillet-fit-unaccepted",
+    "fillet-neighbour-unreconstructed",
+    "fillet-neighbour-shared",
+    "fillet-edge-unidentified",
+    "fillet-radius-undeclared",
+    "fillet-radius-disagrees",
+    "revolve-motion-unproven",
+    "material-side-unavailable",
+}
+
+_GATE_TOKEN_RE = re.compile(r"\A[a-z0-9]+(-[a-z0-9]+)+\Z")
+
+
+def _declared_gate(gate: str) -> str:
+    """A gate string, refused if it opens with a token nobody declared."""
+    token = gate.split(":", 1)[0]
+    if _GATE_TOKEN_RE.match(token) and not (
+        _in_closed_set(token, UNRECONSTRUCTED_GATES)
+        or _in_closed_set(token, set(FIT_REJECTION_TOKENS))
+    ):
+        raise ValueError(
+            f"{token!r} is not a declared unreconstructed gate; add it to UNRECONSTRUCTED_GATES "
+            "with what a reader is meant to do about it."
+        )
+    return gate
+
+
+# What the router's own outcome is called where a program reports it.  Five of
+# these used to be synthesized as f"motion-{refusal or verdict or 'none'}",
+# which meant they existed only at runtime: not greppable, not assertable, and
+# silently renamed by any change to the router's vocabulary.  The mapping is
+# explicit so that a new router outcome fails here, loudly, instead of inventing
+# a token nobody declared.
+MOTION_ROUTER_REASONS = {
+    "router-ambiguous": "motion-router-ambiguous",
+    "router-signature-conflict": "motion-router-signature-conflict",
+}
+MOTION_VERDICT_REASONS = {
+    "extrusion": "motion-extrusion",
+    "helical": "motion-helical",
+    "none": "motion-none",
+    "revolution": "motion-revolution-confirmed",
+}
+MOTION_EVIDENCE_REASONS = (
+    set(MOTION_ROUTER_REASONS.values())
+    | set(MOTION_VERDICT_REASONS.values())
+    | {"motion-evidence-undeclared", "motion-evidence-unavailable", "motion-axis-mismatch"}
+)
+
+
+def _motion_reason(router: Mapping[str, Any]) -> str:
+    """The declared token for a router outcome that was not a confirmed revolve."""
+    refusal, verdict = router.get("refusal"), router.get("verdict")
+    reason = (
+        MOTION_ROUTER_REASONS.get(str(refusal))
+        if refusal
+        else MOTION_VERDICT_REASONS.get(str(verdict or "none"))
+    )
+    if not _in_closed_set(reason, MOTION_EVIDENCE_REASONS):
+        raise ValueError(
+            f"the router returned refusal {refusal!r} and verdict {verdict!r}, which this planner "
+            f"has no declared reason for; add it to MOTION_ROUTER_REASONS or MOTION_VERDICT_REASONS."
+        )
+    return str(reason)
+
 
 def _motion_evidence(
     regions: Sequence[RegionFit],
@@ -764,7 +850,7 @@ def _motion_evidence(
     if router["verdict"] != "revolution":
         return {
             "confirmed": False,
-            "reason": f"motion-{router['refusal'] or router['verdict'] or 'none'}",
+            "reason": _motion_reason(router),
             "detail": (
                 "this group's own facets do not show it swept by a rotation: "
                 + str(router.get("reason", "the router reached no verdict."))
@@ -1184,17 +1270,18 @@ def _plan_fillets(
                 "surface behind the proposal."
             )
             continue
-        claimant = owner.get(region.region_hash)
-        if claimant is not None:
+        if region.region_hash in owner:
             # The blend surface is already rebuilt -- as a side of an extrude
             # whose section runs through the round, or as the wall of a bore.
             # Rounding it again would put the same area in two archetypes, and
             # the coverage account would report more than the scan.
-            gates[region.region_hash] = (
-                "fillet-region-already-reconstructed: this blend surface is already part of "
-                f"{claimant}, whose own profile rebuilds it. A fillet here would rebuild the same "
-                "area a second time."
-            )
+            #
+            # No gate is recorded, and there used to be one
+            # (`fillet-region-already-reconstructed`): every region an archetype
+            # owns is `claimed`, and the unreconstructed list is built from the
+            # regions nothing claimed, so that string was constructed and then
+            # discarded on every run. A named gate nobody can ever read is a
+            # check this planner appears to report and does not.
             continue
         first, second = region.fillet["between"]
         owners = sorted({owner.get(first), owner.get(second)} - {None})
@@ -1561,7 +1648,7 @@ def plan_archetypes(
         # this gate rather than contradicting it.
         for region in revolve:
             unmappable[region.region_hash] = (
-                f"revolve-motion-unproven ({motion['reason']}): {motion['detail']}"
+                f"revolve-motion-unproven: {motion['reason']} -- {motion['detail']}"
             )
 
     holes, hole_gates = _plan_holes(
@@ -1618,7 +1705,7 @@ def plan_archetypes(
                 "area": region.area,
                 "area_fraction": None,
                 "bounding_box": [list(region.bounding_box[0]), list(region.bounding_box[1])],
-                "gate": gate,
+                "gate": _declared_gate(gate),
             }
         )
     return groups, unreconstructed
@@ -2217,6 +2304,12 @@ def build_reconstruction_program(
         "dump_sha256": fit_record.dump_sha256,
         "manifest_sha256": manifest_sha256,
         "units": fit_record.units,
+        # Beside the units, for the same reason: both say what the numbers under
+        # them mean. The regime sets the noise floors every upstream gate was
+        # judged against, and `overridden` says whether the mesh was measured or
+        # the caller asserted it -- without which two programs from the same dump
+        # are byte-identical either way.
+        "regime": fit_record.regime,
         "thresholds": {key: value for key, value in thresholds.items()},
         "datum": frame.to_dict(),
         "user_parameters": parameters,
@@ -2273,6 +2366,7 @@ _PROGRAM_FIELDS = {
     "dump_sha256",
     "manifest_sha256",
     "units",
+    "regime",
     "thresholds",
     "datum",
     "user_parameters",

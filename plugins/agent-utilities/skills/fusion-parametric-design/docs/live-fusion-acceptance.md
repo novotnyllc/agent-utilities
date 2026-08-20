@@ -446,9 +446,34 @@ does, and only for the release it ran against.
    boss, `null` an open question with `orientation.unavailable_reason` and
    `orientation.mesh_closed`/`mesh_winding` saying why (this is step 3 coming
    back); `unfitted_regions[].failed_gate`; `unclaimed.components` with their
-   `dominant_curvature`; and `flags`, where `noise-model-inconsistent`,
-   `normals-unoriented` or `angular-resolution-degraded` qualify every verdict
-   downstream without stopping the run.
+   `dominant_curvature`; and `flags`, where `noise-model-inconsistent` or
+   `angular-resolution-degraded` qualify every verdict downstream without
+   stopping the run. (There is no `normals-unoriented` flag: nothing ever raised
+   one, and the winding it would have judged is reported per region in
+   `orientation` and per part in `mesh_orientation`, each with the reason it is
+   unavailable.)
+
+   Then read `disproof`, which is derived from the per-region evidence rather
+   than asserted beside it: `gates[<gate>].ran` is how many accepted fits each
+   gate actually judged and `skip_reasons` counts the rest under the reason the
+   skipping block recorded. Both structure gates have a power floor — against
+   residuals inside the measurement noise they have nothing to test — so on an
+   exact tessellation it is normal for `residual-structure` and
+   `heldout-residual` to have run on none of them. The gate names are the tokens
+   in each region's own `fit.support.checked`: `radius-ratio`, `bounds-margin`,
+   `relative-residual`, `simpler-primitive`, `support-span`,
+   `support-span-floor`, `residual-structure`, `heldout-residual`,
+   `nested-kind-parsimony`, `kind-promotion`, `parameter-uncertainty`,
+   `cylinder-normal-tie-break` (the facet normals took a group the vertices had
+   given to a sphere), `cylinder-normals-discrete` (the normals sweep, so this is
+   not a prism of planar walls — the same token names the *rejection* when they
+   do not), `normal-constrained-axis` (the axis came from the facet normals, not
+   from the vertices) and `boundary-circle-corroboration` (the group's own
+   boundary loop agrees with the fitted radius and axis; when it does not, the
+   `boundary_circle.flag` is `boundary-circle-disagrees` and nothing is moved).
+   `regime` says which measurement regime the run was in, whether you declared
+   it, and whether that declaration overrode the mesh's own reading; it is
+   carried into the program, because every noise floor above hangs off it.
 
    A refusal exits 2 with `refusal.reason` one of `triangle-budget-exceeded`,
    `mesh-degenerate`, `mesh-not-welded`, `feature-scale-below-noise`,
@@ -478,12 +503,17 @@ does, and only for the release it ran against.
    Read every `unreconstructed[].gate` and confirm it is a sentence you agree
    with. The gate names are `material-side-unavailable` (the open mesh case from
    step 3), `plane-unmappable`, `hole-base-ambiguous`, `hole-base-not-extruded`,
-   `hole-axis-oblique`, `hole-not-contained`, `fillet-fit-unaccepted`,
-   `fillet-region-already-reconstructed`, `fillet-neighbour-unreconstructed`,
+   `hole-axis-oblique`, `hole-not-contained`, `hole-radius-absent`,
+   `fillet-fit-unaccepted`, `fillet-neighbour-unreconstructed`,
    `fillet-neighbour-shared`, `fillet-radius-undeclared`,
-   `fillet-radius-disagrees`, and `fillet-edge-unidentified`. **A gate is
+   `fillet-radius-disagrees`, `fillet-edge-unidentified`, and
+   `revolve-motion-unproven`, which carries the kinematic router's own reason
+   after it: `motion-router-ambiguous`, `motion-router-signature-conflict`,
+   `motion-extrusion`, `motion-helical`, `motion-none`, `motion-axis-mismatch`,
+   `motion-evidence-undeclared` or `motion-evidence-unavailable`. **A gate is
    a result, not an error.** A refusal, by contrast, exits 2 printing a JSON
    record whose `reason` is one of `fit-record-malformed`,
+   `fit-record-moments-unbound`,
    `fit-record-missing-axial-span`, `fit-record-missing-uncertainty`,
    `frame-no-accepted-fits`, `frame-ambiguous`, `frame-x-underdetermined`,
    `adoption-unmeasured`, `adoption-unlicensed`, `adoption-unsupported-target`,

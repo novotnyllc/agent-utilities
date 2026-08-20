@@ -81,9 +81,13 @@ def plane(label, normal, point, area, *, uncertainty=None, accepted=True, reject
     offset = sum(n * p for n, p in zip(normal, point))
     lo = tuple(p - 1.0 for p in point)
     hi = tuple(p + 1.0 for p in point)
+    moments = _plane_moments(normal, point, area)
     return {
         "region_hash": region_hash(label),
         "area": area,
+        # The parser binds the moment block to the region it rides on, so the
+        # fixture states the same triangle count the block was built from.
+        "triangle_count": moments["facet_count"],
         "bounding_box": [list(lo), list(hi)],
         "fit": {
             "kind": "plane",
@@ -95,16 +99,18 @@ def plane(label, normal, point, area, *, uncertainty=None, accepted=True, reject
             "uncertainty": dict(PLANE_SIGMAS if uncertainty is None else uncertainty),
             **({"rejection": rejection} if rejection else {}),
         },
-        "motion_moments": _plane_moments(normal, point, area),
+        "motion_moments": moments,
     }
 
 
 def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
     lo = tuple(p - radius for p in axis_point)
     hi = tuple(p + radius for p in axis_point)
+    moments = _cylinder_moments(axis, axis_point, radius, area, span)
     return {
         "region_hash": region_hash(label),
         "area": area,
+        "triangle_count": moments["facet_count"],
         "bounding_box": [list(lo), list(hi)],
         "fit": {
             "kind": "cylinder",
@@ -120,7 +126,7 @@ def cylinder(label, axis, axis_point, radius, area, span, *, uncertainty=None):
             "support": {"axial_span": span},
             "uncertainty": dict(CYLINDER_SIGMAS if uncertainty is None else uncertainty),
         },
-        "motion_moments": _cylinder_moments(axis, axis_point, radius, area, span),
+        "motion_moments": moments,
     }
 
 
@@ -226,11 +232,30 @@ def torus(label, radius, minor_radius, area, *, between, candidate=True):
     return region
 
 
-def record(regions: list[dict[str, Any]], *, units: str = "mm") -> dict[str, Any]:
+def record(
+    regions: list[dict[str, Any]],
+    *,
+    units: str = "mm",
+    detected: str = "tessellation",
+    declared: str = "auto",
+) -> dict[str, Any]:
+    """A fit record shaped like U2's, regime block included.
+
+    ``declared`` is what the caller asked for and ``detected`` what the mesh
+    said; the effective regime is the declaration unless it is ``auto``, which
+    is exactly the rule `_detect_regime` applies.
+    """
     return {
         "record_version": 1,
         "dump_sha256": DUMP_SHA256,
         "units": units,
+        "regime": {
+            "regime": detected if declared == "auto" else declared,
+            "detected": detected,
+            "declared": declared,
+            "overridden": declared != "auto" and declared != detected,
+            "evidence": {},
+        },
         "total_area": sum(region["area"] for region in regions),
         "regions": regions,
     }

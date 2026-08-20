@@ -1534,6 +1534,53 @@ class PrismOfPlanesTests(unittest.TestCase):
         self.assertGreater(spread["directions_per_turn"], 8.0)
         self.assertIn("cylinder-normals-discrete", best.support["checked"])
 
+    def test_a_fine_tessellation_survives_the_scan_regime_merge_floor(self) -> None:
+        """The merge is complete-linkage, so a sweep cannot chain into one spike.
+
+        On a scan the merge floor is the mesh's own normal noise, which is
+        routinely wider than the azimuth spacing of a fine tessellation. Merging
+        against the *last* member of the open cluster chained all 360 facets of
+        a genuine exact cylinder into a single direction -- 0 per turn, refused
+        as a prism. Against the cluster's *first* member no cluster is ever
+        wider than the floor, so the sweep survives every floor tried here.
+        """
+        for floor in (1e-06, 1.0, 5.0, 32.0):
+            with self.subTest(merge_deg=floor):
+                best = self._group(360, normal_sigma_theta_floor_deg=floor)[0]
+                self.assertEqual("cylinder", best.kind)
+                self.assertTrue(best.accepted)
+                spread = best.support["normal_direction_spread"]
+                # Two coplanar triangles per wall, so 720 facets on 360 azimuths.
+                self.assertEqual(720, spread["facet_count"])
+                # A cluster spans at most `floor`, so a full turn cannot hold
+                # fewer than 360/(floor + spacing) of them.
+                self.assertGreaterEqual(spread["directions"], 360.0 / (floor + 1.0))
+                self.assertGreater(spread["directions_per_turn"], 8.0)
+
+    def test_the_declared_eight_per_turn_sits_inside_a_thirteen_percent_band(self) -> None:
+        """What separates a refused prism from an accepted round, measured.
+
+        The declared floor is 8.0 per turn and the nearest measurements on
+        either side of it are 13% away: a hexagon carries 7.20 and a 7-sided
+        prism 8.17, which passes. Nothing in the corpus is 7- or 9-sided, so
+        this band is asserted here rather than discovered by a part.
+        """
+        measured = {6: 7.2, 7: 8.1667, 8: 9.1429, 9: 10.125, 10: 11.1111}
+        for sides, per_turn in measured.items():
+            with self.subTest(sides=sides):
+                fits = self._group(sides)
+                best = fits[0]
+                spread = (
+                    best.support.get("normal_direction_spread")
+                    if best.accepted
+                    else next(f for f in fits if f.kind == "cylinder").support[
+                        "normal_direction_spread"
+                    ]
+                )
+                self.assertEqual(sides, spread["directions"])
+                self.assertAlmostEqual(per_turn, spread["directions_per_turn"], places=4)
+                self.assertEqual(per_turn >= 8.0, best.accepted and best.kind == "cylinder")
+
     def test_a_real_bore_is_far_from_the_gate_and_keeps_its_axis_evidence(self) -> None:
         best = self._group(48)[0]
         self.assertEqual("cylinder", best.kind)
@@ -1557,6 +1604,31 @@ class PrismOfPlanesTests(unittest.TestCase):
         flat = _normal_direction_spread([(1.0, 0.0, 0.0), (1.0, 0.0, 0.0)], axis, 1e-06)
         self.assertEqual(1, flat["directions"])
         self.assertEqual(0.0, flat["directions_per_turn"])
+
+    def test_one_direction_is_refused_in_words_that_do_not_refute_themselves(self) -> None:
+        """"within 0 degrees of perpendicular ... across 0 degrees of arc" is not a sentence.
+
+        One direction has no arc, so the coverage and per-turn numbers are the
+        absence of a measurement rather than a small one, and printing them as
+        if they were measured is how a refusal argues against its own premise.
+        """
+        from fusion_design.mesh_fitting import PrimitiveFit, _prism_of_planes
+
+        fit = PrimitiveFit(
+            kind="cylinder",
+            accepted=True,
+            rms_residual=0.0,
+            relative_residual=0.0,
+            extent=10.0,
+            parameters={"axis_direction": (0.0, 0.0, 1.0)},
+        )
+        refused = _prism_of_planes(
+            [fit], [(1.0, 0.0, 0.0), (1.0, 0.0, 0.0)], (0.0, 0.0, 1.0), 5.0, 8.0, 1e-06
+        )[0]
+        self.assertFalse(refused.accepted)
+        self.assertIn("cylinder-normals-discrete", refused.rejection)
+        self.assertIn("one wall, with no arc to sweep", refused.rejection)
+        self.assertNotIn("degrees of arc", refused.rejection)
 
     def test_an_unreadable_normal_refuses_rather_than_defaulting(self) -> None:
         from fusion_design.mesh_fitting import _normal_direction_spread
