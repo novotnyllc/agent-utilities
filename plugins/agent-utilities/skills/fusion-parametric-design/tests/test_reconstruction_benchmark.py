@@ -151,6 +151,33 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _assert_recorded(case, recorded, measured, path="detail"):
+    """A recorded payload against a measured one, floats at the file's own width.
+
+    ``assertEqual`` on the whole structure would compare computed floats
+    bit-for-bit, which ``RECORDED_FLOAT_REL_TOLERANCE`` exists to say this
+    benchmark does not do. Everything else -- keys, ordering, strings, nulls --
+    is compared exactly, so a lost or renamed diagnostic field still fails.
+    """
+    if isinstance(recorded, dict):
+        case.assertIsInstance(measured, dict, path)
+        case.assertEqual(sorted(recorded), sorted(measured), path)
+        for key in recorded:
+            _assert_recorded(case, recorded[key], measured[key], f"{path}.{key}")
+    elif isinstance(recorded, list):
+        case.assertIsInstance(measured, list, path)
+        case.assertEqual(len(recorded), len(measured), path)
+        for index, entry in enumerate(recorded):
+            _assert_recorded(case, entry, measured[index], f"{path}[{index}]")
+    elif isinstance(recorded, float) or isinstance(measured, float):
+        case.assertAlmostEqual(
+            recorded, measured, delta=RECORDED_FLOAT_REL_TOLERANCE * max(abs(recorded), 1.0),
+            msg=path,
+        )
+    else:
+        case.assertEqual(recorded, measured, path)
+
+
 def _fit(source_id: str):
     """Replay one part's fit stage from its committed, hash-bound dump."""
     from fusion_design import mesh_segmentation as seg
@@ -803,9 +830,18 @@ class LargePartBenchmarkTests(unittest.TestCase):  # pragma: no cover - measurem
         self.assertEqual(row["plan"]["refusal"], refused.reason)
         self.assertEqual("frame-ambiguous", refused.reason)
         self.assertIsNone(program)
-        # And the row says which measurement it stopped on, not just that it did.
-        self.assertIn("direction sigma", row["re_measured"])
-        self.assertIn("6.487 deg", row["plan"]["message"])
+        # The whole structured payload, field for field, not a phrase from the
+        # message. Prose cannot tell a diagnostic field that was lost from one
+        # that changed, and the candidates, their measured direction sigmas and
+        # the bound are what make this refusal checkable at all.
+        _assert_recorded(self, row["plan"]["detail"], refused.detail)
+        membership = refused.detail["unstable_membership"]
+        self.assertEqual("same-axis", membership["side"])
+        # It never reaches a score comparison: the membership test runs first.
+        self.assertIsNone(refused.detail["margin"])
+        self.assertIsNone(refused.detail["runner_up"])
+        self.assertGreater(membership["bound_deg"], refused.detail["quantization_grid_deg"])
+        self.assertLess(membership["separation_deg"], refused.detail["quantization_grid_deg"])
 
     def test_the_tropical_leaves_refuse_honestly_rather_than_inventing_a_primitive(self) -> None:
         # The assertion that matters on an organic part is not how much it

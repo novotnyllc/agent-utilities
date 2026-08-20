@@ -275,7 +275,7 @@
       "status": "open"
     },
     {
-      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter now accepts is 23 regions covering 4.8 percent of the surface, and the planner refuses before the vocabulary is ever the binding constraint: two primary-axis candidates sit within the declared frame_margin of 0.1 in score and 0.3666 deg apart in direction, and the lower-scoring one carries a 6.487 deg direction sigma against the 2 deg grid that decides whether it is the winner re-measured or a rival, so a re-tessellation could move it across and change the axis the canonical rule selects. It used to refuse frame-x-underdetermined at 9 accepted regions; the gap this entry names is unchanged either way, because it is about the vocabulary and not about the gate reached first.",
+      "diagnosis": "The horn is a coil swept along a lofted profile. 22 of the graded body's 51 STEP faces are NURBS and the original timeline's dominant features are a coil, two sweeps and two lofts -- none of which the closed archetype vocabulary contains. What the fitter now accepts is 23 regions covering 4.8 percent of the surface, and the planner refuses before the vocabulary is ever the binding constraint: two cylinders sit 0.3666 deg apart carrying measured direction sigmas of 1.7305 and 1.2966 deg, and that combined bound of 6.487 deg straddles the 2 deg line deciding whether the second is the winner re-measured or a rival, so a re-tessellation could move it across and change the axis the canonical rule selects. The scores never enter it -- margin and runner_up are null in the refusal payload. It used to refuse frame-x-underdetermined at 9 accepted regions; the gap this entry names is unchanged either way, because it is about the vocabulary and not about the gate reached first.",
       "gate": "frame-ambiguous",
       "id": "unicorn-horn-is-not-in-the-vocabulary",
       "part": "unicorn_horn_3mf",
@@ -474,10 +474,63 @@
       },
       "plan": {
         "declared_frame_margin": 0.1,
+        "detail": {
+          "axis": "primary",
+          "winner": {
+            "region_hash": "9191c7815b2fc6c55b6bf3d9d62a234ccb938fd90d10016adc27047f7682d145",
+            "kind": "cylinder",
+            "score": 37.76697499673077,
+            "area": 38.32644520721044,
+            "direction": [
+              0.0006193770442242912,
+              0.999994272312446,
+              0.003327418575845409
+            ],
+            "anchor": [
+              -109.99881980073569,
+              6.805842257273617,
+              -0.0010100574959075452
+            ],
+            "basis": "radius x axial span",
+            "direction_sigma_deg": 1.730491135315662,
+            "direction_sigma_basis": "measured",
+            "direction_spread_deg": 0.0
+          },
+          "runner_up": null,
+          "margin": null,
+          "frame_margin": 0.1,
+          "quantization_grid_deg": 2.0,
+          "unstable_membership": {
+            "candidate": {
+              "region_hash": "32d126bcde4e197499c73da5f3b19e58539b04fb6a236a72fd71324d88ab95a8",
+              "kind": "cylinder",
+              "score": 37.75208607498929,
+              "area": 47.19051492412958,
+              "direction": [
+                -0.0008980006238726038,
+                0.9999954269072175,
+                -0.0028878641815935583
+              ],
+              "anchor": [
+                -109.99960475380647,
+                6.845554918526876,
+                -0.001067736445694578
+              ],
+              "basis": "radius x axial span",
+              "direction_sigma_deg": 1.2965782421042336,
+              "direction_sigma_basis": "measured",
+              "direction_spread_deg": 0.0
+            },
+            "separation_deg": 0.3665690465507736,
+            "bound_deg": 6.487020299470146,
+            "side": "same-axis"
+          }
+        },
+        "detail_note": "the refusal's own structured payload, emitted by ReconstructionRefused and asserted against field for field rather than by matching prose: the two candidates, their scores, directions, measured direction sigmas, the separation, the bound and which side of the same-axis line the instability sits on. A prose-only row cannot tell a lost diagnostic field from a changed one.",
         "message": "the primary-axis winner is within the declared margin 0.1 of candidate 32d126bcde4e in score, and the two are not reproducibly the same axis or different ones: that candidate sits 0.3666 deg from the winner, within 6.487 deg of the 2 deg line that decides whether it is this axis re-measured or a rival in the tie, so a re-tessellation can move it across and change the axis this rule selects.",
         "refusal": "frame-ambiguous"
       },
-      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. The fit stage is unchanged from main -- 23 accepted, the same coverage -- and the planner is where this part moves. The canonical tie rule settles a tied axis on the candidates' quantized directions, and it deliberately keeps refusing the tie it cannot settle: here the rival candidate sits 0.3666 deg from the winner while carrying a 6.487 deg direction sigma against the declared 2 deg grid, so which of the two the rule picks is decided by measurement noise rather than by the part. That refusal is present on the canonical-frame branch alone, at its own 9 accepted fits and against the same candidate, so it is the rule's own behaviour and not an interaction with the form-error sigma. The horn used to refuse frame-x-underdetermined, then briefly planned a hole and a sketch-extrude; it now stops one gate earlier and says which measurement it stopped on. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
+      "re_measured": "Re-measured host-side from the committed dump when the canonical datum frame and the quantization floor (#48) landed on top of the form-error sigma and the held-out power skip (#54). Both branches carried a row for this part that its own code no longer reproduced -- the large-part replay is env-gated, so neither merge ran it -- and neither claim was carried forward. No declared threshold value moved in either change. The fit stage is unchanged from main -- 23 accepted, the same coverage -- and the planner is where this part moves. The canonical tie rule settles a tied axis on the candidates' quantized directions, and it deliberately keeps refusing the tie it cannot settle: here it never gets as far as a score comparison -- margin and runner_up are both null in the payload. Two cylinders sit 0.3666 deg apart with measured direction sigmas of 1.7305 and 1.2966 deg, so their combined bound of 6.487 deg straddles the 2 deg line that decides whether the second is the winner re-measured or a rival in the tie. Membership in the tie set is therefore not reproducible, and which axis the rule selects is decided by measurement noise rather than by the part. That refusal is present on the canonical-frame branch alone, at its own 9 accepted fits and against the same candidate 32d126bcde4e, so it is the rule's own behaviour and not an interaction with the form-error sigma. The horn used to refuse frame-x-underdetermined, then briefly planned a hole and a sketch-extrude; it now stops one gate earlier and says which measurement it stopped on. top_gates is the five largest refusal classes, censused over the refused regions by the gate phrase each rejection opens with -- the text before its first colon or first number -- and it is re-derived rather than carried forward. The four rows used two different key shapes before this measurement, so a reader could not compare them.",
       "regime": "scan",
       "stage_reached": "plan",
       "total_area_mm2": 22900.99189470306,
