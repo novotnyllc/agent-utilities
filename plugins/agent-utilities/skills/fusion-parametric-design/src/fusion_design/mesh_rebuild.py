@@ -1220,9 +1220,17 @@ def _constraint_schedule(
 
     # Layer 1b: perpendicular and parallel between lines the axes did not already
     # pin. A line already made horizontal or vertical needs neither.
+    #
+    # Within one loop only, like every pairwise layer here. Two contours in one
+    # sketch are independent geometry that happens to share a plane, and a
+    # parallel or perpendicular between them couples them: a later dimension on
+    # one then moves or overconstrains the other. Two rotated rectangles in one
+    # slab are the case -- every line of each is parallel to one of the other's.
     for position, (index, _entity, direction) in enumerate(lines):
         for other_index, _other, other_direction in lines[position + 1 :]:
             if index in oriented and other_index in oriented:
+                continue
+            if entities[index].get("loop") != entities[other_index].get("loop"):
                 continue
             assert direction is not None and other_direction is not None
             angle = _angle_between(direction, other_direction)
@@ -1288,9 +1296,14 @@ def _constraint_schedule(
                  "snapped_from": offset, "snapped_from_unit": "mm"}
             )
 
-    # Layer 1e: concentric and equal radii between curves.
+    # Layer 1e: concentric and equal radii between curves -- within one loop,
+    # for the reason layer 1b states. Two bores of the same radius in one slab's
+    # section are two bores, and tying them together makes one of them stop
+    # being editable on its own.
     for position, (index, entity) in enumerate(curves):
         for other_index, other in curves[position + 1 :]:
+            if entities[index].get("loop") != entities[other_index].get("loop"):
+                continue
             gap = math.dist(entity["center_mm"], other["center_mm"])
             if gap <= length_tolerance:
                 schedule.append(

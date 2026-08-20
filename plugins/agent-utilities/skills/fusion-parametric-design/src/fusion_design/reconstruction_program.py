@@ -2149,6 +2149,43 @@ OBSERVABLE_FOR_QUANTITY = {
 OBSERVABLES = {"volume", "centroid", "bbox"}
 
 
+def _sections_differ_in_area(
+    below: Mapping[str, Any], above: Mapping[str, Any], tolerance: float | None
+) -> bool:
+    """Do these two sections enclose measurably different areas?
+
+    Not ``!=``. These are floating-point sums over a tessellated section, so
+    two geometrically equal areas essentially never agree to the last bit and a
+    bare inequality is true for a difference of one part in 1e15 -- which would
+    declare ``volume`` on every station and leave the whole equal-area case,
+    the one this comparison exists for, unreachable on measured geometry.
+
+    The window is the caller's own ``slab_constancy_tolerance_mm`` times the
+    section's perimeter, which is the area a boundary displaced by that
+    tolerance sweeps. That is the same number, and the same reasoning, this
+    stage already uses to decide whether two sections of one slab are the same
+    section -- so a difference it calls agreement here is a difference it calls
+    agreement there. No new threshold, and it scales with the part.
+    """
+    lower, upper = _section_material_area(below), _section_material_area(above)
+    if tolerance is None:
+        # No declared tolerance means no declared decomposition either, and
+        # this station cannot exist. Fall back to the bare comparison rather
+        # than invent a window.
+        return lower != upper
+    perimeter = max(_section_perimeter(below), _section_perimeter(above))
+    return abs(lower - upper) > float(tolerance) * max(perimeter, 1.0)
+
+
+def _section_perimeter(slab: Mapping[str, Any]) -> float:
+    """The total boundary length of this slab's section, from its own loops."""
+    return sum(
+        abs(float(loop.get("perimeter_mm") or 0.0))
+        for loop in slab.get("loops") or ()
+        if loop.get("role") in ("outer", "island", "cavity")
+    )
+
+
 def _section_material_area(slab: Mapping[str, Any]) -> float:
     """The material area of one slab's own section, from its classified loops.
 
@@ -2171,6 +2208,7 @@ def _user_parameters(
     groups: Sequence[Mapping[str, Any]],
     adoptions: Sequence[Mapping[str, Any]],
     units: str,
+    section_tolerance: float | None = None,
 ) -> list[dict[str, Any]]:
     """One named parameter per driven quantity, shared where a relationship says so.
 
@@ -2238,19 +2276,23 @@ def _user_parameters(
                 "An outermost station bounds one slab only, so moving it changes that slab's "
                 "height and the solid's volume with it."
             )
-        elif _section_material_area(below["slab"]) != _section_material_area(above["slab"]):
+        elif _sections_differ_in_area(below["slab"], above["slab"], section_tolerance):
             observable = "volume"
             observable_rationale = (
                 "This station separates sections of "
                 f"{_section_material_area(below['slab']):.6g} and "
-                f"{_section_material_area(above['slab']):.6g} mm2, so moving it grows one slab and "
-                "shrinks the other by different amounts and the solid's volume moves."
+                f"{_section_material_area(above['slab']):.6g} mm2 -- a difference beyond the area a "
+                "boundary displaced by the declared slab_constancy_tolerance_mm would sweep -- so "
+                "moving it grows one slab and shrinks the other by different amounts and the "
+                "solid's volume moves."
             )
         else:
             observable = "centroid"
             observable_rationale = (
-                "This station separates two sections of the same measured area "
-                f"({_section_material_area(below['slab']):.6g} mm2) and different shape -- "
+                "This station separates two sections whose measured areas agree to within the area "
+                "a boundary displaced by the declared slab_constancy_tolerance_mm would sweep "
+                f"({_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2), and of different shape -- "
                 "coalescing established only that they are not congruent. Moving it therefore "
                 "trades material of one shape for material of the other at the same rate, leaving "
                 "the volume exactly unchanged and moving the centroid. Should those two shapes "
@@ -3017,7 +3059,17 @@ def build_reconstruction_program(
         triangle_regions=triangle_regions or None,
     )
     _attach_constraints(groups, adoptions)
-    parameters = _user_parameters(groups, adoptions, fit_record.units)
+    slab_thresholds = _slab_gates(thresholds)
+    parameters = _user_parameters(
+        groups,
+        adoptions,
+        fit_record.units,
+        section_tolerance=(
+            None
+            if slab_thresholds is None
+            else float(slab_thresholds["slab_constancy_tolerance_mm"])
+        ),
+    )
     # Each archetype carries the share of the scan it accounts for. Without it
     # the coverage account could only subtract regions the *program* left out,
     # never one the *build* failed to deliver -- and a fillet that was planned

@@ -1388,10 +1388,25 @@ class SlabEmissionSeamTests(unittest.TestCase):
             self.assertIn(step["plane"]["offset_parameter"], stations)
             self.assertRegex(step["extent"]["parameter"], r"recon_station_\d+ - recon_station_\d+")
 
+        # One enumeration per *sketch*: Fusion returns a different set for each
+        # of them, and one list served to all five describes only one. A report
+        # comes back after a refusal too, so a report alone proves nothing --
+        # the point of this case is that the whole stack, densest slab
+        # included, builds.
         densest = max(extrudes, key=lambda step: len(step["profile_set"]))
-        design = fakes.make_design(behaviour={"profile_regions": densest["profile_set"]})
+        self.assertGreater(len(densest["profile_set"]), 1)
+        design = fakes.make_design(
+            behaviour={
+                "profile_regions": {
+                    step["sketch_name"]: step["profile_set"]
+                    for step in extrudes
+                    if step["profile_set"]
+                }
+            }
+        )
         report, error = run_transaction(source, design, manifest.fusion_document)
-        self.assertIsNotNone(report, error)
+        self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report.get("failures"))
 
     def test_a_boundary_moved_by_an_accepted_snap_still_matches_its_planned_region(self) -> None:
         """The plan's regions come from the section; the sketch has moved since.
@@ -1434,7 +1449,10 @@ class SlabEmissionSeamTests(unittest.TestCase):
             fakes.make_design(behaviour={"profile_regions": moved}),
             manifest.fusion_document,
         )
+        # `run_transaction` returns a report *after* catching a refusal, so a
+        # report alone proves nothing: assert both.
         self.assertIsNone(error, report)
+        self.assertTrue(report["ok"], report.get("failures"))
 
     def test_a_profile_fusion_does_not_enumerate_refuses_rather_than_guessing(self) -> None:
         # The doubles report an enumeration the plan cannot account for. The

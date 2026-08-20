@@ -1381,7 +1381,7 @@ class StationObservableTests(unittest.TestCase):
     correct station as `parameter-inert`.
     """
 
-    def _stack(self, upper_area):
+    def _stack(self, upper_area, tolerance=0.05):
         groups = []
         for index, (low, high, area) in enumerate(
             ((0.0, 4.0, 100.0), (4.0, 8.0, upper_area))
@@ -1400,13 +1400,22 @@ class StationObservableTests(unittest.TestCase):
                         "of": 2,
                         "station_parameters": [lower, upper],
                         "extent_expression": f"{upper} - {lower}",
-                        "loops": [{"role": "outer", "signed_area_mm2": area}],
+                        "loops": [
+                            {
+                                "role": "outer",
+                                "signed_area_mm2": area,
+                                # A 40 mm square: the window is the tolerance
+                                # times this, the area a boundary displaced by
+                                # the tolerance would sweep.
+                                "perimeter_mm": 40.0,
+                            }
+                        ],
                     },
                 }
             )
         return {
             row["name"]: row
-            for row in rp._user_parameters(groups, [], "mm")
+            for row in rp._user_parameters(groups, [], "mm", section_tolerance=tolerance)
             if row["quantity"] == "position"
         }
 
@@ -1422,6 +1431,29 @@ class StationObservableTests(unittest.TestCase):
         self.assertIn("leaving the volume exactly unchanged", interior["observable_rationale"])
         # And the honest caveat is on the record rather than left to be found.
         self.assertIn("report this station inert", interior["observable_rationale"])
+
+    def test_float_noise_is_not_a_difference_in_area(self) -> None:
+        """`!=` on measured areas made the equal-area branch unreachable.
+
+        These are floating-point sums over a tessellated section: two
+        geometrically equal areas essentially never agree to the last bit, so a
+        bare inequality declared `volume` on every station and the perturbation
+        proof then reported a correct one inert. The window is the caller's own
+        `slab_constancy_tolerance_mm` times the section perimeter -- the area a
+        boundary displaced by that tolerance sweeps, which is the same number
+        this stage uses to call two sections of one slab the same section.
+        """
+        # One part in 1e13, which is float noise and not a step.
+        stations = self._stack(100.0 * (1.0 + 1e-13))
+        self.assertEqual("centroid", stations["recon_station_1"]["expected_observable"])
+        # 0.05 mm x 40 mm perimeter = 2 mm2 of window; 3 is beyond it.
+        self.assertEqual(
+            "volume", self._stack(103.0)["recon_station_1"]["expected_observable"]
+        )
+        # And 1 mm2 is inside it: a step this stage would not call a step.
+        self.assertEqual(
+            "centroid", self._stack(101.0)["recon_station_1"]["expected_observable"]
+        )
 
     def test_an_outermost_station_still_moves_the_volume(self) -> None:
         for upper_area in (60.0, 100.0):

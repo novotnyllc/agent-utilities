@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from io import StringIO
 import json
+import math
 from pathlib import Path
 import re
 import tempfile
@@ -679,6 +680,46 @@ class MultiLoopSketchTests(unittest.TestCase):
         )
         self.assertEqual(4, len(curves))
         self.assertIs(curves[0].startSketchPoint, curves[3].endSketchPoint)
+
+    def test_no_pairwise_constraint_couples_two_independent_contours(self):
+        """Every pairwise layer, not only the tangent junctions.
+
+        Two contours in one sketch are independent geometry sharing a plane. A
+        parallel, perpendicular, concentric or equal-radius between them ties
+        them together, and a later dimension on one then moves or
+        overconstrains the other. Two rotated rectangles are the case for the
+        line layers: every line of each is parallel to one of the other's.
+        """
+        def rotated(loop, cx, cy, side, degrees):
+            radians = math.radians(degrees)
+            cos, sin = math.cos(radians), math.sin(radians)
+            corners = []
+            for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                x, y = dx * side / 2.0, dy * side / 2.0
+                corners.append((cx + x * cos - y * sin, cy + x * sin + y * cos))
+            rows = []
+            for index, start in enumerate(corners):
+                end = corners[(index + 1) % len(corners)]
+                rows.append(
+                    {
+                        "kind": "line",
+                        "loop": loop,
+                        "start_mm": list(start),
+                        "end_mm": list(end),
+                        "residual_mm": 0.0,
+                    }
+                )
+            return rows
+
+        # 30 degrees off the axes, so nothing is horizontal or vertical and
+        # layer 1b is the layer that fires.
+        entities = rotated(0, 0.0, 0.0, 10.0, 30.0) + rotated(1, 40.0, 40.0, 6.0, 30.0)
+        schedule = _constraint_schedule(entities, fx.rebuild_spec("dump.bin")["thresholds"])
+        pairs = [entry for entry in schedule if len(entry["entities"]) == 2]
+        self.assertTrue(pairs, schedule)
+        for entry in pairs:
+            loops = {entities[index]["loop"] for index in entry["entities"]}
+            self.assertEqual(1, len(loops), entry)
 
     def test_the_constraint_schedule_does_not_wrap_out_of_one_loop_into_the_next(self):
         """Layer 1c's junction pairing, which wrapped over the flattened list.
