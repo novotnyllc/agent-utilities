@@ -452,7 +452,10 @@ class DatumFrameTests(unittest.TestCase):
         member = math.hypot(0.05, 0.05)
         sigmas = sorted(entry["direction_sigma_deg"] for entry in pooled)
         self.assertAlmostEqual(member, sigmas[0], places=9)
-        self.assertAlmostEqual(math.hypot(member, tilt), sigmas[-1], places=9)
+        # Added, not in quadrature: the representative changing is a discrete
+        # jump of the whole spread, after which the new representative is still
+        # uncertain by its own sigma.
+        self.assertAlmostEqual(member + tilt, sigmas[-1], places=9)
 
     def test_a_pooled_member_with_no_sigma_leaves_the_stack_with_none(self) -> None:
         # One member nobody measured makes the whole merged direction
@@ -533,7 +536,10 @@ class DatumFrameTests(unittest.TestCase):
                     math.degrees(math.atan2(0.01, 9.0)),
                     math.degrees(math.atan2(origin_sigma, 9.0)),
                 ),
-                0.05 * 4.0 / 9.0,
+                # Both ways a primary-axis tilt turns this direction: the axial
+                # component it subtracts moves over the 9 mm lever, and the
+                # projection plane tilts by delta whatever the axial offset is.
+                0.05 * math.hypot(1.0, 4.0 / 9.0),
             ),
             secondary["direction_sigma_deg"],
             places=12,

@@ -1050,9 +1050,15 @@ def _merge_parallel(
             # spread, not just the representative's own. A member with no stated
             # sigma leaves the group with none, which is what makes it
             # ineligible for the canonical tie-break rather than quietly stable.
+            # Added, not combined in quadrature: the representative changing is
+            # a *discrete jump* of the whole spread, not an independent random
+            # error that partly cancels. After the jump the new representative
+            # is still uncertain by its own sigma, so the distance a cell has to
+            # clear is spread + sigma. A 0.8 deg jump with 0.15 deg members is
+            # 0.95, not the 0.814 quadrature would report.
             spread = max(_angle_deg(head.direction, member.direction) for member in members)
             sigmas = [member.direction_sigma_deg for member in members]
-            sigma = None if any(s is None for s in sigmas) else math.hypot(max(sigmas), spread)
+            sigma = None if any(s is None for s in sigmas) else max(sigmas) + spread
             basis = "propagated"
         merged.append(
             replace(
@@ -1337,7 +1343,13 @@ def _secondary_from_second_axis(
                             # the same lever arm as moving the far anchor does.
                             math.degrees(math.atan2(origin_sigma, radial)),
                         ),
-                        z_sigma_deg * axial / radial,
+                        # Two ways a tilt of the primary axis turns this
+                        # direction, and an anchor level with the origin has
+                        # only the second: the axial component it subtracts
+                        # moves by `axial * delta` over the lever `radial`, and
+                        # the projection plane itself tilts by `delta`
+                        # regardless. `hypot(1, axial/radial)` carries both.
+                        z_sigma_deg * math.hypot(1.0, axial / radial),
                     )
                 ),
                 direction_sigma_basis="propagated",
@@ -1415,10 +1427,18 @@ def derive_datum_frame(
     primary_region = next(
         (region for region in accepted if region.region_hash == winner.region_hash), None
     )
+    # A plane's anchor is its *vertex centroid* and the only sigma a plane
+    # record carries is `offset`, which bounds motion along the normal and says
+    # nothing about where on the plane the centroid sits -- the same reason the
+    # no-perpendicular-plane origin fallback states no bound. So a plane primary
+    # states none either, and the canonical tie over directions measured from
+    # that origin refuses rather than certifying a cell it can slide out of.
     primary_anchor_sigma = (
         None
-        if primary_region is None or primary_region.fit is None
-        else primary_region.sigma(_ANCHOR_SIGMA_KEY.get(primary_region.fit.kind, "offset"))
+        if primary_region is None
+        or primary_region.fit is None
+        or primary_region.fit.kind not in _ANCHOR_SIGMA_KEY
+        else primary_region.sigma(_ANCHOR_SIGMA_KEY[primary_region.fit.kind])
     )
     origin_sigma = (
         None
