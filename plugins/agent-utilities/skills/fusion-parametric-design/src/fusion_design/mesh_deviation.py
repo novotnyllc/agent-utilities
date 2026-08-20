@@ -464,29 +464,36 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
 _COARSE = 8
 
 
-_SAMPLE_DEPTH_CAP = 1
+_SAMPLE_DEPTH_CAP = 6
+_SAMPLE_BUDGET = 40000
+#: How many coarse cells one oversized facet may be indexed into before it is
+#: cheaper to measure it on every query than to carry it in the index.
+_OVERSIZED_CELL_CAP = 64
 
 
 def _interior_samples(vertices, triangles, spacing):
-    """Points on these triangles' interiors, no farther apart than ``spacing``.
+    """Points on these triangles' interiors, and the worst spacing achieved.
 
     Vertices alone are not a sample of a surface. Two triangulations of the
     same four points -- a non-coplanar quad split along opposite diagonals --
     share every vertex and separate in the middle, so a vertex-only comparison
     measures zero against surfaces that differ by however far the quad is from
-    flat. Each triangle is therefore subdivided at its edge midpoints until its
-    longest edge is within ``spacing``, and the new points are measured beside
-    the vertices.
+    flat. Each triangle is subdivided at its edge midpoints until its longest
+    edge is within ``spacing``, and the new points are measured beside the
+    vertices.
 
-    ponytail: one level of midpoint subdivision, not an adaptive
-    triangle-to-triangle bound. Three extra points per oversized facet catches
-    the disagreement a shared-vertex pair can hide -- the two diagonals cross
-    at a midpoint, and that midpoint is one of these -- and costs a constant
-    multiple of the node pass. A patch that curves *inside* a sub-triangle
-    still needs the real bound; raise `_SAMPLE_DEPTH_CAP` when a case shows
-    one, knowing each level multiplies the queries by four.
+    Returns ``(points, worst_edge_mm)``. ``worst_edge_mm`` is the longest edge
+    of any sub-triangle the subdivision stopped on: at or below ``spacing`` the
+    sampling met its request, and above it the caller is told by how much
+    rather than left to assume a request it did not get.
+
+    ponytail: midpoint subdivision with a depth cap and a global point budget,
+    not an adaptive triangle-to-triangle bound. Both limits are reported, and a
+    run that hits either says so in its own record instead of quietly measuring
+    coarser than it claims.
     """
     out = []
+    worst = 0.0
     for offset in range(0, len(triangles) - 2, 3):
         a = triangles[offset] * 3
         b = triangles[offset + 1] * 3
@@ -499,10 +506,11 @@ def _interior_samples(vertices, triangles, spacing):
         stack = [(corners, 0)]
         while stack:
             (p0, p1, p2), depth = stack.pop()
-            longest = max(
-                _distance(p0, p1), _distance(p1, p2), _distance(p2, p0)
-            )
-            if longest <= spacing or depth >= _SAMPLE_DEPTH_CAP:
+            longest = max(_distance(p0, p1), _distance(p1, p2), _distance(p2, p0))
+            if longest <= spacing:
+                continue
+            if depth >= _SAMPLE_DEPTH_CAP or len(out) >= _SAMPLE_BUDGET:
+                worst = max(worst, longest)
                 continue
             m01 = _midpoint(p0, p1)
             m12 = _midpoint(p1, p2)
@@ -512,7 +520,7 @@ def _interior_samples(vertices, triangles, spacing):
             stack.append(((m01, p1, m12), depth + 1))
             stack.append(((m20, m12, p2), depth + 1))
             stack.append(((m01, m12, m20), depth + 1))
-    return out
+    return out, worst
 
 
 def _distance(first, second):
@@ -529,6 +537,27 @@ def _midpoint(first, second):
         (first[1] + second[1]) / 2.0,
         (first[2] + second[2]) / 2.0,
     )
+
+
+def _triangle_area_ratio(a, b, c):
+    """Twice this triangle's area over its longest edge squared, or 0.
+
+    A scale-free degeneracy test: zero for a repeated corner and for three
+    distinct collinear ones alike, and unchanged when the whole part is scaled.
+    """
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    longest = max(
+        ux * ux + uy * uy + uz * uz,
+        vx * vx + vy * vy + vz * vz,
+        (b[0] - c[0]) ** 2 + (b[1] - c[1]) ** 2 + (b[2] - c[2]) ** 2,
+    )
+    if longest <= 0.0:
+        return 0.0
+    return (nx * nx + ny * ny + nz * nz) ** 0.5 / longest
 
 
 def _box_distance_sq(box, x, y, z):
@@ -563,6 +592,8 @@ class _TriangleGrid(object):
         self.buckets = {}
         self.oversized = []
         self.oversized_boxes = []
+        self.oversized_cells = {}
+        self.oversized_wide = []
         for offset in range(0, len(triangles) - 2, 3):
             a = triangles[offset] * 3
             b = triangles[offset + 1] * 3
@@ -585,12 +616,26 @@ class _TriangleGrid(object):
             # which costs a constant and keeps the grid from exploding.
             if span > 27:
                 self.oversized.append(offset)
-                # Its box, kept beside it: every query below prunes against
-                # this rather than running the full point-triangle test on a
-                # facet that cannot be the answer.
+                # Its box, kept beside it -- the ray query prunes against this
+                # -- and its coarse cells, so the distance query can find it
+                # without walking the whole set. A facet spanning more coarse
+                # cells than the cap would cost more to index than to measure,
+                # so those few go in `oversized_wide` and are measured always.
                 self.oversized_boxes.append(
                     (low_x, low_y, low_z, high_x, high_y, high_z)
                 )
+                ci0, cj0, ck0 = i0 // _COARSE, j0 // _COARSE, k0 // _COARSE
+                ci1, cj1, ck1 = i1 // _COARSE, j1 // _COARSE, k1 // _COARSE
+                spread = (ci1 - ci0 + 1) * (cj1 - cj0 + 1) * (ck1 - ck0 + 1)
+                if spread > _OVERSIZED_CELL_CAP:
+                    self.oversized_wide.append(offset)
+                    continue
+                for ci in range(ci0, ci1 + 1):
+                    for cj in range(cj0, cj1 + 1):
+                        for ck in range(ck0, ck1 + 1):
+                            self.oversized_cells.setdefault((ci, cj, ck), []).append(
+                                offset
+                            )
                 continue
             for i in range(i0, i1 + 1):
                 for j in range(j0, j1 + 1):
@@ -685,13 +730,15 @@ class _TriangleGrid(object):
                 for step in range(3):
                     base = self.triangles[offset + step] * 3
                     corners.append((v[base], v[base + 1], v[base + 2]))
-                # A facet with two corners in the same place carries no surface
-                # and no adjacency worth counting: it contributes one self-edge
-                # and doubles a real one, which called an otherwise closed scan
-                # open and sent every reverse deviation to `unclassified`. The
-                # distance path deliberately supports these slivers, so the
-                # closure test has to as well.
-                if len(set(corners)) != 3:
+                # A facet with no *area* carries no surface and no adjacency
+                # worth counting -- whether its corners repeat or merely lie on
+                # one line. Either way it contributes one-sided edges, which
+                # called an otherwise closed scan open and sent every reverse
+                # deviation to `unclassified`. The distance and ray paths both
+                # already recognise the collinear case; this one only saw the
+                # repeated one. Scaled by the facet's own size, so the test
+                # means the same thing on a 1 mm part and a 1 m one.
+                if _triangle_area_ratio(*corners) <= 1e-12:
                     continue
                 for first, second in (
                     (corners[0], corners[1]),
@@ -778,31 +825,72 @@ class _TriangleGrid(object):
             vertices[c + 2],
         )
 
+    def _oversized_reach(self, ci, cj, ck):
+        """How many coarse rings out the oversized index can still hold anything."""
+        if not hasattr(self, "_oversized_box"):
+            keys = list(self.oversized_cells)
+            self._oversized_box = (
+                min(key[0] for key in keys),
+                min(key[1] for key in keys),
+                min(key[2] for key in keys),
+                max(key[0] for key in keys),
+                max(key[1] for key in keys),
+                max(key[2] for key in keys),
+            )
+        low_i, low_j, low_k, high_i, high_j, high_k = self._oversized_box
+        return max(
+            abs(ci - low_i), abs(ci - high_i),
+            abs(cj - low_j), abs(cj - high_j),
+            abs(ck - low_k), abs(ck - high_k),
+        )
+
     def nearest_mm(self, x, y, z):
         """Distance from a point to the nearest triangle, or None on an empty mesh."""
         best = None
-        # Nearest box first, and stop at the first box farther than the best
-        # exact distance found: an oversized facet whose *box* is farther than
-        # a triangle already measured cannot beat it. The scan is still linear
-        # in the oversized set -- these are box tests, an order cheaper than the
-        # point-triangle test they replace -- but the exact tests stop early,
-        # which is what a scan with many long facets was paying for.
-        #
-        # ponytail: box prune, not an index. If a mesh ever makes even the box
-        # pass the measured bottleneck, the upgrade is to bucket these on the
-        # coarse overlay `_coarse_floor` already builds.
-        ordered = sorted(
-            (
-                (_box_distance_sq(box, x, y, z), offset)
-                for offset, box in zip(self.oversized, self.oversized_boxes)
-            ),
-        )
-        for lower, offset in ordered:
-            if best is not None and lower >= best:
-                break
+        # Oversized facets, from the coarse index rather than by scanning them
+        # all: they are bucketed once at construction over the same coarse grid
+        # the ring floor uses, so a query walks outward from its own coarse cell
+        # and stops as soon as the shell's own lower bound cannot beat the best
+        # exact distance found. Sorting the whole set per sample -- which is
+        # what the first prune did -- is O(K log K) on every one of Q samples,
+        # and a nonuniform production mesh makes K a large fraction of the
+        # facets. The few that span more coarse cells than the index will hold
+        # are kept in `oversized_wide` and measured every time, which is the
+        # constant this trades for.
+        for offset in self.oversized_wide:
             value = self._triangle_distance_sq(offset, x, y, z)
             if best is None or value < best:
                 best = value
+        if self.oversized_cells:
+            coarse = self.cell * _COARSE
+            ci = int(math.floor(x / coarse))
+            cj = int(math.floor(y / coarse))
+            ck = int(math.floor(z / coarse))
+            seen: set[int] = set()
+            ring = 0
+            while ring <= self._oversized_reach(ci, cj, ck):
+                if ring > 0 and best is not None:
+                    lower = (ring - 1) * coarse
+                    if lower > 0.0 and best <= lower * lower:
+                        break
+                for i in range(ci - ring, ci + ring + 1):
+                    for j in range(cj - ring, cj + ring + 1):
+                        for k in range(ck - ring, ck + ring + 1):
+                            if (
+                                ring > 0
+                                and abs(i - ci) != ring
+                                and abs(j - cj) != ring
+                                and abs(k - ck) != ring
+                            ):
+                                continue
+                            for offset in self.oversized_cells.get((i, j, k), ()):
+                                if offset in seen:
+                                    continue
+                                seen.add(offset)
+                                value = self._triangle_distance_sq(offset, x, y, z)
+                                if best is None or value < best:
+                                    best = value
+                ring += 1
         if not self.buckets:
             return None if best is None else math.sqrt(best)
         cell = self.cell
@@ -1341,10 +1429,20 @@ def run(context):
         # surface sampled coarser than the scan could step over a feature the scan
         # was able to express, and that is the one way this verdict could report a
         # clean number over a bad rebuild.
-        tessellation = {"target_step_mm": median_edge}
+        # Both thresholds are declared independently and the validator permits
+        # `omitted_detail` below `invented_material`. Everything sampled here is
+        # compared against *both*, so the resolution has to serve the smaller of
+        # them: a tessellation tolerance derived from the larger can exceed the
+        # smaller limit it is later judged against, and interiors sampled at the
+        # larger spacing can step over a reverse-only omission.
+        finest_threshold = min(invented_threshold, omitted_threshold)
+        tessellation = {
+            "target_step_mm": median_edge,
+            "threshold_basis_mm": finest_threshold,
+        }
         try:
             recon_vertices, recon_triangles = _tessellate(
-                recon_body, median_edge, invented_threshold / 10.0, tessellation
+                recon_body, median_edge, finest_threshold / 10.0, tessellation
             )
         except Exception as error:
             report["failures"] = ["tessellation-failed"]
@@ -1450,8 +1548,8 @@ def run(context):
         # tessellation was asked for a maximum side of the scan's median edge.
         sample_points = []
         sample_distances = []
-        interior = _interior_samples(
-            recon_vertices, recon_triangles, max(invented_threshold, 1e-06)
+        interior, interior_worst = _interior_samples(
+            recon_vertices, recon_triangles, max(finest_threshold, 1e-06)
         )
         for offset in range(0, len(recon_vertices) - 2, 3):
             point = [recon_vertices[offset], recon_vertices[offset + 1], recon_vertices[offset + 2]]
@@ -1474,6 +1572,20 @@ def run(context):
                 "triangles, by point-to-triangle distance"
             ),
             "sample_count": len(sample_distances),
+            # What the interior sampling actually achieved, against what it was
+            # asked for. Equal or below means every point of every rebuilt
+            # triangle is within the requested spacing of a measured sample;
+            # above means the depth cap or the point budget bound first, and
+            # a discrepancy narrower than `interior_spacing_worst_mm` could sit
+            # between samples. Recorded rather than assumed either way.
+            "interior_spacing_requested_mm": max(finest_threshold, 1e-06),
+            "interior_spacing_worst_mm": interior_worst,
+            "interior_sampling_complete": interior_worst <= 0.0,
+            # Half the worst sub-triangle edge: distance to a fixed surface is
+            # 1-Lipschitz, so no point of a rebuilt triangle can be further
+            # from the source than the nearest interior sample by more than
+            # this. It is the honest width of what sampling could still hide.
+            "interior_covering_mm": interior_worst / 2.0,
             "max_mm": max(sample_distances) if sample_distances else 0.0,
             "beyond_invented_material_threshold": sum(
                 1 for value in sample_distances if value > invented_threshold
@@ -1679,7 +1791,21 @@ def run(context):
         report["reconstruction_to_source"]["beyond_threshold_outside_source"] = outside_source
         report["reconstruction_to_source"]["beyond_threshold_unresolved"] = unresolved
         explained_by_omission = bool(unclassified) and not outside_source and not unresolved
-        established = bool(invented_count) or not unclassified or explained_by_omission
+        # The other side of the same classification, and it settles the case
+        # rather than leaving it open: samples past the threshold that the
+        # source solid's own parity puts *outside* it are invented material, by
+        # the definition this stage uses everywhere else. The signed direction
+        # cannot see them -- an invented boss between sparse scanned vertices
+        # leaves every one of those vertices on the boundary -- which is why
+        # `invented_count` is zero here and why this used to report
+        # `not-established` over a question that had just been answered.
+        classified_invented = bool(unclassified) and bool(outside_source) and not unresolved
+        established = (
+            bool(invented_count)
+            or not unclassified
+            or explained_by_omission
+            or classified_invented
+        )
         # And they have to clear the *omitted* threshold to be omitted detail:
         # the classification above uses the invented threshold, because that is
         # the question it was answering, and the two are declared separately for
@@ -1746,7 +1872,11 @@ def run(context):
         report["verdict"] = {
             "invented_material": {
                 "severity": (
-                    "failure" if invented_count else "pass" if established else "not-established"
+                    "failure"
+                    if invented_count or classified_invented
+                    else "pass"
+                    if established
+                    else "not-established"
                 ),
                 "threshold_mm": invented_threshold,
                 "count": invented_count,
@@ -1765,6 +1895,16 @@ def run(context):
                 "meaning": (
                     UNCLASSIFIED_MEANING
                     if not established
+                    else (
+                        str(outside_source)
+                        + " reconstruction samples past the invented-material threshold lie "
+                        "outside the scanned solid by the source mesh's own ray parity. No "
+                        "scanned vertex is inside the reconstruction -- material invented "
+                        "between sparse scanned vertices reads that way -- but outside the "
+                        "source is what invented material *is*, so this is the ordinary "
+                        "failure and not an open question. " + INVENTED_MEANING
+                    )
+                    if classified_invented
                     else OMISSION_EXPLAINS_MEANING
                     if explained_by_omission
                     else INVENTED_MEANING
@@ -1772,13 +1912,15 @@ def run(context):
             },
             "omitted_detail": omitted,
         }
-        if invented_count:
+        if invented_count or classified_invented:
             report["failures"] = ["invented-material"]
             report_attempted = True
             _emit(report)
+            worst_of = report["verdict"]["invented_material"]["worst_points"][:1] or (
+                report["reconstruction_to_source"]["worst_points"][:1]
+            )
             raise RuntimeError(
-                "Deviation verdict failed: invented material at "
-                + json.dumps(report["verdict"]["invented_material"]["worst_points"][:1])
+                "Deviation verdict failed: invented material at " + json.dumps(worst_of)
             )
         if not omitted_established:
             report["failures"] = ["omitted-detail-unclassified"]

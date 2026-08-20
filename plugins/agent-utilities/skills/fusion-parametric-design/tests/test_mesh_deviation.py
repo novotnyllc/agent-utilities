@@ -429,9 +429,13 @@ class DeviationVerdictTests(unittest.TestCase):
         The rebuild carries a 4 x 4 x 3 mm boss the scan does not: the scan's
         24 corners all sit *on* the rebuilt box, so every signed depth is zero
         and the run used to report `ok`. The reverse direction measured the
-        boss at 3 mm all along, recorded it, and was read by nothing. It is
-        unsigned, so it cannot call this invented material -- but it does
-        disprove the absence of it, and the absence is what a pass claims.
+        boss at 3 mm all along, recorded it, and was read by nothing.
+
+        The reverse direction is unsigned on its own, but the per-sample ray
+        test against the source solid is not: every one of those samples
+        classifies OUTSIDE the scanned solid, and outside the source is what
+        invented material *is*. So this is the ordinary `invented-material`
+        failure rather than an open question about it.
         """
         reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
         inner = reconstruction.meshManager.createMeshCalculator
@@ -442,15 +446,18 @@ class DeviationVerdictTests(unittest.TestCase):
         )
         report = self._run(
             self._namespace(mesh=self._scan(), reconstruction=reconstruction),
-            failure="invented-material-unclassified",
+            failure="invented material",
         )[0]
         self.assertFalse(report["ok"])
-        self.assertEqual(["invented-material-unclassified"], report["failures"])
+        self.assertEqual(["invented-material"], report["failures"])
         verdict = report["verdict"]["invented_material"]
-        self.assertEqual("not-established", verdict["severity"])
-        # No scanned vertex is inside the rebuild -- that is the whole point.
+        self.assertEqual("failure", verdict["severity"])
+        # No scanned vertex is inside the rebuild -- that is the whole point,
+        # and the classification is what settles it anyway.
         self.assertEqual(0, verdict["count"])
         self.assertAlmostEqual(0.0, verdict["max_mm"])
+        self.assertGreater(verdict["unclassified_outside_source"], 0)
+        self.assertEqual(0, verdict["unclassified_unresolved"])
         self.assertTrue(verdict["sign_convention_verified"])
         self.assertGreater(verdict["unclassified_reconstruction_samples"], 0)
         self.assertAlmostEqual(3.0, report["reconstruction_to_source"]["max_mm"])
@@ -504,12 +511,15 @@ class DeviationVerdictTests(unittest.TestCase):
                 mesh=_PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)),
                 reconstruction=reconstruction,
             ),
-            failure="invented-material-unclassified",
+            failure="invented material",
         )[0]
         self.assertFalse(report["ok"])
-        self.assertEqual(["invented-material-unclassified"], report["failures"])
+        # And the classification does not merely disprove the pass: samples
+        # outside the source solid *are* invented material, so this is the
+        # ordinary failure rather than an unclassified one.
+        self.assertEqual(["invented-material"], report["failures"])
         verdict = report["verdict"]["invented_material"]
-        self.assertEqual("not-established", verdict["severity"])
+        self.assertEqual("failure", verdict["severity"])
         self.assertFalse(verdict["unclassified_explained_by_omission"])
         self.assertGreater(verdict["unclassified_outside_source"], 0)
         # The omission is still there and still measured; it just accounts for
@@ -1335,12 +1345,22 @@ class PointToTriangleTests(unittest.TestCase):
         flat = [value for vertex in vertices for value in vertex]
         grid = self.namespace["_TriangleGrid"](flat, triangles, 4.0)
         self.assertTrue(grid.is_closed())
-        sliver = list(triangles) + [triangles[0], triangles[0], triangles[1]]
-        slivered = self.namespace["_TriangleGrid"](flat, sliver, 4.0)
+        slivered = self.namespace["_TriangleGrid"](
+            flat, list(triangles) + [triangles[0], triangles[0], triangles[1]], 4.0
+        )
         self.assertTrue(slivered.is_closed())
-        # And the inside is still the inside.
         self.assertTrue(slivered.encloses(5.0, 5.0, 5.0))
         self.assertFalse(slivered.encloses(50.0, 5.0, 5.0))
+        # Three *distinct* corners on one line have no area either, and the
+        # distance and ray paths already read them that way.
+        line = list(flat) + [30.0, 0.0, 0.0, 31.0, 0.0, 0.0, 32.0, 0.0, 0.0]
+        base = len(vertices)
+        collinear = self.namespace["_TriangleGrid"](
+            line, list(triangles) + [base, base + 1, base + 2], 4.0
+        )
+        self.assertTrue(collinear.is_closed())
+        self.assertTrue(collinear.encloses(5.0, 5.0, 5.0))
+        self.assertFalse(collinear.encloses(50.0, 5.0, 5.0))
 
     def test_oversized_facets_are_pruned_by_their_boxes_not_all_measured(self) -> None:
         """Every query paid the full point-triangle test on every long facet.
@@ -1358,17 +1378,35 @@ class PointToTriangleTests(unittest.TestCase):
         self.assertGreater(len(grid.oversized), 500)
         self.assertEqual(len(grid.oversized), len(grid.oversized_boxes))
 
+        # Indexed on the coarse grid, not scanned: only the few too wide to
+        # index are measured on every query.
+        self.assertTrue(grid.oversized_cells)
+        self.assertLess(len(grid.oversized_wide), len(grid.oversized) / 10)
+
         exact = [0]
+        boxes = [0]
         measure = grid._triangle_distance_sq
+        box_measure = self.namespace["_box_distance_sq"]
 
         def counting(offset, x, y, z):
             exact[0] += 1
             return measure(offset, x, y, z)
 
+        def counting_box(box, x, y, z):
+            boxes[0] += 1
+            return box_measure(box, x, y, z)
+
         grid._triangle_distance_sq = counting
-        self.assertAlmostEqual(1.0, grid.nearest_mm(100.0, 100.0, 201.0), places=6)
-        self.assertLess(exact[0], 40)
+        self.namespace["_box_distance_sq"] = counting_box
+        try:
+            self.assertAlmostEqual(1.0, grid.nearest_mm(100.0, 100.0, 201.0), places=6)
+        finally:
+            self.namespace["_box_distance_sq"] = box_measure
+        self.assertLess(exact[0], 60)
         self.assertLess(exact[0], len(grid.oversized) / 10)
+        # And no per-query pass over every box either, which is the O(K log K)
+        # the sort used to cost on every one of Q samples.
+        self.assertLess(boxes[0], len(grid.oversized))
 
     def test_a_triangle_far_larger_than_the_cell_is_still_found(self) -> None:
         # One triangle spanning many cells goes to the oversized list rather than
