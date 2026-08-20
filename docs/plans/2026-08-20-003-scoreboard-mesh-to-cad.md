@@ -56,18 +56,60 @@ Derivation, exactly: take the coverage account's `plan` stage
 claimed regions and their areas), then subtract every archetype the emission
 stage refused or dropped (`profile-ambiguous`, `sketch-loop-budget-exceeded`,
 skipped fillets, …). What remains is area standing behind an emitted feature
-script. Call it **RC-emitted**.
+script. Call it **RC-scripted** (renamed 2026-08-20 from RC-emitted, per the
+external review — "emitted" over-claimed: this number attests to a script's
+existence, not to built geometry). The headline is a ladder, each rung an
+upper bound on the next:
+
+```text
+RC-scripted-nonempty   host-side upper bound (script exists AND the
+                       non-vacuity conditions below hold)
+RC-built               a live Fusion transaction created the geometry
+RC-verified            built + deviation accepted + editability proof
+```
+
+`delivered_area_fraction` is RC-verified's natural artifact name. Corpus
+reporting carries the area-weighted aggregate **and** the macro-average per
+part, the median, and the zero-count — one large easy surface must not hide
+a population of failed parts.
 
 **Subtraction alone is not the measurement, and crediting it is how this number
 gets overstated.** Emission is all-or-nothing: when host-side `plan_emission`
 refuses any archetype, `emit_mesh_rebuild_script` raises before it returns a
 transaction, so *nothing* was scripted — and in Fusion a failure rolls the whole
 transaction back the same way. A part with one refused archetype and nine good
-ones therefore has RC-emitted **0**, not nine archetypes' worth. The remaining
+ones therefore has RC-scripted **0**, not nine archetypes' worth. The remaining
 area is credited only after `replan_without` produces a reduced program **and
-that program emits successfully**; until then the part's RC-emitted is zero with
+that program emits successfully**; until then the part's RC-scripted is zero with
 the refusal named. Every run below (B, C, E-prod) records the re-emission it
 ran, or records zero.
+
+**Non-vacuity (added 2026-08-20; review finding 4 — P0, measured).** Success
+was being derived from transaction exit status rather than from a positive
+result, and the measured regression proves the gap: one v0.12.0 part EMITS
+exit-0 a program covering **0.0% of source area** — an empty success no gate
+caught. It also composes badly with componentization: an empty successful
+monolithic run raises no refusal token, so refusal-licensed decomposition
+never triggers. A successful parametric reconstruction must now satisfy
+**all** of:
+
+1. at least one parameter-driven feature was created;
+2. at least one immutable source region is claimed;
+3. the union of claimed source triangles has positive area;
+4. at least one resulting body has positive volume, or explicitly licensed
+   surface area;
+5. `created`/`checked` entries were appended only after the corresponding
+   API operations succeeded (the existing discipline, now a scored condition).
+
+Failing any of these is a named refusal, not an emission — new closed-set
+tokens: `no-emittable-claims`, `emission-empty`,
+`emission-zero-source-area`, `emission-zero-geometry`. An intentionally
+emptied `replan-without` result is a named "nothing reconstructable"
+outcome, never a success. This gate is **PR 0a** in the canonical
+implementation order (`docs/reviews/2026-08-20-oracle-design-review.md` §2),
+ahead of everything else, and the v0.12.0 **"8 of 16 emit" census and its
+23.3% area-weighted figure are flagged pending recomputation under it** —
+the 0.0%-area part does not count as emitting.
 
 Why this is the honest number and the two existing numbers are not:
 
@@ -81,11 +123,11 @@ Why this is the honest number and the two existing numbers are not:
   "the fraction of the scan's surface area now standing as editable Fusion
   features"). But it requires a rebuild report from live Fusion, and **no slab
   build has ever run live** — so today it reads 0.0/`unmeasured` everywhere and
-  cannot rank changes. RC-emitted is the strictest number computable host-side
+  cannot rank changes. RC-scripted is the strictest number computable host-side
   today; `delivered` is RC's live-verified counterpart and replaces it in the
   headline the day the §4 Run A exists. The lose-only arithmetic
   (each stage may lose area, never gain — mesh-reconstruction.md,
-  "Partial reconstruction") guarantees RC-emitted ≥ delivered, so RC-emitted is
+  "Partial reconstruction") guarantees RC-scripted ≥ delivered, so RC-scripted is
   an upper bound on the goal metric, and is reported with that label.
 
 ### 1.2 Vocabulary score (V)
@@ -127,7 +169,19 @@ counts only parameters exercised by an `emit-mesh-editability` report.
 ### 1.4 Componentization (C)
 
 **Fusion components emitted with placement transforms ÷ distinct physical
-things evident in the input.** Achieved over target, the same direction as
+things evident in the input.**
+
+**Denominator rule (added 2026-08-20; review finding 11.3).** The denominator
+can never be produced by the detector being scored — a detector that finds 8
+and publishes a census of 8 makes C read 8/8, circular by construction. The
+denominator comes from: independently annotated ground truth where it exists;
+a **human-reviewed evident-things table** for acceptance fixtures (authored
+before the detection run it scores — design -004 R4 as amended);
+`C = unmeasured` on ordinary unlabeled scans. Raw counts are always reported
+regardless: candidates, licensed geometric subobjects, physical things
+evidenced, component definitions, occurrences — and under design -004 §0 the
+numerator's claim level is named (`componentized-geometric` vs
+`physical-thing-evidenced`), never blended. Achieved over target, the same direction as
 every other cell — the first draft had it inverted, which made the stated
 `C = 0` baseline a division by zero and scored ten things collapsed into one
 component as 10 rather than 0.1. Two cases are named rather than computed:
@@ -156,7 +210,10 @@ already satisfied (§3.7).
 
 ### 1.5 Honesty margin (H)
 
-**Refused-by-name area vs silently-unclaimed area.** The second must stay ~0:
+**Refused-by-name area vs silently-unclaimed area.** The second must stay
+**exactly 0** (revised 2026-08-20 from "~0"; review finding 11.2: area
+tolerance is unnecessary when ownership is checked by immutable triangle
+IDs — an approximate target is a place for silence to hide). Original rule:
 every unit of area not claimed by an emitted feature must appear in a named
 list with a gate token (`unreconstructed` + gate, `unfitted_regions`,
 `unclaimed_components`, refusal detail). Structurally this holds by
@@ -168,6 +225,31 @@ part — which **does not exist as a script today** (§4 Run D). One known
 candidate for silence: the 839 of 1,908 corpus face groups carrying fewer than
 four points, stated in prose (mesh-reconstruction.md) but not audited into the
 per-part accounts.
+
+**The enforceable-H spec (added 2026-08-20; review finding 11.2 and missing
+decision 24, decided).** H becomes enforceable only on top of the partition
+lineage contract (design -002 §A.2) — area-only arithmetic cannot survive a
+partition mutation, which Run D's double-counting analysis below already
+sensed. The formal object is a **triangle-disposition state machine**: every
+original triangle carries exactly one primary disposition per stage —
+
+```text
+stage:        fit | decompose | plan | emit | build | verify
+disposition:  claimed(owner, claim-id) | refused(token, gate-evidence)
+              | inferred-supported (derived-geometry ledger, never counted here)
+              | invalidated-by-partition(version)
+```
+
+— with every stage transition checked (a triangle cannot appear at `plan`
+without a `fit`-stage disposition, and every `invalidated-by-partition` must
+be re-dispositioned under the new version before the stage record closes).
+Every refusal token cites the executed gate's evidence; the generic
+`residual` bucket is **not** a permitted disposition — reason-laundering
+through an unnamed residual is exactly the silence H exists to catch.
+Inferred geometry is counted in the derived-geometry ledger, never in
+original-area conservation. Target: **silently-unclaimed triangle count = 0**,
+exact, by immutable triangle ID. Run D remains the audit script; this is the
+substrate that makes its identities checkable rather than approximate.
 
 ### 1.6 No scalar; a headline ordering
 
@@ -221,7 +303,7 @@ Scoreboard row (aggregate):
 
 | cell | value | source / why |
 | --- | --- | --- |
-| RC-emitted | **unmeasured** (bounded above by 71.2% fit-level) | all 11 emit (PR #53), but per-part *area fractions* at the emission stage were never published, and the dumps are not committed, so the number cannot be recomputed from the repository. §4 Run E-prod. |
+| RC-scripted | **unmeasured** (bounded above by 71.2% fit-level) | all 11 emit (PR #53), but per-part *area fractions* at the emission stage were never published, and the dumps are not committed, so the number cannot be recomputed from the repository. §4 Run E-prod. |
 | delivered (live) | **unmeasured** | no slab build has ever run live |
 | V | holes 74 planned of 85 evident bores (87%); prisms: 21/21 hex nut pockets correctly refused as cylinders; fillets **2 planned of 114 candidates** (3 → 2 on the slab path, PR #51 finding 4); extrudes: slab stacks per table; revolve/shell/chamfer/pattern: 0 (shell and revolve unassigned; chamfer/pattern not in vocabulary) | mesh-reconstruction.md; PR #51/#53 |
 | E | **0 proven / parameters emitted per part `unmeasured`** (counts live in the emitted scripts, not in any published table); `interactions_exercised: false` | no U5 report exists for any part |
@@ -233,14 +315,14 @@ Scoreboard row (aggregate):
 | part | fit accepted / coverage | plan coverage | emission (v1, committed) | emission (slab path, PR #53) | V vs ground truth |
 | --- | --- | ---: | --- | --- | --- |
 | honeycomb organiser | 39 planes / 41.6% | 33.5% | refused `profile-ambiguous` (11 loops) | **emits**: 5 slabs, 4 multi-loop sketches, 0 holes (hex pockets correctly cavities, not bores) | STEP = 145 planes, 4 normal families, **0 curved faces**: 39 planes matched to all 4 families at ≤1.1e-05 mm; **0 false curved primitives claimed** (was 6 pre-#48) |
-| desktop organiser | 38 / 27.9% | 27.6% | **emitted** (1 sketch-extrude) — RC-emitted **27.6%**, the only committed nonzero RC in the program | emits, 1 slab | no ground truth; evident-features table `unmeasured` |
+| desktop organiser | 38 / 27.9% | 27.6% | **emitted** (1 sketch-extrude) — RC-scripted **27.6%**, the only committed nonzero RC in the program | emits, 1 slab | no ground truth; evident-features table `unmeasured` |
 | tropical leaves | 31 / 18.3% | 5.7% | refused `profile-ambiguous` | still refuses — all 8 slabs `slab-section-inconstant`, 0.70–4.71 mm measured | organic; correct refusal → scores in H, not V |
 | unicorn horn | 9 / 4.7% | — (plan refuses `frame-x-underdetermined`) | never reaches emission | same | F3D truth: 12 solid features — 3 extrude + 1 fillet expressible, **8 inexpressible by the closed vocabulary** (1 coil, 2 sweeps, 2 lofts, 1 shell, 1 split, 1 move); V = **0/12 recognized** |
 
 On PR #54's branch (scan lane only, no slabs): leaves 31 → **49** accepted,
 horn 9 → **23** and now plans a `hole` and reaches emission, desktop 38 → 45,
 honeycomb byte-identical (manifest `re_measured` notes, PR #54 body). These
-gains are fit-level; RC-emitted moves on no benchmark part from #54 alone.
+gains are fit-level; RC-scripted moves on no benchmark part from #54 alone.
 
 Scoreboard cells common to all four: delivered `unmeasured` (never built
 live); E = 0 proven; C = 1 scripted (one placed component each, denominator 1)
@@ -253,7 +335,7 @@ the measured disagreement, not silently).
 | cell | baseline (main, run artifacts) | PR #54 branch | source |
 | --- | --- | --- | --- |
 | fit coverage (diagnostic ceiling) | 0.0388, 443 accepted (all planes, all ≤ 99 triangles) | **0.1123, 1,718 accepted** | coverage.json; PR #54 |
-| RC-emitted | **0.0** — plan claims 0.21% (one sketch-extrude), emission refuses `profile-ambiguous` (15 loops, 0 matched to holes) | still 0.0 — emission still refused; the blocker moved from `material_side` to cylinder support-floor (32×) and axis-uncertainty (14×) refusals: capture geometry, not σ | rebuild-refusal.json; PR #54 body |
+| RC-scripted | **0.0** — plan claims 0.21% (one sketch-extrude), emission refuses `profile-ambiguous` (15 loops, 0 matched to holes) | still 0.0 — emission still refused; the blocker moved from `material_side` to cylinder support-floor (32×) and axis-uncertainty (14×) refusals: capture geometry, not σ | rebuild-refusal.json; PR #54 body |
 | delivered | 0.0 (`reconstruction-refused`: "Nothing was built") | 0.0 | coverage.json |
 | V | 0 of the evident set (board slab, 3 mounting holes, can cylinders): **0 cylinders accepted either side of #54** | same; 94/98 curved regions now carry a `material_side` | design -002 §3.3; PR #54 |
 | E | 0 / 0 (nothing emitted) | same | — |
@@ -276,7 +358,7 @@ outcome removes the need for the splitter; scan-seg PRs 1–3 unchanged.**
    acceptance *checklist*. 4. C is 1 scripted on every single-object part (one placed component
    each) and `unmeasured` live; assembly decomposition is 0 everywhere and no
    lane moves it. 5. Scan
-   recognition is fit-level ~11% with RC-emitted still 0.
+   recognition is fit-level ~11% with RC-scripted still 0.
 
 ---
 
@@ -314,7 +396,7 @@ exists; otherwise the lane's value is stated as the cell it unlocks.
   the span-gate arithmetic holds (A4, unverified). PR 2 also removes the
   156.6 MB relationships artifact (F8) that currently makes every scan re-run
   operationally hostile.
-- **Cannot move:** RC-emitted on its own — emission on this part is the 2.5D
+- **Cannot move:** RC-scripted on its own — emission on this part is the 2.5D
   lane's scope (F10, ruled explicitly in design -002 §3.3): `delivered stays
   0.0 until the 2.5D multi-loop lane lands` *and* the mesh's 158 boundary
   edges are handled (open mesh → no hole emission, ever — the doctrine's own
@@ -328,7 +410,7 @@ exists; otherwise the lane's value is stated as the cell it unlocks.
 - **Moves:** V's fillet row from **2/114** toward the fit record's candidates
   (the measured regression 3 → 2 on the slab path is the lane's own baseline,
   PR #51 finding 4/PR #53); hole containment across union spans protects the 74.
-  Some RC-emitted (fillet area is small; holes already emit).
+  Some RC-scripted (fillet area is small; holes already emit).
 - **Evidence:** 114 candidates already carry accepted-neighbour evidence;
   the blocker is named (`cap_regions` resolves against one slab).
 - **Cannot move:** scan cells, C, E-proven (that is Run A's).
@@ -350,7 +432,7 @@ exists; otherwise the lane's value is stated as the cell it unlocks.
   denominator quality (station + thickness parameters are the design-intent
   parameters, and PR 6's perturbation specs are what Run A's editability spec
   will exercise); the committed benchmark manifest onto the slab path (the
-  scoreboard's only fully-replayable RC-emitted numbers).
+  scoreboard's only fully-replayable RC-scripted numbers).
 - **Evidence:** design 2026-08-20-001 §D; S1 (shellFeatures) is still an
   unprobed assumption — probe first, as the design orders.
 - **Cannot move:** scan fit coverage; C.
@@ -429,7 +511,7 @@ wall-clock, dominated by spec authorship and the first-failure loop.
 **Run B — benchmark slab-path re-measure (host-side, no Fusion).** The four
 dumps are committed; run `fit-regions` → `plan-reconstruction <manifest>
 --fit-record --program-spec --dump` →
-emission per part on the 2.5D head and record RC-emitted per part into the
+emission per part on the 2.5D head and record RC-scripted per part into the
 manifest with `re_measured` notes. This is 2.5D PR 6's declared job; as a
 measurement it is runnable today. Cost: minutes of compute, an hour of
 recording. This is the **cheapest unmeasured RC number in the program**.
@@ -437,7 +519,7 @@ recording. This is the **cheapest unmeasured RC number in the program**.
 **Run C — Dig-Next-2 re-run on the merged head (post-#54 + post-#53, and again
 post-splitter).** Same host-side chain against the retained dump
 (`dig_next_2_stl-72aeeb2aed8f.meshdump`, scratchpad run/dumps). Record: fit
-coverage, RC-emitted, the mega-group's fate, hole emission given 158 boundary
+coverage, RC-scripted, the mega-group's fate, hole emission given 158 boundary
 edges (expect: still refused — open mesh — unless the local-winding licence
 covers the hole regions; the run decides). Cost: minutes host-side; no Fusion
 needed until something emits. Re-run after scan-seg PR 3 lands (the design's
@@ -481,7 +563,7 @@ term came from. First targets: Dig-Next-2 and the honeycomb; explicitly audit
 the <4-point face groups (§1.5). Cost: an hour. Turns H from "by construction"
 into a measured row.
 
-**Run E-prod — publish per-part RC-emitted for the eleven.** Fold into Run A
+**Run E-prod — publish per-part RC-scripted for the eleven.** Fold into Run A
 (same session produces the numbers); listed separately because it is the
 missing *artifact* — the corpus tables publish counts, never emission-stage
 area fractions, which is why §2.1's RC cell is unmeasured today.
@@ -490,11 +572,47 @@ area fractions, which is why §2.1's RC cell is unmeasured today.
 
 ## 5. Referee's note: the single number to buy first
 
-**Run B** (benchmark slab-path RC-emitted, host-side, free) is the cheapest
+**Run B** (benchmark slab-path RC-scripted, host-side, free) is the cheapest
 unmeasured number, and it is the one most likely to move the *ranking*: if the
-honeycomb's slab-path RC-emitted comes back far below its 33.5% plan coverage
+honeycomb's slab-path RC-scripted comes back far below its 33.5% plan coverage
 (profile-set resolution or loop closure eating area on the only part with a
 byte-perfect ground truth), the fix loop behind §3.1 grows and the 2.5D lane's
 PR 4–6 ordering reshuffles ahead of scan-seg; if it comes back ≈ plan
 coverage, §3.1's risk shrinks and scan-seg's claim to second firms up. Buy it
 before scheduling the live session.
+
+---
+
+## 6. Amendment — external-review incorporation (2026-08-20)
+
+Source: `docs/reviews/2026-08-20-oracle-design-review.md` (findings 4, 11.1,
+11.2, 11.3 land in this document; §1.1, §1.4 and §1.5 were revised in place).
+
+- **Sequencing.** §3's ranking is subordinated to the canonical
+  implementation order in the review file §2: **PR 0a (the §1.1 non-vacuity
+  gate + "emits" census recomputation) and PR 0b (the relationships rewrite,
+  design -002 §A.6) precede every ranked lane**, including §3.1's Run A.
+  The rankings themselves are otherwise unchanged.
+- **Baseline flag.** The v0.12.0 addendum figures the review was rendered
+  against — 8 of 16 parts emitting, area-weighted RC 23.3% (production 11:
+  6 emit, mean 45.5%) — are **RC-scripted, pre-non-vacuity** numbers. They
+  are flagged pending recomputation under PR 0a; the measured 0.0%-area
+  exit-0 part is known to be inside the "8", so the recomputed census is
+  expected to be at most 7 of 16. The recomputed numbers replace them in the
+  next baseline revision; until then any citation of "8 of 16" carries this
+  flag.
+- **New closed-set tokens registered by this amendment:**
+  `no-emittable-claims`, `emission-empty`, `emission-zero-source-area`,
+  `emission-zero-geometry` (§1.1). Tokens inherited by reference:
+  `invalidated-by-partition` (design -002 §A.2),
+  `relationship-budget-exceeded` (design -002 §A.6),
+  `segmentation-datum-unavailable`, `correlation-model-unidentified`
+  (design -002 §A.4/§A.5), `capture-boundary-unclosed`,
+  `pose-locked-for-delivery` (design -004 §4.6/§4.7), and design -001 §A.3's
+  slab-track tokens.
+- **Vocabulary.** `RC-emitted` → `RC-scripted` applied throughout (§1.1
+  records the rename); the H ladder reports `RC-scripted-nonempty` /
+  `RC-built` / `RC-verified` and never promotes a lower rung over a higher
+  one. The `unclaimed_components` population is renamed
+  `unclaimed-surface-component` at its next schema touch (design -002 §A.7)
+  to end the collision with Fusion/physical components.
