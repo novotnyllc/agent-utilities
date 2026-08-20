@@ -599,6 +599,39 @@ class DatumFrameTests(unittest.TestCase):
         # origin would carry none.
         self.assertEqual("plane parallel to the primary axis", frame.evidence["secondary_source"])
 
+    def test_the_tilt_lever_is_measured_from_the_primary_fit_not_the_origin(self) -> None:
+        """The tilt pivots about the fitted axis point, not about the datum origin.
+
+        With the origin on an end cap and the primary's fitted axis point
+        mid-span, a secondary anchor level with that cap has zero axial offset
+        from the *origin* -- and the whole anchor-to-cap distance from the
+        pivot. Measuring the lever from the origin reported no primary-tilt
+        term at all for exactly that arrangement.
+        """
+        record = fx.record(
+            [
+                # Axis point 6 mm up; the cap, and so the origin, is at z = 0.
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 6.0), 3.0, 150.0, 8.0),
+                fx.cylinder("pin", (0.0, 0.0, 1.0), (9.0, 0.0, 0.0), 1.0, 40.0, 6.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        frame = derive_datum_frame(_regions(record), **FRAME_ARGS)
+        secondary = frame.evidence["secondary"]
+        origin_sigma = math.hypot(0.01, 0.01)
+        # axial = |anchor - pivot| + |origin - pivot| = 6 + 6.
+        self.assertAlmostEqual(
+            math.hypot(
+                math.hypot(
+                    math.degrees(math.atan2(0.01, 9.0)),
+                    math.degrees(math.atan2(origin_sigma, 9.0)),
+                ),
+                0.05 * math.hypot(1.0, 12.0 / 9.0),
+            ),
+            secondary["direction_sigma_deg"],
+            places=12,
+        )
+
     def test_a_declared_absolute_basis_refuses_the_tie_rather_than_raising(self) -> None:
         # No `sigma_multiple` is declared under an absolute-tolerance basis, and
         # a plane parallel to the primary axis then reached a multiplication by

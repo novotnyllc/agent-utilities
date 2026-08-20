@@ -1353,6 +1353,7 @@ def _secondary_from_second_axis(
     z_sigma_deg: float | None,
     origin_sigma: float | None,
     sigma_multiple: float | None,
+    primary_anchor: Vec3,
 ) -> list[AxisCandidate]:
     """A bolt pattern gives a natural X: the direction to the second axis."""
     out: list[AxisCandidate] = []
@@ -1395,12 +1396,16 @@ def _secondary_from_second_axis(
         # read under the key this kind's record actually uses.
         anchor_sigma = region.sigma(_ANCHOR_SIGMA_KEY[fit.kind])
         # And the primary axis's angular sigma, because the projection that
-        # produces this direction subtracts that axis. Tilting z by delta moves
-        # the subtracted component by roughly `axial * delta`, which lands on a
-        # perpendicular of length `radial`, so the direction turns by about
-        # `axial / radial * delta`. An anchor far up the axis and close to it is
-        # where that lever is worst, and it is exactly where a tie is likeliest.
-        axial = abs(_dot(offset, z))
+        # produces this direction subtracts that axis. The tilt pivots about
+        # the primary fit's *own* anchor, not about the datum origin: an origin
+        # placed on an end cap while the fitted axis point sits mid-span means
+        # a secondary anchor level with that cap has zero axial offset from the
+        # origin and the whole anchor-to-cap distance from the pivot. Both
+        # levers are measured from the pivot and added, because the tilt swings
+        # the origin and the anchor the same way at once.
+        axial = abs(_dot(_sub(anchor, primary_anchor), z)) + abs(
+            _dot(_sub(origin, primary_anchor), z)
+        )
         out.append(
             AxisCandidate(
                 region_hash=region.region_hash,
@@ -1543,6 +1548,7 @@ def derive_datum_frame(
             winner.direction_sigma_deg,
             origin_sigma,
             sigma_multiple,
+            winner.anchor,
         )
         secondary_basis = "second axis off the primary axis"
     if not secondary:
