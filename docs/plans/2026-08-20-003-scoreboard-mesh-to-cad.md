@@ -62,13 +62,20 @@ existence, not to built geometry). The headline is a ladder, each rung an
 upper bound on the next:
 
 ```text
-RC-scripted-nonempty   host-side upper bound (script exists AND the
-                       non-vacuity conditions below hold)
-RC-built               a live Fusion transaction created the geometry
-RC-verified            built + deviation accepted + editability proof
+RC-scripted     host-side upper bound: script exists AND the host-checkable
+                non-vacuity conditions (2 and 3 below) hold.
+                RC-scripted-nonempty is an explicit alias of this rung.
+RC-built        a live Fusion transaction created the geometry; non-vacuity
+                conditions 1, 4 and 5 below are checkable only here
+RC-verified     built + deviation accepted + editability proof
 ```
 
-`delivered_area_fraction` is RC-verified's natural artifact name. Corpus
+`delivered_area_fraction` is **RC-built's** coverage artifact — a coverage
+number carrying no deviation or editability verdict of its own.
+`RC-verified` is computed only when all three of its gates (built geometry,
+accepted deviation, editability proof) are on the record, and `delivered`
+stays `unmeasured` until §4 Run A's live rebuild — no host-side lane can
+produce it. Corpus
 reporting carries the area-weighted aggregate **and** the macro-average per
 part, the median, and the zero-count — one large easy surface must not hide
 a population of failed parts.
@@ -105,7 +112,14 @@ Failing any of these is a named refusal, not an emission — new closed-set
 tokens: `no-emittable-claims`, `emission-empty`,
 `emission-zero-source-area`, `emission-zero-geometry`. An intentionally
 emptied `replan-without` result is a named "nothing reconstructable"
-outcome, never a success. This gate is **PR 0a** in the canonical
+outcome, never a success. **Evidence boundary:** conditions 2 and 3 are
+checkable host-side from the program/script record and gate `RC-scripted` —
+Run B measures exactly this; conditions 1, 4 and 5 reference live API
+operations and gate `RC-built`. A run that never opened a Fusion session
+reports `RC-scripted`, never a higher rung, and the pre-gate "8 of 16"
+census is *script-existence only* — weaker even than `RC-scripted`, and
+flagged as such below. Identical score values are never reported across
+different gates. This gate is **PR 0a** in the canonical
 implementation order (`docs/reviews/2026-08-20-oracle-design-review.md` §2),
 ahead of everything else, and the v0.12.0 **"8 of 16 emit" census and its
 23.3% area-weighted figure are flagged pending recomputation under it** —
@@ -125,7 +139,8 @@ Why this is the honest number and the two existing numbers are not:
   build has ever run live** — so today it reads 0.0/`unmeasured` everywhere and
   cannot rank changes. RC-scripted is the strictest number computable host-side
   today; `delivered` is RC's live-verified counterpart and replaces it in the
-  headline the day the §4 Run A exists. The lose-only arithmetic
+  headline the day the §4 Run A exists — Run A's live rebuild is its only
+  source; no host-side lane (the 2.5D lane included) can produce it. The lose-only arithmetic
   (each stage may lose area, never gain — mesh-reconstruction.md,
   "Partial reconstruction") guarantees RC-scripted ≥ delivered, so RC-scripted is
   an upper bound on the goal metric, and is reported with that label.
@@ -181,7 +196,13 @@ before the detection run it scores — design -004 R4 as amended);
 regardless: candidates, licensed geometric subobjects, physical things
 evidenced, component definitions, occurrences — and under design -004 §0 the
 numerator's claim level is named (`componentized-geometric` vs
-`physical-thing-evidenced`), never blended. Achieved over target, the same direction as
+`physical-thing-evidenced`), never blended. **Populations must match:** the
+headline C divides `physical-thing-evidenced` components by the
+evident-things (physical) denominator; `componentized-geometric` counts are
+reported beside it as raw counts and — only where a reviewed table of
+evident *geometric subobjects* exists — as a separately labelled
+`C-geometric` ratio. A geometric numerator over a physical-thing
+denominator is never computed. Achieved over target, the same direction as
 every other cell — the first draft had it inverted, which made the stated
 `C = 0` baseline a division by zero and scored ten things collapsed into one
 component as 10 rather than 0.1. Two cases are named rather than computed:
@@ -250,6 +271,17 @@ Inferred geometry is counted in the derived-geometry ledger, never in
 original-area conservation. Target: **silently-unclaimed triangle count = 0**,
 exact, by immutable triangle ID. Run D remains the audit script; this is the
 substrate that makes its identities checkable rather than approximate.
+
+Stage-by-stage enforceability is explicit, because the audit can only read
+records that exist: `fit` and `plan` are auditable today from
+`fit.json`/`program.json` (Run D's identities); `decompose` becomes
+auditable when 002 §A.2's lineage-bearing assignment records land; `emit`
+when PR 0a's emission record lands; `build` and `verify` when Run A's
+rebuild and editability reports exist. Each stage record carries triangle
+IDs, its `partition_version`, predecessor linkage, and refusal evidence.
+Until a stage's record exists its dispositions are `unmeasured` — reported
+as unmeasured, never assumed zero — and the exact-zero target binds per
+stage as each record arrives.
 
 ### 1.6 No scalar; a headline ordering
 

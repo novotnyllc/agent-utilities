@@ -843,6 +843,17 @@ A rejected fit above the floor no longer licenses a split by itself; the
 | **wrong-kind structure** | `residual-structure` (Moran), directional-bin structure | licenses a split **only when** the proposed children jointly explain ≥ `split_min_children_explained` of the parent's area under the predicate below |
 | **insufficient-information** | support floors, `parameter-uncertainty`, span gates, capture boundary, `segmentation-datum-unavailable`, `correlation-model-unidentified` | terminates as T3 — splitting an information-starved region manufactures smaller information-starved regions |
 
+This licence governs **every splitter entry point**, and the two paths that
+look like exceptions are not splits of a T3 terminal: the standalone proxy
+grower of §4.3/§A.5 is **scan-scoped** — when
+`segmentation-datum-unavailable` fires no cross-cut exists, and the grower
+*is* the splitter for the whole scan (the token names the scan's missing
+datum, not a node's evidence class, so no node is simultaneously terminal
+and splittable); and §A.3's mandatory proxy refinement runs on a
+**joint-fit rejection over a mixed lateral cell**, which is the
+mixed-support class (row 1) by definition. A node terminal as T3 is never
+split by any path.
+
 **The aggregate productive-split predicate** (missing decision 3, decided
 here) replaces the existential rule. A split stands only when **all** of the
 following hold, evaluated on **reserved validation triangles** — a blocked
@@ -858,8 +869,15 @@ evidence that chose it:
 3. the improvement in (1) exceeds `split_boundary_cost` × (new boundary
    length / parent boundary length) — new boundaries are a model cost, paid
    for in measured improvement, never free;
-4. no child counts toward (1)–(2) unless its own support and gates pass or
-   it lands in a named terminal class.
+4. the area-weighted mean in (1) is computed over **all** children — no
+   child's loss may be dropped — but only **T1 `terminal-accepted`**
+   children count toward the improved fraction in (2) and toward the
+   wrong-kind clause's explained fraction; a child landing in any other
+   named terminal class is recorded with its class for honesty and
+   contributes **zero** to those fractions. (An earlier form — "or it lands
+   in a named terminal class" — was vacuous, since every completed child
+   lands in one; counting unaccepted children as explanation is the
+   confetti mechanism relicensed.)
 
 New declared thresholds, each `{value, rationale}` through
 `_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,
@@ -929,6 +947,15 @@ decomposition sits relative to frame/relationships) is decided in design
 -004 §A.2 *on top of* this contract: whatever ran earlier against a replaced
 partition version is invalidated by rule 5, so the ordering question loses
 its sting — it becomes a cost question, not a correctness one.
+
+The same argument settles **PR 0b's records** (§A.6, which the canonical
+order runs before the region tree and the peels): they are **provisional by
+construction** — each cites the `partition_version` it ran against, rule 5
+invalidates and recomputes them on every subsequent partition mutation, and
+rule 6 means the scoreboard and every other consumer accept only records
+citing the current version; a stale relationship is a version-mismatch
+refusal, never silently consumed. Running the rewrite early therefore costs
+recomputation, never correctness.
 
 ### A.3 Separation certificates on cross-cut boundaries (finding 8 — accepted)
 

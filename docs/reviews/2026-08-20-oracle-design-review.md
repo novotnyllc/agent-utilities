@@ -93,7 +93,8 @@ This order supersedes the PR ordering statements in 001, 002, 003 §3, and 004
    forced the merge — 002 addendum): plus separation certificates (§A.3)
    and the lateral-cell proxy refinement in the correctness path.
 6. **004 schema, Fusion probes, synthetic assembly emitter** (PRs C-1..C-3)
-   — only after the object ontology (004 §0) is in force in the schema.
+   — PR C-1 is itself the step that puts the object ontology (004 §0) into
+   the schema; C-2/C-3 require C-1, not some prior schema step.
 7. **`plan-decomposition`** (PR C-4) — only after partition lineage and
    invalidation (002 §A.2) are implemented and asserted.
 8. **Slab tracks and virtual closure** (001 §A.1–§A.4; 004 §4.6) — before
@@ -124,7 +125,7 @@ an owner PR — none remains silently missing.
 | 10 | Independent source for the C denominator | **decided** (human-reviewed evident-things table on acceptance fixtures; `C = unmeasured` on unlabeled scans; raw counts always) | 003 §1.4; 004 R4 |
 | 11 | How contact curves are found before an interface band is defined | **decided** (two-pass bootstrap: plane-band cut → cut loops become contact curves → band re-derived as δ of the curves, second pass authoritative) | 004 §A.3 |
 | 12 | Overlapping bands from multiple candidate base faces | **decided** (nearest-contact-curve ownership, quantized tie-break, contested set enumerated) | 004 §A.3 |
-| 13 | Geometry representing interface-owned triangles at C2 | **decided** (delivered inside the base component's mesh slice, owner stays `interface-j` in the record; revisited at C5) | 004 §A.3 |
+| 13 | Geometry representing interface-owned triangles at C2 | **decided** (delivered inside the base component's mesh slice, owner stays `interface-j` in the record; ownership digest and delivery digest are distinct, each audited by its own consumer; revisited at C5) | 004 §A.3 |
 | 14 | Virtual-cap representation, uncertainty, orientation, area rules | **decided** | 004 §4.6 |
 | 15 | Inferred base surface beneath a removed thing | **decided** (same mechanism, `inferred-by-contact`, derived-geometry ledger, never in original-area conservation) | 004 §4.6 |
 | 16 | Slab-track correspondence and temporary-multiple-body policy | **decided** | 001 §A.1 |

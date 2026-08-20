@@ -664,7 +664,14 @@ scan fit coverage can rise while RC stays zero. The contract:
   locally licensed closure procedure for capture boundaries is a registered
   follow-up (owner: emission lane), not smuggled in here. 002's segmentation
   and this design's componentization do not, by themselves, close a capture
-  — this token is what says so by name.
+  — this token is what says so by name. **Scope:** the token is
+  stage-scoped to closure-dependent operations. C1 partition and C2
+  reference-mesh delivery proceed — neither needs a closed mesh — while C3
+  per-thing reconstruction and every slab/loop-ladder operation refuse with
+  it. The partial record is the ordinary one: affected components stay
+  `recognized-reference` with the token recorded, and stage gates and
+  acceptance claims count them exactly there, never as reconstruction
+  failures of some other name.
 
 ### 4.7 Placement observability and instancing, formalized (review finding 12; missing decisions 19, 20, 21 and 26, decided)
 
@@ -683,8 +690,13 @@ noise. The pose record becomes:
   source-world placement within declared `placement_roundtrip_tol` (default
   1e-6 · extent, rationale: numerically meaningful against float64 transform
   composition, far below any measured placement uncertainty);
-- a **pose information (or covariance) matrix** with its **rank and
-  nullspace**;
+- a **pose information matrix** with its **rank and nullspace** — the
+  information matrix is the one serialized form (decision 20 sharpened): its
+  nullspace *is* the set of unconstrained directions, which is the
+  observability claim the record makes. A covariance may be carried as a
+  derived convenience, never as the source of the rank/nullspace fields — a
+  covariance nullspace means the opposite (zero variance), and unbounded
+  modes have no finite covariance representation at all;
 - a **continuous stabilizer group** (none / axis-rotation / full-rotation);
 - **discrete alternate transforms** (the 90° class and its kin), enumerated;
 - an **evidence class per constrained mode**, closed set: `observed`,
@@ -751,10 +763,12 @@ stands beside it, unchanged.
 ## 6. PR sequence
 
 **[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 — C-1..C-3 only after
-the §0 ontology is in the schema; C-4 only after 002 §A.2's lineage contract
-is implemented; slab tracks + virtual closure (001 §A, §4.6) before C-6. PR
-contents below stand, amended per §0/§4.1/§4.6/§4.7.]**
+`docs/reviews/2026-08-20-oracle-design-review.md` §2 — PR C-1 is itself the
+step that lands the §0 ontology in the schema (the bootstrap that satisfies
+the prerequisite; nothing precedes it on this lane), and C-2/C-3 require
+C-1; C-4 only after 002 §A.2's lineage contract is implemented; slab tracks
++ virtual closure (001 §A, §4.6) before C-6. PR contents below stand,
+amended per §0/§4.1/§4.6/§4.7.]**
 
 One worker, one PR at a time, tree green after each, each PR names the
 measured claim it must move **in scoreboard terms** (RC recognition
@@ -1058,14 +1072,19 @@ PC-2 could. It runs first, in PR C-2, before any emitter code is written.
 decisions that had no natural in-place home, the vocabulary renames, and the
 one open item this lane owns.*
 
-### A.1 Status vocabulary additions (closed set)
+### A.1 Vocabulary additions (closed sets, field-scoped)
 
-`componentized-geometric`, `physical-thing-evidenced` (§0);
-`recognized-reference` keeps its meaning as the C2 floor status. New evidence
-class `inferred-by-continuation` (R5); new tokens
-`capture-boundary-unclosed` (§4.6), `pose-locked-for-delivery` (§4.7),
-`invalidated-by-partition` (inherited from 002 §A.2). All enter the
-malformed-record validators in PR C-1.
+The closed sets are **per field**, and PR C-1's malformed-record validators
+check each field against its own set — a token that is valid in another
+field's set is rejected in this one:
+
+- `component_status`: + `componentized-geometric`,
+  `physical-thing-evidenced` (§0); `recognized-reference` keeps its meaning
+  as the C2 floor status.
+- `evidence_class`: + `inferred-by-continuation` (R5).
+- `refusal`: + `capture-boundary-unclosed` (§4.6).
+- `delivery_semantics`: + `pose-locked-for-delivery` (§4.7).
+- `lineage_state`: + `invalidated-by-partition` (inherited from 002 §A.2).
 
 ### A.2 Pipeline position vs frame and relationships (missing decision 7, decided; composition-table row 3 resolved)
 
@@ -1098,9 +1117,16 @@ order fixed here, host/Fusion placement follows 010's migration schedule.
   base), while ownership in the assignment record stays `interface-j` — the
   browser shows every triangle exactly once, the evidence never blends the
   owner classes, and the deviation over band triangles still grades against
-  the joint (consensus item 2, unchanged). Revisited at C5 when joints give
-  the band a semantic home; the revisit is registered here so it cannot
-  happen silently.
+  the joint (consensus item 2, unchanged). Ownership and delivery are
+  therefore **distinct identities with distinct digests**: the assignment
+  record's *ownership digest* hashes each owner's triangle set
+  (`interface-j` separate from `base`), while C2's *delivery digest* hashes
+  the delivered mesh slice per component (the base slice including its
+  interface bands). H audits ownership digests; C2's re-hash check audits
+  delivery digests; a change in either forces re-emission of the affected
+  component, and neither digest is ever derived from the other. Revisited
+  at C5 when joints give the band a semantic home; the revisit is
+  registered here so it cannot happen silently.
 
 ### A.4 Open item (registered, not decided): stable thing-ID migration
 

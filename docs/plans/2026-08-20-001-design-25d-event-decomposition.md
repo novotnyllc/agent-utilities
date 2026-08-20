@@ -728,9 +728,20 @@ per-slab verification at three stations never established it. Added:
 
 - **Nodes:** connected material components within each slab's section (a
   slab may hold several).
-- **Edges:** evidence-backed correspondence across adjacent events — footprint
-  overlap and congruence within the constancy tolerance, the same measured
-  evidence the coalescing rule already reads.
+- **Edges:** evidence-backed correspondence across adjacent events, licensed
+  per edge kind. `continuation` edges require footprint overlap **and**
+  congruence within the constancy tolerance — the same measured evidence the
+  coalescing rule already reads. `branch` and `merge` edges are
+  topology-changing by definition, so congruence with the pre-transition
+  footprints cannot be required of them; they are licensed by
+  **containment/overlap plus evidenced connectivity** instead: each
+  pre-transition component's footprint overlaps the post-transition section,
+  and that section shows the overlapped components connected (`merge`) or
+  one component's footprint continuing as disjoint successors (`branch`).
+  The U-shaped part's bridge slab is the motivating instance: its single
+  connected component is congruent with neither track below it, but contains
+  both footprints and connects them — a licensed `merge`, not a
+  death-plus-birth.
 - **Track states**, closed set: `birth`, `continuation`, `branch`, `merge`,
   `death`, `temporary-disconnection`.
 - **A track may begin as `new-body` at any station**, not only slab 0. A
@@ -755,6 +766,17 @@ its **track** predecessor, not "the previous slab" globally. §C's dependency
 rule ("each slab depends on its predecessor — join needs a body") is
 superseded accordingly: dependencies follow track edges.
 
+The slab record carries the graph into emission: `track_id`,
+`track_predecessor` (null at `birth`) and `track_state` (§A.1's closed set)
+join the schema, and §C's "slab 0 is `new-body`, every later slab `join`" is
+superseded — the emitted operation derives from track state: `birth` →
+`new-body`; `continuation` → `join` into the track's body; `merge` → `join`
+of the evidenced-contact bodies, which thereafter share one track body;
+`branch` → each successor keeps joining the shared body; `death` ends the
+track's dependencies. Temporary multiple bodies between `birth` and `merge`
+are the designed emission state, so the emitter can encode every valid track
+graph the planner produces.
+
 ## A.2 Event states, separated; loop correspondence defined (finding 5 tail; missing decision 17, decided)
 
 The interior-slab regression (measured, v0.12.0 addendum) shows "a plane
@@ -777,8 +799,13 @@ sufficient evidence *for* it elsewhere.
 difference within `slab_constancy_tolerance_mm` (the declared threshold
 already in the vocabulary — no new constant); an unmatched loop names itself
 in the `slab-section-inconstant` refusal rather than failing the slab on a
-bare count mismatch. Matching is deterministic: candidate pairs ordered by
-quantized centroid distance, ties by loop serial.
+bare count mismatch. Matching is a deterministic **one-to-one global
+assignment**, not a greedy pair walk: among assignments of maximum
+cardinality over the eligible (complete-linkage) pairs, take the one
+minimizing total quantized centroid distance, remaining ties broken by loop
+serial — so overlapping candidate pairs cannot select different
+correspondences on different runs. Unmatched loops on either side drive the
+track edges and the `slab-section-inconstant` decision deterministically.
 
 ## A.3 Cause-specific tokens replacing `profile-ambiguous`'s overload (review vocabulary table)
 
@@ -793,6 +820,17 @@ planner refusals:
 - `slab-track-merge-unlicensed` — §A.1's unevidenced join.
 - `multi-body-output-unlicensed` — the track graph terminates in more than
   one body and multi-body delivery is out of scope.
+
+**Scope and propagation:** `slab-track-ambiguous`,
+`slab-stack-disconnected` and `slab-track-merge-unlicensed` are
+**track-scoped** — they stop the affected track's slabs, whose regions go to
+unreconstructed with the token named exactly as the refusal ladder demands,
+while other tracks proceed. `multi-body-output-unlicensed` is
+**delivery-scoped**: it refuses the *output*, never the evidence — the track
+graph, the per-track slab programs and the correspondence evidence stay on
+the record and are handed to design -004's componentization lane intact
+(§A.1's second outcome); the affected regions still route to unreconstructed
+with the token, but nothing §A.1 requires to remain addressable is erased.
 
 `profile-ambiguous` **retires for slab-stack programs** (it survives only as
 the terminal composition token on the degenerate one-slab path, where its
@@ -814,9 +852,22 @@ failing globally:
   volume only, excluded from deviation grading and area conservation, its
   cap station entering §A.2 as a `candidate-geometry-station` with the cap's
   recorded uncertainty. The ladder never learns to "tolerate" open meshes;
-  it receives closed ones whose closure is honestly labelled.
+  it receives closed ones whose closure is honestly labelled. Closure
+  segments carry **no dump-triangle provenance** and are **excluded from the
+  material-side consensus**; their winding is inherited from the licensed
+  contact plane's normal as oriented by the interface record, labelled with
+  the cap's evidence class — B's per-segment provenance tables list them
+  under the derived-geometry ledger, never as source triangles, so they stay
+  out of deviation grading and area conservation on every path.
 - **Globally open captures** (boundary edges unrelated to any interface —
   Dig-Next-2's 158 edges, all 46 slabs `slab-section-open`): v1 policy is
   the hard refusal `capture-boundary-unclosed` (token shared with design
   -004 §4.6). A locally licensed closure procedure for capture boundaries is
   a registered follow-up in the emission lane, not attempted here.
+  **Precedence:** the global open-capture check runs *before* the ladder's
+  closure step — boundary edges unrelated to any licensed interface refuse
+  `capture-boundary-unclosed` first, so a globally open capture can no
+  longer reach `loop-orientation-unavailable` (which keeps its original
+  meaning: orientation/winding failure on a mesh whose boundary is either
+  empty or fully licensed). Design -004 and the scoreboard can rely on the
+  shared token being the one actually emitted.
