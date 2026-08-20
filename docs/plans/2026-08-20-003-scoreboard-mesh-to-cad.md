@@ -58,6 +58,17 @@ stage refused or dropped (`profile-ambiguous`, `sketch-loop-budget-exceeded`,
 skipped fillets, …). What remains is area standing behind an emitted feature
 script. Call it **RC-emitted**.
 
+**Subtraction alone is not the measurement, and crediting it is how this number
+gets overstated.** Emission is all-or-nothing: when host-side `plan_emission`
+refuses any archetype, `emit_mesh_rebuild_script` raises before it returns a
+transaction, so *nothing* was scripted — and in Fusion a failure rolls the whole
+transaction back the same way. A part with one refused archetype and nine good
+ones therefore has RC-emitted **0**, not nine archetypes' worth. The remaining
+area is credited only after `replan_without` produces a reduced program **and
+that program emits successfully**; until then the part's RC-emitted is zero with
+the refusal named. Every run below (B, C, E-prod) records the re-emission it
+ran, or records zero.
+
 Why this is the honest number and the two existing numbers are not:
 
 - `covered_area_fraction` at the **fit** stage counts *accepted fits*. A fit is
@@ -126,15 +137,22 @@ reads 0 rather than undefined), and **an unmeasured denominator →
 has no cell, which is exactly Dig-Next-2's position today. Over-emission
 (a ratio above 1: more components than things) is a failure of this cell and
 is reported by name — `things-over-partitioned` — not as a score above 1.
-Today the emitter builds one dedicated component holding one body per part,
-with no occurrence transforms — **C = 0 emitted everywhere; one body per part
-is the current ceiling** (design 006 §model;
-verified: no component/occurrence emission exists in any emitter path). For a
-single-object STL the denominator is 1 and the cell is trivially satisfiable by
-the current ceiling *once the emitter declares it*; the cell bites on scans of
+Today the emitter builds **one** component per part and places it: the rebuild
+transaction sets a transform from `PLAN["datum_transform"]["matrix"]` and calls
+`root.occurrences.addNewComponent(transform)` (`mesh_rebuild.py`). So for a
+single-object part the cell is **C = 1 at the scripted level** — one placed
+component over a denominator of 1 — and `unmeasured` live, no rebuild having
+been built. What is 0 everywhere is *decomposition*: a second component, an
+occurrence of a recognized sub-thing, anything that makes the denominator
+larger than one. **One body per part is the current ceiling** (design 006
+§model). The earlier draft of this section said no component or occurrence
+emission existed in any emitter path; that was wrong — the placement call above
+is in the shipped transaction, and it is what makes the single-object cell
+satisfied rather than merely satisfiable. The cell bites on scans of
 assemblies — Dig-Next-2 is a PCB assembly (board + soldered components; exact
 census `unmeasured`, no evident-things table exists yet). No lane currently in
-flight moves this cell (§3.7).
+flight moves this cell *on an assembly*, which is the only place it is not
+already satisfied (§3.7).
 
 ### 1.5 Honesty margin (H)
 
@@ -206,7 +224,7 @@ Scoreboard row (aggregate):
 | delivered (live) | **unmeasured** | no slab build has ever run live |
 | V | holes 74 planned of 85 evident bores (87%); prisms: 21/21 hex nut pockets correctly refused as cylinders; fillets **2 planned of 114 candidates** (3 → 2 on the slab path, PR #51 finding 4); extrudes: slab stacks per table; revolve/shell/chamfer/pattern: 0 (shell and revolve unassigned; chamfer/pattern not in vocabulary) | mesh-reconstruction.md; PR #51/#53 |
 | E | **0 proven / parameters emitted per part `unmeasured`** (counts live in the emitted scripts, not in any published table); `interactions_exercised: false` | no U5 report exists for any part |
-| C | **0** — 0 components emitted (1 body/part ceiling) over a denominator of 1 each, these being single objects: a measured 0, unlike the assembly row below | §1.4 |
+| C | **1 scripted / `unmeasured` live** — the transaction places one component per part (`addNewComponent` with the datum transform) over a denominator of 1 each, these being single objects; no rebuild has been built live. Decomposition beyond one component is 0 everywhere | §1.4 |
 | H | all refusals named (tropical-leaves-style silent loss not observed; every gate token closed-set); area-conservation audit `unmeasured` | §1.5 |
 
 ### 2.2 The four benchmark parts (committed, replayable; manifest on the 2.5D head = post-#48 v1 path)
@@ -224,7 +242,8 @@ honeycomb byte-identical (manifest `re_measured` notes, PR #54 body). These
 gains are fit-level; RC-emitted moves on no benchmark part from #54 alone.
 
 Scoreboard cells common to all four: delivered `unmeasured` (never built
-live); E = 0 proven; C = 0; H clean — every stop carries a named gate, and the
+live); E = 0 proven; C = 1 scripted (one placed component each, denominator 1)
+and `unmeasured` live; H clean — every stop carries a named gate, and the
 two "refuse" parts are the honesty exemplar (the leaves' 8 slabs refuse with
 the measured disagreement, not silently).
 
