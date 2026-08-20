@@ -545,6 +545,48 @@ class DeviationVerdictTests(unittest.TestCase):
         self.assertFalse(open_grid.is_closed())
         self.assertIsNone(open_grid.encloses(10.0, 10.0, 5.0))
 
+    def test_a_containment_answer_outside_the_vocabulary_fails_closed(self) -> None:
+        # One scanned vertex answered with something that is neither inside,
+        # outside nor on. It carries no evidence, and a verdict that counted it
+        # as nothing was a pass over material nobody classified.
+        reconstruction = _SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 10.0))
+        honest = reconstruction.pointContainment
+        calls = []
+
+        def sometimes_unknown(point):
+            calls.append(1)
+            return "unknown" if len(calls) == 10 else honest(point)
+
+        reconstruction.pointContainment = sometimes_unknown
+        report = self._run(
+            self._namespace(mesh=self._scan(), reconstruction=reconstruction),
+            failure="containment-query-failed",
+        )[0]
+        self.assertEqual(["containment-query-failed"], report["failures"])
+        self.assertEqual(1, report["containment_unknown"]["nodes"])
+        self.assertNotIn("verdict", report)
+
+    def test_an_omission_below_its_own_threshold_is_not_an_advisory(self) -> None:
+        # The classification uses the *invented* threshold, because that is the
+        # question it answers. Turning those samples into an omitted-detail
+        # advisory has to clear the omitted threshold, which is declared
+        # separately and, here, five times larger.
+        report = self._run(
+            self._namespace(
+                mesh=_PolygonMesh(*_box_mesh((0.0, 0.0, 0.0), (20.0, 20.0, 10.0), 2.0)),
+                # 0.1 mm short: past the 0.05 mm invented threshold and well
+                # inside the 0.25 mm omitted one.
+                reconstruction=_SolidBox("", (0.0, 0.0, 0.0), (20.0, 20.0, 9.9)),
+            )
+        )[0]
+        self.assertTrue(report["ok"], report.get("failures"))
+        verdict = report["verdict"]["invented_material"]
+        self.assertGreater(verdict["unclassified_reconstruction_samples"], 0)
+        self.assertTrue(verdict["unclassified_explained_by_omission"])
+        omitted = report["verdict"]["omitted_detail"]
+        self.assertEqual(0, omitted["count"])
+        self.assertEqual("pass", omitted["severity"])
+
     def test_an_omission_the_scanned_vertices_did_not_see_is_still_an_advisory(self) -> None:
         # `outside_gaps` counts scanned vertices outside the reconstruction. A
         # rebuild short of the scan whose *corners* still touch it leaves that

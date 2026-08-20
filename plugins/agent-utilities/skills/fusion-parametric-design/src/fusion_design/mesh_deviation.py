@@ -1442,6 +1442,31 @@ def run(context):
         # direction, which already saw the omission: a scanned vertex outside
         # the reconstruction. So the unexplained case is the one where the
         # reverse direction reaches further than the omission does.
+        if neither_count:
+            # `pointContainment` gave an answer this transaction's vocabulary
+            # does not carry -- neither inside, nor outside, nor on. Those
+            # vertices are evidence of nothing, and a verdict that ignores them
+            # is a pass over material nobody classified. Failed closed under
+            # the query's own token, because the query is what did not answer.
+            report["failures"] = ["containment-query-failed"]
+            report["containment_unknown"] = {
+                "nodes": neither_count,
+                "of": len(source_nodes),
+                "meaning": (
+                    "BRepBody.pointContainment returned a value outside the three-member "
+                    "PointContainment vocabulary for these scanned vertices. They carry no "
+                    "evidence about invented or omitted material, and neither severity can be "
+                    "reported without them."
+                ),
+            }
+            report_attempted = True
+            _emit(report)
+            raise RuntimeError(
+                "Deviation verdict failed closed: containment-query-failed, "
+                + str(neither_count)
+                + " scanned vertices got an answer outside the PointContainment vocabulary"
+            )
+
         omitted_reach = max(outside_gaps) if outside_gaps else 0.0
         recon_reach = report["reconstruction_to_source"]["max_mm"]
         # Each of those samples is classified against the source *solid*, one
@@ -1473,7 +1498,18 @@ def run(context):
         report["reconstruction_to_source"]["beyond_threshold_unresolved"] = unresolved
         explained_by_omission = bool(unclassified) and not outside_source and not unresolved
         established = bool(invented_count) or not unclassified or explained_by_omission
-        if inside_source and not omitted["count"]:
+        # And they have to clear the *omitted* threshold to be omitted detail:
+        # the classification above uses the invented threshold, because that is
+        # the question it was answering, and the two are declared separately for
+        # a reason. A 0.1 mm recess is not an omitted-detail advisory under a
+        # 0.25 mm declaration just because it cleared the 0.05 mm one.
+        omitted_inside_source = 0
+        for point, distance in zip(sample_points, sample_distances):
+            if distance <= omitted_threshold:
+                continue
+            if source_grid.encloses(point[0], point[1], point[2]):
+                omitted_inside_source += 1
+        if omitted_inside_source and not omitted["count"]:
             # Omission the scanned *vertices* did not see. A deep narrow recess
             # whose rim carries no scanned node leaves `outside_gaps` at zero,
             # so the signed direction counts nothing -- and the reverse
@@ -1483,13 +1519,14 @@ def run(context):
             omitted = dict(
                 omitted,
                 severity="advisory",
-                reconstruction_samples_inside_source=inside_source,
+                reconstruction_samples_inside_source=omitted_inside_source,
                 meaning=(
                     "No scanned vertex lies outside the reconstruction, so the signed direction "
                     "counted no omitted detail -- but "
-                    + str(inside_source)
+                    + str(omitted_inside_source)
                     + " of the reconstruction's own samples sit inside the scanned solid and "
-                    "further than the threshold from any scanned surface, which is rebuilt "
+                    "further than the *omitted-detail* threshold from any scanned surface, which "
+                    "is rebuilt "
                     "surface standing where scanned material used to be. An omission between "
                     "sparse scanned vertices reads this way and no other, so it is reported as "
                     "the advisory it is. " + OMITTED_MEANING
