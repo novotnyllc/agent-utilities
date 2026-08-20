@@ -266,6 +266,37 @@ class BenchmarkFixtureTests(unittest.TestCase):
                     self.assertIn("value", declared, name)
                     self.assertTrue(str(declared.get("rationale", "")).strip(), name)
 
+    def test_each_parts_recorded_stage_is_the_one_its_own_refusals_imply(self) -> None:
+        """A hand-set outcome label contradicted its own row, so there is none.
+
+        The desktop organiser carried `coverage_label: reconstruction-refused`
+        beside one `sketch-extrude`, no refusal anywhere, and
+        `stage_reached: emitted`: the one part in the corpus that gets all the
+        way through, labelled as the failure. Two of the four carried no label at
+        all. `coverage_label` is the *build* stage's verdict -- `compose_coverage`
+        calls anything Fusion has not built `reconstruction-refused`, and this
+        benchmark runs no Fusion, so it is not a number this corpus can report.
+        The outcome is the stage reached, and it is derived here from the row's
+        own refusal fields rather than trusted, so it cannot contradict them
+        again.
+        """
+        self.assertTrue(MANIFEST["results"], "the results table is empty")
+        for source_id, row in MANIFEST["results"].items():
+            with self.subTest(part=source_id):
+                self.assertNotIn("coverage_label", row)
+                if row["fit"]["refusal"]:
+                    implied = "fit"
+                elif (row.get("plan") or {}).get("refusal"):
+                    implied = "plan"
+                elif (row.get("rebuild_emission") or {}).get("refusal"):
+                    implied = "emit-rebuild"
+                else:
+                    implied = "emitted"
+                self.assertEqual(implied, row["stage_reached"])
+                # And the one part that reaches `emitted` says what it emitted.
+                if implied == "emitted":
+                    self.assertTrue(row["plan"]["archetypes"])
+
 
 class HoneycombAgainstItsStepTests(unittest.TestCase):
     """"Does the STL come back matching what the STEP says?", as an executable check.
@@ -307,11 +338,14 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
             self.comparison["mesh_volume_mm3"],
             delta=STEP_VOLUME_REL_TOLERANCE * body["volume_mm3"],
         )
+        # strict: a bbox of the wrong length would truncate and skip an axis
+        # silently, which is a comparison that passed by not being made.
         step_extent = [
-            high - low for low, high in zip(body["bbox_min_mm"], body["bbox_max_mm"])
+            high - low
+            for low, high in zip(body["bbox_min_mm"], body["bbox_max_mm"], strict=True)
         ]
         for axis, (expected, measured) in enumerate(
-            zip(step_extent, self.comparison["mesh_bbox_extent_mm"])
+            zip(step_extent, self.comparison["mesh_bbox_extent_mm"], strict=True)
         ):
             with self.subTest(axis="xyz"[axis]):
                 self.assertAlmostEqual(expected, measured, delta=STEP_BBOX_ABS_TOLERANCE_MM)

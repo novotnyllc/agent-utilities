@@ -287,7 +287,6 @@
   "results": {
     "desktop_organiser_3mf": {
       "body_name": "desktop-organiser-bambulab-v0",
-      "coverage_label": "reconstruction-refused",
       "dump": "desktop_organiser_3mf-9a9e28f371aa.meshdump",
       "dump_sha256": "8a9ab10ee7bf089d910e5b13b3c2d3e7292d65a8da204dd495411a6ba9aa0154",
       "face_groups": 790,
@@ -375,7 +374,6 @@
     },
     "tropical_leaves_stl": {
       "body_name": "tropical-leaves",
-      "coverage_label": "reconstruction-refused",
       "dump": "tropical_leaves_stl-995681e3801a.meshdump",
       "dump_sha256": "94db3ab2cd8b9ebc990f0dc81f3b055ae325a878194fbb1b6891b39bc6663238",
       "face_groups": 2299,

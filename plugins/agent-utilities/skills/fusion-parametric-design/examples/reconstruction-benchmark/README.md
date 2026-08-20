@@ -155,12 +155,18 @@ which no ground truth here can confirm or deny.
 benchmark-manifest.json   fixtures with hashes and roles, every measured number, and the known gaps
 fusion-project.json       the project manifest, with all four mesh_sources and their brep_source pairs
 program-spec.json         the planner's declared thresholds, shared by every part
-rebuild-spec.json         the emitter's declared thresholds; dump_path is relative and the runner resolves it
+rebuild-spec.json         the emitter's declared thresholds; dump_path is a placeholder the runner substitutes
 parts/                    the seven downloaded files, byte for byte
 dumps/                    one hash-bound mesh dump per mesh input, written by Fusion
 ground-truth/             the two STEP B-Rep readings and the F3D timeline, hash-bound like the rest
 results/<source-id>/      the recorded classification and the declared fit spec for that part
 ```
+
+One spec serves four parts, so its `dump_path` is
+`dumps/REPLACED_WITH_THE_PARTS_OWN_DUMP` and the runner substitutes the selected
+part's dump before emitting. Run `emit-mesh-rebuild` against the spec as
+committed and the placeholder is refused by name — `dump-unreadable`, naming the
+path — rather than escaping as an errno nobody can branch on.
 
 ### What this costs, and what earns it
 
