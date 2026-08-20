@@ -1308,8 +1308,10 @@ def _secondary_candidates(
         # whose own membership is not stable under its declared bound
         # carries no sigma, which is what makes it ineligible for the
         # tie-break rather than quietly certifiable.
-        eligible = combined is not None and (
-            offset_from_parallel + combined * sigma_multiple <= angle_tolerance_deg
+        eligible = (
+            combined is not None
+            and sigma_multiple is not None
+            and offset_from_parallel + combined * sigma_multiple <= angle_tolerance_deg
         )
         out.append(
             AxisCandidate(
@@ -1335,6 +1337,13 @@ def _secondary_candidates(
 _ANCHOR_SIGMA_KEY = {"cylinder": "axis_point", "cone": "apex"}
 
 
+def _combined_positional_sigma(anchor: float | None, origin: float | None) -> float | None:
+    """The two measured numbers that place a second axis relative to the datum."""
+    if anchor is None or origin is None:
+        return None
+    return math.hypot(anchor, origin)
+
+
 def _secondary_from_second_axis(
     regions: Sequence[RegionFit],
     z: Vec3,
@@ -1343,6 +1352,7 @@ def _secondary_from_second_axis(
     offset_tolerance: float,
     z_sigma_deg: float | None,
     origin_sigma: float | None,
+    sigma_multiple: float | None,
 ) -> list[AxisCandidate]:
     """A bolt pattern gives a natural X: the direction to the second axis."""
     out: list[AxisCandidate] = []
@@ -1360,6 +1370,20 @@ def _secondary_from_second_axis(
         radial = _length(perpendicular)
         if radial <= offset_tolerance:
             continue
+        # Being far enough off the axis to *be* a candidate is a measurement
+        # against `offset_tolerance`, like the plane case's parallelism. A
+        # candidate whose clearance is smaller than its own positional bound is
+        # one a re-tessellation drops out of the set -- and it can win an
+        # `arbitrary-canonical` tie first, then vanish and change X on the next
+        # fit. Its own bound has to keep it in.
+        positional = _combined_positional_sigma(
+            region.sigma(_ANCHOR_SIGMA_KEY[fit.kind]), origin_sigma
+        )
+        stable_membership = (
+            positional is not None
+            and sigma_multiple is not None
+            and radial - positional * sigma_multiple > offset_tolerance
+        )
         x = _unit(perpendicular)
         if x is None:
             continue
@@ -1388,7 +1412,10 @@ def _secondary_from_second_axis(
                 basis="perpendicular offset from the origin to a second axis",
                 direction_sigma_deg=(
                     None
-                    if anchor_sigma is None or z_sigma_deg is None or origin_sigma is None
+                    if not stable_membership
+                    or anchor_sigma is None
+                    or z_sigma_deg is None
+                    or origin_sigma is None
                     else math.hypot(
                         math.hypot(
                             math.degrees(math.atan2(anchor_sigma, radial)),
@@ -1515,6 +1542,7 @@ def derive_datum_frame(
             offset_tolerance,
             winner.direction_sigma_deg,
             origin_sigma,
+            sigma_multiple,
         )
         secondary_basis = "second axis off the primary axis"
     if not secondary:

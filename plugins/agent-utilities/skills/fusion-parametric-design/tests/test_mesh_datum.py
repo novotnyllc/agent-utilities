@@ -599,6 +599,41 @@ class DatumFrameTests(unittest.TestCase):
         # origin would carry none.
         self.assertEqual("plane parallel to the primary axis", frame.evidence["secondary_source"])
 
+    def test_a_declared_absolute_basis_refuses_the_tie_rather_than_raising(self) -> None:
+        # No `sigma_multiple` is declared under an absolute-tolerance basis, and
+        # a plane parallel to the primary axis then reached a multiplication by
+        # None. It has to be ineligible, not an exception.
+        args = dict(FRAME_ARGS)
+        args["sigma_multiple"] = None
+        frame = derive_datum_frame(_regions(fx.turned_record()), **args)
+        self.assertEqual(frame.evidence["primary_choice"]["basis"], "evidence")
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(_tied_lid()), **args)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+
+    def test_a_second_axis_barely_clear_of_the_offset_tolerance_is_ineligible(self) -> None:
+        """Being far enough off the axis to be a candidate is a measurement too.
+
+        A candidate whose radial clearance is smaller than its own positional
+        bound is one a re-tessellation drops out of the set -- and it can win
+        an `arbitrary-canonical` tie first and then vanish, changing X on the
+        next fit.
+        """
+        record = fx.record(
+            [
+                fx.cylinder("boss", (0.0, 0.0, 1.0), (0.0, 0.0, 4.0), 3.0, 150.0, 8.0),
+                # 0.52 mm off the axis against a declared 0.5 mm tolerance: it
+                # clears by 0.02, and its own bound is far larger than that.
+                fx.cylinder("pin-a", (0.0, 0.0, 1.0), (0.52, 0.0, 4.0), 0.2, 8.0, 6.0),
+                fx.cylinder("pin-b", (0.0, 0.0, 1.0), (0.0, 0.52, 4.0), 0.2, 8.0, 6.0),
+                fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+            ]
+        )
+        with self.assertRaises(ReconstructionRefused) as caught:
+            derive_datum_frame(_regions(record), **FRAME_ARGS)
+        self.assertEqual(caught.exception.reason, "frame-ambiguous")
+        self.assertEqual(caught.exception.detail["axis"], "secondary")
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [
