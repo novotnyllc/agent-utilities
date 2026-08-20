@@ -1573,8 +1573,47 @@ def _plan_slabs(
         return record
 
     axis = _plane_axis(frame, datum_plane)
+    events = record["events"]
+
+    # An *intermediate* cap -- the shoulder where one slab's outline steps in to
+    # the next -- is a face the stack delivers and the single extrude cannot:
+    # extruding the lower slab's profile up to that station *is* that face. The
+    # single extrude's account (`base["regions"]`) therefore leaves those caps
+    # out, and assigning only from it drops them from coverage even though they
+    # were built: 0.828 on the stepped block, whose stack builds every face it
+    # has. So each event's own plane fits are claimed too, by the slab whose
+    # boundary that event is -- the bottom event by the first slab, every other
+    # by the slab below it, which claims each cap exactly once and keeps the
+    # assignment a partition. An event demoted by coalescing bounds no slab, so
+    # it appears here for no owner and its plane stays unclaimed: that face is
+    # flush inside a merged slab and nothing built it as a face.
+    by_hash = {region.region_hash: region for region in remaining}
+    elsewhere = {
+        region_hash
+        for group in groups
+        if group is not base
+        for region_hash in group["regions"]
+    }
+    cap_owner: dict[str, int] = {}
+    owner_of_event: dict[int, int] = {}
+    for position, slab in enumerate(slabs):
+        owner_of_event.setdefault(slab["lower_event"], position)
+        owner_of_event[slab["upper_event"]] = position
+    for event_index, owner in owner_of_event.items():
+        for member in events[event_index]["members"]:
+            region_hash = member["region"]
+            if member["kind"] != "plane-fit" or region_hash in base["regions"]:
+                continue
+            if region_hash in elsewhere or region_hash not in by_hash:
+                continue
+            cap_owner[region_hash] = owner
+
+    claimable = set(base["regions"]) | set(cap_owner)
     assigned: dict[int, list[RegionFit]] = {index: [] for index in range(len(slabs))}
     for region in remaining:
+        if region.region_hash in cap_owner:
+            assigned[cap_owner[region.region_hash]].append(region)
+            continue
         if region.region_hash not in base["regions"]:
             continue
         low, high = _station_range(frame, axis, region.bounding_box)
@@ -1587,13 +1626,11 @@ def _plan_slabs(
         )
         assigned[slot].append(region)
 
-    events = record["events"]
-
     def cap_hash(event_index: int) -> str | None:
         members = [
             m
             for m in events[event_index]["members"]
-            if m["kind"] == "plane-fit" and m["region"] in base["regions"]
+            if m["kind"] == "plane-fit" and m["region"] in claimable
         ]
         if not members:
             return None

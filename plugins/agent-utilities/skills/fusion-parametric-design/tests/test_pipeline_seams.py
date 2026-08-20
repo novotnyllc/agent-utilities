@@ -24,7 +24,7 @@ import math
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 import unittest
 
 from fusion_design.cli import main
@@ -782,6 +782,79 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         # what each archetype claims, and a wall counted twice would inflate it.
         claimed = [h for group in slabs for h in group["regions"]]
         self.assertEqual(sorted(set(claimed)), sorted(claimed))
+
+    def test_the_shoulder_between_two_slabs_is_claimed_by_the_slab_that_builds_it(
+        self,
+    ) -> None:
+        """The stack delivers faces the single extrude cannot, and must say so.
+
+        The shoulder at station 10 is the plinth's top: 768 mm2 of this part's
+        4472, and no part of the single extrude's account, because one extrude
+        of the plinth outline does not produce it. The stack does -- it is
+        exactly slab 0's cap -- but assignment drew only from the extrude's
+        regions, so the shoulder was built and claimed by nobody and the
+        coverage account read 0.828 on a part reconstructed whole.
+        """
+        record = seg.fit_regions(fx.stepped_block_dump(), ts.spec())
+        fit = parse_fit_record(record)
+        program = self._plan(fx.stepped_block_dump())
+        slabs = [g for g in program["archetypes"] if g.get("slab") is not None]
+        claimed = [h for group in slabs for h in group["regions"]]
+        self.assertEqual(sorted(set(claimed)), sorted(claimed))
+        area = {region.region_hash: region.area for region in fit.regions}
+        self.assertEqual(sorted(area), sorted(claimed))
+        self.assertAlmostEqual(
+            1.0, sum(area[h] for h in claimed) / sum(area.values()), places=9
+        )
+        # And by the slab below it, whose extrude to station 10 *is* that face,
+        # rather than by the boss standing on top of it.
+        shoulder = next(
+            h
+            for h, value in area.items()
+            if abs(value - 768.0) < 1e-9
+        )
+        self.assertIn(shoulder, slabs[0]["regions"])
+        self.assertNotIn(shoulder, slabs[1]["regions"])
+
+    def test_slabs_coalesce_only_when_every_station_they_sampled_agrees(self) -> None:
+        """Congruence at the midpoints is not congruence over the merged range.
+
+        Each slab holds its own sections to within the tolerance and their
+        midpoints agree to within it, so the two ends of the merged slab are
+        bounded only by the sum -- while the record keeps the lower slab's
+        `loops` and calls the whole merged height constant. A boss a hair
+        narrower than its plinth coalesces, as it should; give that boss a
+        0.01 taper and its upper station walks outside the window while its
+        midpoint stays inside, and the merge is exactly the claim that is not
+        true.
+        """
+
+        def coalesced(**mesh: Any) -> list[int]:
+            spec = fxr.spec(slabs=True)
+            spec["thresholds"]["slab_evidence"]["slab_constancy_tolerance_mm"] = {
+                "value": 0.3,
+                "rationale": (
+                    "this fixture's step is deliberately inside the window, which is the only "
+                    "way to reach the coalescing branch: below it the two slabs are one section."
+                ),
+            }
+            dump = fx.stepped_block_dump(upper=(39.8, 29.8), **mesh)
+            record = seg.fit_regions(dump, ts.spec())
+            self.assertIsNone(record["refusal"], record["refusal"])
+            program = build_reconstruction_program(
+                parse_fit_record(record),
+                spec,
+                manifest_sha256=_manifest_hash(build_manifest()),
+                dump=dump,
+            )
+            return [
+                index
+                for index, event in enumerate(program["events"])
+                if event.get("coalesced")
+            ]
+
+        self.assertEqual([1], coalesced())
+        self.assertEqual([], coalesced(boss_taper=0.01))
 
     def test_the_emitter_refuses_a_slab_stack_it_cannot_build(self) -> None:
         # PR 2 plans slabs and does not emit them: the multi-loop profile path is

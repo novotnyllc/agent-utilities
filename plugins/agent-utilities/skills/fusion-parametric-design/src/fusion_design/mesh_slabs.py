@@ -653,12 +653,15 @@ def decompose(
         height = upper["station"] - lower["station"]
         mid = lower["station"] + height / 2.0
         evidence, projected = measure(mid)
+        loops = classify_loops(evidence["loops"], projected, bores)
         checks = []
         constant = True
         station_gates: set[str] = set()
+        station_projected: list[list[list[tuple[float, float]]]] = []
         for fraction in fractions:
             other_station = lower["station"] + height * fraction
             other_evidence, other_projected = measure(other_station)
+            station_projected.append(other_projected)
             verdict = congruence(projected, other_projected, tolerance=constancy_tolerance)
             verdict["fraction"] = fraction
             verdict["station"] = other_station
@@ -685,9 +688,23 @@ def decompose(
                 )
                 if not verdict["agrees"]:
                     verdict["reason"] = "the loops' material verdicts differ between stations"
+            if verdict["agrees"] and not roles_agree(
+                loops,
+                classify_loops(other_evidence["loops"], other_projected, bores),
+                verdict["pairs"],
+            ):
+                # The same argument the coalescing test makes, one level down:
+                # a material verdict is not a role. Two stations of one slab can
+                # close congruent loops that agree about being holes and
+                # disagree about *which* hole -- a same-radius inner loop that
+                # is a planned bore's wall at one station and an unclaimed
+                # cavity at the other, which is a section change, and the slab's
+                # `loops` (the midpoint's) would then describe only half its own
+                # height while the record called it constant.
+                verdict["agrees"] = False
+                verdict["reason"] = "the loops' roles differ between stations"
             constant = constant and bool(verdict["agrees"])
             checks.append(verdict)
-        loops = classify_loops(evidence["loops"], projected, bores)
         outer = next((loop for loop in loops if loop["role"] == "outer"), None)
         slabs.append(
             {
@@ -734,6 +751,7 @@ def decompose(
                 ),
                 "relation_to_below": "first",
                 "_projected": projected,
+                "_station_projected": station_projected,
                 "_outer": outer,
             }
         )
@@ -761,6 +779,24 @@ def decompose(
             if not roles_agree(here["loops"], below["loops"], verdict["pairs"]):
                 index += 1
                 continue
+            # Congruence is not transitive at a fixed tolerance. Each slab holds
+            # its own sections to within the tolerance and their midpoints agree
+            # to within it, so two stations at opposite ends of the merged slab
+            # are bounded only by the sum -- twice the tolerance for one merge,
+            # and more for a chain of them -- while the record keeps the lower
+            # slab's `loops` and calls the whole merged height constant. Every
+            # station the upper slab actually sampled is therefore checked
+            # against the profile that survives the merge, which is the one
+            # reference the constancy claim is about, so the bound stays one
+            # tolerance however many slabs coalesce.
+            if not all(
+                congruence(here["_projected"], sampled, tolerance=constancy_tolerance)[
+                    "agrees"
+                ]
+                for sampled in below["_station_projected"]
+            ):
+                index += 1
+                continue
             coalesced.append(here["upper_event"])
             events[here["upper_event"]]["coalesced"] = {
                 "into": [here["index"], below["index"]],
@@ -771,6 +807,14 @@ def decompose(
                 ),
             }
             merged = dict(here)
+            # Every station either slab sampled, so a third slab coalescing on
+            # top is checked against the whole merged range rather than only
+            # the range the first pair happened to cover.
+            merged["_station_projected"] = (
+                here["_station_projected"]
+                + below["_station_projected"]
+                + [below["_projected"]]
+            )
             merged["upper_event"] = below["upper_event"]
             merged["station_hi"] = below["station_hi"]
             merged["height"] = merged["station_hi"] - merged["station_lo"]
@@ -813,6 +857,7 @@ def decompose(
         slab["index"] = position
         slab["relation_to_below"] = relations[position]
         del slab["_projected"]
+        del slab["_station_projected"]
         del slab["_outer"]
 
     return {
