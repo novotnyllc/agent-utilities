@@ -1612,6 +1612,24 @@ def _station_names(kind: str) -> tuple[str, ...]:
     return ("axial", "azimuthal")
 
 
+def _blocked_halves(
+    indices: Sequence[int], grid: _Grid
+) -> dict[int, list[int]]:
+    """The checkerboard split this region's held-out refit would use.
+
+    Shared so a caller can tell *why* a refit produced nothing: halves too small
+    to fit at all is a sample-size fact, and a refit that ran and failed is
+    evidence about the primitive. The two get different answers.
+    """
+    parts: dict[int, list[int]] = {0: [], 1: []}
+    for index in indices:
+        key = grid.keys.get(index)
+        if key is None:
+            continue
+        parts[(key[0] + key[1] + key[2]) & 1].append(index)
+    return parts
+
+
 def _blocked_heldout(
     fit: PrimitiveFit,
     indices: Sequence[int],
@@ -1632,12 +1650,7 @@ def _blocked_heldout(
     an in-sample neighbour half a millimetre away, so the model has effectively
     seen it. Blocking by cell parity puts whole neighbourhoods on one side.
     """
-    parts: dict[int, list[int]] = {0: [], 1: []}
-    for index in indices:
-        key = grid.keys.get(index)
-        if key is None:
-            continue
-        parts[(key[0] + key[1] + key[2]) & 1].append(index)
+    parts = _blocked_halves(indices, grid)
     if min(len(parts[0]), len(parts[1])) < _MIN_REGION_POINTS:
         return {
             "underpowered": (
@@ -2721,6 +2734,31 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                         )
                     else:
                         _passed(checked, "heldout-residual")
+                elif held is None:
+                    halves = _blocked_halves(point_indices, grid)
+                    smaller = min(len(halves[0]), len(halves[1]))
+                    if smaller < _MIN_REGION_POINTS:
+                        # Nothing was refitted because there was nothing to
+                        # refit *on*: a sample-size fact about this region, and
+                        # the same "no power" argument the floor is making.
+                        support["heldout_unavailable_reason"] = (
+                            f"the spatially blocked halves carry {smaller} point(s), below the "
+                            f"{_MIN_REGION_POINTS} a refit needs, so no held-out comparison could "
+                            "be attempted; in-sample residuals lie inside the vertex precision "
+                            f"floor ({precision_floor:.6g}), so there is no power on either side"
+                        )
+                    else:
+                        # The refit ran on halves big enough and produced
+                        # nothing. That is the gate's own answer, not a
+                        # suppressed verdict: the floor licenses suppressing a
+                        # *measured* ratio, never a missing one.
+                        accepted, rejection = False, (
+                            f"held-out residual: refitting this {fit.kind} on a spatially blocked "
+                            "half of its points produced no fit, so it does not survive being "
+                            "asked for half the evidence. In-sample residuals lie inside the "
+                            f"vertex precision floor ({precision_floor:.6g}), which suppresses a "
+                            "measured ratio and not a missing one."
+                        )
                 else:
                     support.update(held)
                     support["heldout_unavailable_reason"] = (

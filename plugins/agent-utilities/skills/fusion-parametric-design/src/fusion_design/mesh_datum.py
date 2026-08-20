@@ -1004,6 +1004,52 @@ def _decide_axis(
     if margin is None or margin >= frame_margin:
         return winner, record
 
+    # Inside the winner's own same-axis cluster the scores do not separate
+    # either, and the highest of them was standing for the whole cluster. Two
+    # cylinders 0.4 deg and 1.6 deg off the same axis have stable, *different*
+    # cells; scoring 100 and 99.9 selects the first and 100 and 100.1 selects
+    # the second, so the frame moves 1.2 deg on a number a re-tessellation
+    # writes -- with nothing crossing the angular line or the margin, which is
+    # what the guards above watch. The cluster's representative is therefore
+    # chosen the way the tie between clusters is: smallest canonical cell.
+    #
+    # ponytail: only members whose own cell is stable can represent the
+    # cluster. If every one of them is unstable the score order stands and the
+    # cell test below refuses on it, which is the same answer by a longer road.
+    cluster = [
+        candidate
+        for candidate in candidates
+        if candidate is not winner
+        and _angle_deg(candidate.direction, winner.direction) <= angle_tolerance_deg
+        and _relative_margin(winner.score, candidate.score) < frame_margin
+    ]
+    if cluster:
+        ranked: list[tuple[tuple[int, int, int], tuple[Any, ...], AxisCandidate]] = []
+        for candidate in [winner] + cluster:
+            cell = _canonical_cell(
+                candidate.direction,
+                candidate.direction_sigma_deg,
+                angle_tolerance_deg,
+                sigma_multiple,
+                candidate.direction_spread_deg,
+            )
+            if cell is not None:
+                ranked.append((cell, candidate.sort_key(), candidate))
+        if ranked:
+            ranked.sort()
+            if ranked[0][2] is not winner:
+                record["same_axis_representative"] = {
+                    "replaced": winner.to_dict(),
+                    "reason": (
+                        "this candidate and the selected one are the same axis within "
+                        f"{angle_tolerance_deg:g} deg and their scores do not separate, so the "
+                        "higher score was standing for the cluster on a number a re-tessellation "
+                        "moves. The cluster is represented by its smallest canonical cell, the "
+                        "same rule that settles the tie between clusters."
+                    ),
+                }
+                winner = ranked[0][2]
+
     tied = _tied(candidates, winner, frame_margin, angle_tolerance_deg)
     celled: list[tuple[tuple[int, int, int], tuple[Any, ...], AxisCandidate]] = []
     for candidate in tied:

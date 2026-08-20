@@ -759,6 +759,45 @@ class DatumFrameTests(unittest.TestCase):
         # 160 mm up the axis, the same clearance no longer survives the tilt.
         self.assertEqual([None, None], sigmas(164.0))
 
+    def test_score_jitter_inside_one_axis_does_not_move_the_frame(self) -> None:
+        """The cluster's representative was its highest score, which is jitter.
+
+        Two cylinders 0.4 deg and 1.6 deg off the same axis are the same axis
+        by the declared tolerance, and their scores do not separate either --
+        so the higher of them stood for the cluster and the canonical rule read
+        *its* cell. Swapping which is higher, by 0.02 mm of axial span, moved
+        the frame 1.2 deg with nothing crossing the angular line or the margin.
+        The cluster is represented by its smallest canonical cell now, the same
+        rule that settles the tie between clusters.
+        """
+
+        def tilt(degrees: float):
+            slope = math.tan(math.radians(degrees))
+            norm = math.sqrt(1.0 + slope * slope)
+            return (slope / norm, 0.0, 1.0 / norm)
+
+        def frame_for(span_a: float, span_b: float):
+            record = fx.record(
+                [
+                    fx.cylinder("a", tilt(0.4), (0.0, 0.0, 4.0), 3.0, 150.0, span_a),
+                    fx.cylinder("b", tilt(1.6), (6.0, 0.0, 4.0), 3.0, 150.0, span_b),
+                    # A differently-directed rival close enough in score to put
+                    # this axis on the canonical rule rather than on evidence.
+                    fx.cylinder("c", tilt(30.0), (0.0, 9.0, 4.0), 3.0, 150.0, 7.6),
+                    fx.plane("cap", (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 28.0),
+                ]
+            )
+            return derive_datum_frame(_regions(record), **FRAME_ARGS)
+
+        first, second = frame_for(8.0, 7.98), frame_for(7.98, 8.0)
+        self.assertEqual(
+            "arbitrary-canonical", first.evidence["primary_choice"]["basis"]
+        )
+        self.assertEqual(first.z_axis, second.z_axis)
+        # And the swap is on the record rather than silent.
+        self.assertNotIn("same_axis_representative", first.evidence["primary_choice"])
+        self.assertIn("same_axis_representative", second.evidence["primary_choice"])
+
     def test_a_parallel_second_cylinder_is_not_a_rival(self) -> None:
         record = fx.record(
             [
