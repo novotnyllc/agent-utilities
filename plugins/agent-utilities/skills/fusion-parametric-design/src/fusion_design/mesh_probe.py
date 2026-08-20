@@ -486,4 +486,6 @@ def run(context):
             })
         raise
 '''
-    return _script_prelude(manifest) + transaction.replace("__PROBE_SPECS__", _json_literal(specs))
+    return _script_prelude(manifest, report_dir=specs.get("dump_dir")) + transaction.replace(
+        "__PROBE_SPECS__", _json_literal(specs)
+    )

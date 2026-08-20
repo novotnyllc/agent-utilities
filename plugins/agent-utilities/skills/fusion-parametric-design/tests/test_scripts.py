@@ -12,6 +12,9 @@ from fusion_design.export_handoff import emit_export_example_script
 from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.positive_control import emit_positive_control_script
 from fusion_design.scripts import (
+    REPORT_BEGIN,
+    REPORT_END,
+    _script_prelude,
     emit_inventory_script,
     emit_parameter_sync_script,
     emit_scaffold_script,
@@ -638,3 +641,84 @@ class ScriptEmissionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportTeeTests(unittest.TestCase):
+    """A transport timeout must not be able to lose a report the transaction produced.
+
+    GFG-Accurate on a 524k-triangle scan ran 330 seconds against an MCP transport
+    that gives up at 180. The grouping was applied, the report was discarded, and
+    the pipeline was stuck on an operation that had already succeeded. stdout is
+    not a durable channel, so `_emit` also writes the report beside the
+    transaction's own inputs and says on stdout where it put it.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.manifest = load_manifest(
+            Path(__file__).resolve().parents[1]
+            / "examples"
+            / "electronics-enclosure"
+            / "fusion-project.json"
+        )
+
+    def _emitter(self, source: str):
+        namespace = load_generated_script(source)
+        return namespace["_emit"], namespace
+
+    def test_a_declared_directory_gets_the_same_bytes_stdout_carries(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            emit, _namespace = self._emitter(_script_prelude(self.manifest, report_dir=directory))
+            captured = StringIO()
+            with redirect_stdout(captured):
+                emit({"kind": "mesh-generate-face-groups", "ok": True})
+            printed = json.loads(
+                captured.getvalue().split(REPORT_BEGIN)[1].split(REPORT_END)[0].strip()
+            )
+            path = Path(printed["report_tee_path"])
+            self.assertTrue(path.is_file(), printed)
+            self.assertEqual(directory, str(path.parent))
+            self.assertEqual(printed, json.loads(path.read_text(encoding="utf-8")))
+            self.assertNotIn("report_tee_error", printed)
+
+    def test_two_transaction_kinds_in_one_directory_do_not_clobber_each_other(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            emit, _namespace = self._emitter(_script_prelude(self.manifest, report_dir=directory))
+            with redirect_stdout(StringIO()):
+                emit({"kind": "mesh-extract", "ok": True})
+                emit({"kind": "mesh-generate-face-groups", "ok": True})
+                emit({"kind": "mesh-extract", "ok": False})
+            written = sorted(p.name for p in Path(directory).iterdir())
+            self.assertEqual(2, len(written), written)
+            # Re-running one transaction overwrites only its own report.
+            extract = next(p for p in Path(directory).iterdir() if "mesh-extract" in p.name)
+            self.assertIs(False, json.loads(extract.read_text(encoding="utf-8"))["ok"])
+
+    def test_a_transaction_with_no_output_directory_says_so_rather_than_going_quiet(self) -> None:
+        emit, _namespace = self._emitter(_script_prelude(self.manifest))
+        captured = StringIO()
+        with redirect_stdout(captured):
+            emit({"kind": "inventory"})
+        printed = json.loads(
+            captured.getvalue().split(REPORT_BEGIN)[1].split(REPORT_END)[0].strip()
+        )
+        self.assertIsNone(printed["report_tee_path"])
+        self.assertIn("only on stdout", printed["report_tee_unavailable_reason"])
+
+    def test_an_unwritable_directory_reports_the_failure_and_still_emits(self) -> None:
+        emit, _namespace = self._emitter(
+            _script_prelude(self.manifest, report_dir="/nonexistent-directory-for-this-test")
+        )
+        captured = StringIO()
+        with redirect_stdout(captured):
+            emit({"kind": "mesh-extract", "ok": True})
+        printed = json.loads(
+            captured.getvalue().split(REPORT_BEGIN)[1].split(REPORT_END)[0].strip()
+        )
+        # Losing the tee must never lose the transaction.
+        self.assertIs(True, printed["ok"])
+        self.assertIn("report_tee_error", printed)

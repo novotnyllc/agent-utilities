@@ -37,7 +37,14 @@ if TYPE_CHECKING:
     from .manifest import Manifest
 
 
-FACE_GROUP_SPEC_FIELDS = {"component_path", "body_name"}
+#: ``report_dir`` is optional and is the only reason this spec has a third field.
+#: This transaction is the one the MCP transport's 180-second ceiling actually
+#: killed: GFG-Accurate on a 524k-triangle scan ran 330 seconds, the grouping was
+#: applied, and the successful report was discarded with no way to recover it.
+#: Unlike extraction it writes no file of its own, so it has no directory to tee
+#: its report beside unless the caller names one. Absent, the tee is reported as
+#: unavailable and the run keeps the old failure mode.
+FACE_GROUP_SPEC_FIELDS = {"component_path", "body_name", "report_dir"}
 
 #: The one method this package will run, and the reason it is not a spec field.
 #: Fast is measurably wrong on real parts and Accurate is measurably right; a
@@ -57,6 +64,16 @@ def validate_face_group_spec(spec: Any) -> list[ValidationIssue]:
             )
         ]
     _reject_unknown_fields(issues, spec, FACE_GROUP_SPEC_FIELDS, "face_group_spec")
+    report_dir = spec.get("report_dir")
+    if report_dir is not None and (not isinstance(report_dir, str) or not report_dir.strip()):
+        issues.append(
+            ValidationIssue(
+                "face-group-spec-invalid-report-dir",
+                "face_group_spec.report_dir",
+                "report_dir, when present, must be a non-empty Fusion-host directory path to tee "
+                "this transaction's report into.",
+            )
+        )
     _validate_body_binding(
         issues,
         {key: spec[key] for key in ("component_path", "body_name") if key in spec},
@@ -407,6 +424,6 @@ def run(context):
             })
         raise
 '''
-    return _script_prelude(manifest) + transaction.replace(
+    return _script_prelude(manifest, report_dir=spec.get("report_dir")) + transaction.replace(
         "__FACE_GROUP_SPECS__", _json_literal(specs)
     )

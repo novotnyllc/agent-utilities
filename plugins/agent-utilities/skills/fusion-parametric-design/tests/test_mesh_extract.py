@@ -362,3 +362,20 @@ class ExtractFallbackTests(_Harness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtractReportTeeTests(unittest.TestCase):
+    """The extraction report is written beside the dump, not only to stdout.
+
+    The MCP transport gives up at 180 seconds and a mesh transaction on a real
+    capture runs longer than that. A report only on stdout is a report the
+    transport can throw away after the work is done.
+    """
+
+    def test_the_transaction_tees_its_report_into_its_own_declared_dump_dir(self) -> None:
+        source = mesh_source(provenance="designed_export")
+        manifest = _manifest(source)
+        classification = classify(request(edit_kind="dimensional", facet_count=800), source).to_dict()
+        script = emit_mesh_extract_script(manifest, classification, source, spec(dump_dir="/tmp/dumps"))
+        self.assertIn("REPORT_TEE_DIR = '/tmp/dumps'", script)
+        self.assertIn("def _report_tee_path(report):", script)

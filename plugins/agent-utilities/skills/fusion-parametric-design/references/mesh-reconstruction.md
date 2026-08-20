@@ -199,6 +199,66 @@ are always recorded, with `noise.sigma_estimator` and
 `noise.sigma_estimator_reason` saying which was chosen and why. No declared
 threshold moved: this is a selection, not a tolerance.
 
+**Estimator C measures what the other two cannot: form error.** Both estimators
+above work at facet scale — sixteen nearest points is about two median edges — so
+a surface that is smooth between neighbouring facets and wavy across a feature
+reads as noise-free to both. That is exactly what a structured-light scanner
+delivers, and on the first real capture the pipeline saw they reported
+σ = 0.0054 mm while the part's own genuinely-flat board faces carried a plane-fit
+RMS of 0.033–0.076 mm. Estimator C is the RMS residual to a best-fit plane over a
+patch, at a ladder of radii doubling from half the declared `min_feature_size`,
+and two things about it are forced by measurement rather than chosen:
+
+- **the patch stays on one face group.** A ball of radius 0.8 mm centred on a
+  1.6 mm board's top face contains the bottom face and the neighbouring
+  components. Sampled without that restriction the capture reads 0.0709 mm — and
+  that number is not form error, it is one un-segmented face group holding
+  448,122 of the mesh's 524,614 triangles, so 85% of the sampled patches are
+  centred in it and straddle whatever it contains. Confined to a face group, the
+  same statistic at the same radius reads 0.0032 mm.
+- **a rung is measured only on the surfaces that span it,** and aggregated as the
+  median over *surfaces* rather than over patches. A 1.4 mm face group cannot
+  report the form error at 3.2 mm. The capture's honest ladder is 0.0032 mm over
+  1000 surfaces at 0.8 mm, 0.0043 over 288 at 1.6 and 0.0106 over 17 at 3.2, and
+  it stops there because fewer than four surfaces span the next rung.
+
+**The prediction that this would be 0.03–0.08 mm on that capture is refuted, and
+the refutation is the useful part.** The 0.033–0.076 mm the large flat board
+faces carry is the form error *of the few large faces*, at their own 10 mm scale;
+the part's median surface is 1.4 mm across and carries 0.003 mm, which is the
+facet noise. So on this capture `sigma` is unchanged — the dihedral estimator is
+still the largest of the three — and with it `feature_scale.margin` (29.8),
+`sigma_kappa` and the HK signature histogram are unchanged to the digit. What
+moved the coverage was the per-region ladder inside the structure gates and the
+held-out power skip, not the global σ.
+
+Form error is a function of scale and a single number cannot be one, so the
+ladder is recorded whole in `noise.form_error.scale_table` and the gates read it
+at each region's own extent. The record carries all three estimators;
+`noise.sigma_form` is the ladder at the declared feature size. In the `scan`
+regime `sigma` is the largest of the three — every consumer of `sigma` is making
+the same claim about the same surface, and a form error the facet estimators
+cannot see makes the neighbourhood radius, the curvature dead zone, the
+normal-direction floor and the recoverable feature size all claim a precision the
+measurement does not support. In the `tessellation` regime it is recorded and
+never taken: an exact tessellation's vertices sit on the analytic surface, so
+what a plane residual over a patch measures there is the surface's own curvature,
+which is geometry and not error. Again a selection, not a tolerance: no declared
+threshold value moved.
+
+**Underpowered is not disproved, and the held-out gate had to learn the
+difference.** Refitting a region on a spatially blocked half used to *refuse* the
+fit whenever the half produced no fit at all — and on a real scan that is the
+largest single refusal class, because a nine-triangle face group cannot be halved
+into two groups that each clear their own span floors. That is a fact about the
+split, not evidence that the fit is over-parameterized. It is now recorded as a
+skip with its reason, never appended to `checked`, and counted in
+`disproof.gates` like every other skip. Where the gate *does* run on a scan, the
+form error at the region's own extent floors its denominator: two halves of a
+wavy face sit on different parts of the wave, and the difference between them is
+only evidence of over-fitting once it exceeds what the surface's own shape puts
+there.
+
 And `sigma` is floored at the precision
 the coordinates are *stored* at (`vertex_precision_rel`; a binary STL holds
 float32). Without that floor the residual-structure gates spend their power
@@ -272,9 +332,20 @@ The archetype vocabulary is closed and all four kinds now emit:
 
 ### What makes a bore a bore
 
-`hole` sat in the vocabulary unassignable for two units, because telling a bore from a boss means knowing which side of the surface the material is on, and shape alone never says. `fit-regions` measures it: the signed volume of a closed, consistently wound mesh gives its winding an outward direction, and comparing that against a region's own surface normals yields `orientation.material_side` — `"inside"` for a bore, `"outside"` for a boss.
+`hole` sat in the vocabulary unassignable for two units, because telling a bore from a boss means knowing which side of the surface the material is on, and shape alone never says. `fit-regions` measures it: the signed volume of a consistently wound mesh gives its winding an outward direction, and comparing that against a region's own surface normals yields `orientation.material_side` — `"inside"` for a bore, `"outside"` for a boss.
 
-**It is `null` on an open or inconsistently wound mesh, and on every plane** (a plane encloses no volume, so it has an outward direction but no inside). When it is `null` on a cylinder the region is left unreconstructed carrying `material-side-unavailable` and the fitting stage's own reason for the absence. It is never guessed. The practical consequence belongs on a capture checklist rather than buried here: **a scan that is not watertight can never produce a hole.**
+**It is `null` on every plane** (a plane encloses no volume, so it has an outward direction but no inside), and on a curved region whenever the winding does not license the claim — which is now two questions, global and local, because demanding global closure made the field useless on the first real scan the pipeline saw.
+
+**Globally**, the winding is licensed by either of two things, and the record's `mesh_orientation.licence` says which held:
+
+- **`closed`** — the mesh has no boundary and no non-manifold edge. This is the licence the module has always used and every verdict measured over the eleven production parts rests on it; it is unchanged.
+- **`oriented-and-bounded`** — the mesh is *consistently oriented* (no directed edge is used twice, which on a manifold mesh is exactly "every interior edge is traversed in opposite directions by its two triangles") **and** the open boundary is too small to flip the surface integral's sign. That second half is a proof, not a tolerance: the integral is taken about the mesh centroid, each boundary loop is capped by the fan from its own centroid, and the cap can shift the integral by at most `R·A/3` per loop. When the integral exceeds the sum of those bounds, no filling of those holes can change the sign.
+
+**Locally**, a region carries usable winding only when its own triangles — and everything within one declared `min_feature_size` of them — touch no boundary and no non-manifold edge. Near dirt the mesh does not describe a solid, and which side of the surface the material is on is not a question its winding can answer. The margin is derived from `min_feature_size` rather than separately declared, because `material_side` is a claim about which side of *this* surface the solid is on and a surface is only a side of a solid over the feature it belongs to. A region refused for it stays `null` and its `orientation.local_winding` names the distance to the nearest dirty edge beside the margin it missed, so "near a hole" is never the whole answer.
+
+The measurement that forced this: **158 boundary edges in 9 loops, the largest 7.5 mm across, on a 90 mm part** — 0.02% of its edges, and dirt rather than bores — made `material_side` null on all 98 curved regions, which made `hole` unemittable, which is what the rebuild refusal cited three stages later. When it is `null` on a cylinder the region is still left unreconstructed carrying `material-side-unavailable` and the fitting stage's own reason for the absence. It is never guessed.
+
+**Mesh repair is deliberately not built here.** On that scan the loops are disjoint component footprints, not bores, so hole-filling would not have saved the part; and filling holes changes the bytes the whole pipeline is hash-bound to, so it is its own unit with `mesh_sources` re-digest discipline. The local licence is what this unit implements.
 
 The same fail-closed rule runs the other way, which is the half that is easy to get wrong. A cylinder of *unknown* side is treated exactly as it was before this evidence existed — it can still join a revolve or an extrude group — because "unknown" is not "inward", and changing behaviour on absent evidence is the same defect wearing the opposite sign.
 

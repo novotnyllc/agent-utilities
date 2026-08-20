@@ -2066,3 +2066,234 @@ class FilletChainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# estimator C: form error, and the two licences that read it
+# --------------------------------------------------------------------------
+
+
+def wavy_plate_mesh(size=12.0, divisions=96, wavelength=4.0, amplitude=0.05, noise=0.0005, seed=7):
+    """Four flat-ish plates that are smooth at facet scale and wavy at feature scale.
+
+    This is the shape the facet estimators are blind to by construction, and it
+    is what a structured-light scanner actually delivers: every neighbouring pair
+    of facets agrees to within the sampling noise, and the surface still departs
+    from its own best-fit plane by far more than that over a feature.
+    """
+    rng = random.Random(seed)
+    step = size / divisions
+    vertices = []
+    for i in range(divisions + 1):
+        for j in range(divisions + 1):
+            x, y = i * step, j * step
+            z = amplitude * math.sin(2.0 * math.pi * x / wavelength)
+            vertices.append((x + rng.gauss(0.0, noise), y + rng.gauss(0.0, noise), z + rng.gauss(0.0, noise)))
+    triangles, groups = [], []
+    half = divisions // 2
+    for i in range(divisions):
+        for j in range(divisions):
+            a = i * (divisions + 1) + j
+            b = a + 1
+            c = (i + 1) * (divisions + 1) + j + 1
+            d = (i + 1) * (divisions + 1) + j
+            triangles.append((a, b, c))
+            triangles.append((a, c, d))
+            # Four quadrants, four face groups: a rung is only measured on
+            # surfaces that span it, so the fixture has to carry more than one.
+            label = (0 if i < half else 2) + (0 if j < half else 1)
+            groups.extend([label, label])
+    return vertices, triangles, groups
+
+
+def punch(vertices, triangles, groups, drop):
+    """Drop triangles by index: the mesh's own dirt, a boundary loop where they were."""
+    kept = [(t, g) for i, (t, g) in enumerate(zip(triangles, groups)) if i not in drop]
+    return vertices, [t for t, _ in kept], [g for _, g in kept]
+
+
+class FormErrorEstimatorTests(unittest.TestCase):
+    """Estimator C measures what A and B cannot, and never speaks on a tessellation."""
+
+    def _noise_block(self, vertices, triangles, groups, **overrides):
+        dump = make_dump(vertices, triangles, face_groups=groups)
+        mesh = seg.weld_dump(dump, 0.0)
+        topo = seg._build_topology(mesh)
+        return seg._sigma_form(mesh, topo, spec(**overrides)), mesh, topo
+
+    def test_a_wavy_surface_is_invisible_to_the_facet_estimators_and_not_to_this_one(self) -> None:
+        vertices, triangles, groups = wavy_plate_mesh()
+        form, mesh, topo = self._noise_block(vertices, triangles, groups, min_feature_size=1.6)
+        quadric_surface, quadric = seg._local_scale_estimates(
+            mesh, topo, sorted({v for i in topo.valid for v in mesh.triangles[i]})
+        )
+        dihedral = seg._sigma_dihedral(topo)
+        # Both facet estimators sit at the sampling noise; the wave is a
+        # millimetre-scale shape and neither of them works at that scale.
+        self.assertLess(quadric, 0.005, quadric)
+        self.assertLess(dihedral, 0.005, dihedral)
+        # Estimator C sees it, and reports the scale it saw it at.
+        self.assertGreater(form["sigma"], 5.0 * max(quadric, dihedral), form)
+        self.assertTrue(form["scale_table"])
+        self.assertEqual(0.8, form["scale_table"][0]["radius"])
+        self.assertIsNone(form["unavailable_reason"])
+
+    def test_the_ladder_grows_with_scale_and_says_how_many_surfaces_measured_each_rung(self) -> None:
+        vertices, triangles, groups = wavy_plate_mesh()
+        form, _mesh, _topo = self._noise_block(vertices, triangles, groups, min_feature_size=1.6)
+        table = form["scale_table"]
+        self.assertGreaterEqual(len(table), 2)
+        for rung in table:
+            # A rung nobody could measure is not reported at all.
+            self.assertGreaterEqual(rung["surfaces"], seg._SIGMA_FORM_MIN_SURFACES)
+        radii = [rung["radius"] for rung in table]
+        self.assertEqual(sorted(radii), radii)
+        self.assertLessEqual(table[0]["form_error"], table[-1]["form_error"])
+
+    def test_the_ladder_is_read_at_a_region_s_own_extent_and_clamped_at_both_ends(self) -> None:
+        table = [
+            {"radius": 1.0, "form_error": 0.01, "surfaces": 9},
+            {"radius": 4.0, "form_error": 0.04, "surfaces": 5},
+        ]
+        # Below the smallest rung: that rung, never an extrapolation into the
+        # scale the facet estimators already own.
+        self.assertAlmostEqual(0.01, seg._form_error_at(table, 0.5))
+        # Half the extent is the patch radius the region spans.
+        self.assertAlmostEqual(0.01, seg._form_error_at(table, 2.0))
+        self.assertAlmostEqual(0.04, seg._form_error_at(table, 8.0))
+        self.assertAlmostEqual(0.02, seg._form_error_at(table, 4.0), places=6)
+        # Above the largest rung the part said nothing, so the last stands.
+        self.assertAlmostEqual(0.04, seg._form_error_at(table, 400.0))
+        self.assertEqual(0.0, seg._form_error_at([], 4.0))
+
+    def test_an_exact_tessellation_reports_the_estimator_and_never_takes_it(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh()), spec())
+        noise = record["noise"]
+        self.assertEqual("tessellation", noise["regime"])
+        # Recorded in every regime -- an absent key would read as "not measured".
+        self.assertIn("sigma_form", noise)
+        self.assertEqual("quadric", noise["sigma_estimator"])
+        # `sigma` is the quadric estimate or the vertex-precision floor under it,
+        # never the form estimator.
+        self.assertEqual(max(noise["sigma_quadric"], noise["vertex_precision_floor"]), noise["sigma"])
+        # And nothing downstream may read a form error on a mesh whose vertices
+        # sit on the analytic surface: what a plane residual measures there is
+        # the surface's own curvature, which is geometry and not error.
+        self.assertNotEqual("form", noise["sigma_estimator"])
+        self.assertIn("scale_table", noise["form_error"])
+        # The structure gates keep the facet scale: on a tessellation what a
+        # plane residual over a patch measures is the surface's own curvature.
+        self.assertEqual(noise["surface_scale"], noise["structure_scale"])
+        self.assertIn("no form error", noise["structure_scale_reason"])
+
+    def test_a_dump_with_no_grouping_says_it_cannot_measure_form_rather_than_zero(self) -> None:
+        vertices, triangles, _groups = wavy_plate_mesh(divisions=8)
+        dump = make_dump(vertices, triangles)
+        mesh = seg.weld_dump(dump, 0.0)
+        form = seg._sigma_form(mesh, seg._build_topology(mesh), spec())
+        self.assertEqual(0.0, form["sigma"])
+        self.assertIn("face grouping", form["unavailable_reason"])
+
+
+class LocalWindingLicenceTests(unittest.TestCase):
+    """A closed mesh is not the only mesh whose winding says which side is material."""
+
+    def test_a_closed_mesh_is_licensed_by_closure_exactly_as_it_always_was(self) -> None:
+        record = seg.fit_regions(make_dump(*torus_mesh()), spec())
+        orientation = record["mesh_orientation"]
+        self.assertTrue(orientation["closed"])
+        self.assertEqual("closed", orientation["licence"])
+        self.assertEqual(0, orientation["boundary_loop_count"])
+        sides = [r["orientation"]["material_side"] for r in record["regions"] if r["accepted"]]
+        self.assertTrue(sides)
+        self.assertTrue(all(side is not None for side in sides), sides)
+
+    def test_dirt_costs_the_regions_that_touch_it_and_not_the_rest(self) -> None:
+        vertices, triangles, groups = torus_mesh(major_steps=64, minor_steps=24)
+        # Two adjacent quads removed: a small boundary loop on an otherwise
+        # closed, consistently wound part -- the shape a real scan arrives in.
+        punched = punch(vertices, triangles, groups, drop={0, 1, 2, 3})
+        record = seg.fit_regions(
+            make_dump(punched[0], punched[1], face_groups=punched[2]), spec()
+        )
+        orientation = record["mesh_orientation"]
+        self.assertFalse(orientation["closed"])
+        self.assertTrue(orientation["consistently_oriented"])
+        # The new licence: not closed, and the winding is still proved.
+        self.assertEqual("oriented-and-bounded", orientation["licence"])
+        self.assertIn(orientation["winding"], ("outward", "inward"))
+        self.assertGreater(orientation["open_cap_area"], 0.0)
+        self.assertLess(orientation["cap_volume_bound"], abs(orientation["signed_volume"]))
+
+    def test_a_region_on_the_dirt_stays_null_and_names_its_distance(self) -> None:
+        vertices, triangles, groups = torus_mesh(major_steps=64, minor_steps=24)
+        # One group per major step, so the region that owns the hole is separable
+        # from the ones that do not.
+        groups = [i // (2 * 24) for i in range(len(triangles))]
+        punched_v, punched_t, punched_g = punch(vertices, triangles, groups, drop={0, 1, 2, 3})
+        record = seg.fit_regions(
+            make_dump(punched_v, punched_t, face_groups=punched_g), spec(min_feature_size=1.0)
+        )
+        curved = [
+            r for r in record["regions"] if r["accepted"] and r["fit"]["kind"] != "plane"
+        ]
+        self.assertTrue(curved, [r["fit"]["kind"] for r in record["regions"]])
+        near = [r for r in curved if r["orientation"]["material_side"] is None]
+        clean = [r for r in curved if r["orientation"]["material_side"] is not None]
+        # Both halves must be non-empty, or this fixture is testing one branch.
+        self.assertTrue(near, "no region was refused for being on the dirt")
+        self.assertTrue(clean, "every region was refused; the licence is not local")
+        for region in near:
+            local = region["orientation"]["local_winding"]
+            self.assertFalse(local["clean"])
+            self.assertIsNotNone(local["nearest_dirty_distance"])
+            self.assertLessEqual(local["nearest_dirty_distance"], local["margin"])
+            self.assertIn("boundary or non-manifold edge", region["orientation"]["unavailable_reason"])
+        for region in clean:
+            self.assertTrue(region["orientation"]["local_winding"]["clean"])
+            self.assertIsNone(region["orientation"]["unavailable_reason"])
+
+
+class HeldOutPowerTests(unittest.TestCase):
+    """Underpowered is not disproved, and the census has to be able to tell them apart."""
+
+    def test_a_half_that_cannot_fit_is_a_skip_with_a_reason_not_a_refusal(self) -> None:
+        record = seg.fit_regions(make_dump(*box_mesh(divisions=6)), spec())
+        skipped = [
+            r for r in record["regions"]
+            if r["accepted"] and "heldout_unavailable_reason" in r["fit"]["support"]
+        ]
+        for region in skipped:
+            # A skip never claims the gate.
+            self.assertNotIn("heldout-residual", region["fit"]["support"]["checked"])
+        refusals = [
+            r["fit"]["rejection"] for r in record["regions"]
+            if not r["accepted"] and str(r["fit"]["rejection"]).startswith("held-out")
+        ]
+        # The old "produced no fit, so it does not survive being asked for half
+        # the evidence" refusal is gone: that sentence was a verdict about the
+        # split, and it is now a skip.
+        for rejection in refusals:
+            self.assertNotIn("produced no fit", rejection)
+
+    def test_the_underpowered_reason_says_it_is_about_the_split(self) -> None:
+        """The gate itself, on a region whose halves cannot each carry a fit."""
+        vertices, triangles, groups = cylinder_mesh(radius=8.0, height=30.0, sides=64, stacks=20)
+        dump = make_dump(vertices, triangles, face_groups=groups)
+        record = seg.fit_regions(dump, spec())
+        region = next(r for r in record["regions"] if r["accepted"])
+        mesh = seg.weld_dump(dump, 0.0)
+        topo = seg._build_topology(mesh)
+        fit = seg.PrimitiveFit(**{
+            **{k: v for k, v in region["fit"].items() if k != "support"},
+            "support": region["fit"]["support"],
+        })
+        # A grid whose cells are the whole part puts every point on one side of
+        # the checkerboard, so there is no half to refit -- the underpowered case.
+        indices = sorted({v for t in region["welded_triangle_indices"] for v in mesh.triangles[t]})
+        one_cell = seg._Grid(mesh.vertices, indices, 1e6)
+        one_cell.keys = {index: (0, 0, 0) for index in indices}
+        held = seg._blocked_heldout(fit, indices, mesh, one_cell, spec())
+        self.assertIn("underpowered", held)
+        self.assertIn("points", held["underpowered"])
+        self.assertNotIn("ratio", held)

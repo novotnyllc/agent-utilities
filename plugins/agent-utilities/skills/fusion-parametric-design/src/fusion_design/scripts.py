@@ -21,8 +21,24 @@ def manifest_sha256(manifest: Manifest) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _script_prelude(manifest: Manifest) -> str:
+def _script_prelude(manifest: Manifest, report_dir: str | None = None) -> str:
+    """The header every generated transaction carries.
+
+    ``report_dir`` is where ``_emit`` tees its report to a file, and it is a
+    recovery path rather than a convenience. The MCP transport this skill is
+    driven through has a 180-second ceiling: GFG-Accurate on a 524k-triangle scan
+    ran 330 seconds, the transport discarded the *successful* report, and the
+    pipeline was stuck on an operation that had already done its work. stdout is
+    not a durable channel, so the report is also written where the transaction's
+    own inputs live, and the stdout report says where.
+
+    Emitters pass their own declared output directory or the directory of the
+    file they write. One that has neither passes nothing and the tee is reported
+    as unavailable, which is a statement rather than a silence.
+    """
+    tee_dir = str(report_dir).strip() if report_dir is not None and str(report_dir).strip() else None
     return f'''import json
+import os
 import traceback
 import adsk.core
 import adsk.fusion
@@ -32,13 +48,49 @@ FUSION_DOCUMENT_NAME = {manifest.fusion_document!r}
 MANIFEST_SHA256 = {manifest_sha256(manifest)!r}
 REPORT_BEGIN = {REPORT_BEGIN!r}
 REPORT_END = {REPORT_END!r}
+# Where _emit tees its report so a transport timeout loses nothing. None when
+# this transaction declares no output directory of its own.
+REPORT_TEE_DIR = {tee_dir!r}
 
 
 class DocumentChangedError(RuntimeError):
     """The active document is no longer ours; the transaction must touch nothing further."""
 
 
+def _report_tee_path(report):
+    """Where this report is teed: one file per transaction kind, beside its inputs.
+
+    Named for the report's own `kind` and the manifest it was emitted against, so
+    two transactions in one directory do not clobber each other and re-running
+    the same transaction overwrites only its own previous report.
+    """
+    if not REPORT_TEE_DIR:
+        return None
+    kind = report.get("kind") if isinstance(report, dict) else None
+    name = "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(kind or "report"))
+    return os.path.join(REPORT_TEE_DIR, "fusion-design-report-" + name + "-" + MANIFEST_SHA256[:12] + ".json")
+
+
 def _emit(report):
+    # The tee happens before the print and its own path goes into the report, so
+    # the file and the stdout block are the same bytes wherever both survive.
+    path = _report_tee_path(report)
+    if path is not None and isinstance(report, dict):
+        report["report_tee_path"] = path
+        try:
+            handle = open(path, "w")
+            try:
+                handle.write(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
+            finally:
+                handle.close()
+        except Exception as error:
+            # Never fatal: losing the tee must not lose the transaction.
+            report["report_tee_error"] = str(error)
+    elif isinstance(report, dict):
+        report["report_tee_path"] = None
+        report["report_tee_unavailable_reason"] = (
+            "this transaction declares no output directory, so its report is only on stdout"
+        )
     print(REPORT_BEGIN)
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
     print(REPORT_END)

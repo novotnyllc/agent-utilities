@@ -559,7 +559,9 @@ def run(context):
         raise
 '''
     return (
-        _script_prelude(manifest)
+        # Beside the dump this transaction writes: the extraction's own inputs
+        # and its output already live there.
+        _script_prelude(manifest, report_dir=specs["dump_dir"])
         + _SHARED_SOURCE
         + "\n\n"
         + transaction.replace("__EXTRACT_SPECS__", _json_literal(specs))

@@ -1,4 +1,5 @@
 import json
+import os
 import traceback
 import adsk.core
 import adsk.fusion
@@ -8,13 +9,49 @@ FUSION_DOCUMENT_NAME = 'Wearable Controller Pod'
 MANIFEST_SHA256 = 'dea2a647d99f41c6f2829a67e92a66f634eba5f838d056d86464efa3fef3a642'
 REPORT_BEGIN = 'FUSION_DESIGN_REPORT_BEGIN'
 REPORT_END = 'FUSION_DESIGN_REPORT_END'
+# Where _emit tees its report so a transport timeout loses nothing. None when
+# this transaction declares no output directory of its own.
+REPORT_TEE_DIR = None
 
 
 class DocumentChangedError(RuntimeError):
     """The active document is no longer ours; the transaction must touch nothing further."""
 
 
+def _report_tee_path(report):
+    """Where this report is teed: one file per transaction kind, beside its inputs.
+
+    Named for the report's own `kind` and the manifest it was emitted against, so
+    two transactions in one directory do not clobber each other and re-running
+    the same transaction overwrites only its own previous report.
+    """
+    if not REPORT_TEE_DIR:
+        return None
+    kind = report.get("kind") if isinstance(report, dict) else None
+    name = "".join(c if (c.isalnum() or c in "-_") else "-" for c in str(kind or "report"))
+    return os.path.join(REPORT_TEE_DIR, "fusion-design-report-" + name + "-" + MANIFEST_SHA256[:12] + ".json")
+
+
 def _emit(report):
+    # The tee happens before the print and its own path goes into the report, so
+    # the file and the stdout block are the same bytes wherever both survive.
+    path = _report_tee_path(report)
+    if path is not None and isinstance(report, dict):
+        report["report_tee_path"] = path
+        try:
+            handle = open(path, "w")
+            try:
+                handle.write(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
+            finally:
+                handle.close()
+        except Exception as error:
+            # Never fatal: losing the tee must not lose the transaction.
+            report["report_tee_error"] = str(error)
+    elif isinstance(report, dict):
+        report["report_tee_path"] = None
+        report["report_tee_unavailable_reason"] = (
+            "this transaction declares no output directory, so its report is only on stdout"
+        )
     print(REPORT_BEGIN)
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), default=str))
     print(REPORT_END)

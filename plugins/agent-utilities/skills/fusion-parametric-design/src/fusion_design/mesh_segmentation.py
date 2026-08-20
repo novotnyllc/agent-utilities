@@ -193,6 +193,36 @@ _SIGMA_A_QUANTILE_CALIBRATION = 0.735
 _SIGMA_QUADRIC_PARAMETERS = 6
 _SIGMA_QUADRIC_CALIBRATION = 0.698
 _DIHEDRAL_CALIBRATION = 2.2       # spec 3.2: theta_med ~ 2.2 sigma / l
+# Estimator C, the form-error estimator: a plane fitted over a *feature-sized*
+# patch rather than a facet-sized one. Both estimators above are facet-to-facet
+# by construction -- 16 nearest points is about 2.1 median edges, and a quadric
+# over that span absorbs anything smoother than the span itself -- so a surface
+# that is locally smooth and globally wavy reads as noise-free to both. On the
+# first real structured-light capture the pipeline saw, they reported
+# sigma = 0.0054 mm while the part's own genuinely-flat board faces carried a
+# plane-fit rms of 0.033-0.076 mm. That gap is not measurement noise and it is
+# not discretization: it is *form error*, the surface's departure from the shape
+# it is nominally, and it is the dominant error on a scan.
+#
+# The smallest rung is one feature across, which is the same span
+# `_neighbourhood_radius` already refuses to exceed (`ceiling = feature / 2.0`)
+# and for the same reason: at that radius the patch describes one side of one
+# feature. The ladder doubles from there because form error is a function of
+# scale and a single number cannot be one -- a part whose faces are flat at 2 mm
+# and wavy at 10 mm carries both, and the gate judging a 10 mm region needs the
+# 10 mm answer. Measured on the 524k-triangle capture with min_feature_size =
+# 1.6 mm, confined to face groups and taken over the surfaces that span each
+# rung: 0.0032 mm over 1000 surfaces at 0.8 mm, 0.0043 over 288 at 1.6, and
+# 0.0106 over 17 at 3.2. The ladder stops there because fewer than four
+# surfaces on this part span 12.8 mm, and a rung measured on three surfaces is
+# three surfaces' shape rather than the part's form error.
+_SIGMA_FORM_PATCH_FRACTION = 0.5
+_SIGMA_FORM_LADDER_FACTOR = 2.0   # one octave per rung: the part is asked about scales, not about a grid
+_SIGMA_FORM_CENTRES_PER_SURFACE = 30
+_SIGMA_FORM_MAX_SURFACE_POINTS = 20000
+#: A rung measured on fewer surfaces than this is one surface's shape, not the
+#: part's form error, and the ladder stops rather than reporting it.
+_SIGMA_FORM_MIN_SURFACES = 4
 _H_MIN_EDGE_MULTIPLE = 2.5        # spec 4.2: below this k < 10 and the variance law fails
 _THETA_TARGET_FRACTION = 5.0      # spec 4.2: theta_tgt = alpha / 5
 _TRIM_SIGMAS = 2.5                # spec 4.1: trimming band for the second PCA pass
@@ -909,6 +939,168 @@ def _local_scale_estimates(
     return surface, min(noise, surface)
 
 
+def _sigma_form(mesh: WeldedMesh, topo: _Topology, spec: DetectionSpec) -> dict[str, Any]:
+    """Estimator C: the surface's departure from flat, as a function of scale.
+
+    Estimators A and B measure facet-to-facet noise.  Neither can see what a
+    scanner mostly does wrong: a nominally flat face that is smooth everywhere
+    and wavy across its span reads as noise-free to both, because both work
+    inside a couple of median edges where it *is* flat.  This measures that --
+    the RMS residual to a best-fit plane over a patch, at a ladder of patch radii
+    starting at half the declared feature size and doubling.
+
+    Two things this does that a naive version does not, both forced by
+    measurement on the first real capture:
+
+    * **the patch stays on one face group.**  A patch is a ball of vertices, and
+      on a 1.6 mm board a ball of radius 0.8 mm centred on the top face contains
+      the bottom face and the neighbouring components.  Sampled without that
+      restriction the median patch RMS on the capture reads 0.0709 mm, and that
+      number is not form error: it is one un-segmented face group holding 448,122
+      of the mesh's 524,614 triangles, so 85% of the sampled patches are centred
+      in it and straddle whatever it happens to contain.  Confined to a face
+      group -- which is what the segmentation stage means by "one surface" -- the
+      same statistic at the same radius reads 0.0035 mm.
+    * **a rung is measured only on surfaces large enough to show it,** and
+      aggregated as the median over *surfaces* rather than over patches.  A
+      1.4 mm face group cannot report the form error at 3.2 mm; including it
+      makes every rung above the median group's own size read that group's size
+      instead of the part's waviness.  On the capture, the honest ladder is
+      0.0037 mm at 0.8 mm, 0.0085 at 1.6, 0.0151 at 3.2, saturating there --
+      form error that is real, and an order of magnitude below what the
+      unconfined sample claims.
+
+    The single ``sigma`` is the ladder read at the declared feature size, which
+    is the number the record reports beside the other two estimators.  The table
+    is what the structure gates actually read, through ``_form_error_at``, at
+    each region's own extent -- because a region's residual has to be compared
+    against the form error at *its* scale, and a part whose faces are flat at
+    2 mm and wavy at 10 mm carries both.
+
+    Cost is bounded by the sample counts, not by the mesh: a fixed number of
+    patch centres per surface per rung, over a point set sub-sampled where a
+    surface is denser than the estimate needs.
+    """
+    feature = float(spec.value("min_feature_size"))
+    detail: dict[str, Any] = {
+        "sigma": 0.0,
+        "min_feature_size": feature,
+        "median_edge_length": topo.median_edge,
+        "scale_table": [],
+        "unavailable_reason": None,
+        "note": (
+            "form error: the RMS departure from a best-fit plane over a patch confined to one face "
+            "group, at a ladder of radii doubling from half the declared feature size. Each rung is "
+            "measured only on the surfaces whose own extent spans it, and aggregated as the median "
+            "over surfaces. The facet estimators cannot see this -- both work at facet scale, where "
+            "a wavy surface is locally flat -- and on a measured surface it is what a residual "
+            "inside it is made of. sigma is the ladder read at the declared feature size; the "
+            "structure gates read the table at each region's own extent."
+        ),
+    }
+    if feature <= 0.0 or mesh.face_groups is None:
+        detail["unavailable_reason"] = (
+            "the dump carries no face grouping, so there is no surface to confine a patch to and a "
+            "patch would measure the part's geometry rather than its form"
+            if mesh.face_groups is None
+            else "a non-positive declared feature size"
+        )
+        return detail
+
+    surfaces: list[tuple[list[int], float]] = []
+    by_group: dict[int, list[int]] = {}
+    for index in topo.valid:
+        by_group.setdefault(mesh.face_groups[mesh.dump_triangles[index]], []).append(index)
+    for label in sorted(by_group):
+        triangles = by_group[label]
+        if len(triangles) < _MIN_REGION_TRIANGLES:
+            continue
+        points = sorted({v for t in triangles for v in mesh.triangles[t]})
+        if len(points) < _SIGMA_A_NEIGHBOURS:
+            continue
+        # A surface denser than the estimate needs is sub-sampled: this is a
+        # plane residual over a patch, and it converges long before a quarter of
+        # a million points. Without it the one 448k-triangle group costs more
+        # than every other surface put together.
+        if len(points) > _SIGMA_FORM_MAX_SURFACE_POINTS:
+            points = points[:: len(points) // _SIGMA_FORM_MAX_SURFACE_POINTS]
+        surfaces.append((points, _extent([mesh.vertices[i] for i in points])))
+    if not surfaces:
+        detail["unavailable_reason"] = "no face group carries enough points for a plane residual"
+        return detail
+
+    radius = _SIGMA_FORM_PATCH_FRACTION * feature
+    table: list[dict[str, Any]] = []
+    while radius <= topo.extent:
+        per_surface: list[float] = []
+        for points, extent in surfaces:
+            # A surface that does not span the rung cannot report it. Without
+            # this every rung above the median surface's own size reports that
+            # size instead of the part's waviness.
+            if extent < 2.0 * radius:
+                continue
+            grid = _Grid(mesh.vertices, points, radius)
+            step = max(1, len(points) // _SIGMA_FORM_CENTRES_PER_SURFACE)
+            estimates: list[float] = []
+            for offset in range(0, len(points), step):
+                centre_point = mesh.vertices[points[offset]]
+                near = grid.near(mesh.vertices, centre_point, radius)
+                if len(near) < _SIGMA_A_NEIGHBOURS:
+                    continue
+                patch = [mesh.vertices[i] for i in near]
+                centre = _centroid(patch)
+                _values, vectors = _symmetric_eigen(_covariance(patch, centre))
+                normal = vectors[0]
+                residuals = [_dot(_sub(p, centre), normal) for p in patch]
+                estimates.append(math.sqrt(sum(r * r for r in residuals) / (len(patch) - 3)))
+            if estimates:
+                per_surface.append(_median(estimates))
+        if len(per_surface) < _SIGMA_FORM_MIN_SURFACES:
+            break
+        table.append(
+            {
+                "radius": radius,
+                "form_error": _median(per_surface),
+                "surfaces": len(per_surface),
+            }
+        )
+        radius *= _SIGMA_FORM_LADDER_FACTOR
+    detail["scale_table"] = table
+    if not table:
+        detail["unavailable_reason"] = (
+            f"fewer than {_SIGMA_FORM_MIN_SURFACES} face groups span twice the smallest rung "
+            f"({_SIGMA_FORM_PATCH_FRACTION * feature:.6g}), so no rung is measured on enough "
+            "surfaces to be a statement about the part"
+        )
+        return detail
+    detail["sigma"] = _form_error_at(table, feature)
+    return detail
+
+
+def _form_error_at(table: Sequence[Mapping[str, Any]], extent: float) -> float:
+    """The measured form error at ``extent``, by log-log interpolation of the ladder.
+
+    Clamped at both ends rather than extrapolated. Below the smallest rung the
+    answer is that rung: the facet estimators already own that scale and a form
+    error extrapolated below where it was measured would be invented. Above the
+    largest, the ladder stopped because no surface spanned the next rung, so the
+    part has said nothing about larger scales and the last measurement stands.
+    """
+    if not table:
+        return 0.0
+    half = max(0.5 * extent, 1e-12)
+    if half <= table[0]["radius"]:
+        return float(table[0]["form_error"])
+    for lo, hi in zip(table, table[1:]):
+        if half <= hi["radius"]:
+            a, b = float(lo["form_error"]), float(hi["form_error"])
+            if a <= 0.0 or b <= 0.0:
+                return max(a, b)
+            t = math.log(half / lo["radius"]) / math.log(hi["radius"] / lo["radius"])
+            return a * (b / a) ** t
+    return float(table[-1]["form_error"])
+
+
 def _sigma_dihedral(topo: _Topology) -> float:
     """Estimator B (spec 3.2): the median interior-edge dihedral, calibrated.
 
@@ -1382,8 +1574,15 @@ def _blocked_heldout(
     mesh: WeldedMesh,
     grid: _Grid,
     spec: DetectionSpec,
-) -> dict[str, float] | None:
+    form_error: float = 0.0,
+) -> dict[str, Any]:
     """Spec 10.3: checkerboard by grid-cell parity, not a random point split.
+
+    Returns either the comparison -- ``heldout_rms``, ``in_sample_rms``,
+    ``ratio`` -- or a single ``underpowered`` key naming why there was no
+    comparison to make. Those are different answers and the caller treats them
+    differently: a ratio is a verdict, and "this region cannot be split into two
+    halves that each determine the primitive" is a fact about the split.
 
     A random split is optimistic under correlated noise: every held-out point has
     an in-sample neighbour half a millimetre away, so the model has effectively
@@ -1396,10 +1595,22 @@ def _blocked_heldout(
             continue
         parts[(key[0] + key[1] + key[2]) & 1].append(index)
     if min(len(parts[0]), len(parts[1])) < _MIN_REGION_POINTS:
-        return None
+        return {
+            "underpowered": (
+                f"one blocked half of this region holds {min(len(parts[0]), len(parts[1]))} points, "
+                f"below the {_MIN_REGION_POINTS} a fit needs, so there is no half-data fit to "
+                "compare against"
+            )
+        }
     taper = float(spec.value("min_taper_ratio"))
     major = float(spec.value("min_torus_major_ratio"))
-    floor = _BAND_FLOOR_RATIO * fit.extent
+    # The denominator's floor, and what it is a floor *of*: the resolution at
+    # which "the half-fit's own residual" is a meaningful denominator at all. A
+    # half-fit whose in-sample RMS is 0.001 mm on a surface whose shape departs
+    # from the primitive by 0.015 mm has not fitted the surface that well -- it
+    # has fitted its own half of the waviness -- and dividing by it turns the
+    # part's form into a ratio of 15 and a verdict of "over-parameterized".
+    floor = max(_BAND_FLOOR_RATIO * fit.extent, form_error)
     worst = 0.0
     heldout_rms = 0.0
     in_sample_rms = 0.0
@@ -1408,10 +1619,26 @@ def _blocked_heldout(
         test = [mesh.vertices[i] for i in parts[test_key]]
         extent = _extent(train)
         if extent <= 0.0:
-            return None
+            return {
+                "underpowered": (
+                    "one blocked half of this region has no extent, so there is no half-data fit "
+                    "to compare against"
+                )
+            }
         trial = _raw_fit(train, fit.kind, extent, taper, major)
         if not trial.accepted:
-            return None
+            # A half that cannot itself determine the primitive says nothing
+            # about the full fit. On a scan the halves of a nine-triangle group
+            # fail their own span floors, which is a fact about how the region
+            # was split and not evidence that the fit is over-parameterized --
+            # and it was refusing the fit outright.
+            return {
+                "underpowered": (
+                    f"a spatially blocked half of these points does not itself determine a "
+                    f"{fit.kind} ({trial.rejection}), so the comparison has no power: this is a "
+                    "property of the split, not evidence about the full fit"
+                )
+            }
         held = _rms(_residuals(trial.kind, trial.parameters, test))
         # Against *this* fit's own in-sample residual, not the full fit's. The
         # question is whether a model generalizes beyond the data that produced
@@ -1638,6 +1865,7 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     topo: _Topology = state["topology"]
     surface_scale, sigma_quadric = _local_scale_estimates(mesh, topo, state["live_points"])
     sigma_dihedral = _sigma_dihedral(topo)
+    form = _sigma_form(mesh, topo, state["spec"])
     lo, hi = sorted((sigma_quadric, sigma_dihedral))
     disagree = hi > 0.0 and (lo <= 0.0 or hi / lo > 2.0)
     dihedral = _dihedral_degrees(topo)
@@ -1665,13 +1893,34 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
             "only one estimating noise, and the vertex precision floor bounds it from below"
         )
     else:
-        # Two independent *noise* estimators, cross-checked. The larger is used --
-        # the conservative choice, since every downstream band widens with it.
-        sigma = max(sigma_quadric, sigma_dihedral)
-        estimator = "quadric" if sigma_quadric >= sigma_dihedral else "dihedral"
+        # Three estimators of how far this surface departs from the shape it is
+        # nominally, cross-checked. The largest is used -- the conservative
+        # choice, since every downstream band widens with it.
+        #
+        # Estimator C is the one that is not facet-scale, and it is taken here
+        # rather than only at the structure gates because every consumer of
+        # `sigma` is making the same claim about the same surface: the
+        # neighbourhood radius, the curvature dead zone, the normal-direction
+        # floor and the recoverable feature size are all statements about how
+        # much of what this mesh shows is the part. A form error the facet
+        # estimators cannot see makes every one of them claim a precision the
+        # measurement does not support.
+        candidates = {
+            "quadric": sigma_quadric,
+            "dihedral": sigma_dihedral,
+            "form": form["sigma"],
+        }
+        estimator = max(sorted(candidates), key=lambda name: candidates[name])
+        sigma = candidates[estimator]
         why = (
-            "both estimators are estimating noise on a measured surface, so the larger is taken: "
-            "every downstream band widens with sigma, and the conservative side is the honest one"
+            "all three estimators are estimating how far this measured surface departs from the "
+            "shape it is nominally, so the largest is taken: every downstream band widens with "
+            "sigma, and the conservative side is the honest one"
+            if estimator != "form"
+            else "the form-error estimator reads above both facet estimators, and it is the only "
+            "one of the three that can see low-frequency departure from the nominal shape: on a "
+            "measured surface that is the error that dominates, and calibrating anything below it "
+            "claims a precision the measurement does not support"
         )
     # No estimator can see below the precision the coordinates are *stored* at.
     # A binary STL holds float32, so a 100 mm part carries about 1e-05 mm of
@@ -1702,7 +1951,37 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
     # already the larger of the two, so this max is a no-op there.
     surface_scale = max(surface_scale, sigma, sigma_dihedral)
     discretization = math.sqrt(max(0.0, surface_scale * surface_scale - sigma * sigma))
-    state["noise"] = {"sigma": sigma, "surface_scale": surface_scale}
+    # The scale the residual-*structure* gates have to clear, which is not the
+    # same scale the feature budget and the neighbourhood radius read.
+    #
+    # `sigma` above is facet-to-facet: it is what the normals, the curvature
+    # classes and the recoverable feature size are statements about, and it stays
+    # exactly what it was. But a residual-structure test asks a different
+    # question -- "is this residual the wrong primitive, or is it the surface?"
+    # -- and on a measured surface the answer includes form error, which no facet
+    # estimator can see. Calibrating those gates below the form error hands them
+    # the part's own waviness to test: on the capture they refused 286 regions
+    # for Moran z of 12-54 on faces that are genuinely planes, and 2,207 for a
+    # held-out half that had merely landed on a different part of the same wave.
+    #
+    # So the structure scale is the larger of the facet scale and the form error,
+    # and only in the `scan` regime. An exact tessellation carries no form error
+    # by construction -- its vertices sit on the analytic surface -- so what
+    # estimator C measures there is the surface's own curvature over a
+    # feature-sized patch, which is geometry and not error. It is recorded in
+    # both regimes and taken in one.
+    form_table = form["scale_table"] if regime["regime"] != "tessellation" else []
+    form_error = form["sigma"] if regime["regime"] != "tessellation" else 0.0
+    structure_scale = max(surface_scale, form_error)
+    state["noise"] = {
+        "sigma": sigma,
+        "surface_scale": surface_scale,
+        "structure_scale": structure_scale,
+        "form_error": form_error,
+        # The ladder, so the gates can read it at each region's own extent
+        # rather than at the one scale this record reports.
+        "form_error_table": form_table,
+    }
     # The flag says the *noise model* is inconsistent, and that claim only means
     # something where both estimators are estimating noise. On an exact
     # tessellation the dihedral estimator is measuring the facet turn angle of a
@@ -1722,8 +2001,34 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "sigma": sigma,
         "sigma_quadric": sigma_quadric,
         "sigma_dihedral": sigma_dihedral,
+        "sigma_form": form["sigma"],
         "sigma_estimator": estimator,
         "sigma_estimator_reason": why,
+        "form_error": form,
+        # The three estimators and which of them each consumer takes, in one
+        # place, because "sigma" alone can no longer answer "sigma of what".
+        "structure_scale": structure_scale,
+        "structure_scale_estimator": (
+            "form"
+            if form_error > surface_scale
+            else ("facet-turn-angle" if regime["regime"] == "tessellation" else estimator)
+        ),
+        "structure_scale_reason": (
+            "the form-error estimator reads above the facet scale at the declared feature size, so "
+            "the residual-structure and held-out gates are calibrated to it: a residual inside the "
+            "surface's own departure from its nominal shape is not evidence about which primitive "
+            "the surface is. Each gate reads form_error.scale_table at its own region's extent, so "
+            "this number is the ladder at one scale and not the whole of what they use"
+            if form_error > surface_scale
+            else (
+                "an exact tessellation carries no form error, so estimator C is recorded and not "
+                "taken; the facet scale is the whole measurement error here"
+                if regime["regime"] == "tessellation"
+                else "at the declared feature size the facet estimators read at or above the "
+                "form-error estimator. The gates still read form_error.scale_table at each "
+                "region's own extent, where a larger region can sit above this number"
+            )
+        ),
         "surface_scale": surface_scale,
         "discretization_scale": discretization,
         # What `surface_scale` and `discretization_scale` are a scale *of*, which
@@ -1747,10 +2052,18 @@ def _stage_noise_scale(state: dict[str, Any]) -> dict[str, Any] | None:
         "note": (
             "sigma is measurement noise, estimated about a local quadric so surface curvature "
             "does not read as noise, and cross-checked against the calibrated dihedral median. "
-            "Both estimators are always reported; sigma_estimator says which one sigma was taken "
-            "from and sigma_estimator_reason says why, because the regime decides which of them is "
-            "estimating noise at all. surface_scale adds the mesh's own discretization; it sizes "
-            "the power floor below which the residual-structure test has nothing to test. Neither "
+            "All three estimators are always reported; sigma_estimator says which one sigma was "
+            "taken from and sigma_estimator_reason says why, because the regime decides which of "
+            "them is estimating noise at all. sigma_form is the third and it is not facet-scale: "
+            "it is the surface's departure from a plane over a patch one declared feature across, "
+            "which is the error a measured surface actually carries and the one the other two are "
+            "blind to by construction. sigma stays facet-scale -- it is what the normals, the "
+            "curvature classes and the recoverable feature size are statements about -- and "
+            "structure_scale is the larger of the facet scale and the form error, which is what "
+            "the residual-structure and held-out gates are calibrated to. structure_scale_estimator "
+            "and structure_scale_reason say which and why. surface_scale adds the mesh's own "
+            "discretization; it sizes the facet-scale term in the power floor below which the "
+            "residual-structure test has nothing to test. Neither "
             "decides whether to give up: that is the feature-scale budget. surface_scale_basis "
             "says what surface_scale is a scale of: on a scan it is measurement noise, and on a "
             "tessellation it is the facet turn angle -- the scale at which the surface itself "
@@ -2071,6 +2384,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
     spec: DetectionSpec = state["spec"]
     groups: dict[int, list[int]] = state["regions_by_label"]
     surface_scale = state["noise"]["surface_scale"]
+    form_table = state["noise"]["form_error_table"]
     grid: _Grid = state["grid"]
     gates = spec.fit_gates()
     perpendicular = float(spec.value("cylinder_normal_perpendicular_deg"))
@@ -2150,7 +2464,36 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
             # on `accepted` first. That is an operand order, not an invariant,
             # and an UnboundLocalError here becomes `fit-record-stage-failed` for
             # the whole mesh.
-            power_floor = max(_BAND_FLOOR_RATIO * fit.extent, 0.1 * surface_scale)
+            #
+            # The form error *at this region's own extent*, read off the ladder
+            # the noise stage measured. A residual has to be compared against the
+            # form error at its own scale: this part's faces are flat to 0.0037 mm
+            # over 0.8 mm and wavy to 0.015 mm over 3.2, and a gate that judges a
+            # 3 mm region against the 0.8 mm number is testing the waviness.
+            # Empty outside the scan regime -- an exact tessellation carries no
+            # form error -- and `_form_error_at` then returns 0.0, so everything
+            # below reduces to what it was.
+            form_error = _form_error_at(form_table, fit.extent)
+            # `form_error` enters undivided while `surface_scale` enters at a
+            # tenth, and the asymmetry is the point. `surface_scale` is a
+            # *per-facet* scale: a region's RMS averages it down over its points,
+            # so a residual has to sit an order of magnitude above it before it
+            # stops being facet noise. Form error is a *whole-patch* scale --
+            # a plane fitted to a wavy face has an RMS equal to the waviness, not
+            # a tenth of it -- so a tenth of it would be a floor an order of
+            # magnitude below anything it is meant to floor.
+            noise_floor = max(_BAND_FLOOR_RATIO * fit.extent, 0.1 * surface_scale)
+            power_floor = max(noise_floor, form_error)
+            # Which term bound it, so a skipped gate says what it had no power
+            # against rather than naming a scale that was not the operative one.
+            floor_basis = (
+                "the surface's own form error"
+                if form_error >= noise_floor
+                else "the measurement noise"
+            )
+            support["form_error"] = form_error
+            support["power_floor"] = power_floor
+            support["power_floor_basis"] = floor_basis
             passed, measured = _support_floors(fit, points, spec, topo.median_edge)
             support.update(measured)
             if not passed:
@@ -2175,7 +2518,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 if structure is None:
                     support["moran_z"] = None
                     support["moran_unavailable_reason"] = (
-                        "residuals are below the measurement noise, so a spatial-autocorrelation "
+                        f"residuals are below {floor_basis}, so a spatial-autocorrelation "
                         "test has no power here"
                         if fit.rms_residual <= power_floor
                         else "too few connected inliers for the variance formula to mean anything"
@@ -2209,7 +2552,12 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                         fit,
                         points,
                         residuals,
-                        surface_scale,
+                        # The scale a systematically-signed bin mean has to beat.
+                        # On a scan that is the form error where it exceeds the
+                        # facet scale: a wavy face's bins *are* systematically
+                        # signed, and against the facet scale every one of them
+                        # reads as the wrong primitive.
+                        max(surface_scale, form_error),
                         float(spec.value("directional_bin_sigmas")),
                     )
                     support["directional_structure"] = magnitude
@@ -2223,7 +2571,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     elif structure is not None:
                         _passed(checked, "residual-structure")
 
-            if accepted and fit.rms_residual <= power_floor:
+            if accepted and fit.rms_residual <= noise_floor:
                 # The same rule the Moran block above already states, applied to
                 # its sibling: a test has no power against residuals an order of
                 # magnitude inside the measurement noise. Held-out residuals of
@@ -2237,13 +2585,22 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     "power here"
                 )
             elif accepted:
-                held = _blocked_heldout(fit, point_indices, mesh, grid, spec)
-                if held is None:
-                    accepted, rejection = False, (
-                        f"held-out residual: refitting this {fit.kind} on a spatially blocked half "
-                        "of its points produced no fit, so it does not survive being asked for half "
-                        "the evidence."
-                    )
+                # Unlike the two structure tests above, this one is *not* skipped
+                # by the form error: it stays a real gate on a scan and takes the
+                # form error as the resolution of its own comparison instead. Two
+                # halves of a wavy face sit on different parts of the wave, so the
+                # difference between them is only evidence of over-fitting once it
+                # exceeds what the surface's own shape puts there.
+                held = _blocked_heldout(fit, point_indices, mesh, grid, spec, form_error)
+                if "underpowered" in held:
+                    # Underpowered is not disproved. This branch used to refuse
+                    # the fit outright and it is the single largest refusal class
+                    # on a real scan: a face group of nine triangles cannot be
+                    # halved into two groups that each determine a primitive, and
+                    # calling that "does not survive being asked for half the
+                    # evidence" is a verdict about the split. Recorded as a skip
+                    # with its reason, and deliberately not appended to `checked`.
+                    support["heldout_unavailable_reason"] = held["underpowered"]
                 else:
                     support.update(held)
                     if held["ratio"] > float(spec.value("heldout_ratio_max")):
@@ -2348,6 +2705,14 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
         )
 
     state["regions"] = regions
+    # The part-level winding judgement the regions were licensed against. The
+    # module docstring above has claimed it lands here since the `normals-unoriented`
+    # flag was deleted in its favour; it did not, and a region's null
+    # `material_side` was readable only as "the mesh is not closed" with no way to
+    # see which of the two licences failed.
+    if "mesh_orientation" not in state:
+        state["mesh_orientation"] = _mesh_orientation(mesh, topo)
+    state["record"]["mesh_orientation"] = state["mesh_orientation"]
     state["record"]["disproof"] = dict(
         _disproof_gate_census(regions),
         moran_plane_baseline_z=plane_baseline,
@@ -2418,32 +2783,236 @@ def _disproof_gate_census(regions: Sequence[Mapping[str, Any]]) -> dict[str, Any
     }
 
 
+def _open_boundary(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
+    """The mesh's open boundary, as loops, with the cap each one is missing.
+
+    A boundary edge is one carried by a single triangle; a non-manifold edge is
+    one carried by three or more.  Both are *dirt*: the mesh does not describe a
+    solid there.  The loops are assembled by chaining each boundary edge in the
+    direction its own triangle traverses it, so a loop is oriented consistently
+    with the surface it came off.
+
+    For each loop this reports the area of the fan cap from the loop's own
+    centroid -- an achievable cap, not a lower bound -- and the loop's greatest
+    distance from the centroid frame's origin.  Together those bound how far the
+    surface integral below could be from the closed solid's volume.
+    """
+    directed: dict[int, list[int]] = {}
+    dirty_vertices: set[int] = set()
+    non_manifold = 0
+    for (i, j), incident in topo.edges.items():
+        if len(incident) == 2:
+            continue
+        dirty_vertices.add(i)
+        dirty_vertices.add(j)
+        if len(incident) != 1:
+            non_manifold += 1
+            continue
+        # Direction as the one owning triangle traverses it.
+        a, b, c = mesh.triangles[incident[0]]
+        forward = (i, j) in ((a, b), (b, c), (c, a))
+        head, tail = (i, j) if forward else (j, i)
+        directed.setdefault(head, []).append(tail)
+
+    loops: list[list[int]] = []
+    remaining = {head: list(tails) for head, tails in directed.items()}
+    for start in sorted(remaining):
+        while remaining.get(start):
+            loop = [start]
+            node = remaining[start].pop()
+            guard = 0
+            while node != start and remaining.get(node) and guard <= len(directed) + 1:
+                loop.append(node)
+                node = remaining[node].pop()
+                guard += 1
+            loops.append(loop)
+    return {
+        "boundary_edges": topo.boundary_edges,
+        "non_manifold_edges": non_manifold,
+        "loops": loops,
+        "dirty_vertices": dirty_vertices,
+    }
+
+
 def _mesh_orientation(mesh: WeldedMesh, topo: _Topology) -> dict[str, Any]:
-    """Is this mesh's winding outward, and is it closed enough for the question to mean anything?
+    """Is this mesh's winding outward, and is it oriented enough for the question to mean anything?
 
     The signed volume of a closed, consistently wound mesh is positive when the
-    winding faces outward. On an open or inconsistently wound mesh the number is
+    winding faces outward. On an *inconsistently* wound mesh the number is
     meaningless, and this says so rather than returning a sign nobody should
     trust -- because the consumer of this field decides whether a cylinder is a
     bore or a boss, and guessing there is exactly the invention this skill exists
     to prevent.
+
+    Closure, though, is not the same question, and demanding it globally is what
+    made this field useless on the first real scan the pipeline saw: 158 boundary
+    edges in 9 loops, the largest 7.5 mm across on a 90 mm part, made
+    ``material_side`` null on all 98 curved regions, which made every bore
+    unemittable three stages later. Those loops are dirt on a part whose winding
+    is otherwise perfectly well defined.
+
+    So the global licence is *consistent orientation plus a proof*, not closure:
+
+    * **consistent orientation** -- every interior edge is traversed in opposite
+      directions by its two triangles. This is a topological fact, measured, with
+      no threshold in it. Without it no signed volume means anything.
+    * **a sign the open boundary cannot flip.** The surface integral is taken
+      about the mesh centroid, where it is origin-dependent only through the caps
+      the boundary loops are missing. Filling each loop with the fan from its own
+      centroid gives a concrete closed surface whose extra volume is at most
+      ``R * A / 3`` per loop -- ``A`` the fan's area, ``R`` its greatest radius
+      from the frame origin. When the integral exceeds the sum of those bounds,
+      *no* filling of those holes can change the sign, and the winding is a
+      proved statement rather than a hope about small holes.
+
+    Closure is still reported, because a consumer may want to know; it is no
+    longer what licenses the answer. What the caps cannot license is the answer
+    *near* them, and that is the local licence in ``_region_orientation``.
     """
     closed = topo.boundary_edges == 0 and topo.non_manifold_edges == 0
+    # About the mesh centroid: for a closed surface the integral is
+    # origin-independent, so this changes nothing on a closed mesh, and for an
+    # open one it is the frame that makes the missing caps' bound smallest.
+    live = sorted({v for index in topo.valid for v in mesh.triangles[index]})
+    origin = _centroid([mesh.vertices[i] for i in live]) if live else (0.0, 0.0, 0.0)
     volume = 0.0
+    # A directed edge used twice is two triangles that disagree about which side
+    # is out, and that is the whole test: an edge shared by two triangles is
+    # traversed twice, so if neither traversal repeats the other they must be
+    # opposite. No threshold, and it needs no separate pass over the edge table.
+    seen: set[tuple[int, int]] = set()
+    inconsistent = 0
     for index in topo.valid:
         a, b, c = mesh.triangles[index]
-        pa, pb, pc = mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]
+        pa = _sub(mesh.vertices[a], origin)
+        pb = _sub(mesh.vertices[b], origin)
+        pc = _sub(mesh.vertices[c], origin)
         volume += _dot(pa, _cross(pb, pc)) / 6.0
+        for edge in ((a, b), (b, c), (c, a)):
+            if edge in seen:
+                inconsistent += 1
+            seen.add(edge)
+
+    boundary = _open_boundary(mesh, topo)
+    cap_area = 0.0
+    cap_volume_bound = 0.0
+    for loop in boundary["loops"]:
+        if len(loop) < 3:
+            continue
+        points = [_sub(mesh.vertices[i], origin) for i in loop]
+        centre = _centroid(points)
+        area = 0.0
+        for k in range(len(points)):
+            area += 0.5 * _length(
+                _cross(_sub(points[k], centre), _sub(points[(k + 1) % len(points)], centre))
+            )
+        cap_area += area
+        cap_volume_bound += max(_length(p) for p in points) * area / 3.0
+
+    consistent = inconsistent == 0
+    # Two licences, and the second is *added* to the first rather than replacing
+    # it. `closed` is the licence this module has always used, and every verdict
+    # measured over the 11 production parts and the benchmark corpus rests on it;
+    # tightening it here would be a different change, with its own measurement to
+    # make, smuggled into this one. What is new is the second disjunct, which is
+    # the one that unlocks a scan: a mesh with dirt on it is not closed and can
+    # still carry a proved winding.
+    #
+    # It is the stronger of the two, and the record says which one held --
+    # `consistently_oriented` false with `licence` "closed" is a mesh whose
+    # signed volume this module is trusting on precedent rather than on proof.
+    proved = consistent and abs(volume) > cap_volume_bound
+    licensed = (closed or proved) and volume != 0.0
     return {
         "closed": closed,
+        "consistently_oriented": consistent,
+        "inconsistent_edges": inconsistent,
         "signed_volume": volume,
-        "winding": ("outward" if volume > 0.0 else "inward") if closed and volume != 0.0 else None,
+        "boundary_loop_count": len(boundary["loops"]),
+        "open_cap_area": cap_area,
+        "open_cap_area_fraction": cap_area / topo.total_area if topo.total_area > 0.0 else None,
+        "cap_volume_bound": cap_volume_bound,
+        "licence": ("closed" if closed else "oriented-and-bounded") if licensed else None,
+        "winding": ("outward" if volume > 0.0 else "inward") if licensed else None,
         "unavailable_reason": (
             None
-            if closed and volume != 0.0
-            else "the mesh is not closed and consistently wound, so its winding carries no "
-            "inside/outside information"
+            if licensed
+            else (
+                f"{inconsistent} interior edges are traversed the same way by both their "
+                "triangles, so this mesh is neither closed nor consistently wound and its signed "
+                "volume carries no inside/outside information"
+                if not consistent
+                else f"the surface integral {volume:.6g} does not exceed the "
+                f"{cap_volume_bound:.6g} that filling this mesh's {len(boundary['loops'])} open "
+                "boundary loops could contribute, so the sign is not proved"
+            )
         ),
+        "note": (
+            "The winding is licensed either by closure, which is what this module has always used, "
+            "or -- for a mesh with dirt on it -- by consistent orientation together with an open "
+            "boundary too small to flip the surface integral's sign. `licence` says which held. "
+            "Whether the answer holds near a particular boundary loop is a separate, local "
+            "question, answered per region in orientation.local_winding."
+        ),
+    }
+
+
+def _local_winding(
+    triangles: Sequence[int],
+    mesh: WeldedMesh,
+    topo: _Topology,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Is *this* region far enough from the mesh's dirt for its winding to be usable?
+
+    The global licence says the mesh as a whole carries a usable winding. That is
+    a statement about the part, and
+    it is not a statement about a region sitting on the lip of a hole: there the
+    surface the winding describes simply is not there, and the inside/outside
+    question has no answer the mesh can give.
+
+    The local licence is therefore: this region's own triangles, and everything
+    within a declared margin of them, touch no boundary and no non-manifold edge.
+
+    The margin is one ``min_feature_size``, derived rather than separately
+    declared. ``material_side`` is a claim about which side of *this* surface the
+    solid is on, and a surface is only a side of a solid over the feature it
+    belongs to -- so dirt within one feature of the region is dirt in the very
+    geometry the claim is about, and dirt further away than that is describing a
+    different feature. Deriving it from the same declaration that sizes every
+    other feature-scale decision here keeps a caller who declares one number from
+    having to keep a second one consistent with it.
+
+    Reports the distance to the nearest dirty edge whenever the region is refused
+    for one, because "near a hole" is not actionable and "0.42 mm from a boundary
+    edge, margin 1.6 mm" is.
+    """
+    margin = float(state["spec"].value("min_feature_size"))
+    cache = state.get("boundary_dirt")
+    if cache is None:
+        boundary = _open_boundary(mesh, topo)
+        dirty = sorted(boundary["dirty_vertices"])
+        cache = {
+            "vertices": dirty,
+            "grid": _Grid(mesh.vertices, dirty, max(margin, 1e-9)) if dirty else None,
+        }
+        state["boundary_dirt"] = cache
+    if cache["grid"] is None:
+        return {"clean": True, "margin": margin, "nearest_dirty_distance": None}
+    grid: _Grid = cache["grid"]
+    nearest = math.inf
+    for index in triangles:
+        for vertex in mesh.triangles[index]:
+            point = mesh.vertices[vertex]
+            for other in grid.near(mesh.vertices, point, margin):
+                nearest = min(nearest, _length(_sub(mesh.vertices[other], point)))
+                if nearest == 0.0:
+                    break
+    return {
+        "clean": nearest > margin,
+        "margin": margin,
+        "margin_basis": "min_feature_size",
+        "nearest_dirty_distance": None if nearest == math.inf else nearest,
     }
 
 
@@ -2459,7 +3028,9 @@ def _region_orientation(
     ``material_side`` is the answer downstream wants: ``outside`` means the solid
     is on the far side of the surface from the primitive's outward normal (a
     boss), ``inside`` means the surface wraps material (a bore). It is ``None``
-    whenever the mesh's own winding does not license the claim.
+    whenever the mesh's own winding does not license the claim -- globally,
+    because the mesh is not consistently wound, or locally, because this region
+    is sitting on the mesh's dirt.
     """
     global_orientation = state.setdefault("mesh_orientation", _mesh_orientation(mesh, topo))
     if not fit.accepted:
@@ -2491,20 +3062,35 @@ def _region_orientation(
     outward_unit = _unit(outward)
     material_side: str | None = None
     reason = global_orientation["unavailable_reason"]
+    local: dict[str, Any] | None = None
     if fit.kind == "plane":
         reason = "a plane encloses no volume; its outward direction is reported instead"
     elif global_orientation["winding"] is not None and fraction is not None:
-        # A curved primitive's own normal points away from its axis or centre.
-        # When the winding normal agrees, material is behind the surface (a
-        # boss); when it opposes, the surface wraps material (a bore).
-        outward_winding = global_orientation["winding"] == "outward"
-        agrees = fraction >= 0.5
-        material_side = "outside" if agrees == outward_winding else "inside"
+        local = _local_winding(triangles, mesh, topo, state)
+        if not local["clean"]:
+            reason = (
+                f"this region is {local['nearest_dirty_distance']:.4g} mm from a boundary or "
+                f"non-manifold edge, inside the {local['margin']:.4g} mm margin (one declared "
+                "min_feature_size); the mesh does not describe a solid there, so which side of "
+                "this surface the material is on is not a question its winding can answer"
+            )
+        else:
+            # A curved primitive's own normal points away from its axis or
+            # centre. When the winding normal agrees, material is behind the
+            # surface (a boss); when it opposes, the surface wraps material (a
+            # bore). Licensed globally by consistent orientation and a proved
+            # sign, and locally by this region being clear of the mesh's dirt.
+            outward_winding = global_orientation["winding"] == "outward"
+            agrees = fraction >= 0.5
+            material_side = "outside" if agrees == outward_winding else "inside"
+            reason = None
     return {
         "surface_normal_agreement": fraction,
         "outward_normal": list(outward_unit) if outward_unit is not None else None,
         "mesh_winding": global_orientation["winding"],
         "mesh_closed": global_orientation["closed"],
+        "mesh_consistently_oriented": global_orientation["consistently_oriented"],
+        "local_winding": local,
         "material_side": material_side,
         "unavailable_reason": reason,
     }
