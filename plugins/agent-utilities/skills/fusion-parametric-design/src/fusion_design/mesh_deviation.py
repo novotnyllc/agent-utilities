@@ -464,6 +464,14 @@ def _point_triangle_distance_sq(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
 _COARSE = 8
 
 
+def _box_distance_sq(box, x, y, z):
+    """Squared distance from a point to an axis-aligned box, zero inside it."""
+    dx = box[0] - x if x < box[0] else (x - box[3] if x > box[3] else 0.0)
+    dy = box[1] - y if y < box[1] else (y - box[4] if y > box[4] else 0.0)
+    dz = box[2] - z if z < box[2] else (z - box[5] if z > box[5] else 0.0)
+    return dx * dx + dy * dy + dz * dz
+
+
 class _TriangleGrid(object):
     """A uniform grid over the source mesh's triangles, for point-to-mesh distance.
 
@@ -487,6 +495,7 @@ class _TriangleGrid(object):
         self.cell = cell_mm
         self.buckets = {}
         self.oversized = []
+        self.oversized_boxes = []
         for offset in range(0, len(triangles) - 2, 3):
             a = triangles[offset] * 3
             b = triangles[offset + 1] * 3
@@ -509,6 +518,12 @@ class _TriangleGrid(object):
             # which costs a constant and keeps the grid from exploding.
             if span > 27:
                 self.oversized.append(offset)
+                # Its box, kept beside it: every query below prunes against
+                # this rather than running the full point-triangle test on a
+                # facet that cannot be the answer.
+                self.oversized_boxes.append(
+                    (low_x, low_y, low_z, high_x, high_y, high_z)
+                )
                 continue
             for i in range(i0, i1 + 1):
                 for j in range(j0, j1 + 1):
@@ -553,7 +568,23 @@ class _TriangleGrid(object):
         span = max(high_i - start_i + 2, 0)
         margin_j = int(math.ceil(direction[1] * span)) + 1
         margin_k = int(math.ceil(direction[2] * span)) + 1
-        candidates = set(self.oversized)
+        # Only the oversized facets whose box the ray's row can reach. A ray
+        # travelling +x from this cell stays inside the y/z band the margins
+        # above describe, so a facet outside that band cannot be crossed and
+        # does not need a Moller-Trumbore test per query.
+        band_lo_y = (cj - margin_j) * self.cell
+        band_hi_y = (cj + margin_j + 1) * self.cell
+        band_lo_z = (ck - margin_k) * self.cell
+        band_hi_z = (ck + margin_k + 1) * self.cell
+        candidates = {
+            offset
+            for offset, box in zip(self.oversized, self.oversized_boxes)
+            if box[3] >= x
+            and box[1] <= band_hi_y
+            and box[4] >= band_lo_y
+            and box[2] <= band_hi_z
+            and box[5] >= band_lo_z
+        }
         for i in range(start_i, high_i + 2):
             for j in range(cj - margin_j, cj + margin_j + 1):
                 for k in range(ck - margin_k, ck + margin_k + 1):
@@ -664,7 +695,25 @@ class _TriangleGrid(object):
     def nearest_mm(self, x, y, z):
         """Distance from a point to the nearest triangle, or None on an empty mesh."""
         best = None
-        for offset in self.oversized:
+        # Nearest box first, and stop at the first box farther than the best
+        # exact distance found: an oversized facet whose *box* is farther than
+        # a triangle already measured cannot beat it. The scan is still linear
+        # in the oversized set -- these are box tests, an order cheaper than the
+        # point-triangle test they replace -- but the exact tests stop early,
+        # which is what a scan with many long facets was paying for.
+        #
+        # ponytail: box prune, not an index. If a mesh ever makes even the box
+        # pass the measured bottleneck, the upgrade is to bucket these on the
+        # coarse overlay `_coarse_floor` already builds.
+        ordered = sorted(
+            (
+                (_box_distance_sq(box, x, y, z), offset)
+                for offset, box in zip(self.oversized, self.oversized_boxes)
+            ),
+        )
+        for lower, offset in ordered:
+            if best is not None and lower >= best:
+                break
             value = self._triangle_distance_sq(offset, x, y, z)
             if best is None or value < best:
                 best = value

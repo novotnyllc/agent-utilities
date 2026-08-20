@@ -1322,6 +1322,34 @@ class PointToTriangleTests(unittest.TestCase):
         self.assertGreater(grid._coarse_floor(-1000, -1000, -1000), 0)
         self.assertEqual(1, _CountingSet.walked)
 
+    def test_oversized_facets_are_pruned_by_their_boxes_not_all_measured(self) -> None:
+        """Every query paid the full point-triangle test on every long facet.
+
+        The cell is derived from the median facet, so a scan with nonuniform
+        facets can put a large fraction of the mesh in the oversized list -- and
+        that list was measured in full, per query, before the grid was even
+        consulted. On this mesh every facet is oversized; the query is 1 mm
+        from one face and 200 mm from the far side, and the boxes settle all
+        but a handful without a triangle test.
+        """
+        vertices, triangles = _box_mesh((0.0, 0.0, 0.0), (200.0, 200.0, 200.0), 5.0)
+        flat = [value for vertex in vertices for value in vertex]
+        grid = self.namespace["_TriangleGrid"](flat, triangles, 0.5)
+        self.assertGreater(len(grid.oversized), 500)
+        self.assertEqual(len(grid.oversized), len(grid.oversized_boxes))
+
+        exact = [0]
+        measure = grid._triangle_distance_sq
+
+        def counting(offset, x, y, z):
+            exact[0] += 1
+            return measure(offset, x, y, z)
+
+        grid._triangle_distance_sq = counting
+        self.assertAlmostEqual(1.0, grid.nearest_mm(100.0, 100.0, 201.0), places=6)
+        self.assertLess(exact[0], 40)
+        self.assertLess(exact[0], len(grid.oversized) / 10)
+
     def test_a_triangle_far_larger_than_the_cell_is_still_found(self) -> None:
         # One triangle spanning many cells goes to the oversized list rather than
         # into hundreds of buckets; it must still answer.
