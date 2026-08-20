@@ -2,7 +2,7 @@
 
 Which model tier should drive which of this skill's task classes. Classify by the shape of the work, never by model IDs: tiers are **frontier** (deep design reasoning), **mid** (bounded iteration), and **economy** (mechanical driving of fail-closed tooling).
 
-This reference owns no routing authority — *which model and effort a worker gets* is decided by the session's routing skill or policy when one exists (an org router such as railyard's model-routing doctrine, or a harness-level rule), falling back to the tier table below. The skill classifies; the router selects. What follows is the skill's own workflow doctrine: its work-shape taxonomy and its dispatcher operating shape.
+This reference is the skill's **standalone doctrine**. The skill is used in harnesses with no org router or session routing policy present, so the dispatcher operating shape and the tier/effort guidance below must be self-sufficient here and travel with the skill. The one exception: when a session-level routing policy *is* present (an org router such as railyard's model-routing doctrine, or a harness-level rule), it takes precedence over the example table — the skill classifies, the router selects.
 
 ## The dispatcher operating shape
 
