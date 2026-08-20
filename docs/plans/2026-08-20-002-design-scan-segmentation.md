@@ -451,16 +451,33 @@ All paths under `plugins/agent-utilities/skills/fusion-parametric-design/`.
 - **Splitter plugged:** trivial L0 = GFG groups (no new splitting yet; the
   mega-group becomes a terminal-unfitted node with its named gate, as today).
 - **Measured claim:** tessellation corpus (11 parts, 71%) **semantically
-  identical** fit/coverage results; `fit.json` 32.6 MB → ~1.5 MB + permutation
-  sidecar; coverage record carries `partition_checked: true` naming its
-  partition.
+  identical** fit/coverage results; `fit.json` 32.6 MB → ~1.5 MB; coverage
+  record carries `partition_checked: true` naming its partition.
+- **What the 32.6 MB actually is.** Two things hold it, and replacing only the
+  first does not reach 1.5 MB: the per-region triangle-index lists, *and*
+  `inlier_vertex_indices`, which every region also serializes and which
+  `fit-regions` pretty-prints one integer per indented line — on a
+  262k-vertex scan that field alone is megabytes. PR 1 compacts both: ranges
+  plus a permutation for the triangles, and `inlier_vertex_indices` either
+  dropped (no consumer in the repo — verified in the PR, with the grep
+  recorded) or reduced to the same range form. If it turns out to have a
+  consumer, the size gate is revised in the PR rather than the field kept and
+  the number quietly missed.
+- **The permutation lives inside the record, not in a file beside it.**
+  `_cmd_fit_regions` emits exactly one JSON payload through one output path
+  and supports stdout, where there is no directory to put a companion in. A
+  separate file would also be unauthenticated: a stale or swapped one maps
+  ranges onto the wrong triangles silently. So the permutation is a top-level
+  array *in* `fit.json`, covered by the record's own digest like everything
+  else in it, and `cli.py` needs no new output path — which is why it is
+  absent from the file list below rather than forgotten from it.
 - **The comparison this PR is gated on, stated exactly.** This PR replaces
-  per-region index lists with `(offset, count)` ranges plus a permutation
-  sidecar — which is where the 32.6 MB goes — so a byte comparison of
+  per-region index lists with `(offset, count)` ranges plus one permutation —
+  which is where most of the 32.6 MB goes — so a byte comparison of
   `fit.json` must fail even when every verdict is unchanged, and demanding one
   would gate the PR on not doing the thing it exists to do. The gate is
   therefore: (a) `fit.json` and the coverage record compared *after*
-  normalization — expand each region's range through the sidecar back to a
+  normalization — expand each region's range through the permutation back to a
   sorted index list, then compare the resulting structures — every region's
   triangle set, fitted kind, parameters, accept/reject verdict and reason, and
   every coverage fraction identical; (b) byte comparison retained, unchanged,
