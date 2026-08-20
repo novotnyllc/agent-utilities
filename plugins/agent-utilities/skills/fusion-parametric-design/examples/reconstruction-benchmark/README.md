@@ -154,11 +154,14 @@ scope by construction, not by tuning, and the F3D is the evidence for saying so.
 
 It does not get far enough for that to be what stops it. The fit stage accepts
 **23 regions — 20 planes and 3 cylinders, 4.8% of the area** — and the planner
-refuses `frame-ambiguous`: two primary-axis candidates sit within the declared
-`frame_margin` of each other in score and 0.3666° apart in direction, and the
-lower-scoring one carries a 6.487° direction sigma against the 2° grid that
-decides whether it is the winner re-measured or a rival. The canonical tie rule
-settles a tie it can quantize reproducibly; this one it cannot, so it says so
+refuses `frame-ambiguous` — before any score is compared. The refusal's own
+payload is stored in the manifest under `plan.detail` and asserted field for
+field, and it records `margin` and `runner_up` as null: what stops the horn is
+the *membership* test, which runs first. Two cylinders sit **0.3666° apart**
+carrying measured direction sigmas of **1.7305° and 1.2966°**, so their combined
+bound of **6.487°** straddles the 2° line that decides whether the second is the
+winner re-measured or a rival in the tie. The canonical rule settles a tie it can
+quantize reproducibly; it cannot even establish who is in this one, so it says so
 rather than picking.
 
 ### The tropical leaves, which are here to be refused
