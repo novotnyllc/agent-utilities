@@ -55,7 +55,20 @@ MANIFEST = json.loads((BENCH / "benchmark-manifest.json").read_text(encoding="ut
 #: The closed role vocabulary the fixture table is allowed to use. A role
 #: outside it means the manifest is describing something this benchmark does not
 #: know how to treat, which is a defect and not a new capability.
-FIXTURE_ROLES = {"stl-input", "step-ground-truth", "f3d-ground-truth", "3mf-input", "mesh-dump"}
+FIXTURE_ROLES = {
+    "stl-input",
+    "step-ground-truth",
+    "f3d-ground-truth",
+    "3mf-input",
+    "mesh-dump",
+    # The two derived answer keys. They are what the STEP and F3D are *read as*
+    # -- nothing in this repository can open a STEP or an F3D -- so they are the
+    # files the assertions actually run against and they are hash-bound in the
+    # same table as the parts and the dumps. Left unbound, the answer key could
+    # be edited into agreement with whatever the pipeline happened to produce.
+    "brep-ground-truth",
+    "timeline-ground-truth",
+}
 
 # --- tolerances, each with the measurement it was set from -----------------
 #
@@ -88,6 +101,20 @@ STEP_BBOX_ABS_TOLERANCE_MM = 1.0e-03
 #: last-place rounding into a test failure, so they are compared relatively at a
 #: width no real change to the estimator could hide inside.
 RECORDED_FLOAT_REL_TOLERANCE = 1.0e-09
+
+#: A fitted plane's normal against the STEP face normal it matches. The STEP
+#: states its normals to nine decimals and a plane fitted through the
+#: tessellation of one of its faces agrees with it to 0.0 degrees -- every dot
+#: product in the set is 1.0 in double precision -- so this is the width of the
+#: agreement's own float noise, not a modelling allowance.
+PLANE_NORMAL_ABS_TOLERANCE_DEG = 1.0e-06
+
+#: And its *position*: the distance from the fitted plane to the STEP face's own
+#: plane, once the single rigid translation between the two is applied. Measured
+#: worst is 1.1e-05 mm over 39 planes; 1e-03 mm is the same thousandth of a
+#: millimetre the bounding boxes are held to, below the resolution of any process
+#: that would make this organiser and ninety times the measurement.
+PLANE_OFFSET_ABS_TOLERANCE_MM = 1.0e-03
 
 
 def _families(body):
@@ -169,10 +196,20 @@ class BenchmarkFixtureTests(unittest.TestCase):
                 self.assertEqual(fixture["sha256"], _sha256(path))
                 self.assertIn(fixture["role"], FIXTURE_ROLES)
 
-    def test_the_ground_truth_files_the_manifest_names_all_exist(self) -> None:
+    def test_every_ground_truth_file_exists_and_is_bound_by_digest(self) -> None:
+        # The answer key gets the same treatment as the questions. Without a
+        # digest, `ground-truth/*.json` could be rewritten wholesale -- into
+        # agreement with whatever the pipeline produced -- and every assertion
+        # below would still pass, greenly.
+        bound = {fixture["file"]: fixture for fixture in MANIFEST["fixtures"]}
         for name in MANIFEST["ground_truth"]:
             with self.subTest(ground_truth=name):
-                self.assertTrue((BENCH / "ground-truth" / name).is_file())
+                path = BENCH / "ground-truth" / name
+                self.assertTrue(path.is_file())
+                fixture = bound.get(f"ground-truth/{name}")
+                self.assertIsNotNone(fixture, f"{name} is not in the hash-bound fixture table")
+                self.assertEqual(fixture["sha256"], _sha256(path))
+                self.assertEqual(fixture["bytes"], path.stat().st_size)
 
     def test_the_benchmark_project_manifest_validates_and_still_matches_its_files(self) -> None:
         # mesh_sources records a file by digest, so this is the check that the
@@ -191,15 +228,37 @@ class BenchmarkFixtureTests(unittest.TestCase):
         )
 
     def test_every_recorded_part_carries_a_classification_and_a_declared_fit_spec(self) -> None:
+        # The comment here used to claim the gate re-derived the path, while the
+        # only code that calls it ran on the env-gated path for two of the four
+        # parts. So it is called here, for all four: `classification_from_record`
+        # re-derives the decision from the recorded inputs and refuses a record
+        # whose stated path is not the one those inputs produce, and
+        # `require_classification` additionally binds it to the mesh source it
+        # was decided for.
+        from fusion_design.manifest import load_manifest
+        from fusion_design.mesh_reconstruction import (
+            classification_from_record,
+            require_classification,
+        )
+        from fusion_design.mesh_source import mesh_source_record
+
+        manifest = load_manifest(BENCH / "fusion-project.json")
         for source_id in MANIFEST["results"]:
             with self.subTest(part=source_id):
                 classification = json.loads(
                     (BENCH / "results" / source_id / "classification.json").read_text(encoding="utf-8")
                 )
-                # The gate re-derives the path from the recorded inputs, so a
-                # hand-edited record cannot smuggle a different one through.
                 self.assertEqual("parametric-rebuild", classification["path"])
                 self.assertEqual(source_id, classification["inputs"]["source_id"])
+                rederived = classification_from_record(classification)
+                self.assertEqual(classification["path"], rederived.path)
+                bound = require_classification(
+                    classification,
+                    "reconstruction-benchmark",
+                    ("parametric-rebuild",),
+                    mesh_source_record(manifest, source_id),
+                )
+                self.assertEqual("parametric-rebuild", bound.path)
                 spec = json.loads(
                     (BENCH / "results" / source_id / "fit-spec.json").read_text(encoding="utf-8")
                 )
@@ -339,7 +398,81 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
         self.assertEqual(recorded["planes_matched"], self.row["fit"]["accepted_kinds"]["plane"])
         self.assertEqual(recorded["step_families_hit"], len(hit))
         self.assertEqual(len(families), len(hit))
-        self.assertLessEqual(worst, recorded["worst_plane_normal_deviation_deg"])
+        # The family table's normals are rounded to three decimals, so `worst`
+        # above is how far a fitted normal sits from the *rounded* value and not
+        # from the STEP. It was recorded, and asserted one-sidedly, as though it
+        # were the agreement. Both are re-measured exactly here: the rounding is
+        # a property of the table and the agreement is a property of the fit.
+        self.assertAlmostEqual(
+            recorded["family_table_rounding_deviation_deg"],
+            worst,
+            delta=RECORDED_FLOAT_REL_TOLERANCE * recorded["family_table_rounding_deviation_deg"],
+        )
+        against_step = max(
+            min(_angle_deg(region["fit"]["parameters"]["normal"], face["normal"])
+                for face in body["faces"])
+            for region in self.record["regions"]
+            if region["accepted"]
+        )
+        self.assertAlmostEqual(
+            recorded["worst_plane_normal_deviation_deg"],
+            against_step,
+            delta=PLANE_NORMAL_ABS_TOLERANCE_DEG,
+        )
+
+    def test_every_fitted_plane_sits_where_the_step_says_that_face_sits(self) -> None:
+        """Direction was checked and *position* never was.
+
+        "The STL is the same solid" was area, volume and bounding-box extent --
+        all three of which a solid keeps when it is translated, and this mesh is
+        translated: it arrives with its bounding-box corner on the origin while
+        the STEP body straddles it. So the check is against the one rigid
+        translation between them, measured from the two bounding boxes and
+        recorded: with it applied, every fitted plane has to land on the plane of
+        the STEP face it is parallel to. Without this, a plane fitted at the
+        wrong station -- the wrong shelf, the wrong wall -- still passed.
+        """
+        body, = self.brep["bodies"]
+        recorded = MANIFEST["step_comparison"]["honeycomb_organizer_stl"]["plane_match"]
+        low = [min(point[axis] for point in self._mesh_points()) for axis in range(3)]
+        translation = [
+            measured - stated for measured, stated in zip(low, body["bbox_min_mm"])
+        ]
+        for axis in range(3):
+            with self.subTest(axis="xyz"[axis]):
+                self.assertAlmostEqual(
+                    recorded["mesh_to_step_translation_mm"][axis],
+                    translation[axis],
+                    delta=STEP_BBOX_ABS_TOLERANCE_MM,
+                )
+        worst, matched = 0.0, 0
+        for region in self.record["regions"]:
+            if not region["accepted"]:
+                continue
+            normal = region["fit"]["parameters"]["normal"]
+            offset = region["fit"]["parameters"]["offset"]
+            distances = [
+                abs(sum(n * (o + t) for n, o, t in zip(normal, face["origin_mm"], translation))
+                    - offset)
+                for face in body["faces"]
+                if _angle_deg(normal, face["normal"]) <= PLANE_NORMAL_ABS_TOLERANCE_DEG
+            ]
+            self.assertTrue(distances, "a fitted plane parallel to no STEP face")
+            matched += 1
+            worst = max(worst, min(distances))
+        self.assertEqual(recorded["planes_matched"], matched)
+        self.assertLessEqual(worst, PLANE_OFFSET_ABS_TOLERANCE_MM)
+        self.assertAlmostEqual(
+            recorded["worst_plane_offset_mm"], worst, delta=PLANE_OFFSET_ABS_TOLERANCE_MM
+        )
+
+    def _mesh_points(self):
+        """The dump's own vertices, in millimetres."""
+        from fusion_design.mesh_dump import read_mesh_dump
+
+        dump = read_mesh_dump(BENCH / "dumps" / self.row["dump"], self.row["dump_sha256"])
+        flat = dump.vertices_mm
+        return [tuple(flat[i : i + 3]) for i in range(0, len(flat), 3)]
 
     def test_the_noise_record_says_which_estimator_sigma_came_from_and_keeps_both(self) -> None:
         # The defect was that `sigma = max(quadric, dihedral)` ran before the
@@ -384,6 +517,126 @@ class HoneycombAgainstItsStepTests(unittest.TestCase):
             refused.detail["margin"],
             delta=RECORDED_FLOAT_REL_TOLERANCE * recorded["margin"],
         )
+
+
+class UnicornHornGroundTruthTests(unittest.TestCase):
+    """What the F3D and the STEP say, read from the JSON they were read into.
+
+    The two binary fixtures -- 13.8 MB of F3D and STEP -- are kept because the
+    user asked for them, and nothing in this repository can open either one. The
+    files that *are* readable are the derived JSONs in `ground-truth/`, so those
+    are hash-bound in the same fixture table and asserted against here. Without
+    this the binaries would be inert: kept, cited, and never checked.
+
+    The gap statement is the assertion. `unicorn-horn-is-not-in-the-vocabulary`
+    says the horn's real features are outside the closed archetype vocabulary,
+    and that stops being a claim about this build the moment the vocabulary
+    grows: the expressible set is derived from `ARCHETYPE_KINDS` here rather than
+    restated, so adding `loft` or `sweep` fails this test and demands the gap be
+    re-written.
+    """
+
+    #: Which archetype each Fusion timeline feature would have to become. Only
+    #: the four the vocabulary contains are mapped; a feature absent from this
+    #: table is inexpressible by construction, which is the point.
+    FEATURE_TO_ARCHETYPE = {
+        "ExtrudeFeature": "sketch-extrude",
+        "RevolveFeature": "revolve",
+        "HoleFeature": "hole",
+        "FilletFeature": "fillet",
+    }
+
+    #: Timeline entries that are not solid features: the sketches and planes a
+    #: feature is built on. They are not "inexpressible", they are scaffolding.
+    NON_FEATURE_ENTITIES = {"Sketch", "ConstructionPlane"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.timeline = json.loads(
+            (BENCH / "ground-truth" / "unicorn-horn-parametric-multi-v3.f3d.timeline.json")
+            .read_text(encoding="utf-8")
+        )
+        cls.brep = json.loads(
+            (BENCH / "ground-truth" / "unicorn-horn-4examples-v3.step.brep.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def _kinds(self):
+        kinds = {}
+        for entry in self.timeline["timeline"]:
+            name = entry["entity_type"].rsplit("::", 1)[-1]
+            kinds[name] = kinds.get(name, 0) + 1
+        return kinds
+
+    def test_the_manifest_summary_is_the_timelines_own_feature_census(self) -> None:
+        summary = MANIFEST["f3d_ground_truth"]
+        self.assertEqual(self._kinds(), summary["feature_kinds"])
+        self.assertEqual(len(self.timeline["timeline"]), summary["timeline_count"])
+        self.assertEqual(
+            [{"name": p["name"], "expression": p["expression"]}
+             for p in self.timeline["user_parameters"]],
+            [{"name": p["name"], "expression": p["expression"]}
+             for p in summary["user_parameters"]],
+        )
+        self.assertEqual(self.timeline["design_type"], summary["design_type"])
+
+    def test_the_horns_real_features_are_still_outside_the_vocabulary(self) -> None:
+        from fusion_design.reconstruction_program import ARCHETYPE_KINDS
+
+        self.assertEqual({"sketch-extrude", "revolve", "hole", "fillet"}, ARCHETYPE_KINDS)
+        self.assertLessEqual(set(self.FEATURE_TO_ARCHETYPE.values()), ARCHETYPE_KINDS)
+        kinds = self._kinds()
+        features = {
+            name: count
+            for name, count in kinds.items()
+            if name not in self.NON_FEATURE_ENTITIES
+        }
+        # The designer's own list, feature for feature: three extrudes, two
+        # sweeps, two lofts, a coil, a fillet, a shell, a split and a move.
+        self.assertEqual(
+            {
+                "ExtrudeFeature": 3,
+                "SweepFeature": 2,
+                "LoftFeature": 2,
+                "CoilFeature": 1,
+                "FilletFeature": 1,
+                "ShellFeature": 1,
+                "SplitBodyFeature": 1,
+                "MoveFeature": 1,
+            },
+            features,
+        )
+        inexpressible = sorted(
+            name for name in features if self.FEATURE_TO_ARCHETYPE.get(name) not in ARCHETYPE_KINDS
+        )
+        self.assertEqual(sorted(MANIFEST["f3d_ground_truth"]["inexpressible"]), inexpressible)
+        # Eight of the twelve solid features, and no revolve anywhere in the
+        # original, so the one archetype this part might have earned is not what
+        # the designer used.
+        self.assertEqual(8, sum(features[name] for name in inexpressible))
+        self.assertNotIn("RevolveFeature", features)
+        gap, = [g for g in MANIFEST["known_gaps"] if g["id"] == "unicorn-horn-is-not-in-the-vocabulary"]
+        self.assertEqual("open", gap["status"])
+
+    def test_the_graded_body_is_the_one_the_manifest_names_and_is_mostly_nurbs(self) -> None:
+        recorded = MANIFEST["step_comparison"]["unicorn_horn_3mf"]
+        body, = [
+            b for b in self.brep["bodies"]
+            if f"{b['component_path']} {b['name']}".strip() == recorded["step_body"]
+        ]
+        kinds = {}
+        for face in body["faces"]:
+            kinds[face["kind"]] = kinds.get(face["kind"], 0) + 1
+        self.assertEqual(recorded["step_face_kinds"], kinds)
+        self.assertEqual(body["face_count"], sum(kinds.values()))
+        # "43 percent of the graded body's faces are NURBS", as an arithmetic
+        # statement rather than a sentence: 22 of 51. The archetype vocabulary
+        # has no NURBS member, so that area is unreachable by construction.
+        self.assertAlmostEqual(
+            0.43, kinds["NurbsSurfaceType"] / body["face_count"], places=2
+        )
+        self.assertIn("NURBS", recorded["note"])
 
 
 @unittest.skipUnless(

@@ -152,6 +152,30 @@
       "pair": "desktop_organiser_3mf",
       "role": "mesh-dump",
       "sha256": "8a9ab10ee7bf089d910e5b13b3c2d3e7292d65a8da204dd495411a6ba9aa0154"
+    },
+    {
+      "bytes": 44540,
+      "file": "ground-truth/honeycomb-tool-organizer.step.brep.json",
+      "original_name": "Honeycomb tool organizer.STEP, read as a B-Rep in Fusion",
+      "pair": "honeycomb",
+      "role": "brep-ground-truth",
+      "sha256": "1b27f3ef2484c27de5e6008584898319f1177bc0070c5fb01a8de7b83723250c"
+    },
+    {
+      "bytes": 53219,
+      "file": "ground-truth/unicorn-horn-4examples-v3.step.brep.json",
+      "original_name": "Unicorn Horn_4examples v3.step, read as a B-Rep in Fusion",
+      "pair": "unicorn-horn",
+      "role": "brep-ground-truth",
+      "sha256": "4a6a7371193621b10d64e332d36ca754a2aea7b2a48c2d449328a8c31d36f761"
+    },
+    {
+      "bytes": 6510,
+      "file": "ground-truth/unicorn-horn-parametric-multi-v3.f3d.timeline.json",
+      "original_name": "Unicorn Horn Parametric_Multi v3.f3d, its timeline and user parameters read in Fusion",
+      "pair": "unicorn-horn",
+      "role": "timeline-ground-truth",
+      "sha256": "8772dff0c1b4de33a9fb8e6f4cdfe12ca549cbb6ec72b95e314052f8b63e90e2"
     }
   ],
   "ground_truth": {
@@ -452,10 +476,17 @@
       "note": "The STEP carries no cylinder, cone, sphere or torus: the whole organiser is 145 planes in exactly four directions, three vertical walls 120 degrees apart and one horizontal. Any curved primitive the reconstruction claims on this part is a claim the ground truth contradicts.",
       "plane_match": {
         "curved_primitives_claimed": 0,
-        "note": "Every accepted fit is a plane and every one of them lands on a STEP family. The STEP carries no curved surface at all, so 'curved primitives claimed' is a checkable zero rather than an opinion -- it was six before the discrete-normal gate.",
+        "family_table_rounding_deviation_deg": 0.3800607015657995,
+        "mesh_to_step_translation_mm": [
+          76.25,
+          86.946886,
+          2.0
+        ],
+        "note": "Every accepted fit is a plane, every one of them is parallel to one of the STEP's own face normals to 0.0 degrees, and every one lands on that face's plane to 1.1e-05 mm once the single rigid translation between the imported mesh and the STEP body is applied -- the mesh arrives with its bounding-box corner at the origin, so position is only checkable through that one translation, which is measured from the two bounding boxes and recorded here. The STEP carries no curved surface at all, so 'curved primitives claimed' is a checkable zero rather than an opinion -- it was six before the discrete-normal gate. family_table_rounding_deviation_deg is not a property of the fit: it is how far the fitted normals sit from the *family table*, whose normals are rounded to three decimals, and it used to be recorded as though it were the agreement.",
         "planes_matched": 39,
         "step_families_hit": 4,
-        "worst_plane_normal_deviation_deg": 0.3801
+        "worst_plane_normal_deviation_deg": 0.0,
+        "worst_plane_offset_mm": 1.1091710860000603e-05
       },
       "step_area_mm2": 257165.521966,
       "step_bbox_extent_mm": [

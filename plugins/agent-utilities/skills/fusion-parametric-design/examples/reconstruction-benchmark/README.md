@@ -51,12 +51,23 @@ The vendor STEP is **145 planar faces in exactly four directions** — three
 vertical walls 120° apart and one horizontal — and not one cylinder, cone,
 sphere or torus anywhere. The STL is the same solid: its summed facet area
 agrees with the STEP's analytic area to 3.2e-08 relative, its volume to 7.7e-07,
-and its bounding box to 2.3e-06 mm.
+and its bounding box to 2.3e-06 mm. Those three are all invariant under moving
+the part, and this mesh *is* moved — it arrives with its bounding-box corner on
+the origin — so position is checked through the single rigid translation between
+the two, `(76.25, 86.946886, 2.0)` mm, measured from the two bounding boxes and
+recorded in the manifest.
 
-It now fits: **45 regions, 39 accepted, every one a plane, 41.6% of the area, and
-all 39 within 0.38° of one of the STEP's four families with all four families
-hit**. Not one cylinder, cone, sphere or torus is claimed — which is the
-strongest check this pair affords, because the STEP says the part contains none.
+It now fits: **45 regions, 39 accepted, every one a plane, 41.6% of the area,
+every one parallel to one of the STEP's own face normals to 0.0° with all four
+families hit, and every one landing on that face's plane to 1.1e-05 mm** once
+that translation is applied. Not one cylinder, cone, sphere or torus is claimed —
+which is the strongest check this pair affords, because the STEP says the part
+contains none.
+
+(The 0.38° this used to report was never the agreement: the family table's
+normals are rounded to three decimals, and 0.38° is how far an exact
+`0.866025404` sits from a stored `0.866`. It is still recorded, under a name that
+says what it measures.)
 
 Getting there took two fixes, and this part is what found both.
 
@@ -147,9 +158,27 @@ program-spec.json         the planner's declared thresholds, shared by every par
 rebuild-spec.json         the emitter's declared thresholds; dump_path is relative and the runner resolves it
 parts/                    the seven downloaded files, byte for byte
 dumps/                    one hash-bound mesh dump per mesh input, written by Fusion
-ground-truth/             the two STEP B-Rep readings and the F3D timeline
+ground-truth/             the two STEP B-Rep readings and the F3D timeline, hash-bound like the rest
 results/<source-id>/      the recorded classification and the declared fit spec for that part
 ```
+
+### What this costs, and what earns it
+
+29.6 MB of binary fixtures, in git history forever: 24.4 MB in `parts/` and
+5.1 MB in `dumps/`. 14.1 MB of that is the pair nothing in this repository can
+open — the 10.7 MB F3D archive and the 3.1 MB unicorn STEP — kept because the
+originals are the point: the answer key is then the vendor's own file rather than
+somebody's transcription of it.
+
+What earns the bytes is that everything asserted *about* them is asserted against
+the derived JSONs in `ground-truth/`, and those are hash-bound in the same
+fixture table as the parts and the dumps. The F3D's timeline JSON is re-read for
+the horn's own feature census — 3 extrudes, 2 sweeps, 2 lofts, a coil, a fillet,
+a shell, a split and a move — and "eight of the twelve are inexpressible" is
+*derived* from `ARCHETYPE_KINDS` rather than restated, so growing the vocabulary
+fails the test instead of quietly making this README wrong. The unicorn STEP's
+B-Rep JSON is checked the same way, face kind by face kind. Nothing here cites a
+file it never reads.
 
 ## Running it
 
