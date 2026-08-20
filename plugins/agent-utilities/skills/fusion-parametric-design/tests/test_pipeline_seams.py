@@ -24,7 +24,7 @@ import math
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 import unittest
 
 from fusion_design.cli import main
@@ -719,6 +719,445 @@ class LoopEvidenceSeamTests(unittest.TestCase):
         self.assertEqual(["loop-orientation-unavailable"], evidence["gates"])
         for loop in evidence["loops"]:
             self.assertEqual("unavailable", loop["verdict"])
+
+
+class SlabDecompositionSeamTests(unittest.TestCase):
+    """`fit-regions` output and its own dump, read by the 2.5D decomposition.
+
+    The events come from the fit record's plane offsets and sigmas; the loops
+    come from sectioning the dump those fits were derived from. Neither half is
+    hand-built, which matters because they are produced by different stages and
+    the decomposition is the first thing that needs both to agree about where
+    the part's own boundaries are.
+    """
+
+    def _plan(self, dump, **spec_overrides):
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        return build_reconstruction_program(
+            parse_fit_record(record),
+            fxr.spec(slabs=True, **spec_overrides),
+            manifest_sha256=_manifest_hash(build_manifest()),
+            dump=dump,
+        )
+
+    def test_the_events_are_this_records_own_plane_stations(self) -> None:
+        # A plinth with a boss on it: 0, the shoulder at 10, the top at 18, and
+        # nothing else -- the three places material starts or stops along the
+        # datum primary axis, each with an accepted plane fit behind it.
+        program = self._plan(fx.stepped_block_dump())
+        self.assertEqual(
+            [0.0, 10.0, 18.0], [round(event["station"], 6) for event in program["events"]]
+        )
+        for event in program["events"]:
+            self.assertGreaterEqual(event["defining_members"], 1)
+            self.assertTrue(any(m["kind"] == "plane-fit" for m in event["members"]))
+            # The side walls' span ends corroborate the fitted stations rather
+            # than inventing their own: every one merged into these three.
+            self.assertTrue(any(m["kind"] == "span-end" for m in event["members"]))
+            self.assertAlmostEqual(1.0, sum(m["weight"] for m in event["members"]), places=9)
+
+    def test_a_two_step_part_plans_two_stacked_join_only_extrudes(self) -> None:
+        program = self._plan(fx.stepped_block_dump())
+        slabs = [g for g in program["archetypes"] if g.get("slab") is not None]
+        self.assertEqual(2, len(slabs))
+        self.assertEqual(["new-body", "join"], [g["operation"] for g in slabs])
+        self.assertEqual([0.0, 10.0], [round(g["plane"]["offset"], 6) for g in slabs])
+        self.assertEqual([10.0, 8.0], [round(g["extent"]["value"], 6) for g in slabs])
+        # A join needs a body to join to, so each slab depends on the one below.
+        self.assertEqual([], slabs[0]["dependencies"])
+        self.assertEqual([slabs[0]["id"]], slabs[1]["dependencies"])
+        self.assertEqual(
+            ["recon_station_1 - recon_station_0", "recon_station_2 - recon_station_1"],
+            [g["slab"]["extent_expression"] for g in slabs],
+        )
+        self.assertEqual(["first", "step-in"], [g["slab"]["relation_to_below"] for g in slabs])
+        for group in slabs:
+            slab = group["slab"]
+            self.assertTrue(slab["constancy"]["constant"])
+            self.assertEqual(["outer"], [loop["role"] for loop in slab["loops"]])
+            self.assertEqual([1.0], [loop["consensus_fraction"] for loop in slab["loops"]])
+            self.assertEqual([], slab["gates"])
+        # Each region is claimed by exactly one slab: the coverage account sums
+        # what each archetype claims, and a wall counted twice would inflate it.
+        claimed = [h for group in slabs for h in group["regions"]]
+        self.assertEqual(sorted(set(claimed)), sorted(claimed))
+
+    def test_the_shoulder_between_two_slabs_is_claimed_by_the_slab_that_builds_it(
+        self,
+    ) -> None:
+        """The stack delivers faces the single extrude cannot, and must say so.
+
+        The shoulder at station 10 is the plinth's top: 768 mm2 of this part's
+        4472, and no part of the single extrude's account, because one extrude
+        of the plinth outline does not produce it. The stack does -- it is
+        exactly slab 0's cap -- but assignment drew only from the extrude's
+        regions, so the shoulder was built and claimed by nobody and the
+        coverage account read 0.828 on a part reconstructed whole.
+        """
+        record = seg.fit_regions(fx.stepped_block_dump(), ts.spec())
+        fit = parse_fit_record(record)
+        program = self._plan(fx.stepped_block_dump())
+        slabs = [g for g in program["archetypes"] if g.get("slab") is not None]
+        claimed = [h for group in slabs for h in group["regions"]]
+        self.assertEqual(sorted(set(claimed)), sorted(claimed))
+        area = {region.region_hash: region.area for region in fit.regions}
+        self.assertEqual(sorted(area), sorted(claimed))
+        self.assertAlmostEqual(
+            1.0, sum(area[h] for h in claimed) / sum(area.values()), places=9
+        )
+        # And by the slab below it, whose extrude to station 10 *is* that face,
+        # rather than by the boss standing on top of it.
+        shoulder = next(
+            h
+            for h, value in area.items()
+            if abs(value - 768.0) < 1e-9
+        )
+        self.assertIn(shoulder, slabs[0]["regions"])
+        self.assertNotIn(shoulder, slabs[1]["regions"])
+
+    def test_a_gated_slab_does_not_take_the_cap_its_surviving_neighbour_builds(
+        self,
+    ) -> None:
+        """The slab below owns the cap only while the slab below is built.
+
+        Gate the bottom slab and the one above it becomes the `new-body`
+        extrude, whose *start* face is the shared event plane -- so that plane
+        is built, by the surviving slab, while the assignment handed it to the
+        gated one and the account reported it unreconstructed under the gate of
+        a slab that never touched it. On this part it is the 768 mm2 shoulder:
+        62.0% covered against 80.3%.
+        """
+        # The stepped block upside down: the tapered step is the *lower* slab,
+        # so it gates and its neighbour survives.
+        vertices, triangles, groups = fx.stepped_block_mesh(boss_taper=0.3)
+        dump = fx.make_dump(
+            [(x, y, -z) for (x, y, z) in vertices],
+            [(c, b, a) for (a, b, c) in triangles],
+            face_groups=list(groups),
+        )
+        program = self._plan(dump)
+        built = [g for g in program["archetypes"] if g.get("slab")]
+        self.assertEqual(1, len(built))
+        self.assertEqual("new-body", built[0]["operation"])
+        area = {
+            region.region_hash: region.area
+            for region in parse_fit_record(seg.fit_regions(dump, ts.spec())).regions
+        }
+        shoulder = next(h for h, value in area.items() if abs(value - 768.0) < 1e-9)
+        self.assertIn(shoulder, built[0]["regions"])
+        self.assertIn(shoulder, built[0]["cap_regions"])
+        self.assertNotIn(
+            shoulder, {row["region_id"] for row in program["unreconstructed"]}
+        )
+
+    def test_a_section_that_left_geometry_unresolved_does_not_build_its_slab(
+        self,
+    ) -> None:
+        """The filter that keeps closed loops is discarding evidence.
+
+        `section_mesh` can return a valid closed outer loop *and* an open
+        polyline or a junction beside it -- material this stage could not
+        resolve into a boundary. Every gate downstream reads the retained
+        closed loops only, so the slab stayed usable, claimed its regions as
+        reconstructed, and emitted a profile with the unresolved component
+        missing from it. A block with one wall removed sections open at every
+        station and is the smallest case.
+        """
+        vertices, triangles, groups = fx.stepped_block_mesh()
+        kept = [(t, g) for t, g in zip(triangles, groups) if g != 1]
+        dump = fx.make_dump(
+            vertices, [t for t, _ in kept], face_groups=[g for _, g in kept]
+        )
+        program = self._plan(dump)
+        self.assertEqual([], [g for g in program["archetypes"] if g.get("slab")])
+        gates = {row["gate"].split(":")[0] for row in program["unreconstructed"]}
+        self.assertEqual({"slab-section-open"}, gates)
+        # Named first, because everything else this slab could report -- loops
+        # that did not classify, stations that did not agree -- is derived from
+        # the section this one is about.
+        from fusion_design import mesh_slabs as ms
+
+        self.assertIn("slab-section-open", ms.SLAB_GATES)
+        self.assertIn("slab-section-open", rp.UNRECONSTRUCTED_GATES)
+
+    def test_slabs_coalesce_only_when_every_station_they_sampled_agrees(self) -> None:
+        """Congruence at the midpoints is not congruence over the merged range.
+
+        Each slab holds its own sections to within the tolerance and their
+        midpoints agree to within it, so the two ends of the merged slab are
+        bounded only by the sum -- while the record keeps the lower slab's
+        `loops` and calls the whole merged height constant. A boss a hair
+        narrower than its plinth coalesces, as it should; give that boss a
+        0.01 taper and its upper station walks outside the window while its
+        midpoint stays inside, and the merge is exactly the claim that is not
+        true.
+        """
+
+        def coalesced(**mesh: Any) -> list[int]:
+            spec = fxr.spec(slabs=True)
+            spec["thresholds"]["slab_evidence"]["slab_constancy_tolerance_mm"] = {
+                "value": 0.3,
+                "rationale": (
+                    "this fixture's step is deliberately inside the window, which is the only "
+                    "way to reach the coalescing branch: below it the two slabs are one section."
+                ),
+            }
+            dump = fx.stepped_block_dump(upper=(39.8, 29.8), **mesh)
+            record = seg.fit_regions(dump, ts.spec())
+            self.assertIsNone(record["refusal"], record["refusal"])
+            program = build_reconstruction_program(
+                parse_fit_record(record),
+                spec,
+                manifest_sha256=_manifest_hash(build_manifest()),
+                dump=dump,
+            )
+            return [
+                index
+                for index, event in enumerate(program["events"])
+                if event.get("coalesced")
+            ]
+
+        self.assertEqual([1], coalesced())
+        self.assertEqual([], coalesced(boss_taper=0.01))
+
+    def test_the_emitter_refuses_a_slab_stack_it_cannot_build(self) -> None:
+        # PR 2 plans slabs and does not emit them: the multi-loop profile path is
+        # a later unit, and building each slab's outer loop while dropping its
+        # cavities would be exactly the improvisation this package bans.
+        dump = fx.stepped_block_dump()
+        program = self._plan(dump)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mesh.bin"
+            path.write_bytes(_dump_bytes(dump))
+            with self.assertRaises(ReconstructionRefused) as caught:
+                plan_emission(program, dump, fx.rebuild_spec(str(path)))
+        self.assertEqual("program-schema-violation", caught.exception.reason)
+        self.assertEqual(2, caught.exception.detail["slab_count"])
+
+    def test_a_tapered_step_refuses_by_measurement_and_the_slab_below_stands(self) -> None:
+        # The upper step is a truncated pyramid, so its cross-section differs at
+        # every station. The guard measures the disagreement and that slab is not
+        # built; the constant slab below it still is.
+        program = self._plan(fx.stepped_block_dump(boss_taper=0.5))
+        gates = [
+            entry["gate"]
+            for entry in program["unreconstructed"]
+            if entry["gate"].startswith("slab-section-inconstant")
+        ]
+        self.assertTrue(gates, program["unreconstructed"])
+        slabs = [g for g in program["archetypes"] if g.get("slab") is not None]
+        self.assertEqual(1, len(slabs))
+        self.assertTrue(slabs[0]["slab"]["constancy"]["constant"])
+        self.assertEqual(0.0, round(slabs[0]["plane"]["offset"], 6))
+
+    def test_a_slab_whose_inner_loop_has_no_role_is_gated_even_with_an_outer(self) -> None:
+        """The gate is about the section, not only about its outer boundary.
+
+        A cavity wall crossing a local non-manifold edge reaches no material
+        verdict, so its loop is `unclassified` -- and with an outer loop still
+        present the slab used to be built anyway, counting its regions as
+        reconstructed on a question nobody answered. The role table is forced
+        here rather than fixtured: what is under test is the gate.
+        """
+        from unittest.mock import patch
+
+        from fusion_design import mesh_slabs as ms
+
+        honest = ms.classify_loops
+        calls = []
+
+        def with_one_unclassified(loops, projected, bore_regions):
+            rows = honest(loops, projected, bore_regions)
+            calls.append(1)
+            # Only the first section, so one slab is gated and the other is not:
+            # gating every slab leaves the single-extrude fallback claiming all
+            # the regions, which is a different path.
+            if rows and len(calls) == 1:
+                rows = rows + [dict(rows[0], polyline_index=len(rows), role="unclassified")]
+            return rows
+
+        with patch.object(ms, "classify_loops", with_one_unclassified):
+            program = self._plan(fx.stepped_block_dump())
+        gates = [
+            entry["gate"]
+            for entry in program["unreconstructed"]
+            if entry["gate"].startswith("slab-loops-unclassified")
+        ]
+        self.assertTrue(gates, program["unreconstructed"])
+        # And the outer loop really was there: this is not the old case.
+        decomposition = program["slab_decomposition"]
+        self.assertIsNotNone(decomposition)
+
+    def test_a_loop_that_named_a_role_and_a_gate_still_gates_its_slab(self) -> None:
+        """A role is a verdict; a gate says how far the verdict can be trusted.
+
+        `loop_material_evidence` can hand back both: enough of the walls voted
+        to call a loop `outer`, and more of its length went unattributed than
+        the caller declared tolerable, so it also records
+        `slab-wall-unattributed`. Reading only the role accepted the slab and
+        counted its regions as reconstructed while the recorded attribution
+        failure said the evidence was thin.
+        """
+        from unittest.mock import patch
+
+        from fusion_design import mesh_slabs as ms
+
+        honest = ms.classify_loops
+        calls = []
+
+        def with_one_gated(loops, projected, bore_regions):
+            rows = honest(loops, projected, bore_regions)
+            calls.append(1)
+            if rows and len(calls) == 1:
+                rows = [dict(rows[0], gates=["slab-wall-unattributed"])] + list(rows[1:])
+            return rows
+
+        with patch.object(ms, "classify_loops", with_one_gated):
+            program = self._plan(fx.stepped_block_dump())
+        gates = [
+            entry["gate"]
+            for entry in program["unreconstructed"]
+            if entry["gate"].startswith("slab-wall-unattributed")
+        ]
+        self.assertTrue(gates, program["unreconstructed"])
+        # And the token is in this stage's own closed set, not arriving from
+        # outside it.
+        self.assertIn("slab-wall-unattributed", ms.SLAB_GATES)
+
+    def test_a_triangle_two_regions_both_claim_is_refused_not_resolved_by_order(self) -> None:
+        """Region ownership decides bore-or-cavity, so it cannot depend on order.
+
+        The map from triangle to region is what `classify_loops` reads to tell
+        a wall of a bore this program already cuts from a wall of a cavity. A
+        triangle listed by two regions used to let the later record win
+        silently, so *reordering* two records could change which feature the
+        planner planned. An index outside the dump names a triangle of some
+        other mesh entirely.
+        """
+        dump = fx.stepped_block_dump()
+        record = seg.fit_regions(dump, ts.spec())
+        self.assertIsNone(record["refusal"], record["refusal"])
+        digest = _manifest_hash(build_manifest())
+
+        def plan(mutate):
+            edited = json.loads(json.dumps(record))
+            mutate(edited)
+            return build_reconstruction_program(
+                parse_fit_record(edited),
+                fxr.spec(slabs=True),
+                manifest_sha256=digest,
+                dump=dump,
+            )
+
+        def double_claim(edited):
+            regions = [r for r in edited["regions"] if r.get("triangle_indices")]
+            regions[1]["triangle_indices"] = list(regions[1]["triangle_indices"]) + [
+                regions[0]["triangle_indices"][0]
+            ]
+
+        def out_of_range(edited):
+            region = next(r for r in edited["regions"] if r.get("triangle_indices"))
+            region["triangle_indices"] = list(region["triangle_indices"]) + [10 ** 9]
+
+        for mutate, needle in (
+            (double_claim, "claimed by both region"),
+            (out_of_range, "names a triangle of some other mesh"),
+        ):
+            with self.subTest(needle=needle):
+                with self.assertRaises(ReconstructionRefused) as caught:
+                    plan(mutate)
+                self.assertEqual("fit-record-malformed", caught.exception.reason)
+                self.assertIn(needle, caught.exception.message)
+
+    def test_dirt_on_one_face_does_not_cost_the_loops_that_do_not_touch_it(self) -> None:
+        # One duplicated triangle on the bottom face: three edges now carry three
+        # incident triangles, so the mesh is not closed in the whole-mesh sense.
+        # Neither slab's section is cut from those triangles, so both classify --
+        # the per-edge locality the design assumes, which the whole-mesh licence
+        # measured in PR 1 did not deliver.
+        vertices, triangles, groups = fx.stepped_block_mesh()
+        dirty = list(triangles) + [triangles[0]]
+        winding = mf.mesh_winding_evidence(vertices, dirty)
+        self.assertFalse(winding["closed"])
+        self.assertEqual(0, winding["boundary_edges"])
+        self.assertEqual(3, winding["non_manifold_edges"])
+        self.assertEqual("outward", winding["winding"])
+        self.assertTrue(winding["non_manifold_triangles"])
+
+        program = self._plan(
+            ts.make_dump(vertices, dirty, face_groups=list(groups) + [groups[0]])
+        )
+        slabs = [g for g in program["archetypes"] if g.get("slab") is not None]
+        self.assertEqual(2, len(slabs))
+        for group in slabs:
+            loops = group["slab"]["loops"]
+            self.assertEqual(["outer"], [loop["role"] for loop in loops])
+            self.assertEqual([1.0], [loop["consensus_fraction"] for loop in loops])
+            self.assertEqual([[]], [loop["gates"] for loop in loops])
+
+    def test_a_torn_dump_still_refuses_every_loop_globally(self) -> None:
+        # The other half of the locality rule: a *boundary* edge means the
+        # surface has a hole in it, the enclosed volume is undefined, and no loop
+        # anywhere on it can be classified. Locality is about self-touches only.
+        vertices, triangles, _groups = fx.stepped_block_mesh()
+        winding = mf.mesh_winding_evidence(vertices, triangles[:-4])
+        self.assertGreater(winding["boundary_edges"], 0)
+        self.assertIsNone(winding["winding"])
+        self.assertIn("hole in it", winding["unavailable_reason"])
+
+    def test_one_slab_plans_exactly_what_the_planner_planned_without_slabs(self) -> None:
+        """The generalisation's safety proof: the old planner is the base case.
+
+        A plain brick decomposes to a single slab, and a single slab must produce
+        the *same archetype* the planner produced before slabs existed -- same
+        regions, same caps, same plane, same extent -- with the slab record added
+        beside it. Anything else and every existing part's plan has quietly moved.
+        """
+        dump = brick_dump()
+        record = seg.fit_regions(dump, ts.spec())
+        digest = _manifest_hash(build_manifest())
+        without = build_reconstruction_program(
+            parse_fit_record(record), fxr.spec(), manifest_sha256=digest
+        )
+        with_slabs = build_reconstruction_program(
+            parse_fit_record(record), fxr.spec(slabs=True), manifest_sha256=digest, dump=dump
+        )
+        self.assertEqual(1, len([g for g in with_slabs["archetypes"] if g.get("slab")]))
+        self.assertEqual(without["order"], with_slabs["order"])
+        self.assertEqual(without["user_parameters"], with_slabs["user_parameters"])
+        # `zip` truncates to the shorter list, so a gained or lost archetype
+        # would leave this loop passing on the ones that survived.
+        self.assertEqual(len(without["archetypes"]), len(with_slabs["archetypes"]))
+        for before, after in zip(
+            without["archetypes"], with_slabs["archetypes"], strict=True
+        ):
+            self.assertEqual(
+                {k: v for k, v in before.items() if k != "slab"},
+                {k: v for k, v in after.items() if k != "slab"},
+            )
+        self.assertEqual(without["unreconstructed"], with_slabs["unreconstructed"])
+        self.assertEqual(
+            without["covered_area_fraction"], with_slabs["covered_area_fraction"]
+        )
+
+    def test_undeclared_gates_mean_no_decomposition_and_the_program_says_so(self) -> None:
+        # The router's own rule, applied here: without declared gates nothing is
+        # claimed, and the plan is what it was before slabs existed.
+        dump = fx.stepped_block_dump()
+        record = seg.fit_regions(dump, ts.spec())
+        program = build_reconstruction_program(
+            parse_fit_record(record),
+            fxr.spec(),
+            manifest_sha256=_manifest_hash(build_manifest()),
+            dump=dump,
+        )
+        self.assertEqual([], program["events"])
+        self.assertFalse(program["slab_decomposition"]["usable"])
+        self.assertIn("slab_evidence", program["slab_decomposition"]["detail"])
+        self.assertEqual(
+            [None], [g.get("slab") for g in program["archetypes"] if g["kind"] == "sketch-extrude"]
+        )
 
 
 class PlanToRebuildSeamTests(unittest.TestCase):

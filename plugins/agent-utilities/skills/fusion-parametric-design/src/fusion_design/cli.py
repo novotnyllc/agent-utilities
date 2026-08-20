@@ -21,7 +21,7 @@ from .mesh_datum import ReconstructionRefused, parse_fit_record
 from .reconstruction_coverage import compose_coverage, format_coverage
 from .reconstruction_program import build_reconstruction_program
 from .mesh_deviation import emit_mesh_deviation_script
-from .mesh_dump import read_mesh_dump
+from .mesh_dump import MeshDumpError, read_mesh_dump
 from .mesh_editability import (
     emit_mesh_editability_script,
     validate_editability_report,
@@ -239,14 +239,29 @@ def _cmd_plan_reconstruction(args: argparse.Namespace) -> int:
     named_paths = [("manifest", args.manifest), ("fit-record", args.fit_record), ("program-spec", args.program_spec)]
     if args.output:
         named_paths.append(("output", args.output))
+    if args.dump:
+        named_paths.append(("dump", args.dump))
     _validate_named_paths(named_paths)
 
     manifest = load_manifest(args.manifest)
     fit_record = parse_fit_record(json.loads(Path(args.fit_record).read_text(encoding="utf-8")))
     spec = json.loads(Path(args.program_spec).read_text(encoding="utf-8"))
+    dump = None
+    if args.dump:
+        # Re-hashed against the digest the fit record is bound to, before a byte
+        # of it is parsed -- the same rule the emitter follows for the same file.
+        try:
+            dump = read_mesh_dump(args.dump, fit_record.dump_sha256)
+        except MeshDumpError as error:
+            print(
+                json.dumps(
+                    {"reason": error.reason, "detail": error.detail}, indent=2, sort_keys=True
+                )
+            )
+            return 2
     try:
         program = build_reconstruction_program(
-            fit_record, spec, manifest_sha256=manifest_sha256(manifest)
+            fit_record, spec, manifest_sha256=manifest_sha256(manifest), dump=dump
         )
     except ReconstructionRefused as refused:
         # A refusal is a result, not a crash: it prints its named reason and the
@@ -802,6 +817,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to the program spec JSON: the declared thresholds with their rationales, and the "
             "adoption decision for each proposal that is adopted."
+        ),
+    )
+    plan_reconstruction.add_argument(
+        "--dump",
+        help=(
+            "Optional path to the mesh dump this fit record was derived from. With it the planner "
+            "decomposes the part into 2.5D slabs -- a slab's loops are cut from the dump's own "
+            "triangles, which the fit record does not carry. Without it the plan is what it was "
+            "before slabs existed and the program records that it was not attempted."
         ),
     )
     plan_reconstruction.add_argument("-o", "--output")

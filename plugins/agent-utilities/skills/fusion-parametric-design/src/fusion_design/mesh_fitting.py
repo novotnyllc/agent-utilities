@@ -705,17 +705,37 @@ LOOP_EVIDENCE_GATES = {
 def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
     """Is this mesh closed and consistently wound, and which way does it face?
 
-    This is the licence every material verdict below rests on, and it is the
-    *same* licence ``material_side`` already rests on in the segmentation stage:
-    a closed mesh with a non-zero signed volume has an outward direction, and
-    anything else does not.  Reporting a direction for an open or torn mesh
-    would be inventing the one fact the whole classification hangs from.
+    The licence splits in two, because the two ways a mesh can be dirty are not
+    the same fact and lumping them threw away eleven judgeable loops on the
+    production corpus:
 
-    Two things are measured beyond that licence and reported rather than used,
-    because they are what tells a reader *why* a dirty mesh is dirty:
-    ``non_manifold_edges`` (an edge more than two triangles share) and
-    ``reversed_edges`` (an edge two triangles traverse the *same* way, which is
-    a winding flip rather than a hole).
+    * **A boundary edge is global.** An edge with one incident triangle means
+      the surface has a hole in it, the enclosed volume is undefined, and the
+      sign of the signed volume means nothing anywhere. ``winding`` is ``None``
+      and no loop at any station can be classified.
+    * **A non-manifold edge is local.** An edge three or more triangles share is
+      a surface touching *itself*: it tears nothing, the body still encloses its
+      volume, and the sign is as trustworthy as it ever was. So the direction
+      stands, and ``non_manifold_triangles`` names exactly the triangles that
+      touch the dirt -- a loop cut from any of them is unjudgeable, and a loop
+      cut from clean walls elsewhere on the same mesh is not.
+
+    That is the per-edge locality the 2.5D design assumes. Measured on the
+    production corpus it is the whole difference between two parts refusing
+    outright and both being classified: tropical leaves carries **one**
+    non-manifold edge in 86,394 triangles and POD-A2-LID **two** in 10,200, and
+    neither has a single boundary edge.
+
+    ``consistently_wound`` (no edge two triangles traverse the same way) is
+    measured and reported rather than gating: a winding flip makes its own
+    triangles vote wrong, which the loop consensus already catches by name.
+
+    Adjacency is keyed by exact vertex *position*, not by index: a dump exported
+    through a triangle-soup format repeats a position under several indices, and
+    keying by index would report every edge as a boundary on a perfectly closed
+    solid.  The weld is exact -- coordinates that differ in the last bit stay
+    distinct, which reads as "not closed", which is the honest answer for a mesh
+    whose vertices genuinely do not meet.
 
     Adjacency is keyed by exact vertex *position*, not by index: a dump exported
     through a triangle-soup format repeats a position under several indices, and
@@ -737,9 +757,10 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
         weld.append(target)
 
     directed: dict[tuple[int, int], int] = {}
+    incident: dict[tuple[int, int], list[int]] = {}
     degenerate = 0
     volume = 0.0
-    for a, b, c in faces:
+    for index, (a, b, c) in enumerate(faces):
         pa, pb, pc = verts[a], verts[b], verts[c]
         if _unit(_cross(_sub(pb, pa), _sub(pc, pa))) is None:
             # A zero-area triangle has no normal and no adjacency worth having.
@@ -750,8 +771,21 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
         wa, wb, wc = weld[a], weld[b], weld[c]
         for i, j in ((wa, wb), (wb, wc), (wc, wa)):
             directed[(i, j)] = directed.get((i, j), 0) + 1
+            incident.setdefault((i, j) if i < j else (j, i), []).append(index)
 
     boundary = non_manifold = reversed_edges = 0
+    dirty: set[int] = set()
+    # Clean manifold seams: two faces, traversing the edge opposite ways. A
+    # component with none of them at all is not a surface enclosing anything --
+    # coincident duplicated facets are the case -- and its signed volume is an
+    # artifact rather than a volume, so it may not vote on the winding below.
+    # One dirty edge does not disqualify a component: a box with a single
+    # inverted wall is still a box, and calling its winding unavailable throws
+    # away the very contradiction the caller is meant to see.
+    clean_seams: set[tuple[int, int]] = set()
+    # The non-manifold edges themselves, because *which* shells one of them
+    # joins is the question below -- not whether the mesh has any.
+    joins: set[tuple[int, int]] = set()
     seen: set[tuple[int, int]] = set()
     for (i, j), forward in directed.items():
         key = (i, j) if i < j else (j, i)
@@ -762,20 +796,121 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
         total = forward + backward
         if total > 2:
             non_manifold += 1
+            dirty.update(incident[key])
+            joins.add(key)
         elif total == 1:
             boundary += 1
         elif forward == 2 or backward == 2:
             reversed_edges += 1
+        else:
+            clean_seams.add(key)
 
     closed = boundary == 0 and non_manifold == 0
-    winding = ("outward" if volume > 0.0 else "inward") if closed and volume != 0.0 else None
+    # A hole in the surface is what makes the sign meaningless; a self-touch is
+    # not. See the docstring -- this is the per-edge locality, and it is the only
+    # place the two kinds of dirt are told apart.
+    #
+    # But a self-touch can also be two *shells* meeting at an edge, and one
+    # global sign is a claim about one solid. Two closed shells wound opposite
+    # ways share no boundary edge, so the total signed volume takes the larger
+    # one's sign and flips every clean loop on the smaller -- swapping its
+    # material verdicts. So the shells are separated over the manifold edges
+    # and their signs compared: they agree, and the global sign is one solid's,
+    # or they do not, and this mesh carries no global winding at all.
+    parent = list(range(len(faces)))
+
+    def _root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for key, members in incident.items():
+        if len(members) != 2:
+            continue
+        first, second = _root(members[0]), _root(members[1])
+        if first != second:
+            parent[first] = second
+    shells: dict[int, float] = {}
+    for index, (a, b, c) in enumerate(faces):
+        pa, pb, pc = verts[a], verts[b], verts[c]
+        if _unit(_cross(_sub(pb, pa), _sub(pc, pa))) is None:
+            continue
+        root = _root(index)
+        shells[root] = shells.get(root, 0.0) + _dot(pa, _cross(pb, pc)) / 6.0
+    # Only closed, consistently wound components vote. A duplicated facet is
+    # the case that made this necessary: two coincident triangles wound the
+    # same way share every edge, so nothing is open or non-manifold, and away
+    # from the origin their doubled tetrahedron term carries a sign of its own
+    # -- disagreeing with the solid's and withdrawing the whole mesh's winding
+    # over a component that encloses nothing. Its edges are all `reversed`, so
+    # it is excluded here and still counted in `reversed_edges` and
+    # `consistently_wound`, where it belongs.
+    encloses = {
+        _root(member) for key in clean_seams for member in incident.get(key, ())
+    }
+    tainted = {root for root in shells if root not in encloses}
+    signs = {
+        value > 0.0
+        for root, value in shells.items()
+        if value != 0.0 and root not in tainted
+    }
+    # Disagreement is only evidence of *two solids* when the shells are joined
+    # by a non-manifold edge. A solid with an internal void is two disjoint
+    # shells whose signs disagree by construction -- the void's is inward --
+    # and that is one solid, correctly wound, which this must not withhold.
+    # Two shells disagreeing is evidence of two solids only when they are
+    # actually joined. A solid with an internal void is two disjoint shells
+    # whose signs disagree by construction -- the void's is inward -- and a
+    # non-manifold edge somewhere else on the part does not make those two into
+    # one; treating any dirt anywhere as joining every shell threw the whole
+    # part's winding away for a self-touch on the far side of it, which is the
+    # per-edge locality this stage is built on. So the comparison is per group
+    # of shells connected *through* non-manifold edges.
+    joined = {root: root for root in shells}
+
+    def _joined_root(index: int) -> int:
+        while joined[index] != index:
+            joined[index] = joined[joined[index]]
+            index = joined[index]
+        return index
+
+    for key in joins:
+        members = [_root(member) for member in incident.get(key, ())]
+        members = [member for member in members if member in joined]
+        for other in members[1:]:
+            first, second = _joined_root(members[0]), _joined_root(other)
+            if first != second:
+                joined[first] = second
+    grouped: dict[int, set[bool]] = {}
+    for root, value in shells.items():
+        if value == 0.0 or root in tainted:
+            continue
+        grouped.setdefault(_joined_root(root), set()).add(value > 0.0)
+    shells_agree = all(len(group) <= 1 for group in grouped.values())
+    # And the direction comes from the same components that voted on it. The
+    # reported `signed_volume` stays the whole mesh's, because that is the
+    # census; the winding is a claim about the solid, and a component enclosing
+    # nothing has no business setting its sign -- a duplicated facet far enough
+    # from the origin outweighs the body it was duplicated from.
+    enclosed = sum(
+        value for root, value in shells.items() if root not in tainted
+    )
+    winding = (
+        ("outward" if enclosed > 0.0 else "inward")
+        if boundary == 0 and enclosed != 0.0 and shells_agree
+        else None
+    )
     return {
+        "shell_count": len(shells),
+        "shells_agree": shells_agree,
         "closed": closed,
         "consistently_wound": reversed_edges == 0,
         "signed_volume": volume,
         "winding": winding,
         "boundary_edges": boundary,
         "non_manifold_edges": non_manifold,
+        "non_manifold_triangles": tuple(sorted(dirty)),
         "reversed_edges": reversed_edges,
         "degenerate_triangles": degenerate,
         "welded_positions": len(node),
@@ -783,8 +918,13 @@ def mesh_winding_evidence(vertices: Any, triangles: Any) -> dict[str, Any]:
         "unavailable_reason": (
             None
             if winding is not None
-            else "the mesh is not closed with a non-zero signed volume, so its winding carries no "
-            "inside/outside information"
+            else (
+                "the surface has a hole in it, so it encloses no volume and its winding carries no "
+                "inside/outside information"
+                if boundary > 0
+                else "the mesh's signed volume is zero, so its winding carries no inside/outside "
+                "information"
+            )
         ),
     }
 
@@ -911,6 +1051,13 @@ def loop_material_evidence(
         inside_length = outside_length = unattributed_length = 0.0
         regions: set[str] = set()
         provenance = line.segment_triangles
+        # Locality: this loop is judgeable only if none of *its own* walls sits
+        # on a non-manifold edge. Dirt elsewhere on the mesh is not this loop's
+        # problem, and refusing over it is what threw away eleven good loops.
+        dirty_walls = sorted(
+            {t for entry in provenance for t in entry} & set(winding["non_manifold_triangles"])
+        )
+        clean = not dirty_walls
         for k in range(n):
             ax, ay = flat[k]
             bx, by = flat[(k + 1) % n]
@@ -929,7 +1076,7 @@ def loop_material_evidence(
                     regions.add(triangle_regions[tri_index])
                 a, b, c = faces[tri_index]
                 outward = _unit(_cross(_sub(verts[b], verts[a]), _sub(verts[c], verts[a])))
-                if outward is None or not licensed:
+                if outward is None or not licensed or not clean:
                     continue
                 outward = _scale(outward, flip)
                 planar = _sub(outward, _scale(normal, _dot(outward, normal)))
@@ -958,7 +1105,7 @@ def loop_material_evidence(
         consensus = (max(inside_length, outside_length) / attributed) if attributed > 0.0 else None
         unattributed_fraction = (unattributed_length / total) if total > 0.0 else 1.0
         loop_gates: list[str] = []
-        if not licensed:
+        if not licensed or not clean:
             verdict = "unavailable"
             loop_gates.append("loop-orientation-unavailable")
         elif attributed <= 0.0:
@@ -969,7 +1116,7 @@ def loop_material_evidence(
             loop_gates.append("loop-material-contradictory")
         else:
             verdict = "material-inside" if inside_length >= outside_length else "material-outside"
-        if licensed and unattributed_fraction > float(attribution_min_fraction):
+        if licensed and clean and unattributed_fraction > float(attribution_min_fraction):
             if "slab-wall-unattributed" not in loop_gates:
                 loop_gates.append("slab-wall-unattributed")
         parity_expected = "material-inside" if depth % 2 == 0 else "material-outside"
@@ -993,6 +1140,10 @@ def loop_material_evidence(
                 "material_outside_length_mm": outside_length,
                 "unattributed_length_mm": unattributed_length,
                 "unattributed_fraction": unattributed_fraction,
+                # Which of this loop's own walls sit on a non-manifold edge. Empty
+                # is the normal case and the reason a dirty mesh no longer costs
+                # every loop on it; non-empty is exactly why this one refuses.
+                "dirty_wall_triangles": dirty_walls,
                 "parity_expected": parity_expected,
                 "parity_agrees": parity_agrees,
                 "wall_regions": sorted(regions),

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import random
 import unittest
 
 from fusion_design.manifest import ManifestValidationError, ValidationIssue
 from fusion_design.mesh_datum import ReconstructionRefused, parse_fit_record
+from fusion_design import mesh_slabs as ms
 from fusion_design import reconstruction_program as rp
 
 import fixtures_fit_record as fx
@@ -894,7 +896,10 @@ class ProgramValidatorTests(unittest.TestCase):
 
     def test_an_unknown_program_version_is_refused(self) -> None:
         program = self._valid()
-        program["program_version"] = 2
+        # v1 is the version *before* slabs: it carries no `events` and no
+        # `slab_decomposition`, so this executor refuses it by name rather than
+        # best-efforting a program whose shape it does not implement.
+        program["program_version"] = 1
         codes = [issue.code for issue in self._check(program)["issues"]]
         self.assertIn("program-version-unsupported", codes)
 
@@ -915,6 +920,48 @@ class ProgramValidatorTests(unittest.TestCase):
         program["user_parameters"][0]["expected_observable"] = "vibes"
         codes = [issue.code for issue in self._check(program)["issues"]]
         self.assertIn("program-value-out-of-set", codes)
+
+    def test_a_sketch_extrude_missing_the_shapes_the_emitter_reads_is_refused(self) -> None:
+        """The validator's whole job: a named refusal instead of a TypeError later.
+
+        `plane` and `extent` were only ever checked *if* they were objects, so a
+        hand-edited `plane: null` passed every check and reached the emitter's
+        own comprehension over `group["plane"]["offset"]`.
+        """
+        for field, value in (("plane", None), ("extent", None), ("extent", {"value": "deep"})):
+            with self.subTest(field=field, value=value):
+                program = self._valid()
+                extrude = next(
+                    g for g in program["archetypes"] if g["kind"] == "sketch-extrude"
+                )
+                extrude[field] = value
+                issues = self._check(program)["issues"]
+                self.assertIn("program-malformed", [issue.code for issue in issues])
+                self.assertTrue(
+                    any(issue.path.endswith("." + field) for issue in issues),
+                    [issue.path for issue in issues],
+                )
+
+    def test_a_malformed_slab_block_is_refused_by_path(self) -> None:
+        # The v2 key arrived without a shape check, and the emitter reads
+        # `index`, `of` and `loops` from it without asking again.
+        for slab, ending in (
+            ("not-an-object", ".slab"),
+            ({"index": "0", "of": 2, "loops": []}, ".slab.index"),
+            ({"index": 0, "of": 2, "loops": None}, ".slab.loops"),
+        ):
+            with self.subTest(slab=slab):
+                program = self._valid()
+                extrude = next(
+                    g for g in program["archetypes"] if g["kind"] == "sketch-extrude"
+                )
+                extrude["slab"] = slab
+                issues = self._check(program)["issues"]
+                self.assertIn("program-malformed", [issue.code for issue in issues])
+                self.assertTrue(
+                    any(issue.path.endswith(ending) for issue in issues),
+                    [issue.path for issue in issues],
+                )
 
     def test_a_program_edited_after_it_was_built_fails_its_own_hash(self) -> None:
         program = self._valid()
@@ -965,6 +1012,458 @@ class ProgramValidatorTests(unittest.TestCase):
             rp.PROGRAM_CHECKS = original
         self.assertEqual(recorded, ["ran"])
         self.assertEqual(result["checked"], ("closed-vocabulary",))
+
+
+class EventMergeTests(unittest.TestCase):
+    """The merge rule's own arithmetic, away from any mesh."""
+
+    @staticmethod
+    def _candidates(*pairs):
+        return [
+            {"kind": "plane-fit", "region": f"r{index}", "station": station, "sigma": sigma}
+            for index, (station, sigma) in enumerate(pairs)
+        ]
+
+    def test_stations_inside_their_joint_uncertainty_become_one(self) -> None:
+        events = ms.merge_events(
+            self._candidates((10.0, 0.02), (10.03, 0.02)),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertEqual(2, events[0]["defining_members"])
+        self.assertAlmostEqual(10.015, events[0]["station"], places=9)
+
+    def test_stations_outside_it_stay_two(self) -> None:
+        events = ms.merge_events(
+            self._candidates((10.0, 0.002), (10.03, 0.002)),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(2, len(events))
+
+    def test_complete_linkage_does_not_chain_a_row_of_near_neighbours(self) -> None:
+        # Six stations each 0.02 apart with sigma 0.01: every consecutive pair is
+        # within tolerance of the next, so single linkage would smear all six
+        # into one event 0.1 wide. Linking to the cluster's *first* member stops
+        # it, which is the whole reason the rule is written that way.
+        events = ms.merge_events(
+            self._candidates(*[(10.0 + 0.02 * k, 0.01) for k in range(6)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertGreater(len(events), 1)
+        for event in events:
+            span = max(m["station"] for m in event["members"]) - min(
+                m["station"] for m in event["members"]
+            )
+            self.assertLessEqual(span, 3.0 * math.hypot(0.01, 0.01) + 1e-12)
+
+    def test_the_merged_station_is_weighted_by_inverse_variance(self) -> None:
+        # A fitted plane with a small sigma must dominate a bounding-box
+        # corroboration that agrees with it, not be averaged away by it.
+        events = ms.merge_events(
+            self._candidates((10.0, 0.001), (10.2, 0.1)),
+            event_merge_sigmas=100.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertLess(events[0]["station"], 10.001)
+        self.assertLess(events[0]["sigma"], 0.001)
+        self.assertAlmostEqual(1.0, sum(m["weight"] for m in events[0]["members"]), places=9)
+
+    def test_a_zero_sigma_is_floored_so_a_clean_export_still_merges(self) -> None:
+        # An analytically planar face fits with zero residual, so the derived
+        # tolerance collapses to zero and nothing merges with anything. Measured
+        # on POD-C-LID that produced 76 events and a nine-micron slab.
+        pairs = [(10.0, 0.0), (10.009, 0.0)]
+        self.assertEqual(
+            2, len(ms.merge_events(self._candidates(*pairs), event_merge_sigmas=3.0, sigma_floor=0.0))
+        )
+        floored = ms.merge_events(
+            self._candidates(*pairs), event_merge_sigmas=3.0, sigma_floor=0.01
+        )
+        self.assertEqual(1, len(floored))
+        self.assertEqual([0.0, 0.0], [m["sigma_measured"] for m in floored[0]["members"]])
+
+
+class EventLinkageTests(unittest.TestCase):
+    """Complete linkage means against every member, not against the first one."""
+
+    def _rows(self, pairs):
+        return [
+            {"station": station, "sigma": sigma, "kind": "plane-fit", "region": f"r{index}"}
+            for index, (station, sigma) in enumerate(pairs)
+        ]
+
+    def test_one_imprecise_member_cannot_admit_two_precise_ones_to_each_other(self) -> None:
+        # Sigmas 100, 0.01, 0.01 at stations 0, 1 and 2. Testing only against
+        # the cluster's first member let the loose one carry both precise plane
+        # fits into one event, even though their own joint tolerance is 0.042
+        # against a separation of 1 -- collapsing two real defining events and
+        # deleting the slab between them.
+        events = ms.merge_events(
+            self._rows([(0.0, 100.0), (1.0, 0.01), (2.0, 0.01)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(2, len(events))
+        self.assertEqual([2, 1], [len(event["members"]) for event in events])
+
+    def test_members_that_agree_with_every_one_of_them_still_merge(self) -> None:
+        events = ms.merge_events(
+            self._rows([(0.0, 0.5), (0.1, 0.5), (0.2, 0.5)]),
+            event_merge_sigmas=3.0,
+            sigma_floor=0.0,
+        )
+        self.assertEqual(1, len(events))
+        self.assertEqual(3, len(events[0]["members"]))
+
+    def test_the_assignment_is_global_and_not_a_per_loop_greedy(self) -> None:
+        """An earlier loop must not consume the partner a later one needed.
+
+        Two nearby loops sampled differently at the two stations have centroids
+        that cross. A per-loop greedy takes the first loop's own nearest
+        partner, which is the *second* loop's, and pairs what is left -- the
+        Hausdorff that follows then gates a constant slab. Scoring every pair
+        and taking the cheapest first does not.
+        """
+        # A and B are 1 apart; at the second station their centroids have
+        # crossed by a hair, so A's nearest is B' and B's nearest is also B'.
+        a = [(0.0, 0.0), (0.9, 0.0), (0.9, 0.9), (0.0, 0.9)]
+        b = [(1.0, 0.0), (1.9, 0.0), (1.9, 0.9), (1.0, 0.9)]
+        a_again = [(0.02, 0.0), (0.92, 0.0), (0.92, 0.9), (0.02, 0.9)]
+        b_again = [(0.98, 0.0), (1.88, 0.0), (1.88, 0.9), (0.98, 0.9)]
+        verdict = ms.congruence([a, b], [b_again, a_again], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+
+    def test_a_cap_slot_is_named_by_position_not_by_list_order(self) -> None:
+        """`cap_regions` says what exists; the fillet path needs which slot.
+
+        A slab boundary that is a supported `span-end` event closes no
+        claimable plane fit, so one slot is empty -- and read by list order the
+        surviving cap answered to `caps[0]`, which named an *upper* cap
+        `start` and selected the wrong edge to round. With neither, the list
+        was indexed empty and planning raised `IndexError`.
+        """
+        upper_only = {
+            "id": "sketch-extrude-x-s0",
+            "kind": "sketch-extrude",
+            "cap_regions": ["upper"],
+            "cap_positions": {"start": None, "end": "upper"},
+        }
+        self.assertEqual(
+            ("end-side", None), rp._same_feature_edge(upper_only, "upper", "wall")
+        )
+        neither = {
+            "id": "sketch-extrude-x-s1",
+            "kind": "sketch-extrude",
+            "cap_regions": [],
+            "cap_positions": {"start": None, "end": None},
+        }
+        selector, reason = rp._same_feature_edge(neither, "wall-a", "wall-b")
+        self.assertIsNone(selector)
+        self.assertIn("no edge can be selected", reason)
+        # A group from before this field still reads positionally.
+        legacy = {"id": "e", "kind": "sketch-extrude", "cap_regions": ["lo", "hi"]}
+        self.assertEqual(("start-side", None), rp._same_feature_edge(legacy, "lo", "wall"))
+
+    def test_congruence_pairs_to_minimise_the_worst_pair_not_the_first(self) -> None:
+        """Greedy over the sorted pairs consumes a partner another loop needed.
+
+        Two equal squares at x = 0 and x = 3 against two at x = 1 and x = -2:
+        the cheapest single pair is 0-1, and taking it forces 3--2 five units
+        apart, while pairing 0--2 with 3-1 costs two for both. Any tolerance
+        between them then reports a slab that is constant as
+        `slab-section-inconstant`.
+        """
+
+        def square(x: float):
+            return [(x, 0.0), (x + 1.0, 0.0), (x + 1.0, 1.0), (x, 1.0)]
+
+        verdict = ms.congruence(
+            [square(0.0), square(3.0)], [square(1.0), square(-2.0)], tolerance=3.0
+        )
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+        self.assertAlmostEqual(2.0, verdict["worst_hausdorff"])
+        self.assertTrue(verdict["agrees"], verdict)
+        # And the same sections under a tolerance that no pairing can meet
+        # still disagree -- the rule minimises the worst pair, it does not
+        # excuse it.
+        self.assertFalse(
+            ms.congruence(
+                [square(0.0), square(3.0)],
+                [square(1.0), square(-2.0)],
+                tolerance=1.5,
+            )["agrees"]
+        )
+
+    def test_concentric_loops_are_paired_by_geometry_not_by_list_order(self) -> None:
+        """Concentric loops share a centroid exactly, so the centroid decides nothing.
+
+        `section_mesh` orders its polylines by the triangles it intersected, and
+        that order is not the same at two stations. A centroid-only greedy then
+        paired the outer boundary with the inner one, the Hausdorff that
+        followed was large, and a constant slab was marked
+        `slab-section-inconstant` on ordering alone.
+        """
+        outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0)]
+        verdict = ms.congruence([outer, inner], [inner, outer], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+        self.assertAlmostEqual(0.0, verdict["worst_hausdorff"])
+
+    def test_congruence_reports_the_pairing_it_matched_on(self) -> None:
+        # Anything else compared between two sections has to go through this,
+        # because `section_mesh` does not emit loops in the same order twice.
+        square = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+        far = [(20.0, 20.0), (22.0, 20.0), (22.0, 22.0), (20.0, 22.0)]
+        verdict = ms.congruence([square, far], [far, square], tolerance=0.1)
+        self.assertTrue(verdict["agrees"], verdict)
+        self.assertEqual([(0, 1), (1, 0)], verdict["pairs"])
+
+
+class LoopRoleTests(unittest.TestCase):
+    """The design's classification table, on loop evidence built by hand."""
+
+    @staticmethod
+    def _loop(index, depth, verdict, walls=()):
+        return {
+            "polyline_index": index,
+            "depth": depth,
+            "verdict": verdict,
+            "consensus_fraction": 1.0,
+            "parity_agrees": True,
+            "signed_area_mm2": 1.0,
+            "perimeter_mm": 4.0,
+            "point_count": 4,
+            "wall_regions": list(walls),
+            "gates": [],
+        }
+
+    def test_each_row_of_the_table_is_reachable(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0)]
+        island = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]
+        bore = [(2.5, 2.5), (3.0, 2.5), (3.0, 3.0), (2.5, 3.0)]
+        roles = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", ["wall"]),
+                self._loop(1, 1, "material-outside", ["pocket"]),
+                self._loop(2, 2, "material-inside", ["boss"]),
+                self._loop(3, 1, "material-outside", ["bore-a"]),
+            ],
+            [square, inner, island, bore],
+            {"bore-a"},
+        )
+        self.assertEqual(
+            ["outer", "cavity", "island", "bore"], [row["role"] for row in roles]
+        )
+        # The island's parent is the cavity it stands in, not the outer boundary.
+        self.assertEqual(1, roles[2]["parent"])
+
+    def test_a_section_fraction_list_of_only_the_midpoint_is_refused(self) -> None:
+        # The reference section *is* the midpoint, so 0.5 compares it with
+        # itself: a spec declaring only that validates as a constancy guard and
+        # performs none.
+        spec = fx.spec(slabs=True)
+        spec["thresholds"]["slab_evidence"]["slab_section_fractions"]["value"] = [0.5]
+        codes = {issue.code for issue in rp.validate_program_spec(spec)}
+        self.assertIn("threshold-invalid-value", codes)
+        # A list that also carries a real station is fine.
+        spec["thresholds"]["slab_evidence"]["slab_section_fractions"]["value"] = [0.25, 0.5]
+        self.assertEqual([], rp.validate_program_spec(spec))
+
+    def test_slabs_that_agree_on_geometry_and_not_on_roles_do_not_coalesce(self) -> None:
+        """Congruent loops are not the same section.
+
+        Two slabs can close the same loops in the same places and disagree
+        about what those loops *are* -- a same-radius inner loop that is a
+        bore's wall below and an unclaimed cavity above. Merging keeps only the
+        lower slab's `loops`, so the upper slab's roles would be dropped and
+        the program would describe that cavity as the bore. Compared through
+        the pairing `congruence` matched on, because the two stations do not
+        emit their loops in the same order.
+        """
+        below = [{"role": "outer"}, {"role": "bore"}]
+        above_same = [{"role": "outer"}, {"role": "bore"}]
+        above_differs = [{"role": "outer"}, {"role": "cavity"}]
+        self.assertTrue(ms.roles_agree(below, above_same, [(0, 0), (1, 1)]))
+        self.assertFalse(ms.roles_agree(below, above_differs, [(0, 0), (1, 1)]))
+        # And through the pairing, not by position: the same two sections with
+        # their loops emitted the other way round still agree.
+        self.assertTrue(
+            ms.roles_agree(below, list(reversed(above_same)), [(0, 1), (1, 0)])
+        )
+
+    def test_a_loop_whose_walls_nobody_owns_is_not_called_a_cavity(self) -> None:
+        """`cavity` means "these walls belong to no bore", and that needs walls.
+
+        A fit record written before `triangle_indices` existed leaves every
+        loop with no wall regions, so the bore test could never be satisfied
+        and every hole in the section was labelled a cavity -- on a part where
+        the same program separately plans that hole's cylinder as a bore. That
+        is missing evidence read as evidence.
+        """
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]
+        unowned = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", []),
+                self._loop(1, 1, "material-outside", []),
+            ],
+            [square, inner],
+            {"bore-a"},
+        )
+        self.assertEqual(["outer", "unclassified"], [row["role"] for row in unowned])
+        # With no bore planned anywhere, there is no bore for an unattributed
+        # loop to be one of, and `cavity` is a statement again.
+        no_bores = ms.classify_loops(
+            [
+                self._loop(0, 0, "material-inside", []),
+                self._loop(1, 1, "material-outside", []),
+            ],
+            [square, inner],
+            set(),
+        )
+        self.assertEqual(["outer", "cavity"], [row["role"] for row in no_bores])
+
+    def test_a_loop_with_no_material_verdict_is_unclassified_not_guessed(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        roles = ms.classify_loops(
+            [self._loop(0, 0, "unavailable"), self._loop(1, 0, "contradictory")],
+            [square, square],
+            set(),
+        )
+        self.assertEqual(["unclassified", "unclassified"], [row["role"] for row in roles])
+
+
+class HausdorffTests(unittest.TestCase):
+    def test_two_samplings_of_one_square_agree_to_nothing(self) -> None:
+        # Point-to-polyline, not point-to-point: the same square sampled at
+        # different places along its edges is the same square.
+        coarse = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        fine = [
+            (x, y)
+            for x, y in (
+                (0.0, 0.0), (3.0, 0.0), (10.0, 0.0), (10.0, 7.0),
+                (10.0, 10.0), (1.0, 10.0), (0.0, 10.0), (0.0, 4.0),
+            )
+        ]
+        self.assertAlmostEqual(0.0, ms.hausdorff(coarse, fine), places=12)
+
+    def test_a_shrunken_square_reports_how_far_it_moved(self) -> None:
+        # Symmetric, and the corners are what set it: every inner point is 1 mm
+        # from the outer boundary, but the outer *corner* is sqrt(2) from the
+        # inner one, and a one-way distance would report the smaller number.
+        outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        inner = [(1.0, 1.0), (9.0, 1.0), (9.0, 9.0), (1.0, 9.0)]
+        self.assertAlmostEqual(math.sqrt(2.0), ms.hausdorff(outer, inner), places=12)
+        self.assertEqual(ms.hausdorff(outer, inner), ms.hausdorff(inner, outer))
+
+    def test_a_count_mismatch_is_a_disagreement_without_a_distance(self) -> None:
+        square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        verdict = ms.congruence([square], [square, square], tolerance=1.0)
+        self.assertFalse(verdict["agrees"])
+        self.assertIn("loop counts differ", verdict["reason"])
+        self.assertIsNone(verdict["worst_hausdorff"])
+
+
+class SlabStackContinuityTests(unittest.TestCase):
+    """What the planner does when one slab does not hold its own measurement.
+
+    A gated slab at either end is simply not built and the rest still stack. A
+    gated slab *between* two that survive leaves a positive axial gap: the
+    surviving groups no longer touch, so a `join` would ask Fusion to fuse a
+    body nowhere near the one it names, and `_plan_holes` -- which folds the
+    stack into one span from min(lo) to max(hi) -- would read a bore lying
+    inside the gap as contained. The single extrude spans the whole part and is
+    still true, so it stands.
+
+    The decomposition itself is measured on real meshes elsewhere; what is
+    under test here is the planner's response to a gate, so `decompose` is
+    replaced by a three-slab answer with the gates placed by hand.
+    """
+
+    def _slab(self, index, gated):
+        low = index * 4.0
+        return {
+            "index": index,
+            "lower_event": index,
+            "upper_event": index + 1,
+            "station_lo": low,
+            "station_hi": low + 4.0,
+            "height": 4.0,
+            "section_station": low + 2.0,
+            "constancy": {
+                "constant": True,
+                "tolerance": 0.05,
+                "fractions": [0.25, 0.75],
+                "checks": [],
+            },
+            "winding": {"closed": True},
+            "loops": [],
+            "gates": ["slab-section-inconstant"] if gated else [],
+            "relation_to_below": "first" if index == 0 else "same-outline",
+        }
+
+    def _plan(self, gated):
+        from unittest.mock import patch
+
+        decomposition = {
+            "usable": True,
+            "gate": None,
+            "detail": None,
+            "events": [{"members": []} for _ in range(4)],
+            "coalesced_events": [],
+            "slabs": [self._slab(index, index in gated) for index in range(3)],
+            "declared": {},
+        }
+        frame = rp.derive_datum_frame(
+            [region for region in parse_fit_record(two_bores()).regions if region.accepted],
+            frame_margin=0.1,
+            angle_tolerance_deg=2.0,
+            offset_tolerance=0.5,
+            sigma_multiple=3.0,
+        )
+        groups = [{"id": "sketch-extrude-base", "kind": "sketch-extrude", "regions": []}]
+        with patch.object(rp.mesh_slabs, "decompose", return_value=decomposition):
+            record = rp._plan_slabs(
+                groups,
+                [],
+                frame,
+                "XY",
+                {"slab_constancy_tolerance_mm": 0.05},
+                ([], []),
+                None,
+                set(),
+                {"rule": "datum-primary-axis"},
+                2.0,
+            )
+        return groups, record
+
+    def test_a_gate_on_the_top_slab_leaves_the_stack_below_it_standing(self) -> None:
+        groups, record = self._plan({2})
+        self.assertTrue(record["usable"])
+        self.assertIsNone(record["gate"])
+        self.assertEqual(2, len(groups))
+        self.assertEqual(["new-body", "join"], [group["operation"] for group in groups])
+        self.assertEqual([[], [groups[0]["id"]]], [group["dependencies"] for group in groups])
+
+    def test_a_gate_between_two_surviving_slabs_refuses_the_decomposition(self) -> None:
+        groups, record = self._plan({1})
+        self.assertFalse(record["usable"])
+        self.assertEqual("slab-stack-discontinuous", record["gate"])
+        self.assertIn("slab-stack-discontinuous", ms.SLAB_GATES)
+        self.assertIn("would fuse nothing", record["detail"])
+        # The single extrude the caller planned is untouched, and no region is
+        # taken away from it: the gap is a reason not to decompose, not a
+        # reason to stop claiming the material.
+        self.assertEqual(1, len(groups))
+        self.assertEqual("sketch-extrude-base", groups[0]["id"])
+        self.assertEqual({}, record["_gated"])
 
 
 if __name__ == "__main__":

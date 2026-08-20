@@ -478,7 +478,7 @@ class MeshWindingEvidenceTests(unittest.TestCase):
         self.assertFalse(winding["closed"])
         self.assertEqual(3, winding["boundary_edges"])
         self.assertIsNone(winding["winding"])
-        self.assertIn("not closed", winding["unavailable_reason"])
+        self.assertIn("hole in it", winding["unavailable_reason"])
 
     def test_one_flipped_triangle_is_reported_as_a_reversal_not_a_hole(self) -> None:
         tris = list(BOX_TRIS)
@@ -488,6 +488,27 @@ class MeshWindingEvidenceTests(unittest.TestCase):
         self.assertEqual(0, winding["non_manifold_edges"])
         self.assertEqual(3, winding["reversed_edges"])
         self.assertFalse(winding["consistently_wound"])
+
+    def test_a_self_touch_keeps_the_direction_and_names_the_triangles_on_it(self) -> None:
+        # A duplicated triangle: three edges now carry three incident triangles.
+        # The surface has no *hole* in it, so it still encloses its volume and
+        # the winding direction still means something -- and the triangles that
+        # touch the dirt are named so a loop can be judged on whether its own
+        # walls are among them.
+        tris = list(BOX_TRIS) + [BOX_TRIS[0]]
+        winding = mesh_winding_evidence(BOX_VERTS, tris)
+        self.assertFalse(winding["closed"])
+        self.assertEqual(0, winding["boundary_edges"])
+        self.assertEqual(3, winding["non_manifold_edges"])
+        self.assertEqual("outward", winding["winding"])
+        self.assertIsNone(winding["unavailable_reason"])
+        self.assertIn(0, winding["non_manifold_triangles"])
+        self.assertIn(len(BOX_TRIS), winding["non_manifold_triangles"])
+        # And the clean faces are not swept up with them.
+        self.assertLess(len(winding["non_manifold_triangles"]), len(tris))
+
+    def test_a_clean_mesh_names_no_dirty_triangles(self) -> None:
+        self.assertEqual((), mesh_winding_evidence(BOX_VERTS, BOX_TRIS)["non_manifold_triangles"])
 
     def test_an_unwelded_dump_is_welded_by_position_before_the_edges_are_counted(self) -> None:
         # Triangle soup: every triangle carries its own copy of each corner,
@@ -529,6 +550,79 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         self.assertEqual(outward["verdict"], inward["verdict"])
         self.assertEqual(outward["consensus_fraction"], inward["consensus_fraction"])
 
+    def test_two_shells_joined_at_an_edge_carry_no_one_global_winding(self) -> None:
+        """One sign is a claim about one solid, and a shared edge makes two.
+
+        Two closed shells wound opposite ways and touching at an edge have no
+        boundary edge between them, so the total signed volume simply takes the
+        larger one's sign -- and every clean loop on the smaller shell is then
+        flipped, swapping its material verdicts. A solid with an internal void
+        is also two shells of opposite sign, but they are *disjoint*, and that
+        one is one solid and must keep its winding.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        # The void: disjoint shells, opposite signs, still one solid.
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, reversed_tris(BOX_TRIS)))
+        void = mesh_winding_evidence(verts, tris)
+        self.assertEqual(0, void["non_manifold_edges"])
+        self.assertEqual("outward", void["winding"])
+
+        # Two shells sharing a face, and so its four edges: every one of them
+        # carries four triangles and is non-manifold, and the two shells are
+        # separate components over what is left.
+        beside = [(x + 1.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (beside, reversed_tris(BOX_TRIS)))
+        touching = mesh_winding_evidence(verts, tris)
+        self.assertGreater(touching["non_manifold_edges"], 0)
+        self.assertFalse(touching["shells_agree"])
+        self.assertIsNone(touching["winding"])
+
+    def test_dirt_on_one_shell_does_not_join_a_void_to_its_solid(self) -> None:
+        """Per-edge locality, at shell level: dirt joins what it touches.
+
+        A box with an internal void is two disjoint shells of opposite sign and
+        one correctly wound solid. Duplicating a facet of the *outer* box makes
+        that facet's edges non-manifold -- and a global "any dirt at all" test
+        then read the void's inward sign as a second solid, threw the winding
+        away, and left even the clean cavity loop `unavailable`. The dirty edge
+        joins nothing to the void, so the two shells are compared apart.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        inner = scaled(BOX_VERTS, 0.5)
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (inner, reversed_tris(BOX_TRIS)))
+        clean = mesh_winding_evidence(verts, tris)
+        self.assertEqual("outward", clean["winding"])
+        dirty = mesh_winding_evidence(verts, list(tris) + [tris[0]])
+        self.assertGreater(dirty["non_manifold_edges"], 0)
+        self.assertTrue(dirty["shells_agree"])
+        self.assertEqual("outward", dirty["winding"])
+
+    def test_a_duplicated_facet_away_from_the_origin_keeps_the_winding(self) -> None:
+        """A component that encloses nothing must not vote on the sign.
+
+        Two coincident triangles wound the same way share every edge, so the
+        mesh is neither open nor non-manifold -- and their doubled tetrahedron
+        term carries a sign of its own, which away from the origin disagrees
+        with the solid's and withdrew the whole mesh's winding. At the origin
+        the term is zero, which is why this went unseen. The duplicate is
+        still counted where it belongs: the mesh is not consistently wound.
+        """
+        from fusion_design.mesh_fitting import mesh_winding_evidence
+
+        stray = [(x + 5.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (stray, [BOX_TRIS[0], BOX_TRIS[0]]))
+        evidence = mesh_winding_evidence(verts, tris)
+        self.assertEqual(0, evidence["boundary_edges"])
+        self.assertEqual(0, evidence["non_manifold_edges"])
+        self.assertTrue(evidence["shells_agree"])
+        self.assertEqual("outward", evidence["winding"])
+        # And the duplicate is not swept under the rug.
+        self.assertGreater(evidence["reversed_edges"], 0)
+        self.assertFalse(evidence["consistently_wound"])
+
     def test_a_cavity_reads_as_material_outside_its_own_loop(self) -> None:
         # A closed shell with a void: the outer box wound outward, an inner box
         # wound inward. That is what a solid with an internal cavity *is* as a
@@ -568,6 +662,24 @@ class LoopMaterialEvidenceTests(unittest.TestCase):
         tris[flipped] = tuple(reversed(tris[flipped]))
         loose = evidence_at(BOX_VERTS, tris, consensus_fraction=0.5)["loops"][0]
         self.assertEqual("material-inside", loose["verdict"])
+
+    def test_dirt_on_one_body_costs_the_other_bodys_loop_nothing(self) -> None:
+        # Two boxes side by side, one of them with a duplicated triangle. The
+        # mesh as a whole is not closed, so the old whole-mesh licence refused
+        # both loops; the dirt is on one of them, so only that one refuses now.
+        far = [(x + 4.0, y, z) for x, y, z in BOX_VERTS]
+        verts, tris = combine((BOX_VERTS, BOX_TRIS), (far, BOX_TRIS))
+        tris = list(tris) + [tris[0]]
+        evidence = evidence_at(verts, tris)
+        self.assertFalse(evidence["winding"]["closed"])
+        self.assertEqual(0, evidence["winding"]["boundary_edges"])
+        self.assertEqual("outward", evidence["winding"]["winding"])
+        loops = sorted(evidence["loops"], key=lambda row: row["verdict"])
+        self.assertEqual(["material-inside", "unavailable"], [r["verdict"] for r in loops])
+        self.assertEqual([], loops[0]["dirty_wall_triangles"])
+        self.assertEqual(1.0, loops[0]["consensus_fraction"])
+        self.assertTrue(loops[1]["dirty_wall_triangles"])
+        self.assertEqual(["loop-orientation-unavailable"], loops[1]["gates"])
 
     def test_a_torn_mesh_makes_every_loop_unavailable_by_name(self) -> None:
         evidence = evidence_at(BOX_VERTS, BOX_TRIS[:-1])
