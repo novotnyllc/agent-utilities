@@ -33,6 +33,7 @@ Read the reference files beside this skill before substantial work:
 - `references/mesh-reconstruction.md` before any work on a scanned or downloaded mesh
 - `references/capability-matrix.md` when translating a Nurb-style request
 - `references/unsupported.md` before promising a capability
+- `references/model-routing.md` when dispatching or choosing a model for skill work
 
 For commands below, resolve `SKILL_DIR` to the directory containing this
 `SKILL.md`; the installed skill may not be the current project directory.
