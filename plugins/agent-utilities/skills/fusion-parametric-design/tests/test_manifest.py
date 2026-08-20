@@ -39,10 +39,10 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual("Designs/Pods", Manifest.from_data(data).document_folder)
         self.assertEqual("", load_manifest(EXAMPLE).document_folder)
 
-        for blank in ("", "   "):
-            data["project"]["document_folder"] = blank
+        for invalid in ("", "   ", "/Designs/", "Designs//Pods", "Designs/ /Pods"):
+            data["project"]["document_folder"] = invalid
             issues = validate_manifest_data(data)
-            self.assertIn("project-field-invalid", {issue.code for issue in issues}, repr(blank))
+            self.assertIn("project-field-invalid", {issue.code for issue in issues}, repr(invalid))
 
     def test_parameter_role_requires_prefix(self) -> None:
         data = copy.deepcopy(self.data)

@@ -375,12 +375,19 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             )
     if "document_folder" in project:
         document_folder = project.get("document_folder")
-        if not isinstance(document_folder, str) or not document_folder.strip():
+        # Segments are validated here rather than silently dropped later: the
+        # emitter walks exactly what the manifest declares, so "/Designs/" or
+        # "Designs//Pods" would save somewhere other than what was written.
+        if (
+            not isinstance(document_folder, str)
+            or not document_folder.strip()
+            or any(not segment.strip() for segment in document_folder.split("/"))
+        ):
             issues.append(
                 ValidationIssue(
                     "project-field-invalid",
                     "project.document_folder",
-                    "Project field 'document_folder' must be a non-empty string when present.",
+                    "Project field 'document_folder' must be a '/'-separated folder path with non-empty segments.",
                 )
             )
 
