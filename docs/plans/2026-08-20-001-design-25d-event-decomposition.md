@@ -767,15 +767,24 @@ rule ("each slab depends on its predecessor — join needs a body") is
 superseded accordingly: dependencies follow track edges.
 
 The slab record carries the graph into emission: `track_id`,
-`track_predecessor` (null at `birth`) and `track_state` (§A.1's closed set)
+`track_predecessors` (a list serializing **every** incoming edge — empty at
+`birth`, one element for `continuation` and for each `branch` successor,
+one per merging track at `merge`) and `track_state` (§A.1's closed set)
 join the schema, and §C's "slab 0 is `new-body`, every later slab `join`" is
 superseded — the emitted operation derives from track state: `birth` →
 `new-body`; `continuation` → `join` into the track's body; `merge` → `join`
-of the evidenced-contact bodies, which thereafter share one track body;
-`branch` → each successor keeps joining the shared body; `death` ends the
-track's dependencies. Temporary multiple bodies between `birth` and `merge`
-are the designed emission state, so the emitter can encode every valid track
-graph the planner produces.
+of **all** evidenced-contact predecessor bodies named in
+`track_predecessors`, which thereafter share one track body; `branch` →
+each successor keeps joining the shared body; `death` ends the track's
+dependencies; `temporary-disconnection` → the track **suspends**: no
+operation is emitted for the gap stations, the track's body identity
+persists, and the resuming slab depends on the track's last emitted slab
+and joins the track body only when contact is evidenced at the resumption
+section (the §A.1 merge rule applied to the track's own body) — otherwise
+the resumption is a `birth` plus a later evidenced `merge`, or the
+cause-specific refusal, never a silent bridge. Temporary multiple bodies
+between `birth` and `merge` are the designed emission state, so the emitter
+can encode every valid track graph the planner produces.
 
 ## A.2 Event states, separated; loop correspondence defined (finding 5 tail; missing decision 17, decided)
 
