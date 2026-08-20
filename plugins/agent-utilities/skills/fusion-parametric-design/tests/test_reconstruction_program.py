@@ -1371,6 +1371,80 @@ class HausdorffTests(unittest.TestCase):
         self.assertIsNone(verdict["worst_hausdorff"])
 
 
+class StationObservableTests(unittest.TestCase):
+    """Which observable a station moves is measured, not assumed.
+
+    Coalescing establishes that two adjacent sections are not *congruent*.
+    That is weaker than "different area": two different shapes of equal area
+    leave the total volume exactly unchanged when the station between them
+    moves, so declaring `volume` there makes the perturbation proof report a
+    correct station as `parameter-inert`.
+    """
+
+    def _stack(self, upper_area):
+        groups = []
+        for index, (low, high, area) in enumerate(
+            ((0.0, 4.0, 100.0), (4.0, 8.0, upper_area))
+        ):
+            lower, upper = f"recon_station_{index}", f"recon_station_{index + 1}"
+            groups.append(
+                {
+                    "id": f"sketch-extrude-s{index}",
+                    "kind": "sketch-extrude",
+                    "operation": "join",
+                    "regions": [],
+                    "plane": {"datum_plane": "XY", "offset": low, "rotation": None},
+                    "extent": {"kind": "distance", "parameter": None, "value": high - low},
+                    "slab": {
+                        "index": index,
+                        "of": 2,
+                        "station_parameters": [lower, upper],
+                        "extent_expression": f"{upper} - {lower}",
+                        "loops": [{"role": "outer", "signed_area_mm2": area}],
+                    },
+                }
+            )
+        return {
+            row["name"]: row
+            for row in rp._user_parameters(groups, [], "mm")
+            if row["quantity"] == "position"
+        }
+
+    def test_sections_of_different_area_move_the_volume(self) -> None:
+        stations = self._stack(60.0)
+        self.assertEqual("volume", stations["recon_station_1"]["expected_observable"])
+        self.assertIn("100 and 60 mm2", stations["recon_station_1"]["observable_rationale"])
+
+    def test_sections_of_equal_area_move_the_centroid_and_not_the_volume(self) -> None:
+        stations = self._stack(100.0)
+        interior = stations["recon_station_1"]
+        self.assertEqual("centroid", interior["expected_observable"])
+        self.assertIn("leaving the volume exactly unchanged", interior["observable_rationale"])
+        # And the honest caveat is on the record rather than left to be found.
+        self.assertIn("report this station inert", interior["observable_rationale"])
+
+    def test_an_outermost_station_still_moves_the_volume(self) -> None:
+        for upper_area in (60.0, 100.0):
+            stations = self._stack(upper_area)
+            for name in ("recon_station_0", "recon_station_2"):
+                self.assertEqual("volume", stations[name]["expected_observable"])
+
+    def test_a_cavity_is_subtracted_from_the_section_it_sits_in(self) -> None:
+        # The material area, not the outer boundary's: two slabs whose outer
+        # loops differ but whose material areas agree do not move the volume.
+        slab = {
+            "loops": [
+                {"role": "outer", "signed_area_mm2": 100.0},
+                {"role": "cavity", "signed_area_mm2": -30.0},
+                {"role": "island", "signed_area_mm2": 5.0},
+                # A bore is cut by its own feature, ordered after this extrude,
+                # so this section still draws the material it sits in.
+                {"role": "bore", "signed_area_mm2": 9.0},
+            ]
+        }
+        self.assertAlmostEqual(75.0, rp._section_material_area(slab))
+
+
 class SlabStackContinuityTests(unittest.TestCase):
     """What the planner does when one slab does not hold its own measurement.
 

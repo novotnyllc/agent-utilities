@@ -2149,6 +2149,24 @@ OBSERVABLE_FOR_QUANTITY = {
 OBSERVABLES = {"volume", "centroid", "bbox"}
 
 
+def _section_material_area(slab: Mapping[str, Any]) -> float:
+    """The material area of one slab's own section, from its classified loops.
+
+    Outer boundaries and islands add, cavities subtract. Bores are absent on
+    purpose: each is a hole feature this program cuts separately, ordered after
+    the extrude, so the section this slab draws still has them filled.
+    """
+    total = 0.0
+    for loop in slab.get("loops") or ():
+        role = loop.get("role")
+        area = abs(float(loop.get("signed_area_mm2") or 0.0))
+        if role in ("outer", "island"):
+            total += area
+        elif role == "cavity":
+            total -= area
+    return total
+
+
 def _user_parameters(
     groups: Sequence[Mapping[str, Any]],
     adoptions: Sequence[Mapping[str, Any]],
@@ -2204,23 +2222,50 @@ def _user_parameters(
             upper, float(group["plane"]["offset"]) + float(group["extent"]["value"])
         )
     for name in sorted(stations, key=lambda key: (stations[key], key)):
+        # Which observable moves is *measured*, not assumed. An outermost
+        # station moves one slab's height alone, so the volume moves with it.
+        # An interior one grows one slab and shrinks the other, and the volume
+        # moves only if their sections differ in area. Coalescing establishes
+        # that adjacent sections are not *congruent*, which is weaker: two
+        # different shapes of equal area leave the total volume exactly
+        # unchanged, and declaring `volume` there makes the perturbation proof
+        # report a correct station as `parameter-inert`.
+        below = next((g for g in stack if g["slab"]["station_parameters"][1] == name), None)
+        above = next((g for g in stack if g["slab"]["station_parameters"][0] == name), None)
+        if below is None or above is None:
+            observable = "volume"
+            observable_rationale = (
+                "An outermost station bounds one slab only, so moving it changes that slab's "
+                "height and the solid's volume with it."
+            )
+        elif _section_material_area(below["slab"]) != _section_material_area(above["slab"]):
+            observable = "volume"
+            observable_rationale = (
+                "This station separates sections of "
+                f"{_section_material_area(below['slab']):.6g} and "
+                f"{_section_material_area(above['slab']):.6g} mm2, so moving it grows one slab and "
+                "shrinks the other by different amounts and the solid's volume moves."
+            )
+        else:
+            observable = "centroid"
+            observable_rationale = (
+                "This station separates two sections of the same measured area "
+                f"({_section_material_area(below['slab']):.6g} mm2) and different shape -- "
+                "coalescing established only that they are not congruent. Moving it therefore "
+                "trades material of one shape for material of the other at the same rate, leaving "
+                "the volume exactly unchanged and moving the centroid. Should those two shapes "
+                "also share a centroid, no observable in this vocabulary moves and the proof will "
+                "report this station inert: that is a fact about the part, not a fault in the "
+                "parameter."
+            )
         parameters.append(
             {
                 "name": name,
                 "quantity": "position",
                 "unit": units,
                 "nominal": stations[name],
-                # Not `centroid`: a station bounds a slab, so moving it changes
-                # that slab's height and therefore how much material the stack
-                # holds. Coalescing removed the equal-cross-section case, so
-                # adjacent slabs differ by construction and the volume moves.
-                "expected_observable": "volume",
-                "observable_rationale": (
-                    "This station is a boundary between two slabs of different cross-section, so "
-                    "moving it grows one and shrinks the other by different amounts and the "
-                    "solid's volume moves. An outermost station moves one slab's height alone, "
-                    "which moves volume too."
-                ),
+                "expected_observable": observable,
+                "observable_rationale": observable_rationale,
                 "rationale": (
                     "event station on the datum primary axis, merged from the accepted plane "
                     "fits at this boundary and the side regions' spans that end there."

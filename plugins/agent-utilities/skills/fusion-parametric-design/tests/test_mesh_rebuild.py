@@ -22,6 +22,7 @@ from fusion_design.mesh_dump import MeshDumpError
 from fusion_design.mesh_rebuild import (
     EMITTED_KINDS,
     _clip_half,
+    _constraint_schedule,
     _require_chained,
     emit_mesh_rebuild_script,
     plan_emission,
@@ -570,10 +571,161 @@ class SpecValidationTests(unittest.TestCase):
         codes = {issue.code for issue in validate_rebuild_spec(spec)}
         self.assertIn("threshold-invalid-value", codes)
 
+    def test_a_fractional_loop_budget_is_rejected_rather_than_floored(self):
+        # The budget counts loops and `int()` floors it at the point of use: a
+        # declared 2.9 would enforce 2 and a declared 0.5 would refuse every
+        # sketch, so the spec would say one number and the gate apply another.
+        for value in (2.9, 0.5):
+            with self.subTest(value=value):
+                spec = fx.rebuild_spec("dump.bin")
+                spec["thresholds"]["sketch_loop_budget"] = {
+                    "value": value,
+                    "rationale": "fixture budget",
+                }
+                issues = validate_rebuild_spec(spec)
+                self.assertIn("threshold-invalid-value", {issue.code for issue in issues})
+                self.assertTrue(
+                    any(issue.path.endswith("sketch_loop_budget.value") for issue in issues),
+                    [issue.path for issue in issues],
+                )
+        # A whole number expressed as a float is still a whole number.
+        spec = fx.rebuild_spec("dump.bin")
+        spec["thresholds"]["sketch_loop_budget"] = {"value": 8.0, "rationale": "fixture budget"}
+        self.assertEqual([], validate_rebuild_spec(spec))
+
     def test_unknown_threshold_keys_are_rejected(self):
         spec = fx.rebuild_spec("dump.bin")
         spec["thresholds"]["fudge"] = fx.threshold(1.0)
         self.assertTrue(validate_rebuild_spec(spec))
+
+
+class MultiLoopSketchTests(unittest.TestCase):
+    """A sketch holding several loops is several closed contours, not one long one."""
+
+    @classmethod
+    def setUpClass(cls):
+        manifest = build_manifest()
+        cls.directory = tempfile.TemporaryDirectory()
+        dump = fx.box_dump()
+        path = Path(cls.directory.name) / "mesh.bin"
+        path.write_bytes(_dump_bytes(dump))
+        cls.source = emit_mesh_rebuild_script(
+            manifest,
+            classification_record(),
+            source_record(manifest),
+            fx.program(dump.sha256, manifest_sha256=_manifest_hash(manifest)),
+            fx.rebuild_spec(str(path)),
+            NONCE,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def _namespace(self):
+        return fakes.load_transaction(self.source, fakes.make_design(), "unused")
+
+    @staticmethod
+    def _square(loop, x0, y0, side):
+        corners = [
+            (x0, y0), (x0 + side, y0), (x0 + side, y0 + side), (x0, y0 + side)
+        ]
+        rows = []
+        for index, start in enumerate(corners):
+            end = corners[(index + 1) % len(corners)]
+            row = {
+                "kind": "line",
+                "start_cm": list(start),
+                "end_cm": list(end),
+                "start_mm": [value * 10.0 for value in start],
+                "end_mm": [value * 10.0 for value in end],
+                "residual_mm": 0.0,
+            }
+            if loop is not None:
+                row["loop"] = loop
+            rows.append(row)
+        return rows
+
+    def test_each_loop_closes_onto_its_own_start_not_the_previous_loop_s(self):
+        """The chaining bug this test exists for, stated as identity of points.
+
+        Flattened, one `previous_end` and one `first_start` served every loop:
+        the first edge of each later loop began at the preceding loop's
+        endpoint, and the final edge closed onto the *first* loop's start. That
+        is one bridged, open chain where the plan wanted two closed ones.
+        """
+        namespace = self._namespace()
+        design = fakes.make_design()
+        sketch = fakes.FakeSketch(design, None, {})
+        step = {"entities": self._square(0, 0.0, 0.0, 4.0) + self._square(1, 1.0, 1.0, 1.0)}
+        curves = namespace["_build_entities"](sketch, step, [])
+        self.assertEqual(8, len(curves))
+        for first, last in ((0, 3), (4, 7)):
+            with self.subTest(loop=first // 4):
+                # The loop closes: its last curve ends on the very point its
+                # first curve starts from, the same object Fusion shares.
+                self.assertIs(curves[first].startSketchPoint, curves[last].endSketchPoint)
+                # And it is chained through: every edge starts where the last ended.
+                for index in range(first, last):
+                    self.assertIs(curves[index].endSketchPoint, curves[index + 1].startSketchPoint)
+        # Nothing bridges the two: loop 1 does not begin on loop 0's endpoint.
+        self.assertIsNot(curves[3].endSketchPoint, curves[4].startSketchPoint)
+
+    def test_a_single_loop_step_carries_no_loop_key_and_is_unchanged(self):
+        namespace = self._namespace()
+        sketch = fakes.FakeSketch(fakes.make_design(), None, {})
+        curves = namespace["_build_entities"](
+            sketch, {"entities": self._square(None, 0.0, 0.0, 4.0)}, []
+        )
+        self.assertEqual(4, len(curves))
+        self.assertIs(curves[0].startSketchPoint, curves[3].endSketchPoint)
+
+    def test_the_constraint_schedule_does_not_wrap_out_of_one_loop_into_the_next(self):
+        """Layer 1c's junction pairing, which wrapped over the flattened list.
+
+        Each entity is paired with the one that follows it, wrapping at the
+        end. Flattened, "the end" was the end of the *whole* list, so the last
+        entity of one contour was paired with the first of the next -- two
+        entities sharing no point -- and only the final loop ever had its own
+        closing junction checked. The fixture puts an arc at the end of loop 0
+        and a perpendicular line at the start of loop 1, which is exactly the
+        pair that used to produce a tangent across the boundary.
+        """
+        def line(loop, start, end):
+            return {
+                "kind": "line",
+                "loop": loop,
+                "start_mm": list(start),
+                "end_mm": list(end),
+                "residual_mm": 0.0,
+            }
+
+        entities = [
+            # Loop 0: a line running up from the arc's own endpoint, then the arc.
+            line(0, (10.0, 0.0), (10.0, 6.0)),
+            {
+                "kind": "arc",
+                "loop": 0,
+                "start_mm": [10.0, 6.0],
+                "end_mm": [10.0, 0.0],
+                "center_mm": [0.0, 0.0],
+                "radius_mm": 10.0,
+                "residual_mm": 0.0,
+            },
+            # Loop 1, elsewhere entirely, whose first entity happens to be
+            # perpendicular to loop 0's arc radius at that arc's endpoint.
+            line(1, (40.0, 0.0), (40.0, 5.0)),
+            line(1, (40.0, 5.0), (45.0, 5.0)),
+        ]
+        schedule = _constraint_schedule(entities, fx.rebuild_spec("dump.bin")["thresholds"])
+        for entry in schedule:
+            loops = {entities[index].get("loop") for index in entry["entities"]}
+            self.assertEqual(1, len(loops), entry)
+        # The fixture bites: the junction that *is* real, inside loop 0, is
+        # found -- so the absence above is the boundary being respected rather
+        # than layer 1c never firing at all.
+        tangents = [entry["entities"] for entry in schedule if entry["kind"] == "tangent"]
+        self.assertEqual([[1, 0]], tangents, schedule)
 
 
 class EmittedSourceTests(unittest.TestCase):

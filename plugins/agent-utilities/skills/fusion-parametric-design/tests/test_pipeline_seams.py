@@ -1393,6 +1393,49 @@ class SlabEmissionSeamTests(unittest.TestCase):
         report, error = run_transaction(source, design, manifest.fusion_document)
         self.assertIsNotNone(report, error)
 
+    def test_a_boundary_moved_by_an_accepted_snap_still_matches_its_planned_region(self) -> None:
+        """The plan's regions come from the section; the sketch has moved since.
+
+        Every constraint this transaction accepts is allowed to move the
+        geometry by up to the declared `constraint_displacement_tolerance_mm`,
+        so Fusion enumerates profiles of a contour that legitimately differs
+        from the one the plan measured. The area that moves with a displaced
+        boundary is the displacement times the boundary's *length* -- so a
+        window scaled only by the square root of area refuses a profile set the
+        transaction itself asked for, and the longer and thinner the region the
+        worse it gets.
+        """
+        dump = fx.nested_shells_dump()
+        manifest, program, plan, source = self._chain(dump, ts.spec(min_feature_size=8.0))
+        extrudes = [s for s in plan["steps"] if s["kind"] == "sketch-extrude"]
+        displacement = 0.05 * 0.1  # the fixture's declared tolerance, in cm
+        moved = {}
+        widened = False
+        for step in extrudes:
+            if not step["profile_set"]:
+                # A single-loop step resolves its profile by the largest-area
+                # rule and never reaches the matcher; leaving it to the double's
+                # default is what the other seam tests here already do.
+                continue
+            rows = []
+            for row in step["profile_set"]:
+                # Every planned region carries the boundary a snap may move.
+                self.assertGreater(row["perimeter_cm"], 0.0)
+                offset = displacement * row["perimeter_cm"] * 0.9
+                old_window = 0.1 * 0.1 * max(1.0, abs(row["area_cm2"]) ** 0.5)
+                widened = widened or offset > old_window
+                rows.append(dict(row, area_cm2=row["area_cm2"] + offset))
+            moved[step["sketch_name"]] = rows
+        # At least one region's honest displacement exceeds the window the old
+        # square-root-of-area rule allowed, or this fixture proves nothing.
+        self.assertTrue(widened)
+        report, error = run_transaction(
+            source,
+            fakes.make_design(behaviour={"profile_regions": moved}),
+            manifest.fusion_document,
+        )
+        self.assertIsNone(error, report)
+
     def test_a_profile_fusion_does_not_enumerate_refuses_rather_than_guessing(self) -> None:
         # The doubles report an enumeration the plan cannot account for. The
         # largest-area rule would have extruded whatever was biggest; the

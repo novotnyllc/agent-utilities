@@ -382,6 +382,26 @@ def validate_rebuild_spec(spec: Any) -> list[ValidationIssue]:
             thresholds.get("constraint_rejection_budget"),
             "rebuild_spec.thresholds.constraint_rejection_budget",
         )
+        # A budget counts loops, and `int()` at the point of use floors it: a
+        # declared 2.9 would enforce 2 and a declared 0.5 would refuse every
+        # sketch, so the spec would say one number and the gate would apply
+        # another. Rejected here rather than rounded anywhere.
+        declared_budget = thresholds.get("sketch_loop_budget")
+        budget_value = declared_budget.get("value") if isinstance(declared_budget, dict) else None
+        if (
+            isinstance(budget_value, (int, float))
+            and not isinstance(budget_value, bool)
+            and float(budget_value) != int(budget_value)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "threshold-invalid-value",
+                    "rebuild_spec.thresholds.sketch_loop_budget.value",
+                    "This budget counts loops, so it must be a whole number; a fractional one is "
+                    "floored at the point of use and the gate then enforces a limit the spec does "
+                    "not declare.",
+                )
+            )
     rationale = spec.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         issues.append(
@@ -939,6 +959,9 @@ def _slab_profile(
                 "hole_loops": region["hole_loops"],
                 "material": region["material"],
                 "area_mm2": region["area_mm2"],
+                # The boundary an accepted snap is licensed to move, so the
+                # executor's profile match can allow the area that moves with it.
+                "perimeter_mm": region["perimeter_mm"],
                 "centroid_mm": list(region["centroid_mm"]),
             }
             for region in regions
@@ -1217,7 +1240,19 @@ def _constraint_schedule(
     # Layer 1c: tangency at line-arc junctions, measured at the shared endpoint.
     count = len(entities)
     for index, entity in enumerate(entities):
+        loop = entity.get("loop")
         following_index = (index + 1) % count
+        if entities[following_index].get("loop") != loop:
+            # Wrap inside this entity's own loop. Flattened, the entity after
+            # the last of one contour is the first of the *next* one, and the
+            # two share no endpoint: a tangent constraint between them would
+            # bend an unrelated contour, and only the final loop would ever get
+            # its own closing junction checked.
+            following_index = next(
+                other for other in range(count) if entities[other].get("loop") == loop
+            )
+        if following_index == index:
+            continue
         following = entities[following_index]
         if count < 2 or {entity["kind"], following["kind"]} != {"line", "arc"}:
             continue
@@ -1917,6 +1952,9 @@ def plan_emission(
                     "hole_loops": list(region["hole_loops"]),
                     "material": region["material"],
                     "area_cm2": region["area_mm2"] * MM_TO_CM * MM_TO_CM,
+                    # The boundary an accepted snap is allowed to move, so the
+                    # executor can allow the area that moves with it.
+                    "perimeter_cm": region.get("perimeter_mm", 0.0) * MM_TO_CM,
                     "centroid_cm": [value * MM_TO_CM for value in region["centroid_mm"]],
                 }
                 for region in evidence.get("profile_set", ())
@@ -2151,8 +2189,23 @@ def _build_entities(sketch, step, missing):
     created = []
     previous_end = None
     first_start = None
+    # Not None: a single-loop step carries no `loop` key at all, and `None` is
+    # the loop it is then in. Starting from a sentinel makes the first entity
+    # open a loop in both cases.
+    current_loop = "no-loop-yet"
     entities = step["entities"]
     for index, entity in enumerate(entities):
+        loop = entity.get("loop")
+        if loop != current_loop:
+            # Each loop is its own closed contour. Carrying `previous_end`
+            # across a boundary starts the next loop at the previous one's
+            # endpoint and closes the last loop onto the *first* loop's start:
+            # one bridged open chain where the sketch wanted several closed
+            # ones, which either trips `profile-set-mismatch` or extrudes
+            # geometry nobody planned.
+            current_loop = loop
+            previous_end = None
+            first_start = None
         kind = entity["kind"]
         if kind == "circle":
             centre = entity["center_cm"]
@@ -2162,7 +2215,7 @@ def _build_entities(sketch, step, missing):
         start = previous_end if previous_end is not None else _point(
             entity["start_cm"][0], entity["start_cm"][1]
         )
-        last = index == len(entities) - 1
+        last = index == len(entities) - 1 or entities[index + 1].get("loop") != loop
         end = first_start if (last and first_start is not None) else _point(
             entity["end_cm"][0], entity["end_cm"][1]
         )
@@ -2273,6 +2326,16 @@ def _profile_set(sketch, step, planned):
     """
     profiles = sketch.profiles
     tolerance = float(PLAN["thresholds"]["entity_match_tolerance_mm"]["value"]) * 0.1
+    # The plan's regions come from the *section*, and the constraints this
+    # transaction then accepts are allowed to move that geometry by up to the
+    # declared displacement tolerance -- so Fusion is enumerating profiles of a
+    # contour that has legitimately moved since. The area that moves with a
+    # displaced boundary is the displacement times the boundary's own length,
+    # which scales with perimeter rather than with the square root of area: on a
+    # long thin region, allowing only the latter refuses a profile set this
+    # transaction itself asked for. Both allowances are the caller's declared
+    # numbers; neither is widened beyond what was accepted.
+    displacement = float(PLAN["thresholds"]["constraint_displacement_tolerance_mm"]["value"]) * 0.1
     found = []
     for index in range(profiles.count):
         candidate = profiles.item(index)
@@ -2300,8 +2363,12 @@ def _profile_set(sketch, step, planned):
             gap = (
                 (entry["centroid"][0] - want[0]) ** 2 + (entry["centroid"][1] - want[1]) ** 2
             ) ** 0.5
-            if gap <= tolerance and abs(entry["area"] - region["area_cm2"]) <= tolerance * max(
-                1.0, abs(region["area_cm2"]) ** 0.5
+            perimeter = float(region.get("perimeter_cm") or 0.0)
+            area_window = (
+                tolerance * max(1.0, abs(region["area_cm2"]) ** 0.5) + displacement * perimeter
+            )
+            if gap <= tolerance + displacement and (
+                abs(entry["area"] - region["area_cm2"]) <= area_window
             ):
                 matches.append(entry)
         if len(matches) != 1:

@@ -494,6 +494,13 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
                 "depth": depths[index],
                 "material": depths[index] % 2 == 0,
                 "area_mm2": area,
+                # The boundary this region is bounded by, its own and its
+                # holes'. Carried because an accepted snap is *allowed* to move
+                # that boundary, and the area that moves with it is the
+                # displacement times this length -- which is what the executor's
+                # profile match has to allow for.
+                "perimeter_mm": _perimeter(points)
+                + sum(_perimeter(loops[child]) for child in children),
                 "centroid_mm": (
                     [moment[k] / area for k in range(2)]
                     if area > 0.0
@@ -502,6 +509,16 @@ def profile_regions(loops: Sequence[Sequence[tuple[float, float]]]) -> list[dict
             }
         )
     return regions
+
+
+def _perimeter(points: Sequence[tuple[float, float]]) -> float:
+    """The closed length of one projected loop."""
+    count = len(points)
+    if count < 2:
+        return 0.0
+    return sum(
+        math.dist(points[index], points[(index + 1) % count]) for index in range(count)
+    )
 
 
 def congruence(
