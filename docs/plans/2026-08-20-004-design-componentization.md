@@ -627,7 +627,7 @@ what it does not permit is recorded, not worked around silently.
 
 | Stage | Ships | Fusion surface | Gated by |
 | --- | --- | --- | --- |
-| C1 | assignment record, evident-things census, complexity witness, **thing sub-mesh extraction** (the partition licence is evaluated on the sub-meshes, §4.1: extraction, stability, ownership, closure accounting — **no reconstruction**; that gate is C3's) | none (all C1 passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
+| C1 | assignment record, **detection census** (numerator-side; the human-reviewed evident-things *table* is a separately authored artifact, R4 — never this census), complexity witness, **thing sub-mesh extraction** (the partition licence is evaluated on the sub-meshes, §4.1: extraction, stability, ownership, closure accounting — **no reconstruction**; that gate is C3's) | none (all C1 passes are host-side; record reviewed at the existing pause, before any Fusion write) | seg PRs 1/3/4 + branch merge |
 | C2 | grounded base + N placed reference-mesh components + ≤1 residual component | components, occurrences, `transform2`, mesh bodies | C1 + PC-1/2/7 (PC-9/10 for its report) |
 | C3 | per-thing status upgrades reference → primitive → parametric; two-level coverage; R3 layers 2–3 | geometry inside existing components; structure untouched | C2 + PC-11; parametric prisms also on 2.5D lane PRs 4–6 |
 | C4 | instancing verdicts + occurrences; lattice-gated patterns | `addExistingComponent`, pattern features | C3 + PC-3/8 |
@@ -1113,7 +1113,11 @@ check each field against its own set — a token that is valid in another
 field's set is rejected in this one:
 
 - `claim_level` (§0's ontology rung): `componentized-geometric` |
-  `physical-thing-evidenced`.
+  `physical-thing-evidenced` | `residual` — the third value is the C2
+  residual component's level (it owns below-support and otherwise-unclaimed
+  geometry, licensed as neither a geometric subobject nor a physical
+  thing); `residual` never counts in any C numerator, and the field stays
+  mandatory on every component, the residual included.
 - `fidelity_status` (what was actually delivered — §4.1's C2/C3 ladder),
   complete closed set: `recognized-reference` (the C2 floor) |
   `recognized-primitive` | `recognized-parametric` — the reference →

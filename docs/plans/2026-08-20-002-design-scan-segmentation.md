@@ -884,14 +884,21 @@ partitions and then grade the winner on the evidence that chose it:
    cannot flip the verdict; new boundaries are a model cost, paid for in
    measured improvement, never free;
 4. the area-weighted mean in (1) is computed over **all** children — no
-   child's loss may be dropped — but only **T1 `terminal-accepted`**
-   children count toward the improved fraction in (2) and toward the
-   wrong-kind clause's explained fraction; a child landing in any other
-   named terminal class is recorded with its class for honesty and
-   contributes **zero** to those fractions. (An earlier form — "or it lands
-   in a named terminal class" — was vacuous, since every completed child
-   lands in one; counting unaccepted children as explanation is the
-   confetti mechanism relicensed.)
+   child's loss may be dropped. Toward the improved fraction in (2) and the
+   wrong-kind clause's explained fraction count: **T1 `terminal-accepted`**
+   children, and children whose rejection falls in a **split-licensing
+   class of the table** (mixed-support or wrong-kind) *and* whose own
+   validation loss improves on the parent's — the table itself licenses
+   those children for the next level, so counting them as zero progress
+   would cap every tree at depth 1 and make d_max > 1 dead text.
+   Insufficient-information and other terminal children are recorded with
+   their class and contribute **zero**. The confetti guard survives because
+   this credit is provisional to the tree walk, never to a claim: area is
+   *claimed* only by T1 descendants, and a lineage that never reaches T1
+   ends as named terminals with its provisional credit expired. (The
+   earlier "any named terminal class" form was vacuous; a T1-only form
+   over-corrects and breaks multi-level decomposition; this reading is the
+   one the licence table itself makes consistent.)
 
 A proposed child that receives **zero reserved validation triangles** —
 possible because blocks are reserved before the partition and assigned only
@@ -899,6 +906,12 @@ after its boundary is fixed — is **ungradable, by name**: it enters (1) at
 the parent's validation loss and counts as not-improved in (2), the
 conservative substitution under which an ungradable child can never help
 license a split, and the ungradable set is recorded on the split attempt.
+A **node** whose own reserved validation set is empty (possible at the
+block floor on tiny nodes) makes the ordinary predicate **ungradable as a
+whole**: the parent validation loss is undefined, so the split attempt is
+non-licensing, named as such on the record, and never graded on training
+loss instead. The topology-licensed path below is unaffected — it grades
+on topology, not loss.
 
 **Topology-licensed splits.** When the licensing rejection is
 *disconnected inlier support*, the split severs nothing on the mesh: the
@@ -914,7 +927,16 @@ component), the children partition the parent exactly, and each claimed
 child passes its own gates — the split's productivity *is* the evidenced
 separation, and the record names the reason-class that licensed it. A
 fragmentation whose pieces are not the support's connected components is
-not this split and takes the ordinary predicate.
+not this split and takes the ordinary predicate. Because this path grades
+on topology rather than held-out loss, it is **discovered on the full
+parent** — the holdout restriction exists to protect loss grading and does
+not apply here — and the exact-partition check runs on the full parent,
+validation triangles included, so lineage stays exact. Triangles outside
+every inlier component (outliers) attach deterministically to the
+dual-graph-nearest component (quantized distance, ties by the 007 §2.3
+idiom) and are enumerated on the record; a set with no adjacency to any
+component forms one named residual child — every source triangle lands in
+exactly one child.
 
 New declared thresholds, each `{value, rationale}` through
 `_declared_number`: `split_min_loss_improvement` (default 0.15 — below that,

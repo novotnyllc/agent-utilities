@@ -212,15 +212,19 @@ component as 10 rather than 0.1. Two cases are named rather than computed:
 **no components emitted → `C = 0`** (the state below, and the reason the cell
 reads 0 rather than undefined), and **an unmeasured denominator →
 `C = unmeasured`**, never 0 and never 1 — a part with no evident-things census
-has no cell, which is exactly Dig-Next-2's position today. Over-emission
+has no cell, which is exactly Dig-Next-2's position today. **Precedence:**
+`unmeasured` wins — `C = 0` requires a measured, matching denominator and a
+claim-level-bearing record; a missing denominator or claim level reads
+`unmeasured` even when zero components were emitted. Over-emission
 (a ratio above 1: more components than things) is a failure of this cell and
 is reported by name — `things-over-partitioned` — not as a score above 1.
 Today the emitter builds **one** component per part and places it: the rebuild
 transaction sets a transform from `PLAN["datum_transform"]["matrix"]` and calls
 `root.occurrences.addNewComponent(transform)` (`mesh_rebuild.py`). So for a
-single-object part the cell is **C = 1 at the scripted level** — one placed
-component over a denominator of 1 — and `unmeasured` live, no rebuild having
-been built. What is 0 everywhere is *decomposition*: a second component, an
+single-object part the cell shows **a raw scripted-occurrence count of 1** —
+one placed component; headline C is `unmeasured` (a pre-`claim_level`
+record, no measured matching denominator — §1.4 precedence) — and
+`unmeasured` live, no rebuild having been built. What is 0 everywhere is *decomposition*: a second component, an
 occurrence of a recognized sub-thing, anything that makes the denominator
 larger than one. **One body per part is the current ceiling** (design 006
 §model). The earlier draft of this section said no component or occurrence
@@ -299,7 +303,7 @@ editable features), then **V** (the "as many recognized things" clause — RC ca
 rise while everything is one extrude; V is what says the *things* were
 recognized), then **E** (editable is the adjective; an inert parameter fails
 the sentence), then **C** (componentized is the other adjective; the single-object
-cell is already satisfied at the scripted level, so what ranks here is
+cell is already covered by the raw scripted count, so what ranks here is
 assembly decomposition, uniformly zero until a lane can move it), with **H** as
 a guardrail rather than a rank: any change that grows silent area is rejected
 regardless of its other deltas.
@@ -345,7 +349,7 @@ Scoreboard row (aggregate):
 | delivered (live) | **unmeasured** | no slab build has ever run live |
 | V | holes 74 planned of 85 evident bores (87%); prisms: 21/21 hex nut pockets correctly refused as cylinders; fillets **2 planned of 114 candidates** (3 → 2 on the slab path, PR #51 finding 4); extrudes: slab stacks per table; revolve/shell/chamfer/pattern: 0 (shell and revolve unassigned; chamfer/pattern not in vocabulary) | mesh-reconstruction.md; PR #51/#53 |
 | E | **0 proven / parameters emitted per part `unmeasured`** (counts live in the emitted scripts, not in any published table); `interactions_exercised: false` | no U5 report exists for any part |
-| C | **1 scripted / `unmeasured` live** — the transaction places one component per part (`addNewComponent` with the datum transform) over a denominator of 1 each, these being single objects; no rebuild has been built live. Decomposition beyond one component is 0 everywhere | §1.4 |
+| C | **raw scripted occurrence count 1 / headline `unmeasured`** — the transaction places one component per part (`addNewComponent` with the datum transform); pre-`claim_level` records, so §1.4's precedence reads the headline `unmeasured`; `unmeasured` live. Decomposition beyond one component is 0 everywhere | §1.4 |
 | H | all refusals named (tropical-leaves-style silent loss not observed; every gate token closed-set); area-conservation audit `unmeasured` | §1.5 |
 
 ### 2.2 The four benchmark parts (committed, replayable; manifest on the 2.5D head = post-#48 v1 path)
