@@ -46,6 +46,10 @@ SLAB_GATES = {
     "slab-section-inconstant",
     "slab-axis-not-primary",
     "slab-loops-unclassified",
+    # A station whose section left an open polyline or a junction behind: the
+    # closed loops it did resolve are not the whole section, and the profile
+    # built from them omits whatever the rest was.
+    "slab-section-open",
     # Recorded by the planner rather than here: a gated slab with surviving
     # slabs on both sides leaves the stack in two pieces, and a join across the
     # gap fuses nothing.  The single-extrude plan stands instead.
@@ -645,14 +649,22 @@ def decompose(
         closed = [
             line for line in section.polylines if line.closed and len(line.points) >= 3
         ]
-        return evidence, [_project(line.points, frame, u, v) for line in closed]
+        # What this filter drops is evidence, not noise. An open polyline or a
+        # junction at this station is material the section could not resolve
+        # into a boundary, and every gate below reads the retained closed loops
+        # only -- so a slab with an unresolved component stayed usable, claimed
+        # its regions as reconstructed, and emitted a profile that omits it.
+        unresolved = sum(1 for line in section.polylines if not line.closed) + len(
+            section.junctions
+        )
+        return evidence, [_project(line.points, frame, u, v) for line in closed], unresolved
 
     slabs: list[dict[str, Any]] = []
     for index in range(len(events) - 1):
         lower, upper = events[index], events[index + 1]
         height = upper["station"] - lower["station"]
         mid = lower["station"] + height / 2.0
-        evidence, projected = measure(mid)
+        evidence, projected, unresolved = measure(mid)
         loops = classify_loops(evidence["loops"], projected, bores)
         checks = []
         constant = True
@@ -660,8 +672,9 @@ def decompose(
         station_projected: list[list[list[tuple[float, float]]]] = []
         for fraction in fractions:
             other_station = lower["station"] + height * fraction
-            other_evidence, other_projected = measure(other_station)
+            other_evidence, other_projected, other_unresolved = measure(other_station)
             station_projected.append(other_projected)
+            unresolved += other_unresolved
             verdict = congruence(projected, other_projected, tolerance=constancy_tolerance)
             verdict["fraction"] = fraction
             verdict["station"] = other_station
@@ -735,7 +748,13 @@ def decompose(
                 # declared tolerable was attributed to nothing. The role is a
                 # verdict; the gate is the evidence saying how far it can be
                 # trusted, and reading only the role throws that away.
-                "gates": (
+                # `slab-section-open` leads, because it is a fact about the
+                # section itself and everything below is derived from that
+                # section: loops that did not classify and stations that did not
+                # agree are what an unresolved section produces, and naming the
+                # derived failure first sends a reader to the wrong measurement.
+                "gates": ([] if not unresolved else ["slab-section-open"])
+                + (
                     []
                     if constant
                     else ["slab-section-inconstant"]

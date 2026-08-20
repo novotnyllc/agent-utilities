@@ -742,6 +742,7 @@ UNRECONSTRUCTED_GATES = {
     # archetype in this unit's vocabulary covers it".
     "slab-section-inconstant",
     "slab-loops-unclassified",
+    "slab-section-open",
     "loop-orientation-unavailable",
     "loop-material-contradictory",
     "loop-parity-contradiction",
@@ -1595,10 +1596,24 @@ def _plan_slabs(
         for region_hash in group["regions"]
     }
     cap_owner: dict[str, int] = {}
+    below_of = {slab["upper_event"]: position for position, slab in enumerate(slabs)}
+    above_of = {slab["lower_event"]: position for position, slab in enumerate(slabs)}
     owner_of_event: dict[int, int] = {}
-    for position, slab in enumerate(slabs):
-        owner_of_event.setdefault(slab["lower_event"], position)
-        owner_of_event[slab["upper_event"]] = position
+    for event_index in set(below_of) | set(above_of):
+        # The slab below owns the cap, because its extrude up to that station is
+        # the face. Unless it is gated: then it is not built, its claim comes
+        # back as unreconstructed, and the neighbour above -- which a gate at
+        # the bottom of the stack turns into the `new-body` extrude, whose start
+        # face is this same plane -- is what actually builds it. Only if neither
+        # neighbour survives does the cap keep a gated owner, which is then the
+        # true report.
+        order = [
+            position
+            for position in (below_of.get(event_index), above_of.get(event_index))
+            if position is not None
+        ]
+        alive = [position for position in order if not slabs[position]["gates"]]
+        owner_of_event[event_index] = (alive or order)[0]
     for event_index, owner in owner_of_event.items():
         for member in events[event_index]["members"]:
             region_hash = member["region"]

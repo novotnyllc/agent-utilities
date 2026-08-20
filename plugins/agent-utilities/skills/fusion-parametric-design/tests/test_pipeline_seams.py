@@ -816,6 +816,71 @@ class SlabDecompositionSeamTests(unittest.TestCase):
         self.assertIn(shoulder, slabs[0]["regions"])
         self.assertNotIn(shoulder, slabs[1]["regions"])
 
+    def test_a_gated_slab_does_not_take_the_cap_its_surviving_neighbour_builds(
+        self,
+    ) -> None:
+        """The slab below owns the cap only while the slab below is built.
+
+        Gate the bottom slab and the one above it becomes the `new-body`
+        extrude, whose *start* face is the shared event plane -- so that plane
+        is built, by the surviving slab, while the assignment handed it to the
+        gated one and the account reported it unreconstructed under the gate of
+        a slab that never touched it. On this part it is the 768 mm2 shoulder:
+        62.0% covered against 80.3%.
+        """
+        # The stepped block upside down: the tapered step is the *lower* slab,
+        # so it gates and its neighbour survives.
+        vertices, triangles, groups = fx.stepped_block_mesh(boss_taper=0.3)
+        dump = fx.make_dump(
+            [(x, y, -z) for (x, y, z) in vertices],
+            [(c, b, a) for (a, b, c) in triangles],
+            face_groups=list(groups),
+        )
+        program = self._plan(dump)
+        built = [g for g in program["archetypes"] if g.get("slab")]
+        self.assertEqual(1, len(built))
+        self.assertEqual("new-body", built[0]["operation"])
+        area = {
+            region.region_hash: region.area
+            for region in parse_fit_record(seg.fit_regions(dump, ts.spec())).regions
+        }
+        shoulder = next(h for h, value in area.items() if abs(value - 768.0) < 1e-9)
+        self.assertIn(shoulder, built[0]["regions"])
+        self.assertIn(shoulder, built[0]["cap_regions"])
+        self.assertNotIn(
+            shoulder, {row["region_id"] for row in program["unreconstructed"]}
+        )
+
+    def test_a_section_that_left_geometry_unresolved_does_not_build_its_slab(
+        self,
+    ) -> None:
+        """The filter that keeps closed loops is discarding evidence.
+
+        `section_mesh` can return a valid closed outer loop *and* an open
+        polyline or a junction beside it -- material this stage could not
+        resolve into a boundary. Every gate downstream reads the retained
+        closed loops only, so the slab stayed usable, claimed its regions as
+        reconstructed, and emitted a profile with the unresolved component
+        missing from it. A block with one wall removed sections open at every
+        station and is the smallest case.
+        """
+        vertices, triangles, groups = fx.stepped_block_mesh()
+        kept = [(t, g) for t, g in zip(triangles, groups) if g != 1]
+        dump = fx.make_dump(
+            vertices, [t for t, _ in kept], face_groups=[g for _, g in kept]
+        )
+        program = self._plan(dump)
+        self.assertEqual([], [g for g in program["archetypes"] if g.get("slab")])
+        gates = {row["gate"].split(":")[0] for row in program["unreconstructed"]}
+        self.assertEqual({"slab-section-open"}, gates)
+        # Named first, because everything else this slab could report -- loops
+        # that did not classify, stations that did not agree -- is derived from
+        # the section this one is about.
+        from fusion_design import mesh_slabs as ms
+
+        self.assertIn("slab-section-open", ms.SLAB_GATES)
+        self.assertIn("slab-section-open", rp.UNRECONSTRUCTED_GATES)
+
     def test_slabs_coalesce_only_when_every_station_they_sampled_agrees(self) -> None:
         """Congruence at the midpoints is not congruence over the merged range.
 
