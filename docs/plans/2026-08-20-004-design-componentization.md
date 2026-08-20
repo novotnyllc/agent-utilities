@@ -411,9 +411,20 @@ structure without ever changing it.**
 
 ### 4.1 Detection (inside `plan-decomposition`)
 
-- **Trigger:** monolithic reading refused by existing gates (F1 is the live
-  example), or the R3 escalation floor crossed, or `decomposition:
-  prefer-things` declared.
+- **Trigger — and it must be computable where the stage runs.** The stage
+  sits between fit and plan, so it cannot observe `emit-mesh-rebuild`'s
+  verdict: F1's `profile-ambiguous` is raised two stages later, and a trigger
+  that waits for it would leave C-4 producing no assignment on the very part
+  it is measured against. So the trigger is **fit-stage computable**, in this
+  order: (a) the R3 escalation floor crossed (the island-chain witness §4.1
+  computes from `classify_loops` output alone); (b) `decomposition:
+  prefer-things` declared; or (c) a **recorded prior refusal** — a monolithic
+  verdict from an earlier run of the same dump, cited by dump hash and
+  refusal token, which is how F1 enters without inverting the pipeline. A
+  live refusal is not a trigger; it is evidence that gets recorded and read
+  by the *next* run, which keeps the stage order intact and keeps the trigger
+  honest about what it can see. Dig-Next-2 reaches C-4 through (a) and (c)
+  both, and the run records which fired.
 - **Candidates,** from evidence the pipeline already computes (F4):
   island-chain detection over `classify_loops` output (footprint recurrence
   under `congruence`, concentric within pooled sigma, across contiguous
@@ -758,9 +769,16 @@ PC-2 could. It runs first, in PR C-2, before any emitter code is written.
   (host-side until C2; one live Fusion writer at a time thereafter, version
   recorded) and commits the numbers in its description; a claim without its
   number does not merge.
-- 11-part corpus regression on every PR: byte-identical through PR C-4
-  (geometry and records; census lines additive), identical-or-explained
-  after; no assembly wrapper ever appears on a single-thing part.
+- 11-part corpus regression on every PR: byte-identical through PR C-4 **on
+  the record with the additive census fields removed** — adding `things: 0`
+  and the complexity witness changes the serialized bytes by construction, so
+  "byte-identical" and "census lines additive" cannot both be true of the raw
+  file and the contract as first written was unsatisfiable. The comparison is
+  therefore against a normalized record: every key this lane introduces is
+  dropped from both sides, and what remains must match byte for byte. The new
+  keys are checked separately, by name and value, against what the run
+  predicts. Identical-or-explained after C-4; no assembly wrapper ever appears
+  on a single-thing part.
 - The assignment invariant's adversarial property check (PR C-4) enters the
   standard suite; any later detector must pass it unmodified.
 - Area conservation at assembly level: Σ(base) + Σ(things) + Σ(interfaces) +
