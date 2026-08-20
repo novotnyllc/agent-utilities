@@ -958,15 +958,24 @@ class FilletSeamTests(unittest.TestCase):
         gates = {
             entry["region_id"]: entry["gate"] for entry in self.program["unreconstructed"]
         }
-        fragments = [
-            region["region_hash"]
+        partial = [
+            region
             for region in self.record["regions"]
-            if region["accepted"]
-            and region["fit"]["kind"] == "cylinder"
+            if region["fit"]["kind"] == "cylinder"
             and not region.get("fillet_candidate")
             and region["fit"]["support"]["angular_span_deg"] < 180.0
         ]
-        self.assertEqual(2, len(fragments))
+        self.assertEqual(2, len(partial))
+        # One of the three does not survive the fit stage at all: refitting a
+        # 101 deg arc on a spatially blocked half of its points moves it by
+        # 0.07 mm on geometry that is exact to 4e-16, which is the instability
+        # the held-out gate is for. It reaches the planner as no fit rather
+        # than as a cylinder, which is a stronger statement than the gate below.
+        refused = [region for region in partial if not region["accepted"]]
+        self.assertEqual(1, len(refused))
+        self.assertIn("held-out residual", refused[0]["fit"]["rejection"])
+        fragments = [region["region_hash"] for region in partial if region["accepted"]]
+        self.assertEqual(1, len(fragments))
         for region_hash in fragments:
             self.assertIn(region_hash, gates)
 

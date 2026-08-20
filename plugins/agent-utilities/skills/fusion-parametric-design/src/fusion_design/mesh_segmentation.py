@@ -2686,7 +2686,49 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                     elif structure is not None:
                         _passed(checked, "residual-structure")
 
-            if accepted and (fit.rms_residual <= noise_floor or below_precision):
+            if accepted and below_precision:
+                # Measured, then judged -- the same order the Moran block above
+                # settled on. In-sample residuals inside the lattice do not say
+                # the *held-out* ones are: an over-parameterized primitive can
+                # sit on the whole sample at quantization scale and come apart
+                # when it is refitted on half the points, which is exactly what
+                # this gate exists to catch. So the refit runs, and only its
+                # verdict is suppressed -- and only when the held-out residual
+                # is inside the floor too, where the ratio really is two
+                # quantization patterns divided by each other.
+                held = _blocked_heldout(fit, point_indices, mesh, grid, spec, form_error)
+                if "underpowered" in held:
+                    # No comparison was made at all, so there is no verdict for
+                    # the floor to suppress -- and the floor licenses suppressing
+                    # a *measured* ratio, never a missing one. `_blocked_heldout`
+                    # says which property of the split stopped it; the floor adds
+                    # only that there is no power on the in-sample side either.
+                    support["heldout_unavailable_reason"] = (
+                        f"{held['underpowered']}; in-sample residuals lie inside the vertex "
+                        f"precision floor ({precision_floor:.6g}), so there is no power on "
+                        "either side"
+                    )
+                elif held["heldout_rms"] > precision_floor:
+                    support.update(held)
+                    if held["ratio"] > float(spec.value("heldout_ratio_max")):
+                        accepted, rejection = False, (
+                            f"held-out residual {held['heldout_rms']:.6g} is "
+                            f"{held['ratio']:.4g}x the in-sample residual; the fit is "
+                            "over-parameterized for the evidence. In-sample residuals lie "
+                            f"inside the vertex precision floor ({precision_floor:.6g}) and "
+                            "the held-out ones do not, which is the instability this gate is "
+                            "for rather than a comparison of quantization patterns."
+                        )
+                    else:
+                        _passed(checked, "heldout-residual")
+                else:
+                    support.update(held)
+                    support["heldout_unavailable_reason"] = (
+                        "the residual field lies entirely inside the vertex precision floor "
+                        f"({precision_floor:.6g}), held-out residuals included, so the ratio "
+                        "would compare two quantization patterns"
+                    )
+            elif accepted and fit.rms_residual <= noise_floor:
                 # The same rule the Moran block above already states, applied to
                 # its sibling: a test has no power against residuals an order of
                 # magnitude inside the measurement noise. Held-out residuals of
@@ -2696,11 +2738,7 @@ def _stage_disproof(state: dict[str, Any]) -> dict[str, Any] | None:
                 # as unavailable, and deliberately *not* appended to `checked`,
                 # because the check did not run.
                 support["heldout_unavailable_reason"] = (
-                    "the residual field lies entirely inside the vertex precision floor "
-                    f"({precision_floor:.6g}), so a held-out comparison would compare two "
-                    "quantization patterns"
-                    if below_precision
-                    else "residuals are below the measurement noise, so a held-out comparison has "
+                    "residuals are below the measurement noise, so a held-out comparison has "
                     "no power here"
                 )
             elif accepted:
