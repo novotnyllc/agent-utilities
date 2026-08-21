@@ -78,6 +78,32 @@ test("process names in strings, comments, and docstrings are data, not spawns", 
   assert.equal(real.status, 2);
 });
 
+test("f-string interpolation expressions are code; literal f-string text is data", () => {
+  // The interpolation region executes, so a spawn inside it blocks.
+  const hostile = run(
+    execute({ script: 'msg = f"result: {os.system(\'echo hi\')}"' }),
+  );
+  assert.equal(hostile.status, 2);
+  // Harmless interpolation and literal text (including {{literal}} braces and
+  // process names in the literal part) pass.
+  for (const script of [
+    'msg = f"count: {len(bodies)} solids"',
+    'msg = f"{{literal}} subprocess text stays data"',
+  ]) {
+    const result = run(execute({ script }));
+    assert.equal(result.status, 0, script);
+  }
+});
+
+test("parenthesized multiline from-os imports still block; benign lists pass", () => {
+  const hostile = run(
+    execute({ script: "from os import (\n    system,\n)\nsystem('echo hi')" }),
+  );
+  assert.equal(hostile.status, 2);
+  const benign = run(execute({ script: "from os import (\n    path,\n    sep,\n)" }));
+  assert.equal(benign.status, 0);
+});
+
 test("with stripping disabled the gate degrades to a conservative raw scan", () => {
   const result = run(
     execute({ script: "PROJECT_NAME = 'subprocess fixture'" }),

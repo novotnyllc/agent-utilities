@@ -36,6 +36,8 @@ const SPAWN_PATTERNS = [
   [/\bmultiprocessing\b/, "multiprocessing"],
   [/\bos\s*\.\s*(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API"],
   [/\bfrom\s+os\s+import\b[^\n]*\b(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API import"],
+  // Parenthesized import lists span lines; [^)]* crosses newlines.
+  [/\bfrom\s+os\s+import\s*\([^)]*\b(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b[^)]*\)/, "an os process API import"],
   [/\bpty\b/, "pty"],
   // Aliasing os away from its name has no honest use in a thin snippet; the
   // aliased member calls it enables would otherwise slip the qualified-name
@@ -74,6 +76,8 @@ const LANE_MARKERS = [
 function stripPython(script) {
   const out = [];
   let mode = ""; // "", "'", '"', "'''", '"""', "#"
+  let fstring = false; // the current string literal has an f prefix
+  let braceDepth = 0; // >0: inside an f-string {expression} — executable, preserved
   let i = 0;
   while (i < script.length) {
     const ch = script[i];
@@ -87,10 +91,12 @@ function stripPython(script) {
       const triple = script.slice(i, i + 3);
       if (triple === "'''" || triple === '"""') {
         mode = triple;
+        fstring = /[fF]/.test((script.slice(0, i).match(/[A-Za-z]*$/) || [""])[0]);
         out.push(triple);
         i += 3;
       } else if (ch === "'" || ch === '"') {
         mode = ch;
+        fstring = /[fF]/.test((script.slice(0, i).match(/[A-Za-z]*$/) || [""])[0]);
         out.push(ch);
         i += 1;
       } else if (ch === "#") {
@@ -101,18 +107,38 @@ function stripPython(script) {
         out.push(ch);
         i += 1;
       }
+    } else if (braceDepth > 0) {
+      // f-string interpolation expression: executable code, preserved verbatim.
+      // ponytail: a nested string containing braces can miscount the depth;
+      // the failure direction is under-stripping, which only over-blocks.
+      if (ch === "{") braceDepth += 1;
+      else if (ch === "}") braceDepth -= 1;
+      out.push(ch);
+      i += 1;
     } else {
       // inside a string: escapes skip the next character
       if (ch === "\\") {
         out.push("  ");
         i += 2;
+      } else if (fstring && ch === "{" && script[i + 1] === "{") {
+        out.push("  ");
+        i += 2;
+      } else if (fstring && ch === "}" && script[i + 1] === "}") {
+        out.push("  ");
+        i += 2;
+      } else if (fstring && ch === "{") {
+        braceDepth = 1;
+        out.push(ch);
+        i += 1;
       } else if (mode.length === 3 && script.slice(i, i + 3) === mode) {
         out.push(mode);
         mode = "";
+        fstring = false;
         i += 3;
       } else if (mode.length === 1 && ch === mode) {
         out.push(ch);
         mode = "";
+        fstring = false;
         i += 1;
       } else {
         out.push(ch === "\n" ? "\n" : " ");
