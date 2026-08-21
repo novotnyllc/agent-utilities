@@ -43,8 +43,21 @@ test("nudges on ordinary-modeling artifact smells outside the skill tree", () =>
     const result = run(input);
     const p = input.tool_input.file_path;
     assert.equal(result.status, 0, p);
+    // The model-visible channel: PreToolUse additionalContext JSON on stdout.
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.hookSpecificOutput.hookEventName, "PreToolUse", p);
+    assert.match(
+      payload.hookSpecificOutput.additionalContext,
+      /no persistent artifacts anywhere/,
+      p,
+    );
+    assert.match(
+      payload.hookSpecificOutput.additionalContext,
+      /automation\/release lane/,
+      p,
+    );
+    // The human channel keeps the same line.
     assert.match(result.stderr, /no persistent artifacts anywhere/, p);
-    assert.match(result.stderr, /automation\/release lane/, p);
   }
 });
 
@@ -62,6 +75,7 @@ test("stays silent inside the skill tree, on unrelated files, and on common name
   ]) {
     const result = run(write(p));
     assert.equal(result.status, 0, p);
+    assert.equal(result.stdout, "", p);
     assert.equal(result.stderr, "", p);
   }
 });
@@ -69,7 +83,9 @@ test("stays silent inside the skill tree, on unrelated files, and on common name
 test("ignores other tools and never blocks", () => {
   const bash = run({ tool_name: "Bash", tool_input: { command: "touch DESIGN-STATE.md" } });
   assert.equal(bash.status, 0);
+  assert.equal(bash.stdout, "");
   assert.equal(bash.stderr, "");
   const garbage = run("{{{");
   assert.equal(garbage.status, 0);
+  assert.equal(garbage.stdout, "");
 });

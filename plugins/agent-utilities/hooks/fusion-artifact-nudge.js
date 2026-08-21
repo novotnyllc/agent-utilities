@@ -2,7 +2,9 @@
 // PreToolUse on Write/Edit: a warn-only reminder of the fusion doctrine's
 // artifact rule — ordinary modeling creates no agent-authored persistent host
 // artifact anywhere; manifests, DESIGN-STATE files, transaction scripts, and
-// verification reports belong to a locked automation/release lane.
+// verification reports belong to a locked automation/release lane. The
+// reminder reaches the model as PreToolUse additionalContext JSON on stdout
+// (exit 0 discards stderr from the transcript under the hook contract).
 //
 // Warn only, never block: the lanes are legitimate and this hook cannot know
 // which lane is active. Writes inside the skill's own tree (its examples,
@@ -51,11 +53,22 @@ function main(raw) {
       (CONTEXT_SMELLS.some((pattern) => pattern.test(filePath)) &&
         (FUSION_CONTEXT.test(filePath) || FUSION_CONTEXT.test(content)));
     if (smells) {
-      process.stderr.write(
-        `[fusion-artifact-nudge] ${filePath}: ordinary Fusion modeling writes ` +
-          "no persistent artifacts anywhere — confirm an automation/release " +
-          "lane is locked before creating this (SKILL.md §1).\n",
+      const reminder =
+        `${filePath}: ordinary Fusion modeling writes no persistent ` +
+        "artifacts anywhere — confirm an automation/release lane is locked " +
+        "before creating this (SKILL.md §1).";
+      // stdout JSON is what reaches the model on exit 0 (stderr goes only to
+      // the debug log under the hook contract); the stderr line stays for
+      // human terminal visibility.
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            additionalContext: `[fusion-artifact-nudge] ${reminder}`,
+          },
+        }) + "\n",
       );
+      process.stderr.write(`[fusion-artifact-nudge] ${reminder}\n`);
     }
   } catch {
     // Warn-only hook: silence on its own confusion.
