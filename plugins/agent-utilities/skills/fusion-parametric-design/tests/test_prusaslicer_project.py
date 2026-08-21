@@ -666,6 +666,29 @@ class BedPlacementTests(unittest.TestCase):
                 result["printer_geometry"],
             )
 
+    def test_process_free_geometry_override_is_the_layout_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            config = _config_root(root, printer_ini="bed_shape = 0x0,5x0,5x5,0x5\n")
+            presets = _presets(config)
+            override = {
+                "printer": presets.printer,
+                "bed_min_x_mm": 2,
+                "bed_min_y_mm": 3,
+                "bed_width_mm": 20,
+                "bed_depth_mm": 30,
+                "max_print_height_mm": 40,
+            }
+            result = build_project(
+                fixture.manifest(), fixture.write_index(), root / "p.3mf", presets, geometry_override=override
+            )
+            self.assertEqual(20.0, result["printer_geometry"]["bed_width_mm"])
+            self.assertEqual(30.0, result["printer_geometry"]["bed_depth_mm"])
+            self.assertEqual(2.0, result["printer_geometry"]["bed_min_x_mm"])
+            self.assertEqual(3.0, result["printer_geometry"]["bed_min_y_mm"])
+
 
 class ProjectWriterTests(unittest.TestCase):
     def test_index_round_trip_produces_one_object_per_part(self) -> None:

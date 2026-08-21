@@ -1,6 +1,6 @@
 ---
-title: "feat: Optional PrusaSlicer plate and project 3MF adapter"
-date: 2026-08-19
+title: "feat: PrusaSlicer source-backed Fusion handoff"
+date: 2026-08-21
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
@@ -8,124 +8,222 @@ execution: code
 origin: https://github.com/novotnyllc/agent-utilities/issues/22
 ---
 
-# Summary
+# PrusaSlicer Source-Backed Fusion Handoff
 
-Add an optional adapter that consumes verified exports (#24) plus slicer-neutral manufacturing intent (#18) and writes a real PrusaSlicer **project `.3mf`** — separate objects, applied build orientation, plate assignment, presets selected by identifier, and only justified per-object overrides. The project is built as a file, not by driving the slicer. The headless slice that issue #22 also asks for is **unavailable on this host** and returns an explicit unsupported result rather than invented numbers.
+## Goal Capsule
 
----
-
-## Problem Frame
-
-Fusion supplies geometry and intent; PrusaSlicer owns printer, filament, and process profiles. Duplicating those profiles in the manifest would drift and reinvent the slicer. What is missing is the translation step: turning verified per-body exports plus declared intent into a project a human can open in PrusaSlicer and see the same objects, placement, presets, and overrides.
-
----
-
-## Verified host facts (filesystem-only recon; the slicer binary was never executed)
-
-- A PrusaSlicer project `.3mf` is a zip containing `[Content_Types].xml`, `_rels/.rels`, `3D/3dmodel.model` (standard 3MF geometry), `Metadata/Slic3r_PE.config` (full config as `; key = value` lines), `Metadata/Slic3r_PE_model.config` (XML), and an optional `Metadata/thumbnail.png`.
-- `Slic3r_PE_model.config` carries `<object id=… instances_count=…>` with `<metadata type="object" key=… value=…/>` and nested `<volume firstid= lastid=>` entries whose own metadata includes `name`, `volume_type`, and a 16-value `matrix`. **This is where per-object overrides live** — no CLI required to express them.
-- Installed user presets: printer `Original Prusa XL - 5T Input Shaper HF0.4 & HF0.6 nozzles`; print `0.40 SPEED @XLIS HF0.6 mixed`; filament `Overture PETG @XL HF0.4 - Black`, `Overture PETG @XL HF0.4 - White`, `Polymlaker PETG @XL HF0.4`.
-- `PrusaSlicer.ini` records the *selected* presets, and those may name **system** presets with no user `.ini` on disk (currently `Prusament PETG @XL HF0.4`, `0.20mm SPEED @XLIS HF0.4`). Preset discovery must therefore read both sources and must not assume a named preset has a user file.
-- **PrusaSlicer 2.9.6 segfaults on headless slicing** on this machine: `Slic3r::CLI::process_actions` → `Print::export_gcode` → `EXC_BAD_ACCESS` in `optional<ConflictResult>::operator=`. Four crash reports were produced before probing stopped. The adapter must never execute the binary.
+- **Objective:** Integrate the PrusaSlicer 2.9.6 source findings into the existing `fusion-parametric-design` release-lane handoff so installed PrusaSlicer owns profile discovery, compatibility, slicing, and measured outcomes.
+- **Means:** Keep deterministic project construction in Python, add one process-isolated runtime adapter for profile queries and fingerprints, retain the current parser only as an explicit offline fallback, and record the exact runtime/configuration environment in every result.
+- **Authority:** Fusion owns geometry and manufacturing semantics; PrusaSlicer owns installed presets, compatibility, configuration normalization, supports, flow, toolpaths, wipe structures, and slice statistics.
+- **Stop condition:** Basic profile-query/fingerprint/audit integration is merged and verified. Native painted-facet, variable-layer-height, FullSpectrum, and arrangement serialization wait for a separately proven AGPL bridge build/package/invoke chain.
 
 ---
 
-## Requirements
+## Product Contract
 
-- **R1.** Consume an export index produced by #24 (`kind: export-handoff`, `ok: true`) whose artifacts carry `manufacturing_intent`. Verify each referenced 3MF artifact against its recorded `sha256` and `byte_size` before use; any mismatch, missing file, or intent-less index fails closed.
-- **R2.** Emit a PrusaSlicer project `.3mf` with **one object per printable part**, never a merged mesh. Object names carry the part path; `instances_count` reflects the part's declared `quantity`.
-- **R3.** Apply the declared build orientation: map `orientation.contact_face` to the rotation that puts that face on the plate, and write it into the object/volume `matrix`. Record the applied rotation in the result so it is auditable.
-- **R4.** Assign objects to plates, honoring declared grouping. Parts whose `print_as` is `assembled` stay on one plate together; `separate` parts may be distributed. Placement is deterministic (no random arrangement) so a rerun produces identical bytes.
-- **R5.** Select the user's installed printer, filament, and process presets **by identifier**, writing only the preset names into the project config — never a cloned copy of their settings. A requested preset that is neither a user `.ini` nor a selected system preset in `PrusaSlicer.ini` fails with a clear unsupported result naming what was missing and what is available.
-- **R6.** Apply only justified per-object overrides, each traceable to declared intent: `support_material` / `support_material_buildplate_only` / `support_material_style` from `support_policy`, `fill_density` from `strength.infill_percent.target`, `perimeters` from `strength.min_perimeters`. Any override without a declared justification is rejected.
-- **R7.** The slice step returns an **explicit unsupported result** — `{"supported": false, "reason": "...", "detail": "..."}` naming the segfault — never fabricated print time, filament mass, or G-code statistics. The adapter must not execute the PrusaSlicer binary under any code path.
-- **R8.** Record the project's own SHA-256 and byte size, plus the source export-index hash and the per-artifact hashes it consumed, so the project is bound to the exact verified geometry.
-- **R9.** Pure-Python, standard library only (the package declares no dependencies): `zipfile` + `xml.etree.ElementTree` for reading Fusion's exported 3MF meshes and writing the project. Deterministic zip output (fixed timestamps, sorted entries) so identical inputs yield identical bytes.
+### Summary
+
+The existing adapter already binds a verified Fusion export index to a deterministic PrusaSlicer project, resolves preset identifiers, performs bed-aware placement, and optionally slices with a complete profile triple. This extension replaces the remaining home-grown profile-discovery path as the production authority and makes the exact PrusaSlicer runtime/configuration state part of the evidence chain.
+
+### Problem Frame
+
+The current project adapter parses `PrusaSlicer.ini`, user preset files, and vendor bundles itself. That code is a useful offline fallback, but it duplicates installed-profile, inheritance, variant, and compatibility behavior already exposed by PrusaSlicer's `PresetBundle`-backed CLI actions. Results also record the slicer version only after a successful G-code export; a profile query or failed slice is not bound to the executable bytes and configuration snapshot that produced it.
+
+```mermaid
+flowchart TB
+  F[Fusion manifest and verified export index] --> P[Deterministic Python project writer]
+  R[Installed PrusaSlicer runtime] --> Q[Profile-query and fingerprint adapter]
+  Q --> P
+  P --> M[Project 3MF]
+  M --> S[Existing isolated slice oracle]
+  S --> G[G-code statistics and tool audit]
+```
+
+### Requirements
+
+#### Existing project and slice invariants
+
+- R1. Preserve the manifest → verification report → export index → project → slice hash chain and all current fail-closed checks.
+- R2. Preserve deterministic, process-free project construction; only the runtime/slice modules may start PrusaSlicer.
+- R3. Preserve preset identifiers as identities. Never copy a full printer, print, or filament profile into the project or Fusion manifest.
+- R4. Preserve the complete-profile guard before slicing; a partial printer/print/material set must never reach PrusaSlicer.
+- R5. Preserve G-code-only print-time and filament statistics. Missing measurements remain absent, never inferred.
+
+#### Source-backed runtime and profiles
+
+- R6. Add a typed `PrusaSlicerRuntime` adapter that resolves the executable, records its SHA-256 and detected version from the `--help` banner, requires an explicit absolute datadir, and invokes subprocesses with `shell=False`, timeout, and bounded output. Authoritative profile queries are gated to the source-validated `2.9.6` runtime until another version has fixtures and a live canary.
+- R7. Expose the installed `--query-printer-models` and `--query-print-filament-profiles` actions as structured JSON results with distinct outcome classes: `not_found`, `timeout`, `nonzero_exit`, `signal_crash`, `malformed_json`, `missing_app_config`, `profile_not_resolvable`, `snapshot_changed`, `unsupported_version`, and `success`. For 2.9.6 query actions, valid schema-conforming JSON is success even when the raw process exit code is `1`; retain that raw code as evidence. Exit `1` without valid expected JSON is not success.
+- R8. Make the installed runtime query the primary CLI resolver. Retain the current `.ini`/vendor parser only through an explicit `--offline-profiles` mode whose result is labeled non-authoritative and non-installed. Runtime-query failures never trigger an automatic downgrade.
+- R9. Preserve each profile identifier exactly as PrusaSlicer emits it. Normalized vendor/model/variant fields are evidence fields and must never replace the identifier supplied back to PrusaSlicer.
+- R10. Fingerprint the relevant datadir state deterministically from `PrusaSlicer.ini` and sorted `.ini` files under `printer/`, `print/`, `filament/`, and `vendor/`; record the snapshot SHA-256 without copying profile contents into output.
+
+#### Evidence and audit
+
+- R11. Add runtime evidence to query/project/slice CLI results: version, executable path and SHA-256, datadir path and snapshot SHA-256, command kind, exit code, signal, and bounded stderr tail.
+- R12. Add a conservative bounded-memory, full-file G-code tool audit for standard `T<number>` tool-selection commands. Report observed tools and transition count only when the parser recognizes the flavor; otherwise report the metric unavailable.
+- R13. A PrusaSlicer crash invalidates that operation only. It must not crash the agent, weaken validation, drop an override, or cause a fallback to a different datadir.
+- R14. Correct documentation that still claims bed fit is unchecked; the current adapter reads the selected printer geometry and fails closed on placement/height overflow.
+
+#### Source and native-metadata boundary
+
+- R15. Add a concise source contract pinned to PrusaSlicer `2.9.6`, commit `b028299c770b8380ee81c921a2867d522f288123`, naming the source areas that own CLI/profile/project/support/wipe/tool-ordering/FullSpectrum behavior.
+- R16. Document the semantic/native boundary: painted facets, variable layer heights, FullSpectrum, and arrangement transforms are not ordinary config keys and are not hand-authored until a version-gated native serializer has semantic round-trip proof.
+- R17. Do not add or link `libslic3r` to the Python package in this wave. No empty C++ bridge scaffold, copied Prusa algorithms, or new dependency is accepted as implementation progress.
+
+### Scope Boundaries
+
+#### In scope
+
+- Installed-runtime fingerprinting and structured query execution.
+- Primary profile discovery through PrusaSlicer's own CLI.
+- Explicit offline fallback to the existing parser.
+- Runtime evidence propagation, tool-event audit, documentation, tests, and release coupling.
+
+#### Deferred for a separately proven native bridge
+
+- `FacetsAnnotation` serialization for painted supports, seams, fuzzy skin, or MMU regions.
+- Variable-layer-height project metadata.
+- FullSpectrum/ColorMix virtual-extruder serialization and schedule validation.
+- Prusa arrange-wrapper transform extraction and gantry collision evaluation.
+- A generated `PrintConfigDef` catalog that requires building against pinned PrusaSlicer source.
+
+#### Outside this product's identity
+
+- Reimplementing support generation, wipe towers, tool ordering, flow, Arachne, or exact slicer estimates in Python.
+- Treating an offline source/vendor bundle as proof that a profile is installed in the user's current datadir.
+- Treating a syntactically valid project, clean slice, or GUI load as physical-print or fit proof.
 
 ---
 
-## Assumptions
+## Planning Contract
 
-- **Geometry source is the exported 3MF, not STEP.** Fusion's 3MF exports already contain meshes; the adapter merges those meshes into `3D/3dmodel.model` as separate objects. STEP artifacts are recorded as provenance but not parsed.
-- **Orientation is axis-aligned.** `contact_face` yields one of six axis-aligned rotations; arbitrary orientations are out of scope for this issue.
-- **Plate capacity is not modeled.** Plate assignment honors declared grouping only; the adapter does not compute whether objects physically fit, and says so rather than implying it validated placement.
-- **Support style** defaults to PrusaSlicer's configured value unless intent explicitly names one; the adapter does not invent a style.
+### Product Contract preservation
 
----
+Restructured with no scope loss: the original R1-R9 project-writer contract is implemented in the current tree; this revision retains those invariants as R1-R5 and adds the source-backed runtime/profile/evidence requirements as R6-R17. The obsolete historical conclusion that all headless slicing crashes was removed because current code and measured 2.9.6 behavior show the crash is caused by an incomplete profile set.
 
-## Key Technical Decisions
+### Key Technical Decisions
 
-1. **KTD1: Build the project as a file; never drive the slicer.** Forced by the verified segfault, and better regardless — file construction is deterministic and testable offline, whereas driving a GUI-oriented binary is neither. This also keeps the adapter honest about the boundary the skill already draws: Fusion is not the slicer.
-2. **KTD2: The slice is an explicit unsupported result, not an omission.** `references/unsupported.md` already treats print time and filament mass as external, and the planner's `export-and-cost` phase expects "slicer estimate **or explicit unsupported result**." This lands in the existing vocabulary instead of inventing one.
-3. **KTD3: Presets by name only.** The project config records preset identifiers; the user's actual profile settings are never copied into our artifacts, satisfying the issue's explicit non-goal.
-4. **KTD4: Deterministic zip.** Fixed member timestamps and sorted entries so the same index plus the same intent produces byte-identical output — a rerun is verifiable rather than merely plausible.
-5. **KTD5: Adapter is optional and separate.** New module `src/fusion_design/prusaslicer_project.py` plus a CLI subcommand; nothing in the existing export or verification path changes, so a user without PrusaSlicer is unaffected.
+- KTD1. **Subprocess boundary, not `libslic3r` embedding.** The installed executable is the authoritative local service; Python remains standard-library-only and process-isolated.
+- KTD2. **Prusa query first, parser second.** `PresetBundle`-backed CLI results are authoritative in installed-runtime mode. Manual parsing remains useful only when the executable/query surface is unavailable and is labeled accordingly.
+- KTD3. **Runtime evidence is external to deterministic project bytes.** The project remains byte-deterministic for the same geometry/intent/preset identifiers. Runtime fingerprints bind the result and slice evidence rather than being injected into Prusa project metadata.
+- KTD4. **One process boundary.** `prusaslicer_runtime.py` may execute profile queries; `prusaslicer_slice.py` continues to own slicing. `prusaslicer_project.py` remains process-free, with the AST confinement test expanded accordingly.
+- KTD5. **Native metadata waits for a real bridge.** Source knowledge determines the boundary now, but source-coupled serialization ships only after load → save → inspect semantic equality is demonstrated against a pinned PrusaSlicer family.
+- KTD6. **No invented tool metrics.** Tool changes are reported only from recognized `T<number>` events; unknown G-code flavors yield unavailable, not a heuristic count.
+
+### High-Level Technical Design
+
+`PrusaSlicerRuntime` resolves and fingerprints the executable once, then fingerprints the datadir before and after every authoritative query or slice. A changed snapshot is a terminal `snapshot_changed` result. `prusaslicer_profiles.py` normalizes the query JSON into exact identifiers plus vendor/model/variant/bed/extruder evidence. The CLI uses this inventory to validate requested presets. `--offline-profiles` skips runtime querying and calls the existing parser with `resolver: offline_parser`, `installed: false`, and compatibility marked unknown; every runtime-query failure otherwise exits without producing a project.
+
+The project writer receives already resolved identifiers and the existing printer geometry record. It does not start a process or absorb runtime concerns. The slice oracle receives the runtime fingerprint and echoes it with the existing binding chain. After a successful text G-code export, `gcode_audit.py` scans bounded complete lines for standard tool-selection events and reports only what was observed.
+
+### Assumptions
+
+- The installed 2.9.6 CLI actions observed on this host remain available under the exact action names in R7.
+- Query output shape may evolve; normalization rejects malformed or incomplete objects rather than guessing.
+- The relevant datadir snapshot is the selection file plus profile/vendor `.ini` inputs, not thumbnails, caches, logs, or generated G-code.
+- A runtime query may legitimately fail against a bare copied vendor directory because installed `AppConfig` state is part of the contract.
+
+### Risks
+
+- **Query schema drift:** isolate normalization and reject incomplete objects rather than guessing.
+- **Runtime/config race:** fingerprint before and after an authoritative operation and reject if the relevant snapshot changes.
+- **Fallback ambiguity:** never silently mix query and parser evidence in one inventory. A result has one named resolver and authority level.
+- **Release drift:** changes under `plugins/` bump both manifests in lockstep; marketplace repin occurs only after merge to `main`.
 
 ---
 
 ## Implementation Units
 
-### U1. Project 3MF writer
+### U5. Runtime fingerprint and structured query adapter
 
-**Goal:** `src/fusion_design/prusaslicer_project.py` that reads an export index plus its 3MF artifacts and writes a PrusaSlicer project `.3mf`.
+- **Goal:** Add the single reusable process boundary for PrusaSlicer discovery/query operations.
+- **Requirements:** R6, R7, R10, R13; KTD1, KTD4.
+- **Files:**
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_runtime.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_runtime.py`
+- **Patterns:** Reuse executable discovery, bounded stderr handling, timeout behavior, and argument-list subprocess calls from `prusaslicer_slice.py`; share helpers only where doing so reduces duplication without weakening the process-free project boundary.
+- **Test scenarios:** `--help` version banner, missing banner, timeout, and failed probe; exact argv for both query actions; valid expected JSON with raw exit `1` succeeds and invalid/empty exit `1` fails for both actions; every query result carries the complete runtime evidence payload; executable/datadir hashes are stable; relevant profile edit changes snapshot; unrelated file does not; unsupported version, timeout, nonzero, signal, and malformed JSON are distinct; executable or datadir drift during a query refuses; no shell invocation.
 
-**Requirements:** R1–R4, R8, R9; KTD1, KTD4.
+### U6. Installed profile inventory and offline fallback
 
-**Files:**
-- `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_project.py`
-- `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_project.py`
+- **Goal:** Make PrusaSlicer's query API the primary source of installed printer/print/filament identifiers and compatibility.
+- **Requirements:** R8, R9; KTD2.
+- **Files:**
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_profiles.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_project.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_profiles.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_project.py`
+- **Patterns:** Normalize `printer_models[].variants[].printer_profiles` and `user_printer_profiles`; preserve `name` verbatim; call `--query-print-filament-profiles` for the selected printer; use the current parser only through an explicitly labeled fallback adapter.
+- **Test scenarios:** system and user printer profiles normalize; compatible print/filament identifiers survive unchanged; requested incompatible/absent profiles refuse before build/slice; missing installed-style config yields structured failure; `--offline-profiles` is labeled non-installed and compatibility-unknown; no profile setting contents enter the project.
 
-**Approach:** Validate the index (kind/ok/hashes/byte sizes) and fail closed on any mismatch. Parse each part's exported 3MF with `zipfile` + `ElementTree`, extracting its mesh. Compose `3D/3dmodel.model` with one `<object>` per part, applying the orientation rotation and plate offset to each object's transform. Write `Metadata/Slic3r_PE_model.config` with per-object name, `instances_count`, and override metadata. Write the zip deterministically (sorted entries, fixed timestamps).
+### U7. CLI and evidence-chain integration
 
-**Test scenarios:** index round trip produces one object per part; hash mismatch on a referenced artifact fails closed; missing artifact file fails closed; index without `manufacturing_intent` fails closed; each of the six `contact_face` values yields its expected rotation; `quantity` maps to `instances_count`; `assembled` parts share a plate while `separate` parts may not; identical inputs produce byte-identical output; output refuses to overwrite an existing file.
+- **Goal:** Expose profile inventory and attach exact runtime evidence to project/slice results without changing deterministic project bytes.
+- **Requirements:** R1-R5, R11, R13; KTD3.
+- **Files:**
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/cli.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_slice.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_cli.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_slice.py`
+- **Patterns:** Add `prusaslicer-profiles --config-root ... [--printer ...]`; resolve one runtime before project construction; echo its fingerprint in the project result; pass it into the slice result; preserve the current binding and complete-profile guards.
+- **Test scenarios:** project bytes remain identical with equivalent runtime evidence; CLI JSON names authoritative vs offline resolver; every runtime-query failure exits 2 without a project; an explicitly supplied missing executable never falls back; failed slice retains runtime and binding evidence; datadir drift during slicing refuses; no alternate datadir fallback occurs.
 
----
+### U8. Conservative G-code tool audit
 
-### U2. Preset resolution and per-object overrides
+- **Goal:** Report observed standard tool-selection events without inventing unsupported tool-change metrics.
+- **Requirements:** R12; KTD6.
+- **Files:**
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/gcode_audit.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_gcode_audit.py`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/prusaslicer_slice.py`
+- **Patterns:** Stream the complete file in bounded memory, parse only complete lines matching `T<number>` with optional surrounding whitespace/comment, and report event line, active tools, and transitions. Any conflicting flavor evidence returns `available: false`.
+- **Test scenarios:** single tool, repeated tool, alternating tools, comments containing `T1`, malformed commands, unknown flavor, transitions outside the existing statistics head/tail windows, and a command spanning an input-chunk boundary.
 
-**Goal:** Resolve presets by identifier from the user's configuration and translate declared intent into the allowed override set.
+### U9. Source contract, acceptance correction, and release coupling
 
-**Requirements:** R5, R6; KTD3.
+- **Goal:** Put the source-derived ownership boundary where Fusion-skill operators will read it and ship the plugin update correctly.
+- **Requirements:** R14-R17; KTD5.
+- **Files:**
+  - `plugins/agent-utilities/skills/fusion-parametric-design/SKILL.md`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/references/prusaslicer-source-contract.md`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/references/prusaslicer-3mf-contract.md`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/references/capability-status.md`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/references/unsupported.md`
+  - `plugins/agent-utilities/skills/fusion-parametric-design/docs/live-fusion-acceptance.md`
+  - `plugins/agent-utilities/.codex-plugin/plugin.json`
+  - `plugins/agent-utilities/.claude-plugin/plugin.json`
+- **Patterns:** Keep source details in references, not the top-level skill; update both manifests from `0.13.1` to `0.14.0` because this adds user-visible CLI/runtime behavior.
+- **Test scenarios:** skill routing mentions the new references; stale “bed fit unchecked” claim is absent; source commit/version are exact; both manifests parse and agree; every skill frontmatter name still matches its directory.
 
-**Files:** same module and test file as U1.
+### U10. Post-merge marketplace repin
 
-**Approach:** Read preset identifiers from the user `printer/`, `filament/`, `print/` directories **and** the selected-preset keys in `PrusaSlicer.ini` (a selected system preset has no user `.ini` — treat it as valid). Write only names into `Metadata/Slic3r_PE.config`. Translate intent to exactly the allowed override keys and reject anything else.
-
-**Test scenarios:** a preset present only as a `PrusaSlicer.ini` selection resolves; an unknown preset fails with an unsupported result listing what is available; `support_policy` maps to the correct support keys for each of the four policies; infill and perimeter overrides come from `strength`; an override with no declared justification is rejected; no full profile settings appear anywhere in the output.
-
----
-
-### U3. Unsupported slice result and CLI
-
-**Goal:** A `prusaslicer-project` CLI subcommand, and a slice step that is explicitly unsupported.
-
-**Requirements:** R7; KTD2, KTD5.
-
-**Files:**
-- `plugins/agent-utilities/skills/fusion-parametric-design/src/fusion_design/cli.py`
-- `plugins/agent-utilities/skills/fusion-parametric-design/tests/test_cli.py`
-
-**Approach:** `prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer/--filament/--print <name>]`. The result reports the project path, hashes, applied orientations, plate assignment, overrides, and a `slice` block that is always `{"supported": false, …}` naming the 2.9.6 segfault. **No code path executes the PrusaSlicer binary** — a test asserts the module contains no `subprocess`/`os.system`/`Popen` usage.
-
-**Test scenarios:** happy path writes the project and reports hashes; unknown preset exits 2; missing index exits 2; the slice block is always unsupported and never carries time/mass; static check finds no process-execution API in the module.
-
----
-
-### U4. Documentation
-
-**Goal:** Document the adapter, its boundary, and the unavailable slice.
-
-**Files:** `SKILL.md`, `references/capability-matrix.md`, `references/unsupported.md`, `docs/live-fusion-acceptance.md`, both plugin manifests (version bump).
-
-**Approach:** Record that the adapter builds the project but does not slice; that print time and filament mass remain external and are currently unobtainable on this host; and that the user opens the project in PrusaSlicer to confirm objects, placement, presets, and overrides. Test expectation: none — prose; `tests/test_skill.py` invariants stay green.
+- **Goal:** Bind the published marketplace entry to the merged plugin SHA and `0.14.0` manifest version.
+- **Owner:** Shipping tail after the implementation PR merges to `main`.
+- **Dependency:** U9 and the merge commit on `origin/main`.
+- **Target:** The agent-utilities marketplace entry updated by `.github/workflows/repin-marketplace.yml`; use `scripts/repin-marketplace` only as the documented manual fallback.
+- **Proof:** Record the merged SHA, wait for the repin workflow, then verify the marketplace entry names that SHA and version. A green implementation PR without this observable post-merge state is not release-complete.
 
 ---
 
 ## Verification Contract
 
-- Offline gate: `scripts/test.sh` (repo final gate). No live Fusion needed — this unit consumes an already-produced index.
-- Manual confirmation (user, when convenient): open the generated project in PrusaSlicer and confirm the same objects, placement, presets, and overrides. This is the issue's last acceptance criterion and cannot be automated here.
+| Gate | Command | Proves |
+|---|---|---|
+| Focused runtime/profile/audit | `PYTHONPATH=plugins/agent-utilities/skills/fusion-parametric-design/src:plugins/agent-utilities/skills/fusion-parametric-design/tests python3 -m unittest plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_runtime.py plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_profiles.py plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_project.py plugins/agent-utilities/skills/fusion-parametric-design/tests/test_prusaslicer_slice.py plugins/agent-utilities/skills/fusion-parametric-design/tests/test_gcode_audit.py -v` | New source-backed seams and existing project/slice behavior |
+| Fusion skill gate | `./plugins/agent-utilities/skills/fusion-parametric-design/scripts/test.sh` | Full offline Fusion package and hook contract |
+| Repository skill gate | `npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts` | Skill structure/frontmatter/package hygiene |
+| Manifest parse | `python3 -m json.tool plugins/agent-utilities/.codex-plugin/plugin.json` and the Claude manifest equivalent | Release manifests valid and in lockstep |
+| Live Prusa 2.9.6 canary (installed-runtime only) | Run `prusaslicer-profiles` against the installed datadir, then build and slice a known tiny project with the selected complete profile set | Real query shape, runtime fingerprint, project consumer, and slice evidence |
+| Explicit offline-unsliced check | Run `prusaslicer-project --offline-profiles` without `--slice`, then verify `profile_resolution.geometry_authority == "offline_parser"`; confirm `--offline-profiles --slice` exits 2 without a project | Non-authoritative parser fallback stays explicitly unsliced |
+| Manual GUI acceptance | Open the exact hash-bound project in PrusaSlicer | Objects, placements, presets, and overrides appear as intended; does not prove physical print quality |
 
 ## Definition of Done
 
-R1–R9 implemented and tested; no code path executes the slicer; the slice step returns an explicit unsupported result; docs record the boundary; merged PR with post-merge proof and marketplace repin.
+- R1-R17 are implemented or explicitly preserved by the current tested behavior.
+- Installed PrusaSlicer queries are the primary resolver in CLI use; the parser fallback is visible and non-authoritative.
+- Every query/project/slice result carries exact runtime/datadir fingerprint evidence where a runtime was used.
+- The project writer remains process-free and deterministic.
+- Tool audit reports only recognized G-code facts.
+- Source/native metadata boundaries are documented without speculative bridge scaffolding.
+- Targeted tests, the Fusion skill gate, repository skill gate, manifest checks, and live 2.9.6 canary pass.
+- The PR is merged with post-merge proof; the marketplace repin reaches the merged SHA and version.

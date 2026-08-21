@@ -1,6 +1,6 @@
 # Unsupported or partial capabilities and recommended fallbacks
 
-Status date: 2026-08-17. Fusion and its MCP expose dynamic capabilities; verify the connected Fusion release and MCP schema rather than treating this file as a fixed tool catalog.
+Status date: 2026-08-21. Fusion and its MCP expose dynamic capabilities; verify the connected Fusion release and MCP schema rather than treating this file as a fixed tool catalog.
 
 ## Fixed MCP tool names
 
@@ -60,9 +60,38 @@ begin. Sync the base parameters first.
 
 ## Authoritative printer and material profiles
 
-**Status:** External.
+**Status:** External to Fusion; installed-runtime queries supported.
 
-The package does not duplicate `printer.toml` as an incomplete model of a slicer's machine, nozzle, filament, process, and support settings. Keep the authoritative profile in the slicer that will generate the print job. Record the slicer/profile identifiers and versions in the handoff, then attach time, mass, support, and warning results to the exact exported-body hashes.
+The package does not duplicate `printer.toml` as an incomplete model of a slicer's machine, nozzle, filament, process, and support settings. `prusaslicer-profiles` asks the installed PrusaSlicer 2.9.6 runtime for printer models and compatible print/filament identifiers, preserving the exact identifiers it emits. Keep the authoritative profile in the slicer that will generate the print job. Record the slicer/profile identifiers and versions in the handoff, then attach time, mass, support, and warning results to the exact exported-body hashes.
+
+## Installed PrusaSlicer profile queries and fingerprints
+
+**Status:** Supported for the pinned PrusaSlicer 2.9.6 runtime.
+
+`PrusaSlicerRuntime` is the only profile-query process boundary. It requires an
+explicit absolute datadir, probes the `--help` banner, and then invokes
+`--query-printer-models` and `--query-print-filament-profiles` with `shell=False`,
+a timeout, and bounded output. Every result carries executable path and
+SHA-256, detected version, datadir, profile-snapshot SHA-256, command kind, raw
+exit code/signal, and bounded stderr. The snapshot is deterministic over
+`PrusaSlicer.ini` plus sorted `.ini` files under `printer/`, `print/`,
+`filament/`, and `vendor/`.
+
+The normalized outcomes are distinct: `not_found`, `timeout`, `nonzero_exit`,
+`signal_crash`, `malformed_json`, `missing_app_config`,
+`profile_not_resolvable`, `snapshot_changed`, `unsupported_version`, and
+`success`. A valid schema-conforming query payload is success even when the
+PrusaSlicer process returns raw exit code `1`; invalid or empty exit-`1` output
+is not success. A runtime or snapshot failure stops project construction and
+never selects another datadir or silently downgrades to the parser.
+
+The existing `.ini`/vendor parser remains available only through the explicit
+`--offline-profiles` flag. That result is `resolver: offline_parser`,
+`installed: false`, and compatibility `unknown`; it may generate an unsliced
+project only, and `--offline-profiles --slice` is refused.
+
+See `references/prusaslicer-source-contract.md` for pinned source ownership and
+`references/prusaslicer-3mf-contract.md` for the project/native metadata boundary.
 
 ## Complete FDM printability checker
 
@@ -117,16 +146,30 @@ How the boundary is held:
 
 - **The incomplete profile set is refused, not attempted.** `require_complete_profile_set` raises before anything is executed when printer, print, or filament is missing. That refusal is the fix for the crash, and it is tested by name. A *complete but unresolvable* set is a different failure and was measured separately on PrusaSlicer 2.9.6 (2026-08-19): three names that resolve to nothing exit **1**, not 139, with `Error while loading config from profiles: Printer profile 'X' wasn't found.` -- with and without `--datadir`. So the guard checks completeness, which is what crashes; resolvability failures arrive as an ordinary structured failure with that message as the stderr tail.
 - **A `--datadir` is always supplied.** A plain-dict `presets` argument used to drop it silently, resolving names in PrusaSlicer's default configuration rather than the one they were validated against; that call is now refused.
-- **Execution is confined to one module.** `prusaslicer_slice.py` is the only file in the package permitted to touch a process-execution API; project construction (`prusaslicer_project.py`, `cli.py`, everything `build_project` calls) still contains none, and a structural AST test enforces exactly that split.
+- **Execution is confined to two modules.** `prusaslicer_runtime.py` owns installed profile queries and `prusaslicer_slice.py` owns slicing. Project construction (`prusaslicer_project.py`) and CLI dispatch remain process-free; a structural AST test keeps the process boundary explicit.
 - **`subprocess.run` with an argument list.** No `shell=True`, no string interpolation into a shell, and a timeout so a hung slicer cannot block forever.
 - **Statistics come only from whole lines of the produced G-code's trailing summary block.** PrusaSlicer writes them as one contiguous run of `; key = value` comments at the end of the file, ahead of the `prusaslicer_config` dump, and only that run is parsed. The anchor is structural, not a window: a profile's custom *start* G-code sits at the top of the file, separated from the run by the extrusion moves, so it is excluded for a 200-byte G-code exactly as for a 200-megabyte one — selecting a tail window would exclude nothing at all in the small case, and small parts routinely slice well under the window size. The file is read through a bounded head/tail window (the middle is extrusion moves and can be hundreds of megabytes) and both windows are trimmed to line boundaries first: a window cut mid-line would otherwise turn a truncated number into a syntactically valid, wrong one -- a real `41.9 g` read as `4.0 g`. `gcode_window` reports how much of the file was read, and a slice that yields no readable statistic is `ok: false` rather than `ok: true` with an empty block -- "the statistics were outside the window" must not be indistinguishable from "the slicer wrote none". Anything the G-code does not state is listed in `absent_statistics`. Nothing is inferred, estimated, or interpolated from the project file, the mesh, or a previous print.
 - **The slice is bound to the project it claims to have sliced.** `slice_project` takes a `bindings` map, re-hashes the file on disk against its `project_sha256`, and refuses to run if it changed since the project was built. The map -- export index, manifest, verification report, export run -- is echoed into the result, so a slice block lifted out of one report has something to contradict it.
 - **`--binary-gcode=0` is forced.** The Original Prusa XL presets default to binary G-code, whose statistics are not readable as `; ` comments.
+- **The tool audit is conservative.** After a text slice, `gcode_audit` streams complete lines and recognizes only standard `T<number>` selections when the flavor evidence is compatible. It reports observed tools and a tool-change count; unknown or conflicting flavor evidence returns `available: false`.
 - **Failure is structured, never a fabricated number.** A non-zero exit (139/SIGSEGV included), a timeout, or a missing output file yields `ok: false` with the exit status and stderr tail, and the CLI exits 2.
 
 Without `--slice`, nothing is executed and the block reads `{"supported": true, "attempted": false, ...}`.
 
 Where PrusaSlicer is not installed, `slice_project` returns an explicit unavailable result; obtain the numbers from a manual GUI slice and record them against the project's `sha256` instead.
+
+## Native PrusaSlicer project metadata bridge
+
+**Status:** Deferred and unsupported in the Python package.
+
+Painted facets (`FacetsAnnotation`), variable layer-height profiles,
+FullSpectrum/ColorMix virtual extruders, and native arrangement transforms are
+semantic 3MF structures, not ordinary config keys. A project opening in the GUI
+or preserving an unknown key is not proof. See
+`references/prusaslicer-3mf-contract.md`: a future bridge must be version-gated
+and prove load → save → inspect semantic equality against the pinned source
+family. This wave adds no `libslic3r` dependency, copied slicer algorithms, or
+empty C++ scaffold.
 
 ## FDM-specific structural load rating
 

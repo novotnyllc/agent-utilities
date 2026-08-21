@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict
 import hashlib
 import json
+import math
 from pathlib import Path
 import secrets
 import sys
@@ -37,7 +38,15 @@ from .mesh_source import (
     verify_manifest_mesh_sources,
 )
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
-from .prusaslicer_project import build_project, resolve_presets
+from .prusaslicer_project import (
+    ResolvedPresets,
+    build_project,
+    default_config_root,
+    resolve_presets,
+    selected_preset_defaults,
+)
+from .prusaslicer_profiles import normalize_print_filament_profiles, normalize_printer_models
+from .prusaslicer_runtime import PrusaSlicerRuntime, runtime_fingerprint
 from .prusaslicer_slice import slice_project
 from .report_diff import diff_reports
 from .scripts import (
@@ -441,16 +450,440 @@ SLICE_NOT_ATTEMPTED = {
 }
 
 
+class _ProfileResolutionError(ValueError):
+    """A structured runtime/profile refusal that the CLI can print as JSON."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        super().__init__(str(payload.get("reason", "PrusaSlicer profile resolution failed.")))
+
+
+_RUNTIME_EVIDENCE_KEYS = (
+    "version",
+    "executable",
+    "executable_sha256",
+    "datadir",
+    "profile_snapshot_sha256",
+    "command_kind",
+    "exit_code",
+    "signal",
+    "stderr_tail",
+)
+_RUNTIME_FINGERPRINT_KEYS = (
+    "executable",
+    "executable_sha256",
+    "datadir",
+    "profile_snapshot_sha256",
+)
+
+
+def _compact_runtime(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the runtime binding small while retaining the raw process facts."""
+    compact = {key: result.get(key) for key in _RUNTIME_EVIDENCE_KEYS}
+    # ``raw_exit_code`` is an explicit alias: callers should not confuse the
+    # query result's process status with the normalized ``ok`` outcome.
+    compact["raw_exit_code"] = result.get("exit_code")
+    return compact
+
+
+def _runtime_failure(
+    kind: str,
+    result: dict[str, Any],
+    *,
+    reason: str | None = None,
+    outcome: str | None = None,
+) -> _ProfileResolutionError:
+    resolved_outcome = outcome or result.get("outcome") or "profile_resolution_failed"
+    if resolved_outcome == "success":
+        resolved_outcome = "profile_resolution_failed"
+    payload = {
+        "kind": kind,
+        "ok": False,
+        "outcome": resolved_outcome,
+        "reason": reason or result.get("reason") or "PrusaSlicer profile query failed.",
+        "runtime": _compact_runtime(result),
+    }
+    return _ProfileResolutionError(payload)
+
+
+def _runtime_drift(expected: dict[str, Any], actual: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: {"expected": expected.get(key), "actual": actual.get(key)}
+        for key in _RUNTIME_FINGERPRINT_KEYS
+        if expected.get(key) != actual.get(key)
+    }
+
+
+def _config_root_for(args: argparse.Namespace, *, require_absolute: bool = False) -> Path:
+    raw = getattr(args, "config_root", None)
+    if raw is None:
+        raw = default_config_root()
+    root = Path(raw).expanduser()
+    if require_absolute and not root.is_absolute():
+        raise ValueError(f"--config-root must be an absolute path; got {raw!r}.")
+    return root
+
+
+def _numeric(value: Any, label: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a number")
+    result = float(value)
+    if not math.isfinite(result) or (positive and result <= 0):
+        qualifier = "positive " if positive else "finite "
+        raise ValueError(f"{label} must be a {qualifier}number")
+    return result
+
+
+def _safe_identifier(value: Any, kind: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"A non-empty {kind} preset identifier is required.")
+    if any(character in value for character in "\r\n\""):
+        raise ValueError(f"PrusaSlicer {kind} preset identifier contains a newline or double quote.")
+    return value
+
+
+def _bed_origin(origin: Any) -> tuple[float, float]:
+    if isinstance(origin, dict):
+        x = origin.get("x", origin.get("min_x", origin.get("left", 0.0)))
+        y = origin.get("y", origin.get("min_y", origin.get("bottom", 0.0)))
+        return _numeric(x, "printer bed origin x"), _numeric(y, "printer bed origin y")
+    if isinstance(origin, (list, tuple)) and len(origin) >= 2:
+        return _numeric(origin[0], "printer bed origin x"), _numeric(origin[1], "printer bed origin y")
+    if isinstance(origin, str):
+        tokens = origin.strip().strip("[]()").replace(",", " ").split()
+        if len(tokens) >= 2:
+            return _numeric(float(tokens[0]), "printer bed origin x"), _numeric(float(tokens[1]), "printer bed origin y")
+    # Older query fixtures omit origin for the conventional lower-left bed.
+    return 0.0, 0.0
+
+
+def _geometry_from_query(printer: str, record: dict[str, Any]) -> dict[str, Any]:
+    bed = record.get("bed") if isinstance(record, dict) else None
+    if not isinstance(bed, dict):
+        raise ValueError(f"printer profile {printer!r} has no bed geometry")
+    width = _numeric(bed.get("width"), f"printer profile {printer!r} bed width", positive=True)
+    depth_value = bed.get("depth", bed.get("height"))
+    depth = _numeric(depth_value, f"printer profile {printer!r} bed depth", positive=True)
+    min_x, min_y = _bed_origin(bed.get("origin"))
+    raw_height = bed.get("max_print_height", bed.get("max_print_height_mm"))
+    max_height = None if raw_height is None else _numeric(
+        raw_height, f"printer profile {printer!r} max print height", positive=True
+    )
+    bed_shape = bed.get("bed_shape", bed.get("shape"))
+    return {
+        "printer": printer,
+        "bed_shape": bed_shape,
+        "bed_min_x_mm": min_x,
+        "bed_min_y_mm": min_y,
+        "bed_width_mm": width,
+        "bed_depth_mm": depth,
+        "max_print_height_mm": max_height,
+    }
+
+
+def _resolve_authoritative_profiles(
+    args: argparse.Namespace,
+) -> tuple[ResolvedPresets, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    root = _config_root_for(args)
+    try:
+        runtime = PrusaSlicerRuntime(args.slicer_executable, root)
+    except (OSError, ValueError) as error:
+        raise _ProfileResolutionError(
+            {
+                "kind": "prusaslicer-project",
+                "ok": False,
+                "outcome": "invalid_config_root",
+                "reason": str(error),
+            }
+        ) from error
+    printer_result = runtime.query_printer_models_authoritative()
+    if not printer_result.get("ok"):
+        raise _runtime_failure("prusaslicer-project", printer_result)
+    try:
+        inventory = normalize_printer_models(printer_result.get("payload"))
+    except ValueError as error:
+        raise _runtime_failure(
+            "prusaslicer-project", printer_result, reason=str(error), outcome="malformed_json"
+        ) from error
+
+    try:
+        defaults = selected_preset_defaults(root)
+    except (OSError, ValueError) as error:
+        raise _runtime_failure("prusaslicer-project", printer_result, reason=str(error)) from error
+    printer = args.printer if args.printer is not None else defaults.get("printer")
+    try:
+        printer = _safe_identifier(
+            printer,
+            "printer",
+        )
+    except ValueError as error:
+        raise _runtime_failure("prusaslicer-project", printer_result, reason=str(error)) from error
+    printer_record = inventory["printer_profiles"].get(printer)
+    if printer_record is None:
+        available = ", ".join(sorted(inventory["printer_profiles"])) or "<none>"
+        raise _runtime_failure(
+            "prusaslicer-project",
+            printer_result,
+            reason=f"PrusaSlicer printer preset {printer!r} is not installed; available printer presets: {available}.",
+            outcome="profile_not_resolvable",
+        )
+
+    compatibility_result = runtime.query_print_filament_profiles_authoritative(printer)
+    if not compatibility_result.get("ok"):
+        raise _runtime_failure("prusaslicer-project", compatibility_result)
+    try:
+        compatibility = normalize_print_filament_profiles(compatibility_result.get("payload"))
+    except ValueError as error:
+        raise _runtime_failure(
+            "prusaslicer-project", compatibility_result, reason=str(error), outcome="malformed_json"
+        ) from error
+    if compatibility["printer_profile"] != printer:
+        raise _runtime_failure(
+            "prusaslicer-project",
+            compatibility_result,
+            reason=(
+                f"PrusaSlicer compatibility query returned printer profile "
+                f"{compatibility['printer_profile']!r}, expected {printer!r}."
+            ),
+            outcome="profile_not_resolvable",
+        )
+
+    print_preset = args.print_preset if args.print_preset is not None else defaults.get("print")
+    filament = args.filament if args.filament is not None else defaults.get("filament")
+    try:
+        print_preset = _safe_identifier(print_preset, "print")
+        filament = _safe_identifier(filament, "filament")
+    except ValueError as error:
+        raise _runtime_failure("prusaslicer-project", compatibility_result, reason=str(error)) from error
+    print_record = compatibility["print_profiles"].get(print_preset)
+    if print_record is None:
+        available = ", ".join(sorted(compatibility["print_profiles"])) or "<none>"
+        raise _runtime_failure(
+            "prusaslicer-project",
+            compatibility_result,
+            reason=f"PrusaSlicer print preset {print_preset!r} is not compatible with printer {printer!r}; available print presets: {available}.",
+            outcome="profile_not_resolvable",
+        )
+    compatible_filaments = list(compatibility["compatibility"][print_preset]["filament_profiles"])
+    if filament not in compatible_filaments:
+        available = ", ".join(sorted(compatible_filaments)) or "<none>"
+        raise _runtime_failure(
+            "prusaslicer-project",
+            compatibility_result,
+            reason=f"PrusaSlicer filament preset {filament!r} is not compatible with print preset {print_preset!r}; compatible filament presets: {available}.",
+            outcome="profile_not_resolvable",
+        )
+
+    presets = ResolvedPresets(
+        printer=printer,
+        filament=filament,
+        print_settings=print_preset,
+        config_root=str(root),
+    )
+    try:
+        geometry = _geometry_from_query(printer, printer_record)
+    except ValueError as error:
+        raise _runtime_failure("prusaslicer-project", printer_result, reason=str(error)) from error
+    profile_resolution = {
+        "resolver": "prusaslicer",
+        "installed": True,
+        "geometry_authority": "installed_runtime",
+        "printer": printer,
+        "print": print_preset,
+        "filament": filament,
+        "compatibility": "compatible",
+        "compatible_prints": sorted(compatibility["print_profiles"]),
+        "compatible_filaments": sorted(set(compatible_filaments)),
+    }
+    return presets, geometry, profile_resolution, _compact_runtime(compatibility_result)
+
+
+def _offline_profile_resolution(args: argparse.Namespace) -> tuple[ResolvedPresets, dict[str, Any]]:
+    root = _config_root_for(args)
+    presets = resolve_presets(
+        {"printer": args.printer, "filament": args.filament, "print": args.print_preset},
+        root,
+    )
+    return presets, {
+        "resolver": "offline_parser",
+        "installed": False,
+        "geometry_authority": "offline_parser",
+        "printer": presets.printer,
+        "print": presets.print_settings,
+        "filament": presets.filament,
+        "compatibility": "unknown",
+    }
+
+
+def _cmd_prusaslicer_profiles(args: argparse.Namespace) -> int:
+    try:
+        root = _config_root_for(args, require_absolute=True)
+        runtime = PrusaSlicerRuntime(args.slicer_executable, root)
+    except (OSError, ValueError) as error:
+        payload = {
+            "kind": "prusaslicer-profiles",
+            "ok": False,
+            "outcome": "invalid_config_root",
+            "reason": str(error),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(payload["reason"], file=sys.stderr)
+        return 2
+    printer_result = runtime.query_printer_models_authoritative()
+    if not printer_result.get("ok"):
+        payload = _runtime_failure("prusaslicer-profiles", printer_result).payload
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(payload["reason"], file=sys.stderr)
+        return 2
+    try:
+        inventory = normalize_printer_models(printer_result.get("payload"))
+    except ValueError as error:
+        payload = {
+            "kind": "prusaslicer-profiles",
+            "ok": False,
+            "outcome": "malformed_json",
+            "reason": str(error),
+            "runtime": _compact_runtime(printer_result),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(payload["reason"], file=sys.stderr)
+        return 2
+
+    payload: dict[str, Any] = {
+        "kind": "prusaslicer-profiles",
+        "ok": True,
+        "resolver": "prusaslicer",
+        "installed": True,
+        "printer_profiles": sorted(inventory["printer_profiles"]),
+        "runtime": _compact_runtime(printer_result),
+    }
+    if args.printer is not None:
+        printer = args.printer
+        record = inventory["printer_profiles"].get(printer)
+        if record is None:
+            available = ", ".join(sorted(inventory["printer_profiles"])) or "<none>"
+            reason = f"PrusaSlicer printer preset {printer!r} is not installed; available printer presets: {available}."
+            payload = {
+                "kind": "prusaslicer-profiles",
+                "ok": False,
+                "outcome": "profile_not_resolvable",
+                "reason": reason,
+                "runtime": _compact_runtime(printer_result),
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(reason, file=sys.stderr)
+            return 2
+        compatibility_result = runtime.query_print_filament_profiles_authoritative(printer)
+        if not compatibility_result.get("ok"):
+            payload = _runtime_failure("prusaslicer-profiles", compatibility_result).payload
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(payload["reason"], file=sys.stderr)
+            return 2
+        try:
+            compatibility = normalize_print_filament_profiles(compatibility_result.get("payload"))
+        except ValueError as error:
+            payload = {
+                "kind": "prusaslicer-profiles",
+                "ok": False,
+                "outcome": "malformed_json",
+                "reason": str(error),
+                "runtime": _compact_runtime(compatibility_result),
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(payload["reason"], file=sys.stderr)
+            return 2
+        if compatibility["printer_profile"] != printer:
+            reason = (
+                f"PrusaSlicer compatibility query returned printer profile "
+                f"{compatibility['printer_profile']!r}, expected {printer!r}."
+            )
+            payload = {
+                "kind": "prusaslicer-profiles",
+                "ok": False,
+                "outcome": "profile_not_resolvable",
+                "reason": reason,
+                "runtime": _compact_runtime(compatibility_result),
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(reason, file=sys.stderr)
+            return 2
+        compatible_filaments = sorted(
+            {
+                filament
+                for record in compatibility["compatibility"].values()
+                for filament in record["filament_profiles"]
+            }
+        )
+        payload.update(
+            {
+                "printer": printer,
+                "print_profiles": sorted(compatibility["print_profiles"]),
+                "filament_profiles": compatible_filaments,
+                "compatibility": compatibility["compatibility"],
+                "runtime": _compact_runtime(compatibility_result),
+            }
+        )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
     _validate_named_paths(
         [("manifest", args.manifest), ("export-index", args.export_index), ("output", args.output)]
     )
+    if args.offline_profiles and args.slice:
+        payload = {
+            "kind": "prusaslicer-project",
+            "ok": False,
+            "outcome": "offline_slice_refused",
+            "reason": "--offline-profiles may generate an unsliced project only; remove --slice to continue.",
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(payload["reason"], file=sys.stderr)
+        return 2
     manifest = load_manifest(args.manifest)
-    presets = resolve_presets(
-        {"printer": args.printer, "filament": args.filament, "print": args.print_preset},
-        args.config_root,
+    if args.offline_profiles:
+        presets, profile_resolution = _offline_profile_resolution(args)
+        geometry_override = None
+        runtime_evidence = None
+    else:
+        try:
+            presets, geometry_override, profile_resolution, runtime_evidence = _resolve_authoritative_profiles(args)
+        except _ProfileResolutionError as error:
+            print(json.dumps(error.payload, indent=2, sort_keys=True))
+            print(error.payload["reason"], file=sys.stderr)
+            return 2
+    result = build_project(
+        manifest,
+        args.export_index,
+        args.output,
+        presets,
+        geometry_override=geometry_override,
     )
-    result = build_project(manifest, args.export_index, args.output, presets)
+    if runtime_evidence is not None and not args.slice:
+        runtime_before = {
+            key: runtime_evidence.get(key)
+            for key in _RUNTIME_FINGERPRINT_KEYS
+        }
+        runtime_after = runtime_fingerprint(runtime_evidence["executable"], presets.config_root)
+        drift = _runtime_drift(runtime_before, runtime_after)
+        if drift:
+            Path(result["project_path"]).unlink(missing_ok=True)
+            payload = {
+                "kind": "prusaslicer-project",
+                "ok": False,
+                "outcome": "snapshot_changed",
+                "reason": "PrusaSlicer executable or profile datadir changed during project generation.",
+                "runtime": runtime_evidence,
+                "runtime_fingerprint_before": runtime_before,
+                "runtime_fingerprint_after": runtime_after,
+                "drift": drift,
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(payload["reason"], file=sys.stderr)
+            return 2
+    result["profile_resolution"] = profile_resolution
+    result["runtime"] = runtime_evidence
     if args.slice:
         # The whole chain, not just the project hash: the slice block is the part
         # a human quotes, and on its own it names nothing that verified it.
@@ -468,6 +901,8 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
                 )
             },
             executable=args.slicer_executable,
+            datadir=presets.config_root,
+            runtime_evidence=runtime_evidence,
         )
     else:
         result["slice"] = SLICE_NOT_ATTEMPTED
@@ -1084,7 +1519,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--slicer-executable",
         help="Path to the PrusaSlicer binary. Defaults to the installed app bundle, then PATH.",
     )
+    prusaslicer.add_argument(
+        "--offline-profiles",
+        action="store_true",
+        help=(
+            "Use the existing .ini/vendor parser as an explicit non-authoritative fallback. "
+            "This mode cannot be combined with --slice."
+        ),
+    )
     prusaslicer.set_defaults(handler=_cmd_prusaslicer_project)
+
+    profiles = subparsers.add_parser(
+        "prusaslicer-profiles",
+        help="Query installed PrusaSlicer printer and compatible print/filament profiles.",
+    )
+    profiles.add_argument(
+        "--config-root",
+        required=True,
+        help="Absolute PrusaSlicer configuration directory used by the authoritative query.",
+    )
+    profiles.add_argument("--printer", help="Exact installed PrusaSlicer printer profile identifier.")
+    profiles.add_argument(
+        "--slicer-executable",
+        help="Path to the PrusaSlicer binary. Defaults to the installed app bundle, then PATH.",
+    )
+    profiles.set_defaults(handler=_cmd_prusaslicer_profiles)
 
     diff = subparsers.add_parser(
         "diff-reports",
