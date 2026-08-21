@@ -188,9 +188,19 @@ Fusion work, exactly as in the default lane.
 ./scripts/test.sh
 ```
 
-The suite runs offline against a stubbed API and covers the manifest
-contract, transaction emitters, reconstruction pipeline, and the plugin's
-plugin hooks; it works from a fresh checkout before any install. The
+The no-argument form is the full release gate: the suite runs offline against
+a stubbed API and covers the manifest contract, transaction emitters,
+reconstruction pipeline, and the plugin's plugin hooks; it works from a fresh
+checkout before any install. To run one area during an edit loop, name its
+module fragment (underscores; hyphens are accepted):
+
+```bash
+./scripts/test.sh mesh_segmentation   # one area
+./scripts/test.sh manifest cli        # several areas
+```
+
+Filtered runs skip the syntax check and hook tests — those are release-gate
+stages, so run the full form before committing. The
 generated scripts are syntax-checked offline, so run the included example in a
 saved, disposable Fusion document before treating a connected Fusion release
 as validated — `docs/live-fusion-acceptance.md` has the exact positive and
