@@ -15,7 +15,7 @@ reviewed:
   - docs/plans/2026-08-20-004-design-componentization.md
   - plugins/agent-utilities/skills/fusion-parametric-design/references/mesh-reconstruction.md
 verdict: "evidence-backed overall; 3 blockers, 5 high, 1 medium; central recommendation: make verified feature-program synthesis the central abstraction"
-status: "incorporated 2026-08-21 — every finding, adoption, and abandonment judged; amendments landed in 001/002/003/007/010; new design doc 2026-08-21-001 (feature-program synthesis); mesh-reconstruction.md rewrite registered behind PR #65 (§6)"
+status: "incorporated 2026-08-21 — every finding, adoption, and abandonment judged; amendments landed in 001/002/003/004/007/010; new design doc 2026-08-21-001 (feature-program synthesis); mesh-reconstruction.md rewrite registered behind PR #65 (§6)"
 ---
 
 # Deep Research reconciliation — verdict, judgment, and incorporation record
