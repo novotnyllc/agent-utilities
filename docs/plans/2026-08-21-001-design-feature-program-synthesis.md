@@ -223,9 +223,22 @@ consulted; ties within a gate's declared tolerance proceed together:
 2. **G2 — held-out geometric fidelity.** Area-weighted residual of the
    candidate's predicted geometry against **program-level reserved
    validation triangles**: one blocked reservation per part, drawn **before
-   any hypothesis evidence is extracted** — not merely before fitting —
-   with block scale from the frozen correlation record's held-out
-   derivation (002 §B.1). The reservation contract is total: **candidate
+   any hypothesis evidence is extracted** — not merely before fitting.
+   Block-scale ordering, stated because the correlation record itself comes
+   from measurement (002 §A.4): the phase order is (0) the 002 §A.4
+   correlation calibration — candidate-independent by construction, frozen
+   before any candidate acceptance — then (1) the G2 reservation, sized by
+   the frozen record's held-out derivation (002 §B.1), then (2) all FHG
+   evidence extraction. Calibration's small-patch measurements may touch
+   later-reserved triangles; that exposure is a candidate-independent
+   scalar (range/sill) and is stated on the reservation record
+   (`blocking-basis: correlation-record`, with the record hash). **Where no
+   frozen record exists before reservation** (fresh scan, no regime
+   record, or `correlation-model-unidentified`), block scale falls back to
+   the declared default ≈ 8 ℓ_med (007 §10.3's documented approximate
+   scale), recorded as `blocking-basis: default-8lmed` — the reservation is
+   never deferred until after evidence extraction to wait for a better
+   scale. The reservation contract is total: **candidate
    construction conditions on no reserved geometry at all** — not
    parameters, not residuals, and not topology. Sections and slabs traverse
    raw dump triangles (001 §B), so their extractors run **on the

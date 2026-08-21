@@ -1579,12 +1579,22 @@ comparison`, with both scores, the margin, and the method used) — never as
 an exact classical p-value whose assumptions are unverified. The §5.8
 covariance-triggered demotions (`torus-demoted-cylinder`, `-sphere`,
 `cone-unidentifiable`) are unchanged — they fire on identifiability, which
-is precisely where they belong. **§8.4's per-member rollback F test
-stands**: adopting a relation constrains parameters in the *interior* of
-one model's space (a regular nest), so its F interpretation is not subject
-to this finding; its known calibration softness under correlated residuals
-was already guarded by the `joint_rms_growth` backstop and is further
-served by the -002 §B.1 covariance derivation.
+is precisely where they belong. **§8.4's per-member rollback survives as a
+regular nest but not as a classical calibration**: adopting a relation
+constrains parameters in the *interior* of one model's space, so the
+singular-limit objection above does not apply — yet under spatially
+correlated residuals the constrained/free SSR ratio is still not
+F-distributed, and substituting n_eff into the denominator degrees of
+freedom does not make it so. Where a frozen -002 §A.4 correlation record
+exists, the rollback verdict is therefore computed by the same machinery
+as above — blocked held-out comparison of the constrained vs free fits,
+or a parametric bootstrap of the F statistic under the constrained model
+with the record's noise structure (equivalently, GLS whitening at the
+recorded range where implementable) — and recorded as model-selection
+evidence. The classical F with n_eff substitution remains only the
+no-record fallback, flagged approximate exactly as §7.3 already flags its
+own inflation; the `joint_rms_growth` backstop is retained unconditionally
+in both modes.
 
 ### §2 σ scoped; resolution claims made regime-conditional (adoption 6; abandonment 4)
 
