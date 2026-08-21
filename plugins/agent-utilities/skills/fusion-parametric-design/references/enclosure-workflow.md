@@ -99,6 +99,14 @@ calc_outer_width = calc_inner_width + 2 * fab_wall_thickness
 
 Supports should contact intended load-bearing surfaces. Retainers must not crush components or occupy connector/service zones. External port mouths must clear both the connector nose and overmold geometry.
 
+Propose the lid/base join — and any print-driven part split — proactively,
+with the reason and as real geometry: snap fit, screws with captive nuts,
+press fit, heat-set inserts, or keys/dovetails per the materials, loads, and
+open/close cycle, fasteners as cataloged components positioned with joints so
+Interference and Measure validate engagement. Prior designs in the user's hub
+with an established joining style are pattern sources — read and reuse them
+before inventing.
+
 For variable-height electronics, use local roof height where it materially reduces bulk, but preserve manufacturable transitions and lid structure.
 
 ## 7. Wiring and terminations

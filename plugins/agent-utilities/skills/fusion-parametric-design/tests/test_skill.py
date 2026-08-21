@@ -164,6 +164,28 @@ class SkillContractTests(unittest.TestCase):
         # never the first answer to a UI-only capability.
         self.assertNotIn("ask the user to run that one UI command", text)
 
+    def test_joinery_is_proposed_proactively_as_real_geometry(self) -> None:
+        # Joins and print-driven part splits are surfaced with reasons, modeled
+        # with cataloged fasteners and joints, and pattern-matched against the
+        # user's prior designs.
+        text = SKILL.read_text(encoding="utf-8")
+        workflow = " ".join(
+            (SKILL_DIR / "references" / "enclosure-workflow.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        for requirement in (
+            "Joinery is proposed proactively, and always as real geometry",
+            "would print better split",
+            "heat-set inserts",
+            "modeled or immediately modelable, never as prose only",
+            "reuse beats invention",
+            "dropped without ceremony",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("print-driven part split", workflow)
+        self.assertIn("pattern sources", workflow)
+
     def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
         # Wire runs are sweep/pipe modeling with recorded metadata;
         # electrical checking never becomes a host-side engine, and no native
