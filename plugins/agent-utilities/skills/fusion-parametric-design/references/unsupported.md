@@ -382,11 +382,10 @@ that would have to be planned, constrained and verified.
 
 **Status:** Built — under the named conditions below, outside which they refuse.
 
-This entry previously read "not yet emitted", on the grounds that hole
-classification needs triangle winding to tell a bore from a boss and that
-evidence was not in the fit record. The evidence *is* in the fit record — the
-fitting stage measures `orientation.material_side` per region — and the planner
-now reads it. Both kinds emit. What remains unsupported is narrower, and worth
+Hole classification needs triangle winding to tell a bore from a boss, and
+that evidence *is* in the fit record — the fitting stage measures
+`orientation.material_side` per region — and the planner
+reads it. Both kinds emit. What remains unsupported is narrower, and worth
 stating precisely, because each of these leaves a region unreconstructed under
 the named gate rather than producing an approximate feature:
 

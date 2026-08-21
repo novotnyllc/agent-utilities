@@ -1,5 +1,24 @@
 # Mesh reconstruction
 
+## A design-context scan is an envelope, not a reconstruction job
+
+This reference governs mesh→CAD reconstruction: producing an editable CAD
+model *of the scanned object itself*. That is a distinct, deliberate
+capability, and it is overkill for the common case where a supplied scan is
+context — a real object the design must fit around or against. For that case,
+import the mesh as a named, provisional reference component and derive an
+approximate outer envelope from it with native means: read the mesh's extents
+and native measurements, trace an outline sketch with smoothed splines where
+the profile matters, and offset/extrude/loft to a clean occupancy solid.
+Scans are noisy; a close approximation of the outer shell with smoothed edges
+is the deliverable, produced in minutes, and it inherits the provisional
+rules — revisable, replaceable, fidelity scaled to what the task needs.
+Fusion's Mesh Section Sketch and Fit Curves to Mesh Section are UI-only (no
+API exists), so an MCP-driven envelope leans on extents, measurement, and
+ordinary sketching; in the rare case a mesh-section trace is genuinely needed,
+ask the user to run that one UI command. The pipeline below is invoked only
+when the user actually wants the scanned object rebuilt as editable CAD.
+
 ## What conversion does and does not recover
 
 Mesh-to-B-Rep conversion recovers a shape. It recovers no sketches, no constraints, no dimensions, and no feature history. A cylinder comes back as a many-sided prism with no circular edge to select; a fillet comes back as thousands of facets. `ParametricFeatureMeshConvertOperationType` only means the convert operation re-runs when the mesh changes — it does not restore parameters.
@@ -204,10 +223,10 @@ written by a solid modeller has vertices on the analytic surface to float
 precision and a bimodal dihedral distribution — facet pairs from one planar face
 meet at exactly zero. A scan has neither. `record.regime` carries the decision,
 both readings behind it, and any caller override (`regime: auto|tessellation|scan`).
-Three consequences follow. `noise-model-inconsistent` no longer fires on a
+Three consequences follow. `noise-model-inconsistent` does not fire on a
 noise-free mesh, where the two estimators are *meant* to disagree because one
-absorbs curvature and the other measures the facet turn angle: it fired on all 11
-production parts and now fires on none.
+absorbs curvature and the other measures the facet turn angle; measured across
+11 production parts, the refusal fires on none of them.
 
 **The regime decides which estimator `sigma` comes from, and it is detected
 before the selection rather than after it.** Estimator B declares its own

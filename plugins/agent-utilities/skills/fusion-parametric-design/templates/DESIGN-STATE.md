@@ -1,6 +1,6 @@
 # Design State
 
-Use one copy per Fusion design. Replace the instructional text with project facts; do not mark an unperformed check as passed.
+Use one copy per Fusion design that runs the skill's automation and release lanes — a project with a manifest, verification evidence, or exports. Ordinary modeling needs only the recorded document identity (dataFile id, project and folder ids) until a handoff is requested. Replace the instructional text with project facts; do not mark an unperformed check as passed.
 
 ## Intent and current variant
 

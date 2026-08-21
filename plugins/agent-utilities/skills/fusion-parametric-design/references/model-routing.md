@@ -12,6 +12,12 @@ Which model and effort each worker gets: defer to the tier table and, when prese
 
 The dispatcher also arbitrates the single live Fusion writer: at most one mutating worker at a time; read-only workers may run concurrently. Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
 
+## Ordinary modeling: one Fusion operator, no reviewers
+
+For ordinary Fusion modeling and visual edits, the dispatcher spawns **one Fusion-operating worker** and keeps it. That single worker inserts components, builds features, inspects natively, captures views, and iterates on the user's feedback. There is no reviewer before a visible result, no parallel candidate builders, and no swarm — a simple modeling task is never an agent-orchestration exercise.
+
+The one exception is narrow: a specialist consultation for a missing Fusion capability or a documented API question, spawned only after direct native attempts have failed, and only when its answer leads directly to one native Fusion action. Advice that proposes infrastructure instead of a Fusion action is declined. Fan-out beyond the single modeling worker belongs to the automation lanes — parallel host-side report diffs, project builds, cache warms — never to modeling.
+
 ## Why economy is safe here at all
 
 The skill's CLI and generated transactions validate fail-closed: a malformed manifest is refused, a missing preset is refused before PrusaSlicer runs, a drifted export binding fails the transaction, a deviation run that cannot establish containment reports `not-established`. A weak model driving these paths can therefore produce refusals — never silent wrongness. That property is the entire justification for routing mechanical work to a cheap model; where it does not hold (open-ended design judgment the contract cannot check), the frontier tier holds the pen.

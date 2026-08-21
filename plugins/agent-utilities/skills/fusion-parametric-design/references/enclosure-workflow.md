@@ -13,8 +13,10 @@ For each item create:
 - one or more `<Function> Keep-Out` (role `keepout`) components.
 
 Names are plain words for the browser; the role is the `role` attribute in the
-`fusion_parametric_design` group, written by the scaffold from the manifest
-(`references/design-doctrine.md` § Naming).
+`fusion_parametric_design` group (`references/design-doctrine.md` § Naming; in
+the automation lanes the scaffold writes it from the manifest). For a purchased
+part, the canonical linked catalog component is the reference model — source it
+first (`references/data-and-catalog.md`).
 
 The reference model should expose:
 
@@ -99,7 +101,51 @@ Supports should contact intended load-bearing surfaces. Retainers must not crush
 
 For variable-height electronics, use local roof height where it materially reduces bulk, but preserve manufacturable transitions and lid structure.
 
-## 7. Closed and service assemblies
+## 7. Wiring and terminations
+
+Wiring is part of the design when the design is built around electrical
+modules — LED strips and displays, IMUs and sensors, buttons, step-down
+converters, power injection, existing boards. This is module-to-module hookup,
+not PCB design: the deliverable is a design that shows where wires run, at
+what gauge, ideally with the voltage and current each run carries, and with
+real terminations at the ends.
+
+**Wire runs are native geometry.** The expert technique is a 3D sketch path —
+fit-point splines routed through the enclosure — swept with Pipe or Sweep at
+the wire's outside diameter for its gauge, with appearances matching the real
+wire colors and bend radii the actual wire tolerates. Wire channels, strain
+relief, and grommet features in the enclosure are ordinary native modeling,
+and wire clearance is checked with native Measure and Interference like
+everything else.
+
+**Electrical metadata is base-tier recorded data.** Gauge, conductor count,
+voltage, and current per run live in component/body descriptions and
+attributes — no paid data-management extension assumed. The agent may add
+gentle advisory notes (a gauge that looks thin for a stated current is worth
+saying), but this is recorded data and advice, never a host-side
+electrical-validation engine: the validation-framework prohibition applies
+here exactly as it does to geometry, and electrical safety review stays
+outside CAD (`references/verification-contract.md`).
+
+**Terminations are components.** Ferrules, fork and ring terminals, JST and
+other connector housings, and headers get the same treatment as all purchased
+hardware: catalog or manufacturer CAD first, provisional simple geometry when
+that is enough, stored and reused through the catalog doctrine
+(`references/data-and-catalog.md`), and placed at wire ends so the assembly
+shows real terminations.
+
+**What Fusion does not provide, plainly.** Base Fusion has no general harness
+or cable-routing environment, and the Electronics workspace is PCB design —
+not the vehicle for module hookup (an MCP electronics-read capability, where
+present, reads that PCB-oriented workspace and is not this). Do not hunt for a
+nonexistent native harness tool, and do not invent a framework to fake one:
+wire modeling is ordinary sweep/pipe modeling with recorded metadata.
+
+Proportionality applies: wires appear when they matter to the design — exits,
+channel sizing, clearances, service loops — and not every task needs a full
+harness model.
+
+## 8. Closed and service assemblies
 
 Verify at least these states:
 
@@ -112,9 +158,10 @@ Verify at least these states:
 
 For a wearable, also check smooth body-facing surfaces, local stiffness, garment attachment, and hard-edge isolation.
 
-## 8. Release evidence
+## 9. Release evidence
 
-Produce:
+After the user approves the shape, and when a release or handoff is requested,
+produce:
 
 - parameter/source ledger;
 - component transform ledger;

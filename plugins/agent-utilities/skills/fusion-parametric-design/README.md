@@ -1,12 +1,14 @@
 # Fusion Parametric Design Skill
 
-A Fusion-native adaptation of the strongest workflow disciplines in Nurb: research before geometry, explicit measurement provenance, editable parameters, reference and packing models, functional keep-outs, numerical inspection, assembly verification, print-aware handoff, and honest unsupported-capability boundaries.
+The skill is an expert Fusion operator: the agent operates Fusion through MCP the way a skilled human user operates it — correct Fusion project and file placement first, purchased parts sourced and cataloged as linked components, native features built and edited directly in small bounded operations, native Inspect tools for every measurement and interference question, and quick visual iteration with the user. Fusion is the sole geometry and validation authority; MCP is transport; the agent never writes its own validation framework.
 
-The central difference is architectural:
+It also carries a Fusion-native adaptation of the strongest workflow disciplines in Nurb: research before geometry, explicit measurement provenance, editable parameters, reference and packing models, functional keep-outs, numerical inspection, assembly verification, print-aware handoff, and honest unsupported-capability boundaries.
+
+The central architectural rule:
 
 > **The Fusion document—not generated Python—is the editable CAD source of truth.**
 
-Python emitted by this package is limited to small, idempotent transactions that inventory the document, synchronize user parameters, ensure the component scaffold, or run verification. Product geometry should live as ordinary Fusion sketches, constraints, features, components, joints, and configurations.
+The host tooling below serves the skill's automation and release lanes — manifest-backed evidence, verification-bound exports, variant matrices, PrusaSlicer handoff, and mesh reconstruction. Python emitted by this package is limited to small, idempotent transactions that inventory the document, synchronize user parameters, ensure the component scaffold, or run verification. Product geometry lives as ordinary Fusion sketches, constraints, features, components, joints, and configurations.
 
 Project-specific geometry transactions are intentionally created against the connected Fusion release and its current API documentation; the host CLI does not ship a generic sketch/extrude generator that would become a second CAD source of truth.
 

@@ -56,13 +56,131 @@ class SkillContractTests(unittest.TestCase):
         self.assertTrue(description.group("value").startswith("Use when "))
         self.assertLess(len(frontmatter), 1024)
 
+    def test_expert_operator_philosophy_and_prohibitions_are_stated(self) -> None:
+        # The skill's spine: expert Fusion operation through thin MCP transport,
+        # with the validation-framework prohibition stated unconditionally.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "You are an expert Fusion user operating Fusion through MCP",
+            "sole authority for geometry, feature validity, interference, measurement, and inspection",
+            "Never create a validation framework",
+            "MCP is transport",
+            "stop and report the capability gap",
+            "Do not generate monolithic modeling scripts for ordinary design work",
+            "unless the user explicitly requests reusable automation, batch generation, or a repeatable product generator",
+            "Use Fusion's native built-in functionality comprehensively",
+        ):
+            self.assertIn(requirement, text, requirement)
+
+    def test_data_placement_and_catalog_gates_precede_geometry(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("Decide data placement before geometry", text)
+        self.assertIn(
+            "never begins in an arbitrary or unsaved `Untitled` document", text
+        )
+        self.assertIn("Insert Fastener", text)
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Insert Fastener",
+            "linked external components",
+            "canonical",
+            "two occurrences of one canonical",
+        ):
+            self.assertIn(requirement, catalog, requirement)
+
+    def test_base_fusion_first_and_no_extension_assumptions(self) -> None:
+        # Paid extensions (Manage, Simulation, ...) are never assumed present;
+        # part identity has a base-tier home and extensions get one gentle
+        # mention at most.
+        text = SKILL.read_text(encoding="utf-8")
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Base Fusion first",
+            "never assume an extension is present",
+            "part numbers and part identity require no Manage extension",
+            "no workflow built around the assumption of purchase",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("base-tier BOM", catalog)
+
+    def test_component_sourcing_is_proportionate(self) -> None:
+        # The CAD-search ladder is fitness-for-purpose, not absolute: a named
+        # provisional box is a legitimate occupancy component and sourcing
+        # never delays the visible-result loop.
+        text = SKILL.read_text(encoding="utf-8")
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for document in (text, catalog):
+            flat = " ".join(document.split())
+            self.assertIn("not a failure to source", flat)
+            self.assertIn("frequently wrong", flat)
+        self.assertIn("Fitness for purpose decides the fidelity", text)
+        self.assertIn("never delays the visible-result loop", " ".join(catalog.split()))
+
+    def test_supplied_scan_defaults_to_envelope_not_reconstruction(self) -> None:
+        # A scan the design fits around is an occupancy envelope derived with
+        # native means; the reconstruction lane is only for rebuilding the
+        # scanned object itself as editable CAD.
+        text = SKILL.read_text(encoding="utf-8")
+        doctrine = (SKILL_DIR / "references" / "mesh-reconstruction.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "A supplied scan is usually an envelope source, not a reconstruction job",
+            text,
+        )
+        self.assertIn("editable CAD model of the scanned object itself", text)
+        self.assertIn("an envelope, not a reconstruction job", doctrine)
+
+    def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
+        # Wire runs are sweep/pipe modeling with recorded metadata;
+        # electrical checking never becomes a host-side engine, and no native
+        # harness environment is pretended into existence.
+        text = SKILL.read_text(encoding="utf-8")
+        workflow = (SKILL_DIR / "references" / "enclosure-workflow.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("never a host-side electrical-validation engine", text)
+        flat = " ".join(workflow.split())
+        for requirement in (
+            "Wiring and terminations",
+            "never a host-side electrical-validation engine",
+            "no general harness or cable-routing environment",
+            "Terminations are components",
+        ):
+            self.assertIn(requirement, flat, requirement)
+
+    def test_automation_lanes_are_conditional_and_modeling_is_single_operator(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("never invoked for ordinary modeling or visual edits", text)
+        self.assertIn("two direct native Fusion approaches fail", text)
+        self.assertIn("No review agents before a visible result", text)
+        routing = (SKILL_DIR / "references" / "model-routing.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("one Fusion-operating worker", routing)
+        self.assertIn("no reviewer before a visible result", routing)
+
+    def test_skill_and_references_carry_no_transition_language(self) -> None:
+        # The skill describes how things work, in the present tense.
+        paths = [SKILL, *sorted((SKILL_DIR / "references").glob("*.md"))]
+        for path in paths:
+            lowered = path.read_text(encoding="utf-8").lower()
+            for word in ("legacy", "migration", "previously"):
+                self.assertNotIn(word, lowered, f"{path.name}: {word}")
+
     def test_skill_preserves_fusion_native_source_of_truth_and_research_gate(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         self.assertIn("The Fusion document is the product", text)
         self.assertIn("Research before asking for measurements", text)
         self.assertIn("Do not start fit-dependent geometry", text)
         # Browser names are humane; machine roles ride on attributes, with the
-        # legacy shouty prefixes recognized only as an adoption fallback.
+        # shouty name prefixes recognized only as an adoption fallback.
         self.assertIn("References/", text)
         self.assertIn("PD Trigger Envelope:1", text)
         self.assertIn("role `reference`", text)

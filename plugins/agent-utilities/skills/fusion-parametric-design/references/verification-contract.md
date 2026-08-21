@@ -1,5 +1,15 @@
 # Verification contract
 
+Scope: this contract governs the skill's automation and release lanes — the
+generated verification transaction, the export binding, variants, and the
+reconstruction gates. During ordinary modeling, inspection is native and
+direct: Measure, Interference, Section Analysis, Properties, and feature
+health, read straight from Fusion at sensible boundaries. The evidence
+machinery below is applied when a release, handoff, repeatable generator, or
+reconstruction requires it, and it is never a license to build agent-authored
+validation — every check here is either a native Fusion result or a
+fail-closed judgment shipped in this skill's tested tooling.
+
 A release passes only the checks applicable to its intended use. “Generated successfully” is not a verification result.
 
 ## Digital model integrity
@@ -103,7 +113,7 @@ Core generated scripts do not claim these checks automatically. Use a slicer, cu
 - Material temperature assumptions are compatible with nearby heat sources.
 - Electrical insulation, fuse, wire gauge, and voltage separation are reviewed outside CAD by a qualified method.
 
-Do not infer electrical or thermal safety solely from geometric clearance.
+Do not infer electrical or thermal safety solely from geometric clearance. Fusion simulation is extension-gated and its presence is never assumed: the base-tier structural evidence is conservative geometry, a coupon, or a physical proof test with an explicit safety factor.
 
 ## Physical validation
 

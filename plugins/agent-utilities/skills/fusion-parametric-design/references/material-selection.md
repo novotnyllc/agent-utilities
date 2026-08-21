@@ -110,4 +110,4 @@ Per-part `material.assumption` values must name the decided family or formulatio
 
 ## When the material changes
 
-A material change is a design change. Re-open, at minimum: every printed fit and clearance, snap and clip geometry, hinge thickness and orientation, boss and insert dimensions, wall thickness against the new stiffness, build orientation against the new anisotropy, support strategy against the new removal behavior, and any coupon result that was measured in the old material. Do not carry a coupon-verified clearance across a material change; it was evidence about a material that is no longer in the design.
+A material change is a design change. Re-open, at minimum: every printed fit and clearance, snap and clip geometry, hinge thickness and orientation, boss and insert dimensions, wall thickness against the new stiffness, build orientation against the new anisotropy, support strategy against the new removal behavior, and any coupon result that was measured in the old material. Do not carry a coupon-verified clearance across a material change; it is evidence about a material the design does not use.

@@ -1,5 +1,15 @@
 # Fusion MCP adapter contract
 
+MCP is transport. It is the channel through which the agent operates Fusion —
+never a programming environment in its own right. A Python snippet sent over it
+is short, direct, limited to one native operation or one tightly related
+feature sequence, and readable as the equivalent of a skilled user action in
+Fusion. Python sent over MCP must not become a CAD application, a
+geometry-generation framework, a persistent transaction system, a validation
+framework, a reporting framework, or a replacement for the Fusion browser and
+timeline. The generated transactions described below serve the skill's
+automation and release lanes; ordinary modeling is small direct operations.
+
 Autodesk's Fusion MCP advertises dynamic tools. This skill therefore defines capabilities, not fixed tool names.
 
 ## Capability binding
@@ -33,7 +43,7 @@ Every mutation transaction must:
 8. preserve enough output for audit and diff;
 9. be safe to run a second time.
 
-Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one tested Fusion script can atomically create the group. Conversely, do not pack the entire product into one opaque script.
+Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one script can atomically create the group. Conversely, never pack the entire product into one opaque script: a monolithic product-construction transaction is the anti-pattern this contract exists to prevent, whatever lane it appears in.
 
 ## Main-thread responsiveness
 
@@ -50,12 +60,13 @@ Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/
 Fusion's embedded Python is its own runtime; do not assume that a module
 available to the host Python is importable in Fusion. **Probe it — never quote a
 note, including this one.** Run `emit-capability-probe` against the live Fusion
-and read its report. That command exists because this section previously carried
-a module inventory that was wrong, and the wrong inventory drove an architecture
-decision.
+and read its report. That command exists because any written module inventory
+goes stale the day Fusion auto-updates its interpreter, and a stale inventory
+drives wrong architecture decisions.
 
-What a later live probe actually found, and what the earlier note got wrong:
-`secrets`, `sqlite3`, `ctypes` and `ensurepip` all import. `numpy` raised a plain
+What a live probe finds on one recorded configuration, kept here as an example
+of what only a probe can establish: `secrets`, `sqlite3`, `ctypes` and
+`ensurepip` all import. `numpy` raised a plain
 `ModuleNotFoundError` — **not installed**, which is a different fact from
 unloadable, and it was corrected by installing a matching wheel: numpy 2.5.2 from
 a `cp314` / `macosx_11_0_arm64` wheel imported inside Fusion and ran
