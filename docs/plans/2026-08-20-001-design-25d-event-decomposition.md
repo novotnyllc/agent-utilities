@@ -991,10 +991,15 @@ stations; it is termination on evidence:
    fractions remain the seed set; all mechanics, tolerances, and the
    complete-linkage loop correspondence of §A.2 unchanged).
 3. **Compare** each interval's triangle support against the generative
-   prediction: model residual over the interval's side regions, triangle
-   provenance that no section crossed, and side-region endpoint evidence
-   inside the interval each demand another section at the implicated
-   station. Candidate stations are generated deterministically — the
+   prediction. Insertion is triggered only by **unexplained or
+   prediction-contradicting** support: side-region residual structure
+   exceeding the fitted model's bound over a sub-interval, triangles the
+   fitted side surfaces do not explain, or side-region endpoint evidence
+   inside the interval. **Model-consistent unsectioned support does not
+   trigger** — a constant slab's many axial triangle rows are certified by
+   the fitted side surfaces' own residual bound, not by sectioning every
+   row, otherwise the loop degenerates to one section per row and exhausts
+   the budget refusing valid slabs. Candidate stations are generated deterministically — the
    quantized location of the implicating evidence (residual-peak station,
    provenance-gap midpoint, endpoint station), quantization and tie-breaks
    by the 007 §2.3 idiom — so two runs section the same stations; the exact

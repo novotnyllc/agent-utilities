@@ -755,12 +755,21 @@ symmetric pair-spacing edit leaves the centroid fixed; a shared station
 parameter can drive six unrelated slabs. The scored standard becomes, per
 parameter:
 
-1. **Expected influence set**, authored from the program's own dependency
-   edges (the FHG knows which support each parameter should move — design
-   2026-08-21-001 §8): the regions expected to move, with direction and
-   magnitude class; the regions expected NOT to move; the local observable
-   (local radius, local signed-distance field over the target region's
-   triangles).
+1. **Expected influence set**, authored from the program's dependency
+   edges **and validated against the evidence that licensed them** — the
+   map is never taken on the candidate's own word, or causal E would
+   certify exactly the over-coupling it exists to detect (a program that
+   wrongly shares one parameter across unrelated regions lists them all as
+   expected targets and passes trivially). Every multi-region coupling in
+   the expected set must cite the licence that coupled it: the regularity
+   class certificate (equality/pattern — measured, candidate-independent
+   evidence) or the geometric construction that makes the coupling
+   necessary (a station bounding the features on its plane). A coupling
+   with no licence is `influence-map-unlicensed` — a program defect
+   surfaced by the proof, not a passing map. The set then lists: the
+   regions expected to move, with direction and magnitude class; the
+   regions expected NOT to move; the local observable (local radius, local
+   signed-distance field over the target region's triangles).
 2. **Perturb, recompute, and verify**: the intended support moved in the
    expected direction/magnitude; **non-target support stayed invariant
    within declared tolerance**; constraints and feature health stayed
@@ -785,7 +794,9 @@ never reported across different gates" rule, applied to E).
 New closed-set additions: `parameter-nontarget-moved` (the non-target
 invariance failure, distinct from `parameter-inert`), `influence-map-absent`
 (a parameter emitted without an expected influence set — a program defect,
-not a proof gap). The editability spec schema gains the influence-set
+not a proof gap), `influence-map-unlicensed` (a multi-region coupling in
+the expected set citing no class certificate or necessary construction —
+§7.3's anti-circularity rule). The editability spec schema gains the influence-set
 fields; the selection record (design 2026-08-21-001) is a scoreboard input
 artifact. §4 Run A's procedure gains: author influence maps from the
 selection record rather than hand-written observables where the program

@@ -1631,7 +1631,13 @@ in both modes.
   the record reports that conditional power beside σ̂ rather than a single
   10σ̂ line. A caller-facing floor derived from iid arithmetic on a
   correlated scan is exactly the substitution this corpus refuses
-  elsewhere.
+  elsewhere. This conditioning binds **every downstream consumer of the
+  floor**, by name: the spline fit-point spacing floor ("spacing floor at
+  10σ̂") of designs 009/010 reads the regime-specific power record where
+  one exists and retains the 10σ̂ arithmetic only as the licensed iid
+  fallback — otherwise those consumers would reject recoverable profiles
+  the measured power supports, or admit noise-scale detail where the
+  measured regime is worse than iid.
 
 ### §3 Threshold defaults under the sweep rule
 
