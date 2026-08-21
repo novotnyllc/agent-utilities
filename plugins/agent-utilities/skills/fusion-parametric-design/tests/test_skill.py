@@ -164,10 +164,10 @@ class SkillContractTests(unittest.TestCase):
         # never the first answer to a UI-only capability.
         self.assertNotIn("ask the user to run that one UI command", text)
 
-    def test_joinery_is_proposed_proactively_as_real_geometry(self) -> None:
-        # Joins and print-driven part splits are surfaced with reasons, modeled
-        # with cataloged fasteners and joints, and pattern-matched against the
-        # user's prior designs.
+    def test_joinery_is_decided_and_modeled_by_default(self) -> None:
+        # The expert chooses the join and builds it in — with cataloged
+        # fasteners and joints, pattern-matched against the user's prior
+        # designs — surfacing the reason in the visual loop, not proposing.
         text = SKILL.read_text(encoding="utf-8")
         workflow = " ".join(
             (SKILL_DIR / "references" / "enclosure-workflow.md")
@@ -175,15 +175,17 @@ class SkillContractTests(unittest.TestCase):
             .split()
         )
         for requirement in (
-            "Joinery is proposed proactively, and always as real geometry",
+            "Joinery is decided and modeled, not proposed",
             "would print better split",
             "heat-set inserts",
-            "modeled or immediately modelable, never as prose only",
+            "without asking first",
+            "real geometry, never prose",
             "reuse beats invention",
-            "dropped without ceremony",
+            "Act, show, iterate",
         ):
             self.assertIn(requirement, text, requirement)
         self.assertIn("print-driven part split", workflow)
+        self.assertIn("model it by default", workflow)
         self.assertIn("pattern sources", workflow)
 
     def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
