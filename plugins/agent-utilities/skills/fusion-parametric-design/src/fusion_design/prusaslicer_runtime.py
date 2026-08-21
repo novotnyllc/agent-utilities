@@ -259,13 +259,19 @@ class PrusaSlicerRuntime:
         root = Path(datadir).expanduser()
         if not root.is_absolute():
             raise ValueError(f"An explicit absolute PrusaSlicer datadir is required; got {datadir!r}.")
-        if timeout <= 0:
-            raise ValueError("timeout must be greater than zero")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("timeout must be a positive finite number")
+        try:
+            normalized_timeout = float(timeout)
+        except (OverflowError, ValueError) as error:
+            raise ValueError("timeout must be a positive finite number") from error
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("timeout must be a positive finite number")
         if output_limit < 128:
             raise ValueError("output_limit is too small to retain bounded diagnostics")
         self.executable = resolve_executable(executable)
         self.datadir = root
-        self.timeout = float(timeout)
+        self.timeout = normalized_timeout
         self.output_limit = int(output_limit)
         self.runner = runner
         self._version_result = None

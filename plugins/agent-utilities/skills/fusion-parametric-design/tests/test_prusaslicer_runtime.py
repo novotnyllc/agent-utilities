@@ -58,6 +58,13 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 PrusaSlicerRuntime(_binary(Path(temp)), "relative")
 
+    def test_rejects_invalid_timeouts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for timeout in (True, None, "30", 0, -1, 10**1000, float("nan"), float("inf")):
+                with self.subTest(timeout=timeout), self.assertRaisesRegex(ValueError, "positive finite"):
+                    PrusaSlicerRuntime(_binary(root), root, timeout=timeout)
+
     def test_fingerprints_are_stable_and_ignore_unrelated_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
