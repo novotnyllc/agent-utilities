@@ -166,8 +166,13 @@ as evidence producers feeding the FHG.
    rule proceeds until the rule's place in the FHG competition is stated.
 5. **Scoreboard P / precision / causal-E landed** (003 Amendment §7)
    **before emitters are optimized** — metrics create the optimizer; a lane
-   optimized against the five-cell vector and then measured against the
-   seven-cell one repeats the non-vacuity failure in slow motion.
+   optimized against the old five-cell vector and then measured against the
+   completed one (RC, V as a precision/recall pair, causal E, P, C, with H
+   the guardrail) repeats the non-vacuity failure in slow motion. That
+   corpus schema — RC/V/E/P/C/H — is the governing scoreboard for every
+   selection record; the reviewer's Phase A vector G/F/E/P/C/H (§7) is its
+   own vocabulary, mapped G→RC+deviation, F→V, E→E, P→P, C→C, H→H, and the
+   review's own divergence table already awards the corpus vector the win.
 6. **The evidence lanes, in their previously ordered sequence, re-expressed
    as evidence-feeding-FHG**: amended split licence → region-tree skeleton
    with lineage → cross-cut + correlation model (one shipment, separation

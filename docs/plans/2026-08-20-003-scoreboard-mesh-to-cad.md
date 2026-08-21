@@ -716,14 +716,25 @@ and, where CAD ground truth exists, program-size ratio against the
 reference timeline and feature-graph similarity.
 
 P is reported as this census-plus-diagnostics, never collapsed to a scalar
-(§1.6's rule); the identity claim binds the shared census only. Ranking
-position: after E, before C (§1.6 marker). H remains the guardrail over
-all.
+(§1.6's rule); the identity claim binds the shared census only. Where P
+must *rank* two candidates or two lanes (the §1.6 ordering), the comparator
+is exactly G5's: lexicographic over the shared census in its declared
+order, lower is better on every item; diagnostics never rank anything.
+Ranking position: after E, before C (§1.6 marker). H remains the guardrail
+over all.
 
 ### 7.2 V grows feature precision
 
-    feature recall    = correct recovered feature instances ÷ ground-truth (or evident-table) instances
-    feature precision = correct recovered feature instances ÷ all emitted feature instances
+```text
+feature recall    = correct recovered feature instances ÷ ground-truth (or evident-table) instances
+feature precision = correct recovered feature instances ÷ all emitted feature instances
+```
+
+Zero emitted instances makes precision's denominator zero: the part reads
+`precision: unmeasured-no-emissions` — never 1 (nothing was hallucinated)
+and never 0 (nothing was wrong) — and aggregates skip such parts with the
+skipped count reported beside the aggregate; a zero-denominator recall
+(empty evident table) already reads `unmeasured` under the §1.2 rule.
 
 Recall alone is gameable by over-emission: a system that finds the five
 real holes and hallucinates six more keeps perfect recall. V is the pair,

@@ -135,7 +135,12 @@ archetype decision itself is now judged, not assumed.
 
 Program v3 (v2 = 001's slab blocks; the version discipline of 001 §Schema
 deltas applies — v2 programs refuse loudly under v3 validators, replanning is
-one command). The operation set the search may compose:
+one command). **Version coordination, explicit:** v3 is a superset schema —
+001's v2 slab blocks ride inside it unchanged — and 001's `PROGRAM_VERSION →
+2` declaration stands for its lane until the FHG implementation PR performs
+the 2→3 bump, the same cross-lane coordination 001 §Deviations item 4
+already records for 009's additions; no validator ever accepts two current
+versions at once. The operation set the search may compose:
 
 | Operation | Emission surface (exists today unless noted) | Polarity |
 | --- | --- | --- |
@@ -144,7 +149,7 @@ one command). The operation set the search may compose:
 | `cut-extrude` (pocket, slot, step, counterbore by profile) | `sketch-extrude`, **`cut`** (exercised for holes; generalized here) | subtractive |
 | `revolve` (add or cut) | `revolve` archetype | either, declared |
 | `hole` (bore, counterbore, countersink) | `hole` archetype | subtractive |
-| `shell` | `shell`/`hollow` (001 §D) | subtractive |
+| `shell` | archetype kind `shell`, operation token `hollow` — 001 §D's exact vocabulary, reused unchanged (no second token is minted) | subtractive |
 | `fillet` / `chamfer` | `fillet` (`finish`); chamfer is a vocabulary addition with its own licence | dressing |
 | `sweep` / `loft` | 009's reserved rungs (design exists; emitters pending) | either, declared |
 | `pattern` (rectangular/circular) + `equal`/shared-parameter binding | new emission surface; licensed by regularity classes | inherits member polarity |
@@ -169,7 +174,7 @@ implicit rule" to "a named admission condition the record cites":
 | `hole` | inward cylinder (`material_side == "inside"`) matching centre/diameter within `entity_match_tolerance_mm`; full-turn or licensed-arc span; containment against the spans it crosses (001 §B composition) |
 | `shell` | 001 §D's three measurements verbatim: opposing pairs, ray-cast inner/outer discrimination, one t everywhere; competes in the search against the equivalent explicit interior cuts (§6 decides; 001 §D's fallback semantics unchanged) |
 | `fillet` / `chamfer` | torus/blend-cylinder adjacency to exactly two accepted primary regions with tangency (007 §6 blend rule); chamfer: planar strip at a licensed angle between two primaries, same adjacency shape |
-| `revolve` | router revolution verdict; axis licensed by the datum or a coaxial class |
+| `revolve` | router revolution verdict; axis licensed by the datum or a coaxial class; **polarity declared and evidenced per §5** — a subtractive revolve additionally requires material-outside / occupancy-removal evidence, the same polarity bar as `cut-extrude` |
 | `sweep` / `loft` | 009's rung licences, unchanged |
 | `pattern` | a regularity class (complete linkage or joint fit — 002 §A.6 semantics; union-find banned) **plus** a lattice/circle fit passing its declared gate (004 consensus item 6); otherwise members stay independent and the compactness term simply pays for it |
 | `component` | 004 §0/§4.1's licences at the claimed level, unchanged — the FHG never upgrades a claim level |
@@ -271,14 +276,18 @@ consulted; ties within a gate's declared tolerance proceed together:
    to the emission deviation thresholds — a program that cannot meet the
    grade the emitter will apply is dead on arrival).
 3. **G3 — unexplained support.** The area the candidate leaves unclaimed may
-   not exceed the best surviving candidate's unclaimed area by more than
-   `program_unexplained_slack` (declared). Unclaimed stays a first-class
+   not exceed the baseline by more than `program_unexplained_slack`
+   (declared), where the baseline is a **set-level aggregate computed after
+   the search completes**: the minimum unclaimed area over *all* G1–G2
+   survivors of the full constructed candidate set — never a running best
+   that depends on expansion order or beam contents. Unclaimed stays a first-class
    outcome (007 §6); this gate only forbids *choosing* a program that
    explains less for no compensating reason.
 4. **G4 — unsupported inference.** Inferred geometry (virtual closures,
    continuation completions, hidden caps — the derived-geometry ledger, 002
    §A.2 rule 7) is charged by area and count; a candidate may not carry more
-   unsupported inference than the best surviving candidate plus
+   unsupported inference than the set-level baseline (minimum charge over
+   all G1–G3 survivors, aggregated after search completes, as in G3) plus
    `program_inference_slack` (declared). Nominal snaps count here too: a
    snap without its 007 §8.5 identifiability licence is unsupported
    inference by definition and is never emitted anyway.
@@ -343,7 +352,10 @@ against the other.
   exactly the silent first-rule-wins this design exists to end.
 - **Determinism:** KTD-8 discipline verbatim — every ordering derives from
   content-addressed hashes; gate comparisons use quantized values (007
-  §2.3); ties break by candidate serial then node ID; numpy/BLAS build
+  §2.3); ties break by the candidate's **content hash over its canonical
+  serialized program** (input collections canonically ordered first), then
+  by node content hash — never by an incidental construction serial, which
+  would leak expansion order into selection; numpy/BLAS build
   recorded. Two runs on one dump produce byte-identical selection records.
 - **Bounded memory:** the graph stores support as ranges over the partition
   permutation (002 PR 1), and candidates share structure (a program is a

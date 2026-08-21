@@ -613,8 +613,10 @@ mechanism working, not breaking.
   validator: `event_merge_sigmas`, `slab_constancy_tolerance_mm` (+ the two
   extra station fractions), `loop_material_consensus_fraction`,
   `loop_attribution_min_fraction`, `shell_thickness_sigmas`,
-  `shell_footprint_overlap_min`. Everything per-pair is derived from the
-  fits' own sigmas; no new millimetre constants.
+  `shell_footprint_overlap_min`; Amendment B.2 adds
+  `slab_certification_max_sections` and `reservation_gap_max_fraction`
+  (the latter shared with design 2026-08-21-001 §6 G2). Everything per-pair
+  is derived from the fits' own sigmas; no new millimetre constants.
 - House rules held: numpy in-Fusion only (this design's host-side additions
   are stdlib arithmetic over ≤17k-triangle dumps); `setByPlane` never
   appears (every plane is an offset of origin geometry, A/C); no process is
@@ -992,12 +994,21 @@ stations; it is termination on evidence:
    prediction: model residual over the interval's side regions, triangle
    provenance that no section crossed, and side-region endpoint evidence
    inside the interval each demand another section at the implicated
-   station.
+   station. Candidate stations are generated deterministically — the
+   quantized location of the implicating evidence (residual-peak station,
+   provenance-gap midpoint, endpoint station), quantization and tie-breaks
+   by the 007 §2.3 idiom — so two runs section the same stations; the exact
+   residual aggregation statistic is the implementing PR's
+   `_declared_number` scope, declared with rationale like every other
+   threshold.
 4. **Insert and repeat** until every interval is certified below the
    declared geometric uncertainty bound (`slab_constancy_tolerance_mm`, same
    declared number, same rationale) — or **refuse** `slab-section-inconstant`
    naming the interval and the unresolved evidence, exactly as before.
-5. **Budget:** `slab_certification_max_sections` (declared, with rationale)
+5. **Budget:** `slab_certification_max_sections` (declared, with rationale;
+   registered in the consolidated threshold list of §Vocabulary alongside
+   the other declared numbers, `experimental-default` under 002 §B.2's
+   sweep rule, value recorded hash-bound in the certification record)
    caps the loop; exhausting it is the refusal, never a silent pass. The
    certification record lists every station sectioned, which evidence
    demanded it, and the bound each interval achieved.

@@ -1606,8 +1606,10 @@ or a parametric bootstrap of the F statistic under the constrained model
 with the record's noise structure (equivalently, GLS whitening at the
 recorded range where implementable) — and recorded as model-selection
 evidence. The classical F with n_eff substitution remains only the
-no-record fallback, flagged approximate exactly as §7.3 already flags its
-own inflation; the `joint_rms_growth` backstop is retained unconditionally
+no-record fallback (a regime where calibration was never required — a
+calibration that ran and refused, `correlation-model-unidentified`, fails
+closed per -002 §A.4 instead), flagged approximate exactly as §7.3 already
+flags its own inflation; the `joint_rms_growth` backstop is retained unconditionally
 in both modes.
 
 ### §2 σ scoped; resolution claims made regime-conditional (adoption 6; abandonment 4)

@@ -223,7 +223,13 @@ thing that deliberately did not.*
   (`convert-budget-exceeded`, derived from the measured conversion-behaviour
   record that P2b/M0 seed and the per-call telemetry keeps feeding) plus
   **post-call elapsed-time telemetry**. Explicit user cancellation enters
-  only if a probe ever verifies a real Fusion cancellation API.
+  only if a probe ever verifies a real Fusion cancellation API. Stated
+  honestly: the pre-call budget is a *risk bound from measured behaviour*,
+  not a hard execution bound — a region inside the budget can still stall
+  the synchronous call, and with no verified cancellation API that residual
+  UI-thread availability risk is accepted and documented, one more reason
+  convert stays an opportunistic accelerator rather than a load-bearing
+  stage.
 - **The spatial-index verdict is corrected** (adoption 11): "delete the grid,
   numpy broadcasting covers it" was underspecified to the point of danger —
   literal broadcast pairwise distances at N ≈ 10⁶ is an O(N²) intermediate.

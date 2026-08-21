@@ -89,7 +89,7 @@ it supports:
 | --- | --- | --- |
 | **`surface-region`** | these triangles share a geometric model | a gated fit (the segmentation lane's product) |
 | **`geometric-subobject`** | the exterior surface admits a stable separable partition here | boundary/separability evidence + partition stability + exact ownership + closure accounting (the C1 partition licence, §4.1) |
-| **`physical-thing`** | independent-object evidence exists **beyond** geometric separability | an independent channel: an observed gap or seam, disconnected source topology, a mutually occluding boundary, a uniquely evidenced assembly interface, or an explicit caller declaration **[made machine-checkable 2026-08-21 — the closed predicate set of Amendment §B.2]** |
+| **`physical-thing`** | independent-object evidence exists **beyond** geometric separability | an independent channel, machine-checkable per Amendment §B.2's exact predicate names: `observed-gap-or-seam`, `disconnected-source-topology` (closed, non-nested), or `caller-declaration` — tier-S; `mutual-occlusion-boundary` and `second-view-interface` corroborate only. (A second capture *showing* separation satisfies `observed-gap-or-seam` from that capture; the earlier prose "uniquely evidenced assembly interface" resolves to that predicate, not to a predicate of its own.) |
 | **`delivery-component`** | the output policy chooses a Fusion component as an editing unit | the C2 delivery licence (§4.1) |
 
 Rules that follow, binding on every stage and record below:
@@ -1249,7 +1249,12 @@ is reaffirmed as blocking.*
 §0's "independent channel" prose becomes a **closed predicate set**, each a
 record-backed check the C cell's `physical-thing-evidenced` numerator must
 cite by name (field: `physical_evidence[]`; the validator rejects an
-evidenced claim with an empty list). The set is **two-tiered**, because
+evidenced claim with an empty tier-S set, and **resolves every
+`record-ref`**: the referenced record must exist, its hash and
+`partition_version` must verify, its subject must be the claiming thing,
+and its predicate result must pass the predicate's own declared thresholds
+— an unrelated or stale record entry is a validation failure, not
+evidence). The set is **two-tiered**, because
 several observations are consistent with one part observing itself: a
 hollow molding's inner shell is dual-graph-disconnected from its exterior,
 an integral boss self-occludes its base, and a second view of an interface

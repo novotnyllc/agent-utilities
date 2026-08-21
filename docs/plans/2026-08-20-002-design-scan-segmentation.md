@@ -1225,13 +1225,20 @@ consumers; it is not their common *answer*:
   parameters — not by scaling with a single global n/n_eff ratio (007
   §7.3's AR(1) inflation remains the fallback where no record exists,
   flagged approximate exactly as 007 already flags it);
-- **relation and snap uncertainty** consume the inflated covariances of the
-  specific parameter combinations they test (the §8.1 delta-method path),
-  never a raw length.
+- **relation and snap uncertainty** consume the fit record's inflated
+  parameter covariances through the 007 §8.1 delta-method path — stated
+  precisely so the no-sharing rule below is not self-contradictory:
+  covariance inflation is a **fit-record derivation** (it becomes part of
+  each fit's own record, like the fit parameters themselves), not a peer
+  consumer's private statistic, so relations reading fit-record covariances
+  is the ordinary record→consumer flow the pipeline has always had.
 
 Each consumer's derivation is recorded beside the verdict it produced,
-citing the record's hash. No consumer's derived statistic is an input to
-another consumer; only the frozen record is shared. Spatial effective
+citing the record's hash and, for covariance-mediated consumers, the fit
+record's covariance-derivation hash. No consumer's *own* derived statistic
+(block design, separation scale, null construction) is an input to another
+consumer; only the frozen record — and fit records built on it — are
+shared. Spatial effective
 sample size is not one universal scalar, and the record refusing to reach a
 sill (`correlation-model-unidentified`) still terminates the affected
 candidates as T3 — unchanged.
@@ -1284,6 +1291,11 @@ census):
 4. **Re-derive or confirm** each default from the curves, with the chosen
    operating point's rationale recorded; flat curves are recorded as
    insensitivity (a finding, not a failure); cliff edges move the default
-   away from the cliff by a declared margin.
+   away from the cliff by a declared margin. **Selection is validated on
+   held-out fixtures**: the operating point is chosen on a subset of each
+   fixture class and confirmed on fixtures that played no part in choosing
+   it (leave-one-fixture-out for the real-scan class, whose population is
+   smallest) — a default confirmed only on the fixtures that selected it
+   is calibration overfit wearing a sweep record.
 5. The sweep record (grid, curves, chosen values, fixture hashes) is a
    committed artifact cited by every `swept` label.
