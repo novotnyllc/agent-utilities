@@ -267,6 +267,10 @@ class SkillContractTests(unittest.TestCase):
             routing,
         )
         self.assertIn("single-operator until the lane ends", routing)
+        # The dispatcher shape is the cost architecture: cheap responsive
+        # front, effort escalated in the worker, never a swarm.
+        self.assertIn("token and cost efficiency through tier-matching", routing)
+        self.assertIn("Effort escalates in the worker", routing)
 
     def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
         # The adversarial-review hardening: the locked lane, the

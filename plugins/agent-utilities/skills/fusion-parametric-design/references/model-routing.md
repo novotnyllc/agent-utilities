@@ -6,9 +6,9 @@ This reference is the skill's **standalone doctrine**. The skill is used in harn
 
 ## The dispatcher operating shape
 
-The thread that uses this skill is a **dispatcher, not a worker**. It stays responsive to the user, classifies each piece of work by the work-shape table below, and hands substantial work to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
+The thread that uses this skill is a **dispatcher, not a worker**, and the shape exists for token and cost efficiency through tier-matching. The conversational thread stays responsive at a modest tier and effort by default — talking to the user and routing work does not need high effort, and probably should not run there. It classifies each piece of work by the work-shape table below and hands substantial work to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
 
-Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
+Effort escalates in the worker, where the work demands it: research passes, hard geometry strategy, and integration work get high effort as needed, while routine Fusion operation is tool-driving and usually mid-tier per the work-shape table. The cost architecture is a cheap responsive front, one persistent Fusion-operating worker at the tier the modeling actually needs, and escalated-effort workers only for the genuinely hard reasoning pieces — never a swarm. Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
 
 Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
 
