@@ -296,7 +296,9 @@ consulted; ties within a gate's declared tolerance proceed together:
    scale is ever substituted for a calibration that measurably could not
    identify one. The reservation contract is total: **candidate
    construction conditions on no reserved geometry at all** — not
-   parameters, not residuals, and not topology. Sections and slabs traverse
+   parameters, not residuals, and not hypothesis-level topology (loop
+   closure, adjacency, track correspondence); whole-mesh closure properties
+   are the one stated exception, below, because they feed no hypothesis. Sections and slabs traverse
    raw dump triangles (001 §B), so their extractors run **on the
    non-reserved subset only**: no reserved triangle contributes a section
    segment, a fitted parameter, a station estimate, a profile-entity fit, a
@@ -305,7 +307,17 @@ consulted; ties within a gate's declared tolerance proceed together:
    the flanking non-reserved segments' endpoints, labelled
    `reservation-gap` — no reserved-triangle geometry is consulted to place
    it — recorded per loop, and excluded from entity fitting and material
-   consensus (the 001 §A.4 closure-segment mechanics, reused). When the
+   consensus (the 001 §A.4 closure-segment mechanics, reused). **The mask
+   governs evidence, never topology**: global topology checks — manifold,
+   winding consistency, signed volume, and 001 §A.4's open-capture
+   precedence rule — evaluate the **full anchor mesh**, because closure is
+   a mesh property that feeds no fitted parameter (the same topology/loss
+   distinction throughout this contract), so boundary edges that exist
+   only because of the reservation mask are not capture boundaries and
+   never fire `capture-boundary-unclosed`; a genuinely open capture is
+   judged on the unmasked mesh exactly as 001 specifies, and the
+   licence-floor `slab-join` program stays constructible on ordinary
+   held-out runs. When the
    bridged fraction of a loop's length exceeds
    `reservation_gap_max_fraction` (declared), the loop is **ungradable for
    construction** and hypotheses needing it are not constructed — the
