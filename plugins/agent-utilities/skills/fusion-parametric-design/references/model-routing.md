@@ -18,6 +18,8 @@ The dispatcher spawns **exactly one persistent Fusion-operating worker for the w
 
 Ordinary modeling remains single-operator until the lane ends, not merely until the first screenshot: no reviewers, no parallel candidate builders, no swarm — a simple modeling task is never an agent-orchestration exercise. One read-only specialist consultation is allowed only after the hard stop and after the user directs the work to continue; the specialist does not touch Fusion, create artifacts, propose infrastructure, or reset the attempt budget, and its answer must identify one specific native Fusion action. Advice that proposes infrastructure instead of a Fusion action is declined.
 
+**Standalone degradation.** The dispatcher/decision-worker/executor shape applies when the session has subagent facilities. A session running this skill standalone — no worker facility at all — performs everything as the single agent in one live Fusion session: the same lane lock, attempt budgets, screenshot heartbeat, and single-operator discipline hold unchanged, with effort escalated within itself for decision-heavy moments. The tier shape is an optimization of the same discipline, never a prerequisite for it.
+
 Host-only work that never touches Fusion — documentation reads, offline computations, report diffs, project builds, cache warms — may run in parallel only in an activated machinery lane.
 
 ## Why economy is safe here at all

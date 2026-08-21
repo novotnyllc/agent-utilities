@@ -273,6 +273,10 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Effort escalates in the worker", routing)
         self.assertIn("Whatever is making decisions runs high, xhigh, or max", routing)
         self.assertIn("executor does not re-litigate", routing)
+        # Standalone harnesses run the same discipline as one agent; the tier
+        # shape is an optimization, never a prerequisite.
+        self.assertIn("Standalone degradation", routing)
+        self.assertIn("never a prerequisite", routing)
 
     def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
         # The adversarial-review hardening: the locked lane, the
