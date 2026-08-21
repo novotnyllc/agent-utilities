@@ -37,6 +37,12 @@ const SPAWN_PATTERNS = [
   [/\bos\s*\.\s*(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API"],
   [/\bfrom\s+os\s+import\b[^\n]*\b(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API import"],
   [/\bpty\b/, "pty"],
+  // Aliasing os away from its name has no honest use in a thin snippet; the
+  // aliased member calls it enables would otherwise slip the qualified-name
+  // patterns. Deeper evasion (__import__, getattr chains, importlib) is
+  // deliberate forging — the declared doctrine boundary, not a regex race.
+  [/\bimport\s+os\s+as\b/, "an os alias import"],
+  [/\b__import__\s*\(/, "__import__"],
   [/\bPopen\b/, "Popen"],
   [/\bposix_spawn\w*\s*\(/, "posix_spawn"],
   [/\bfork\s*\(/, "fork"],

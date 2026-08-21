@@ -34,6 +34,9 @@ test("blocks every process-invoking construct, marker or not", () => {
     "os\n  .\n  execv(path, args)",
     "from posix_things import posix_spawnp\nposix_spawnp(exe, argv, env)",
     "fork()",
+    "import os as platform_api\nplatform_api.system('echo hi')",
+    "from os import system as run_it",
+    "__import__('os').system('echo hi')",
     "from multiprocessing import Pool",
     "Popen(['ls'])",
   ]) {
