@@ -30,12 +30,22 @@ means "through the discovered capability, against the connected release."
 | Operation | Status |
 |---|---|
 | Deterministic export | Supported where Fusion's export capability is exposed: `emit-export` generates the ExportManager transaction for STEP/3MF/STL with in-script hashing, no-overwrite outputs, and an evidence-bound handoff index |
-| PrusaSlicer project handoff | Supported: `prusaslicer-project` writes a deterministic project 3MF from the verified export index plus declared intent — objects, orientation, plate grouping, presets by identifier, bed-aware placement with fail-closed fit checks, justified overrides. Presets are named, never cloned; only the printer's `bed_shape`/`max_print_height` are read |
-| Headless slicing | Supported, opt-in (`--slice`): reports the produced G-code's own print time and filament use, bound to the project and G-code hashes. The full printer/print/filament preset set is required — a partial set segfaults PrusaSlicer (exit 139), so the adapter refuses to invoke it that way |
+| Installed PrusaSlicer profile queries | Supported, authoritative for the pinned PrusaSlicer 2.9.6 runtime: `prusaslicer-profiles` invokes the executable's `--query-printer-models` and `--query-print-filament-profiles` actions, preserves exact identifiers, and reports structured failures rather than guessing |
+| Runtime and datadir evidence | Supported: query/project/slice results carry executable path and SHA-256, detected version, absolute datadir, deterministic profile-snapshot SHA-256, command kind, raw exit code/signal, and bounded stderr; executable or relevant profile changes fail closed as `snapshot_changed` |
+| PrusaSlicer project handoff | Supported: `prusaslicer-project` writes a deterministic project 3MF from the verified export index plus declared intent — objects, orientation, plate grouping, presets by identifier, and bounding-box bed placement with fail-closed footprint/height checks. Presets are named, never cloned; the selected printer's `bed_shape`/`max_print_height` are read from the authoritative query and are not copied into project config |
+| Offline profile resolution | Supported only when explicit: `--offline-profiles` uses the existing parser with `resolver: offline_parser`, `installed: false`, and compatibility `unknown`; it may generate an unsliced project but cannot be combined with `--slice` and is never an automatic downgrade |
+| Headless slicing | Supported, opt-in (`--slice`): reports the produced G-code's own print time and filament use, bound to the project, runtime, and G-code hashes. The full printer/print/filament preset set is required — a partial set can segfault PrusaSlicer (exit 139), so the adapter refuses to invoke it that way |
+| G-code tool audit | Supported conservatively after a text slice: bounded streaming recognizes complete `T<number>` selection lines and reports active tools plus a tool-change count only when flavor evidence is compatible; unknown or conflicting flavor evidence returns `available: false` |
 | Print time and filament estimates | Only from a real slice; nothing is estimated without one |
 | Printer and material profiles | Slicer-authoritative; this package never duplicates a machine or filament profile |
+| Native PrusaSlicer project metadata | Deferred: painted facets (`FacetsAnnotation`), variable layer heights, FullSpectrum/ColorMix, and native arrangement transforms require a version-gated bridge with load → save → inspect semantic equality; no Python key approximation or `libslic3r` dependency is shipped |
 | Structural and stress claims | Conservative FDM assumptions, coupons, and proof testing; Fusion simulation only where the user holds the extension that gates it |
 | Material decision | Supported as a recorded decision (family, formulation, source, confidence, coupon, risk) per `references/material-selection.md`; the package ships no numeric property database and no filament profile |
+
+The ownership boundary and pinned source areas are in
+`references/prusaslicer-source-contract.md`; the current minimal project and
+deferred native metadata boundary are in
+`references/prusaslicer-3mf-contract.md`.
 
 ## Reconstruction lane
 

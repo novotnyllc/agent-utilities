@@ -129,7 +129,8 @@ scripts/fusion-design check-editability --rebuild-record <rebuild-report.json> -
 scripts/fusion-design reconstruction-coverage <program.json> [--fit-record <fit.json>] [--rebuild-report <rebuild-report.json>] [--editability-verdict <verdict.json>] [-o account.json]
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
-scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH] [--offline-profiles]
+scripts/fusion-design prusaslicer-profiles --config-root DIR [--printer NAME] [--slicer-executable PATH]
 scripts/fusion-design fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]
 scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]
@@ -148,12 +149,17 @@ verification → export → PrusaSlicer project → slice is described in
 ### Release: verified export and slicing
 
 `emit-export` re-measures each printable part against its passing verification
-report and fails closed on drift; `prusaslicer-project` turns the export index
-plus declared manufacturing intent into a real PrusaSlicer project, presets by
-identifier and never cloned, and `--slice` runs a real headless slice whose
-G-code statistics are reported as produced, never estimated. `plan-variants`
-drives a declared product family through per-variant verification with
-verified restoration.
+report and fails closed on drift. `prusaslicer-profiles` queries the installed
+PrusaSlicer 2.9.6 runtime and reports exact profile identifiers plus executable
+and datadir fingerprints; `prusaslicer-project` consumes that authoritative
+inventory, keeps profiles by identifier, and fails closed on bed-footprint or
+height overflow. `--offline-profiles` is an explicit non-installed,
+non-authoritative, unsliced fallback only. `--slice` runs a real headless slice
+whose G-code statistics and conservative tool audit are reported as produced,
+never estimated. Native painted facets, variable layer heights, FullSpectrum,
+and arrangement metadata remain deferred until a version-gated native bridge
+proves semantic round-trip equality. `plan-variants` drives a declared product
+family through per-variant verification with verified restoration.
 
 ### Reconstruction: mesh → editable CAD
 

@@ -193,6 +193,11 @@ def _selected_presets(config_root: Path) -> tuple[dict[str, set[str]], dict[str,
     return selected, primary
 
 
+def selected_preset_defaults(config_root: str | Path) -> dict[str, str]:
+    """Return only the active identities recorded in ``PrusaSlicer.ini``."""
+    return dict(_selected_presets(Path(config_root).expanduser())[1])
+
+
 # Fields resolved from printer preset sections. Only these are retained when
 # parsing, so a vendor bundle's multi-kilobyte gcode blocks never stay in memory.
 _PRINTER_FIELDS = frozenset({"printer_model", "printer_variant", "inherits", "bed_shape", "max_print_height"})
@@ -1127,11 +1132,73 @@ def _layout(parts: list[dict[str, Any]], geometry: dict[str, Any]) -> list[dict[
     return plates
 
 
+def _geometry_override(override: dict[str, Any], printer: str) -> dict[str, Any]:
+    """Validate the one process-free geometry record supplied by the runtime.
+
+    The runtime owns the dimensions in authoritative mode; this function only
+    checks and canonicalizes the already-query-derived values. It deliberately
+    does not read profile files or infer a bed from missing fields.
+    """
+    if not isinstance(override, dict):
+        raise ValueError("geometry_override must be a mapping")
+
+    def number(key: str, *, positive: bool = False) -> float:
+        value = override.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"geometry_override.{key} must be a number")
+        value = float(value)
+        if not math.isfinite(value) or (positive and value <= 0):
+            qualifier = "positive " if positive else "finite "
+            raise ValueError(f"geometry_override.{key} must be a {qualifier}number")
+        return value
+
+    override_printer = override.get("printer", printer)
+    if not isinstance(override_printer, str) or not override_printer:
+        raise ValueError("geometry_override.printer must be a non-empty string")
+    if override_printer != printer:
+        raise ValueError(
+            f"geometry_override.printer {override_printer!r} does not match resolved printer {printer!r}"
+        )
+    max_height = override.get("max_print_height_mm")
+    if max_height is not None:
+        if isinstance(max_height, bool) or not isinstance(max_height, (int, float)):
+            raise ValueError("geometry_override.max_print_height_mm must be a number or null")
+        max_height = float(max_height)
+        if not math.isfinite(max_height) or max_height <= 0:
+            raise ValueError("geometry_override.max_print_height_mm must be a positive number or null")
+
+    bed_shape = override.get("bed_shape")
+    if bed_shape is None:
+        min_x = number("bed_min_x_mm")
+        min_y = number("bed_min_y_mm")
+        width = number("bed_width_mm", positive=True)
+        depth = number("bed_depth_mm", positive=True)
+        bed_shape = (
+            f"{_fmt(min_x)}x{_fmt(min_y)},"
+            f"{_fmt(min_x + width)}x{_fmt(min_y)},"
+            f"{_fmt(min_x + width)}x{_fmt(min_y + depth)},"
+            f"{_fmt(min_x)}x{_fmt(min_y + depth)}"
+        )
+    elif not isinstance(bed_shape, str) or not bed_shape:
+        raise ValueError("geometry_override.bed_shape must be a non-empty string")
+
+    return {
+        "printer": printer,
+        "bed_shape": bed_shape,
+        "bed_min_x_mm": number("bed_min_x_mm"),
+        "bed_min_y_mm": number("bed_min_y_mm"),
+        "bed_width_mm": number("bed_width_mm", positive=True),
+        "bed_depth_mm": number("bed_depth_mm", positive=True),
+        "max_print_height_mm": max_height,
+    }
+
+
 def build_project(
     manifest: Manifest,
     index_path: str | Path,
     output_path: str | Path,
     presets: ResolvedPresets,
+    geometry_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
@@ -1167,7 +1234,11 @@ def build_project(
     _assert_intent_matches_manifest(manifest, parts)
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
-    geometry = printer_geometry(presets.printer, presets.config_root)
+    geometry = (
+        _geometry_override(geometry_override, presets.printer)
+        if geometry_override is not None
+        else printer_geometry(presets.printer, presets.config_root)
+    )
     plates = _layout(parts, geometry)
 
     payload = _deterministic_zip(

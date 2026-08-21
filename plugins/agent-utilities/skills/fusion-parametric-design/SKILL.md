@@ -83,6 +83,8 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 - `references/enclosure-workflow.md` for the packing question actually at hand
 - `references/verification-contract.md` only in an activated release or automation lane
 - `references/mesh-reconstruction.md` only in an activated reconstruction lane
+- `references/prusaslicer-source-contract.md` when the release lane crosses into PrusaSlicer's source-owned behavior
+- `references/prusaslicer-3mf-contract.md` before generating or reviewing a PrusaSlicer project or its native metadata boundary
 - `references/capability-status.md` when checking whether an operation is supported, partial, or external
 - `references/unsupported.md` before promising a capability
 - `references/model-routing.md` when dispatching or choosing a model for skill work
@@ -383,14 +385,43 @@ When the user runs PrusaSlicer, the export index plus its declared `manufacturin
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project power-pod.fusion-project.json \
   --export-index export-index__<run>.json \
   --output build/project.3mf \
+  --config-root /absolute/path/to/PrusaSlicer-config \
   --printer "<installed printer preset>" \
   --filament "<installed filament preset>" \
   --print "<installed print preset>"
 ```
 
-The adapter binds the index to the manifest — matching hash, declared parts, and field-for-field `manufacturing_intent` agreement; **the manifest is the authority for print settings**, and a divergent index is refused. The chain manifest → verification → export → project → slice is propagated transitively, and a missing link fails closed. It writes one object per printable part, applies declared orientation, plate grouping, and quantity, and emits only the per-object overrides declared intent justifies. Presets are selected by identifier only — profiles stay in PrusaSlicer and are never cloned; only the printer's `bed_shape`/`max_print_height` are read, for bed-aware placement with fail-closed fit checks. `support_policy: explicit-regions` is refused rather than approximated. Output is deterministic and never overwrites.
+Before project construction, query the installed runtime when it is available:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-profiles \
+  --config-root /absolute/path/to/PrusaSlicer-config \
+  [--printer "<exact installed printer preset>"]
+```
+
+PrusaSlicer 2.9.6 is the authoritative resolver. The result carries the exact
+profile identifiers it emitted and compatibility evidence;
+and a runtime fingerprint: executable path and SHA-256, detected version,
+absolute datadir, deterministic profile-snapshot SHA-256, command kind, raw
+exit code/signal, and bounded stderr. A query failure is terminal for that
+operation; it never silently falls back to the offline parser or another
+datadir. The project result repeats `profile_resolution` and `runtime` so the
+slice can be attributed to the same executable and profile snapshot.
+
+The adapter binds the index to the manifest — matching hash, declared parts, and field-for-field `manufacturing_intent` agreement; **the manifest is the authority for print settings**, and a divergent index is refused. The chain manifest → verification → export → project → slice is propagated transitively, and a missing link fails closed. It writes one object per printable part, applies declared orientation, plate grouping, and quantity, and emits only the per-object overrides declared intent justifies. Presets are selected by identifier only — profiles stay in PrusaSlicer and are never cloned. The selected printer's `bed_shape` and `max_print_height` are read for deterministic, bounding-box placement with fail-closed footprint/height checks; this is not collision-accurate polygon nesting or physical fit proof. `support_policy: explicit-regions` is refused rather than approximated. Output is deterministic and never overwrites. See `references/prusaslicer-source-contract.md` and `references/prusaslicer-3mf-contract.md` for the ownership boundary.
+
+`--offline-profiles` is an explicit escape hatch to the existing `.ini`/vendor
+parser. It is labeled `resolver: offline_parser`, `installed: false`, and
+`compatibility: unknown`; it may generate an **unsliced** project only. The CLI
+refuses `--offline-profiles --slice`, and an authoritative runtime failure does
+not trigger this mode automatically.
 
 Pass `--slice` to also run PrusaSlicer headlessly on the generated project. The `slice` block carries the statistics the produced G-code actually contains — print time, filament in mm/cm³/g — under a `bindings` map naming the project sha256 plus the export index, manifest, verification report, and export run behind it; the project file is re-hashed and a slice block cannot be re-attributed. Statistics are read only from whole lines of the G-code's trailing summary block; anything the G-code does not state is listed in `absent_statistics`, never estimated, and a slice yielding no readable statistic is a failure. **Supply the whole profile set**: PrusaSlicer exits 139 (SIGSEGV) on a partial set, so the adapter refuses to invoke the binary unless printer, print, and material profiles all resolve against the required `--datadir`. See `references/unsupported.md`.
+
+After a successful text-G-code slice, `slice.gcode_audit` records only
+recognized `T<number>` tool-selection lines, active tools, and a tool-change count. If
+the G-code flavor is unknown or conflicting, the audit is explicitly
+`available: false`; no tool-change metric is invented.
 
 ### Included host tooling
 
@@ -417,7 +448,8 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" reconstruction-coverage <program.json> [--fit-record <fit.json>] [--rebuild-report <rebuild-report.json>] [--editability-verdict <verdict.json>] [-o account.json]
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
-"$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH]
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH] [--offline-profiles]
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-profiles --config-root DIR [--printer NAME] [--slicer-executable PATH]
 "$SKILL_DIR/scripts/fusion-design" fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]
 "$SKILL_DIR/scripts/fusion-design" prepare-module-bundle <package-dir> <entry-module> [--cache-root DIR]

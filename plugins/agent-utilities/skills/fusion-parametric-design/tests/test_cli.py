@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 import fusion_design.cli as cli_module
 from fusion_design.reconstruction_program import PROGRAM_VERSION
@@ -17,7 +18,7 @@ from fusion_design.manifest import load_manifest
 from fusion_design.scripts import manifest_sha256
 from fusion_design.variant_matrix import MatrixConfig
 from test_prusaslicer_project import _Fixture, _config_root, process_execution_offenses
-from test_prusaslicer_slice import _fake_slicer
+from test_prusaslicer_slice import PRESETS, _fake_slicer
 from test_variant_matrix import _FakeFusion, seed_reports
 
 
@@ -457,6 +458,199 @@ class EmitExportCliTests(unittest.TestCase):
                     )
 
 
+class PrusaSlicerProfilesCliTests(unittest.TestCase):
+    def test_authoritative_profiles_command_returns_normalized_compatibility(self) -> None:
+        class FakeRuntime:
+            def __init__(self, executable, datadir):
+                self.executable = executable
+                self.datadir = datadir
+
+            def query_printer_models_authoritative(self):
+                return {
+                    "ok": True,
+                    "outcome": "success",
+                    "version": "2.9.6",
+                    "executable": "/fake/PrusaSlicer",
+                    "executable_sha256": "a" * 64,
+                    "datadir": str(self.datadir),
+                    "profile_snapshot_sha256": "b" * 64,
+                    "command_kind": "--query-printer-models",
+                    "exit_code": 1,
+                    "signal": None,
+                    "stderr_tail": "",
+                    "payload": {
+                        "printer_models": [
+                            {
+                                "id": "P1",
+                                "name": "Printer One",
+                                "variants": [
+                                    {
+                                        "name": "0.4",
+                                        "printer_profiles": [
+                                            {
+                                                "name": "Printer One 0.4",
+                                                "extruders_cnt": 1,
+                                                "bed": {
+                                                    "width": 200,
+                                                    "height": 180,
+                                                    "origin": {"x": 0, "y": 0},
+                                                    "max_print_height": 200,
+                                                },
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                }
+
+            def query_print_filament_profiles_authoritative(self, printer_profile):
+                result = self.query_printer_models_authoritative()
+                result.update(
+                    {
+                        "command_kind": "--query-print-filament-profiles",
+                        "payload": {
+                            "printer_profile": printer_profile,
+                            "print_profiles": [
+                                {
+                                    "name": "0.20 Quality",
+                                    "filament_profiles": ["PLA @Printer One"],
+                                    "user_filament_profiles": ["Custom PLA"],
+                                }
+                            ],
+                        },
+                    }
+                )
+                return result
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(cli_module, "PrusaSlicerRuntime", FakeRuntime):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "prusaslicer-profiles",
+                        "--config-root",
+                        str(Path(temporary).resolve()),
+                        "--printer",
+                        "Printer One 0.4",
+                    ]
+                )
+        self.assertEqual(0, code)
+        payload = json.loads(output.getvalue())
+        self.assertEqual("prusaslicer", payload["resolver"])
+        self.assertEqual(["0.20 Quality"], payload["print_profiles"])
+        self.assertEqual(["Custom PLA", "PLA @Printer One"], payload["filament_profiles"])
+        self.assertEqual("--query-print-filament-profiles", payload["runtime"]["command_kind"])
+
+    def _runtime(self, compatibility_payload=None, *, printer_result=None):
+        runtime = mock.Mock()
+        runtime.query_printer_models_authoritative.return_value = printer_result or {
+            "ok": True,
+            "outcome": "success",
+            "version": "2.9.6",
+            "executable": "/fake/PrusaSlicer",
+            "executable_sha256": "a" * 64,
+            "datadir": "/fake/config",
+            "profile_snapshot_sha256": "b" * 64,
+            "command_kind": "--query-printer-models",
+            "exit_code": 1,
+            "signal": None,
+            "stderr_tail": "",
+            "payload": {
+                "printer_models": [
+                    {
+                        "id": "P1",
+                        "name": "Printer One",
+                        "variants": [
+                            {
+                                "name": "0.4",
+                                "printer_profiles": [
+                                    {
+                                        "name": "Printer One 0.4",
+                                        "extruders_cnt": 1,
+                                        "bed": {"width": 200, "height": 180},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        runtime.query_print_filament_profiles_authoritative.return_value = {
+            "ok": True,
+            "outcome": "success",
+            "version": "2.9.6",
+            "executable": "/fake/PrusaSlicer",
+            "executable_sha256": "a" * 64,
+            "datadir": "/fake/config",
+            "profile_snapshot_sha256": "b" * 64,
+            "command_kind": "--query-print-filament-profiles",
+            "exit_code": 1,
+            "signal": None,
+            "stderr_tail": "",
+            "payload": compatibility_payload
+            or {
+                "printer_profile": "Printer One 0.4",
+                "print_profiles": [{"name": "0.20 Quality", "filament_profiles": ["PLA"]}],
+            },
+        }
+        return runtime
+
+    def _run_profiles(self, runtime, printer="Printer One 0.4"):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+            cli_module, "PrusaSlicerRuntime", return_value=runtime
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "prusaslicer-profiles",
+                        "--config-root",
+                        str(Path(temporary).resolve()),
+                        "--printer",
+                        printer,
+                    ]
+                )
+        return code, json.loads(output.getvalue())
+
+    def test_missing_printer_is_profile_not_resolvable(self) -> None:
+        code, payload = self._run_profiles(self._runtime(), printer="Missing")
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("profile_not_resolvable", payload["outcome"])
+
+    def test_compatibility_echo_mismatch_is_profile_not_resolvable(self) -> None:
+        runtime = self._runtime({"printer_profile": "Other Printer", "print_profiles": []})
+        code, payload = self._run_profiles(runtime)
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("profile_not_resolvable", payload["outcome"])
+        self.assertIn("expected 'Printer One 0.4'", payload["reason"])
+
+    def test_malformed_compatibility_is_malformed_json(self) -> None:
+        runtime = self._runtime({"printer_profile": "Printer One 0.4", "print_profiles": [{}]})
+        code, payload = self._run_profiles(runtime)
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("malformed_json", payload["outcome"])
+
+    def test_false_success_runtime_failure_is_not_success(self) -> None:
+        runtime = self._runtime(
+            printer_result={
+                "ok": False,
+                "outcome": "success",
+                "reason": "fixture failure",
+                "exit_code": 1,
+            }
+        )
+        code, payload = self._run_profiles(runtime)
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertNotEqual("success", payload["outcome"])
+
+
 class PrusaSlicerProjectCliTests(unittest.TestCase):
     def _run(self, argv: list[str]) -> tuple[int, str, str]:
         output = io.StringIO()
@@ -497,8 +691,24 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             str(output),
             "--config-root",
             str(config),
+            "--offline-profiles",
             *extra,
         ]
+
+    def _authoritative_argv(self, index: Path, output: Path, config: Path, *extra: str) -> list[str]:
+        argv = self._argv(index, output, config, *extra)
+        argv.remove("--offline-profiles")
+        argv.extend(
+            [
+                "--printer",
+                PRESETS.printer,
+                "--filament",
+                PRESETS.filament,
+                "--print",
+                PRESETS.print_settings,
+            ]
+        )
+        return argv
 
     def test_project_is_written_and_hashes_are_reported(self) -> None:
         import hashlib
@@ -533,6 +743,7 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             self.assertEqual(
                 {"printer", "filament", "print"}, set(payload["presets"]), payload["presets"]
             )
+            self.assertEqual("offline_parser", payload["profile_resolution"]["geometry_authority"])
             # The chain is carried forward, not re-derived at each hop.
             index_data = json.loads(index.read_text(encoding="utf-8"))
             self.assertEqual(
@@ -650,12 +861,29 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
                 self.assertNotIn(banned, stdout, banned)
             self.assertFalse((root / "p.gcode").exists())
 
+    def test_offline_slice_refusal_does_not_construct_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            output = root / "p.3mf"
+            with mock.patch.object(cli_module, "PrusaSlicerRuntime") as runtime:
+                code, stdout, errors = self._run(self._argv(index, output, config, "--slice"))
+            payload = json.loads(stdout)
+
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("offline_slice_refused", payload["outcome"])
+        self.assertIn("--offline-profiles", errors)
+        runtime.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertFalse(output.with_suffix(".gcode").exists())
+
     def test_slice_flag_reports_real_statistics_from_the_produced_gcode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             index, config = self._handoff(root)
             code, stdout, errors = self._run(
-                self._argv(
+                self._authoritative_argv(
                     index, root / "p.3mf", config, "--slice", "--slicer-executable", str(_fake_slicer(root))
                 )
             )
@@ -669,13 +897,43 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             self.assertEqual(
                 hashlib.sha256((root / "p.gcode").read_bytes()).hexdigest(), slice_block["gcode_sha256"]
             )
+            self.assertEqual("installed_runtime", payload["profile_resolution"]["geometry_authority"])
+
+    def test_authoritative_unsliced_project_refuses_and_cleans_runtime_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index, config = self._handoff(root)
+            output = root / "p.3mf"
+            real_build = cli_module.build_project
+
+            def build_then_mutate(*args, **kwargs):
+                result = real_build(*args, **kwargs)
+                (config / "PrusaSlicer.ini").write_text(
+                    (config / "PrusaSlicer.ini").read_text(encoding="utf-8") + "# drift\n",
+                    encoding="utf-8",
+                )
+                return result
+
+            with mock.patch.object(cli_module, "build_project", side_effect=build_then_mutate):
+                code, stdout, errors = self._run(
+                    self._authoritative_argv(
+                        index, output, config, "--slicer-executable", str(_fake_slicer(root))
+                    )
+                )
+            payload = json.loads(stdout)
+
+        self.assertEqual(2, code)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("snapshot_changed", payload["outcome"])
+        self.assertIn("changed during project generation", errors)
+        self.assertFalse(output.exists())
 
     def test_failed_slice_exits_two_and_keeps_its_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             index, config = self._handoff(root)
             code, stdout, _ = self._run(
-                self._argv(
+                self._authoritative_argv(
                     index,
                     root / "p.3mf",
                     config,
@@ -688,7 +946,7 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             slice_block = json.loads(stdout)["slice"]
             self.assertFalse(slice_block["ok"])
             self.assertEqual(139, slice_block["exit_code"])
-            self.assertIn("SIGSEGV", slice_block["failure"])
+            self.assertNotIn("SIGSEGV", slice_block["failure"])
             self.assertNotIn("statistics", slice_block)
 
     def test_unknown_preset_exits_two_and_names_what_is_available(self) -> None:
@@ -703,6 +961,33 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             self.assertIn("'Bambu X1C' is not installed", errors)
             self.assertIn("Original Prusa XL - 5T", errors)
             self.assertFalse(output.exists())
+
+    def test_authoritative_missing_or_incompatible_profiles_are_profile_not_resolvable(self) -> None:
+        for option, value in (
+            ("--printer", "Missing Printer"),
+            ("--print", "Missing Print"),
+            ("--filament", "Missing Filament"),
+        ):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(root)
+                output = root / "p.3mf"
+                argv = self._authoritative_argv(
+                    index,
+                    output,
+                    config,
+                    "--slicer-executable",
+                    str(_fake_slicer(root)),
+                )
+                argv[argv.index(option) + 1] = value
+                code, stdout, _ = self._run(
+                    argv
+                )
+                payload = json.loads(stdout)
+                self.assertEqual(2, code)
+                self.assertFalse(payload["ok"])
+                self.assertEqual("profile_not_resolvable", payload["outcome"])
+                self.assertFalse(output.exists())
 
     def test_missing_or_unreadable_index_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

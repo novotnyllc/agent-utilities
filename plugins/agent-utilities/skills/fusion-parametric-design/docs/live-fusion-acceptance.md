@@ -217,14 +217,55 @@ Run the deterministic export transaction against the verified document:
 
 **Pass:** the handoff records the Fusion version (or explicit `unsaved`), manifest hash, verification-report hash, export run ID, reports, screenshots, exact export hashes, slicer/profile evidence when available, provisional dimensions, unsupported checks, and every physical test as `not run`, `pass`, `fail`, or `not applicable`.
 
-## 11. Optional PrusaSlicer project handoff
+## 11. Optional PrusaSlicer project handoff: installed runtime or explicit offline-unsliced mode
 
-Only when PrusaSlicer is installed and the user wants the slicer handoff checked.
+Run the installed-runtime branch when PrusaSlicer is available and the user
+wants authoritative profile and slice evidence. If that query surface is
+unavailable, run the explicit offline-unsliced branch; it remains
+non-authoritative and cannot authorize a slice.
 
 What is automated and what is not:
 
-- **Automated:** project generation (which runs no process at all), the optional headless slice when `--slice` is passed, and every file, hash, and statistic check below.
-- **Manual:** the GUI confirmation of objects, placement, bed fit, presets, and overrides. Only a human can eyeball those, so they are never recorded as passing on the agent's own inspection.
+- **Installed-runtime automated:** installed profile queries and runtime fingerprint, project generation (which runs no process at all), coarse printer-bed footprint/height checks, the optional headless slice when `--slice` is passed, the bounded G-code tool audit, and every file, hash, and statistic check below.
+- **Offline-unsliced automated:** explicit parser-based project generation, with `profile_resolution.geometry_authority: "offline_parser"`, `installed: false`, unknown compatibility, and no slice attempt. `--offline-profiles --slice` is refused.
+- **Manual:** for installed-runtime projects, GUI confirmation of objects, contact-face orientation, native arrangement, presets, and overrides. Physical fit and collision-accurate nesting are still human/physical acceptance, so they are never recorded as passing on the agent's own inspection.
+
+### Installed-runtime profile preflight
+
+Run the authoritative profile query first, with an explicit absolute datadir:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-profiles \
+  --config-root /absolute/path/to/PrusaSlicer-config \
+  --printer "<exact installed printer preset>"
+```
+
+**Pass:** the result is `ok: true`, `resolver: "prusaslicer"`, and
+`installed: true`; the requested printer identifier is present; compatible
+print and filament identifiers are listed; and `runtime` records PrusaSlicer
+`2.9.6`, executable path plus SHA-256, the same absolute datadir, the
+profile-snapshot SHA-256, command kind, raw exit code/signal, and bounded
+stderr. A query failure is terminal and must not be retried against another
+datadir or silently downgraded.
+
+If the installed query surface is unavailable, the only fallback is explicit
+offline mode with the existing parser:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project examples/electronics-enclosure/fusion-project.json \
+  --export-index <export dir>/export-index__<run>.json \
+  --output build/project-offline.3mf \
+  --config-root /absolute/path/to/PrusaSlicer-config \
+  --printer "<known preset identifier>" \
+  --filament "<known filament identifier>" \
+  --print "<known print identifier>" \
+  --offline-profiles
+```
+
+**Pass (offline only):** `profile_resolution` is
+`{"resolver":"offline_parser","installed":false,"geometry_authority":"offline_parser","compatibility":"unknown"}`;
+the project is explicitly unsliced; and `--offline-profiles --slice` is
+refused. Do not present this result as proof that a profile is installed.
 
 Generate the project from the export index produced in step 10:
 
@@ -232,25 +273,32 @@ Generate the project from the export index produced in step 10:
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project examples/electronics-enclosure/fusion-project.json \
   --export-index <export dir>/export-index__<run>.json \
   --output build/project.3mf \
+  --config-root /absolute/path/to/PrusaSlicer-config \
   --printer "<installed printer preset>" \
   --filament "<installed filament preset>" \
   --print "<installed print preset>"
 ```
 
-**Pass (project generation):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; `verification_report_sha256` and `export_run_id` equal the index's own; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, its assigned `plate`, and justified `overrides` (`plate` is not a manifest field: the adapter derives it from `print_as`, so `assembled` parts share plate 1 and each `separate` part gets its own); and `slice` is `{"supported": true, "attempted": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
+**Pass (installed-runtime project generation):** exit code 0; `build/project.3mf` exists; the printed JSON's `project_sha256`/`project_byte_size` match `shasum -a 256` and the on-disk size; `export_index_sha256` matches the index file; `verification_report_sha256` and `export_run_id` equal the index's own; `profile_resolution` names `resolver: "prusaslicer"`, `installed: true`, `geometry_authority: "installed_runtime"`, and the requested exact identifiers; `runtime` carries the query fingerprint; `printer_geometry` records the selected `bed_shape`/dimensions and maximum height used for placement; every printable part appears once in `objects` with its declared `applied_rotation`, `instances_count`, its assigned `plate`, and justified `overrides` (`plate` is not a manifest field: the adapter derives it from `print_as`, so `assembled` parts share plate 1 and each `separate` part gets its own); and `slice` is `{"supported": true, "attempted": false, …}` with no print-time, mass, or G-code numbers anywhere in the payload. Re-running against an existing output fails closed instead of overwriting.
 
 **Optional headless slice.** Re-run the same command with `--slice` appended (and a fresh `--output`, since neither the project nor its G-code is ever overwritten). All three presets must be named: PrusaSlicer exits 139 (SIGSEGV) with no output when given a partial set, so the adapter refuses to invoke it unless printer, print, and filament are all resolved.
 
-**Pass (slice):** exit code 0; `slice.ok` is `true`; `slice.exit_code` is `0`; `slice.project_sha256` equals the payload's `project_sha256`, and `slice.bindings` repeats it alongside the payload's `export_index_sha256`, `manifest_sha256`, `verification_report_sha256`, and `export_run_id`; `slice.gcode_sha256`/`gcode_byte_size` match `shasum -a 256` and the on-disk size of `slice.gcode_path`; `slice.slicer_version` names the binary that ran; `slice.presets` are the requested ones; and every number under `slice.statistics` also appears verbatim in the G-code's own `; ` comment lines. Anything the G-code does not state appears in `absent_statistics` rather than as a value. A failed slice must instead show `ok: false` with `exit_code`, `failure`, and `stderr_tail`, no `statistics` key, and CLI exit code 2.
+**Pass (slice):** exit code 0; `slice.ok` is `true`; `slice.exit_code` is `0`; `slice.project_sha256` equals the payload's `project_sha256`, and `slice.bindings` repeats it alongside the payload's `export_index_sha256`, `manifest_sha256`, `verification_report_sha256`, and `export_run_id`; `slice.runtime_evidence` names the same executable/datadir fingerprints and `runtime_fingerprint_before`/`runtime_fingerprint_after` show no drift; `slice.gcode_sha256`/`gcode_byte_size` match `shasum -a 256` and the on-disk size of `slice.gcode_path`; `slice.slicer_version` names the binary that ran; `slice.presets` are the requested ones; and every number under `slice.statistics` also appears verbatim in the G-code's own `; ` comment lines. `slice.gcode_audit` records recognized active tools and a tool-change count, or explicitly reports `available: false` for unknown/conflicting flavor evidence. Anything the G-code does not state appears in `absent_statistics` rather than as a value. A failed slice must instead show `ok: false` with `exit_code`, `failure`, and `stderr_tail`, no `statistics` key, and CLI exit code 2.
 
-**Manual confirmation — the user does this, the agent does not:** open `build/project.3mf` in the PrusaSlicer GUI and confirm by eye that
+**Manual confirmation for installed-runtime projects — the user does this, the agent does not:** open `build/project.3mf` in the PrusaSlicer GUI and confirm by eye that
 
 1. the same objects are present, one per printable part, with the part paths as their names and no merged mesh;
-2. placement matches the reported plates and orientations — each part rests on the bed on its declared contact face, and parts declared `assembled` sit together — **and every object instance fits inside the selected printer's bed**. The adapter cannot check this: bed geometry lives in the printer preset, which is referenced by name and never read, so plates march along +Y without bound and a large job can run off the bed. Confirm the fit by eye and rearrange in the GUI if needed;
+2. placement matches the reported plates and orientations — each part rests on the bed on its declared contact face, and parts declared `assembled` sit together. The adapter has already read the selected printer's `bed_shape` and `max_print_height` and failed closed on coarse bounding-box footprint/height overflow; it does not prove polygon-accurate collision nesting, physical fit, or the quality of later one-at-a-time plate loading. Confirm the native arrangement by eye and rearrange in the GUI if needed;
 3. the printer, filament, and print presets shown are the requested ones, with the user's own profile settings intact (the project names presets, it does not carry copies of them);
 4. per-object settings show only the justified overrides — supports from the declared policy, infill from the declared target, perimeters from the declared minimum.
 
-Where PrusaSlicer is not installed, or `--slice` was not used, slice in the GUI and record the resulting time/mass/statistics against the project's `sha256`. The agent must not report those numbers unless they came from the `--slice` G-code or the user supplied them from a GUI slice.
+If an installed-runtime project was generated without `--slice`, the user may
+slice it in the GUI and record the resulting time/mass/statistics against the
+project's `sha256`. An explicit offline-parser project must remain unsliced;
+it is not evidence that the named profiles are installed and must not be used
+to authorize a slice. The agent must not report numbers unless they came from
+the `--slice` G-code or the user supplied them from a GUI slice of an
+installed-runtime project.
 
 **Pass:** the user confirms 1–4. This is a human acceptance step; it is never recorded as passing on the agent's own inspection.
 

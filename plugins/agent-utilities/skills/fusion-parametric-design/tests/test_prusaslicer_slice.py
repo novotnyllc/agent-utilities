@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import stat
 import subprocess
@@ -9,7 +10,9 @@ import unittest
 from unittest import mock
 
 from fusion_design import prusaslicer_slice
+from fusion_design import prusaslicer_runtime
 from fusion_design.prusaslicer_project import ResolvedPresets
+from fusion_design.prusaslicer_runtime import profile_snapshot_sha256, sha256_file
 from fusion_design.prusaslicer_slice import (
     IncompleteProfileSetError,
     parse_gcode_statistics,
@@ -59,12 +62,56 @@ class _Runner:
 
 
 def _fake_slicer(root: Path, exit_code: int = 0) -> Path:
-    """A stand-in binary that emits canned G-code. The real slicer is never run in tests."""
+    """A stand-in binary for version/query/slice calls. The real slicer never runs in tests."""
     script = root / f"fake-slicer-{exit_code}"
+    printer_payload = json.dumps(
+        {
+            "printer_models": [
+                {
+                    "id": "XL5IS",
+                    "name": "Original Prusa XL",
+                    "variants": [
+                        {
+                            "name": "HF0.4",
+                            "printer_profiles": [
+                                {
+                                    "name": PRESETS.printer,
+                                    "extruders_cnt": 5,
+                                    "bed": {
+                                        "width": 360,
+                                        "height": 360,
+                                        "origin": "[0, 0]",
+                                        "max_print_height": 360,
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    compatibility_payload = json.dumps(
+        {
+            "printer_profile": PRESETS.printer,
+            "print_profiles": [
+                {"name": PRESETS.print_settings, "filament_profiles": [PRESETS.filament]}
+            ],
+        }
+    )
     script.write_text(
         "#!/usr/bin/env python3\n"
-        "import sys\n"
+        "import json, sys\n"
         "argv = sys.argv[1:]\n"
+        "if '--help' in argv:\n"
+        "    print('PrusaSlicer 2.9.6')\n"
+        "    raise SystemExit(0)\n"
+        "if '--query-printer-models' in argv:\n"
+        f"    print({printer_payload!r})\n"
+        "    raise SystemExit(1)\n"
+        "if '--query-print-filament-profiles' in argv:\n"
+        f"    print({compatibility_payload!r})\n"
+        "    raise SystemExit(1)\n"
         "if '--output' in argv:\n"
         "    open(argv[argv.index('--output') + 1], 'w').write('''" + GCODE + "''')\n"
         f"sys.exit({exit_code})\n",
@@ -146,13 +193,13 @@ class ExecutableDiscoveryTests(unittest.TestCase):
             self.assertIsNone(resolve_executable(Path(temporary) / "absent"))
 
     def test_bundle_then_path_then_none(self) -> None:
-        with mock.patch.object(prusaslicer_slice, "BUNDLE_EXECUTABLE") as bundle:
+        with mock.patch.object(prusaslicer_runtime, "BUNDLE_EXECUTABLE") as bundle:
             bundle.is_file.return_value = True
             self.assertIs(bundle, resolve_executable())
             bundle.is_file.return_value = False
-            with mock.patch.object(prusaslicer_slice.shutil, "which", return_value="/usr/bin/prusa-slicer"):
+            with mock.patch.object(prusaslicer_runtime.shutil, "which", return_value="/usr/bin/prusa-slicer"):
                 self.assertEqual(Path("/usr/bin/prusa-slicer"), resolve_executable())
-            with mock.patch.object(prusaslicer_slice.shutil, "which", return_value=None):
+            with mock.patch.object(prusaslicer_runtime.shutil, "which", return_value=None):
                 self.assertIsNone(resolve_executable())
 
     def test_unavailable_slicer_is_a_structured_result_not_a_crash(self) -> None:
@@ -191,6 +238,16 @@ class StatisticsParsingTests(unittest.TestCase):
         statistics, absent = parse_gcode_statistics("GCDE\x00\x01Producer=PrusaSlicer 2.9.6")
         self.assertEqual({}, statistics)
         self.assertEqual(len(prusaslicer_slice._STATISTIC_KEYS), len(absent))
+
+    def test_non_finite_numeric_statistics_are_absent(self) -> None:
+        statistics, absent = parse_gcode_statistics(
+            "; total filament used [g] = nan\n"
+            "; filament used [g] = inf\n"
+            "; estimated printing time (normal mode) = 1h 2m\n"
+        )
+        self.assertEqual({"estimated_printing_time_normal": "1h 2m"}, statistics)
+        self.assertIn("total_filament_used_g", absent)
+        self.assertIn("filament_used_g", absent)
 
 
 class SliceInvocationTests(unittest.TestCase):
@@ -254,7 +311,7 @@ class SliceInvocationTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["attempted"])
         self.assertEqual(139, result["exit_code"])
-        self.assertIn("SIGSEGV", result["failure"])
+        self.assertNotIn("SIGSEGV", result["failure"])
         self.assertEqual("boom", result["stderr_tail"])
         self.assertNotIn("statistics", result)
 
@@ -286,6 +343,24 @@ class SliceInvocationTests(unittest.TestCase):
         self.assertIsNone(result["exit_code"])
         self.assertIn("did not finish within 7 seconds", result["failure"])
         self.assertNotIn("statistics", result)
+
+    def test_timeout_must_be_finite_and_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+            for timeout in (0, -1, None, float("inf")):
+                with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                    slice_project(
+                        project,
+                        PRESETS,
+                        bindings=_bindings(project),
+                        executable=binary,
+                        datadir=root,
+                        timeout=timeout,
+                        runner=_Runner(),
+                    )
 
     def test_warnings_are_collected_from_slicer_output(self) -> None:
         runner = _Runner(stderr="WARNING: object is too tall\nfine\n")
@@ -542,13 +617,200 @@ class RealSubprocessTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         self.assertEqual(139, result["exit_code"])
-        self.assertIn("SIGSEGV", result["failure"])
+        self.assertNotIn("SIGSEGV", result["failure"])
+
+    def test_real_subprocess_output_is_tail_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            script = root / "noisy-slicer"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "print('x' * (8 * 1024 * 1024), file=sys.stderr)\n"
+                f"pathlib.Path(sys.argv[sys.argv.index('--output') + 1]).write_text({GCODE!r})\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            result = slice_project(
+                project, PRESETS, bindings=_bindings(project), executable=script, datadir=root
+            )
+        self.assertTrue(result["ok"], result)
+        self.assertLessEqual(len(result["stderr_tail"]), 4000)
+
+    def test_real_timeout_preserves_output_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            script = root / "slow-slicer"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys, time\n"
+                "print('timeout diagnostic', file=sys.stderr, flush=True)\n"
+                "time.sleep(1)\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            result = slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=script,
+                datadir=root,
+                timeout=0.1,
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("timeout diagnostic", result["stderr_tail"])
+
+
+class RuntimeEvidenceTests(unittest.TestCase):
+    def _runtime_evidence(self, binary: Path, datadir: Path) -> dict[str, str]:
+        return {
+            "version": "2.9.6",
+            "executable": str(binary),
+            "executable_sha256": sha256_file(binary),
+            "datadir": str(datadir),
+            "profile_snapshot_sha256": profile_snapshot_sha256(datadir),
+        }
+
+    def test_runtime_evidence_is_bound_and_runner_uses_no_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            datadir = root / "config"
+            datadir.mkdir()
+            (datadir / "PrusaSlicer.ini").write_text("[presets]\n", encoding="utf-8")
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("binary", encoding="utf-8")
+            evidence = self._runtime_evidence(binary, datadir)
+            runner = _Runner()
+            calls: list[dict] = []
+
+            def recording_runner(command, **kwargs):
+                calls.append(kwargs)
+                return runner(command, **kwargs)
+
+            result = slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=binary,
+                datadir=datadir,
+                runtime_evidence=evidence,
+                runner=recording_runner,
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(evidence, result["runtime_evidence"])
+        self.assertFalse(calls[0]["shell"])
+        self.assertEqual(evidence["profile_snapshot_sha256"], result["runtime_fingerprint_after"]["profile_snapshot_sha256"])
+
+    def test_runtime_evidence_mismatch_refuses_before_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            datadir = root / "config"
+            datadir.mkdir()
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("binary", encoding="utf-8")
+            evidence = self._runtime_evidence(binary, datadir)
+            binary.write_text("changed", encoding="utf-8")
+            runner = _Runner()
+            result = slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=binary,
+                datadir=datadir,
+                runtime_evidence=evidence,
+                runner=runner,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("snapshot_changed", result["outcome"])
+        self.assertFalse(result["attempted"])
+        self.assertEqual([], runner.calls)
+
+    def test_runtime_datadir_drift_after_runner_is_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            datadir = root / "config"
+            datadir.mkdir()
+            target = datadir / "PrusaSlicer.ini"
+            target.write_text("before", encoding="utf-8")
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("binary", encoding="utf-8")
+            evidence = self._runtime_evidence(binary, datadir)
+
+            def mutate(command, **kwargs):
+                result = _Runner()(command, **kwargs)
+                target.write_text("after", encoding="utf-8")
+                return result
+
+            result = slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=binary,
+                datadir=datadir,
+                runtime_evidence=evidence,
+                runner=mutate,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("snapshot_changed", result["outcome"])
+        self.assertFalse((root / "project.gcode").exists())
+
+    def test_post_slice_project_mutation_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("binary", encoding="utf-8")
+            original = _Runner()
+
+            def mutate(command, **kwargs):
+                result = original(command, **kwargs)
+                project.write_bytes(b"mutated project")
+                return result
+
+            result = slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=binary,
+                datadir=root,
+                runner=mutate,
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("hashes to", result["failure"])
+        self.assertFalse((root / "project.gcode").exists())
+
+    def test_audit_read_exception_is_structured_and_cleans_gcode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("binary", encoding="utf-8")
+            with mock.patch.object(prusaslicer_slice, "audit_gcode", side_effect=ValueError("bad audit")):
+                result = slice_project(
+                    project,
+                    PRESETS,
+                    bindings=_bindings(project),
+                    executable=binary,
+                    datadir=root,
+                    runner=_Runner(),
+                )
+        self.assertFalse(result["ok"])
+        self.assertIn("Unable to audit G-code evidence", result["failure"])
+        self.assertFalse((root / "project.gcode").exists())
 
 
 class ExecutionIsConfinedTests(unittest.TestCase):
-    """Slicing needs subprocess, so the no-execution guarantee moved rather than vanished."""
+    """Only the runtime-query and slicing boundaries may start processes."""
 
-    def test_prusaslicer_slice_is_the_only_module_that_can_start_a_process(self) -> None:
+    def test_only_prusaslicer_runtime_modules_can_start_a_process(self) -> None:
         from test_prusaslicer_project import process_execution_offenses
 
         package = Path(prusaslicer_slice.__file__).parent
@@ -557,7 +819,7 @@ class ExecutionIsConfinedTests(unittest.TestCase):
             for module in sorted(package.glob("*.py"))
             if process_execution_offenses(module.read_text(encoding="utf-8"))
         }
-        self.assertEqual({"prusaslicer_slice.py"}, offenders)
+        self.assertEqual({"prusaslicer_runtime.py", "prusaslicer_slice.py"}, offenders)
 
     def test_the_command_is_an_argument_list_and_never_a_shell_string(self) -> None:
         source = Path(prusaslicer_slice.__file__).read_text(encoding="utf-8")
