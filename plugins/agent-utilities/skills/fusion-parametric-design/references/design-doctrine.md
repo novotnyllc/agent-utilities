@@ -42,11 +42,14 @@ small direct operations, each the equivalent of one skilled user action.
   deletion, a new component, a specialist consult, or a resumed session does
   not reset it — and repeated feature failures never justify diagnostic
   infrastructure.
-- On a capability the MCP does not expose, stop and report the gap. Host-side
-  geometry arithmetic is never an improvised substitute; the reconstruction
-  lane's tested, fail-closed host-side fitting
-  (`references/mesh-reconstruction.md`) is that lane's own contract, not a
-  license for ad-hoc geometry math anywhere else.
+- Every capability gap runs one probe-dependent ladder: probe the native API
+  at time of use (recorded limitations are hints, never permanent truth — a
+  capability note goes stale the release Fusion adds the API), then drive the
+  single UI command through the session's computer-use capability and verify
+  the result, then stop and report the gap. Host-side geometry arithmetic is
+  never an improvised substitute; the reconstruction lane's tested,
+  fail-closed host-side fitting (`references/mesh-reconstruction.md`) is that
+  lane's own contract, not a license for ad-hoc geometry math anywhere else.
 
 ## One owner for each fact
 
@@ -80,11 +83,14 @@ establishing the document, not an afterthought:
   with Undo and local feature edits between visual micro-iterations rather
   than a version per feature group; a Fusion save creates a version, and that
   checkpoint is the desired behavior;
-- the document's durable identity is its dataFile id — names are user-mutable,
-  so later sessions reconnect by id (open documents first, then the data API)
-  and only report the current name. The Fusion document and its native
-  versions hold document state in ordinary modeling; `DESIGN-STATE.md` records
-  identity only in the lanes that keep one;
+- in ordinary modeling, Fusion itself is the identity store: the named, saved
+  document in the Data Panel is the durable record, an optional attribute
+  stamp (`fusion_parametric_design`) written at save gives a later session
+  exact reacquisition, and resume finds the document by name and recency —
+  open documents first. Manifest-managed lanes record the dataFile id plus
+  project and folder ids in `DESIGN-STATE.md` and reconnect by the recorded
+  id, never the name, reporting a findability failure rather than adopting a
+  namesake;
 - an unresolvable save or reconnect — offline data API, no active project,
   missing declared folder, missing recorded id — is a named refusal, never a
   silently kept Untitled;

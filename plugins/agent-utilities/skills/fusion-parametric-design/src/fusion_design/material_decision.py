@@ -313,19 +313,22 @@ def _validate_material_decision(
         # nothing about the nozzle that is about to wear open. Abrasion and
         # moisture are separate gates: each fires only for the property the
         # family actually establishes.
-        needs: list[str] = []
+        needs: list[tuple[str, str]] = []
         if family in ABRASIVE_FAMILIES and nozzle not in ABRASION_RESISTANT_NOZZLES:
             needs.append(
-                "nozzle to be one of " + ", ".join(sorted(ABRASION_RESISTANT_NOZZLES))
+                ("nozzle", "nozzle to be one of " + ", ".join(sorted(ABRASION_RESISTANT_NOZZLES)))
             )
         if family in HYGROSCOPIC_FAMILIES and drying not in {"required", "done"}:
-            needs.append("drying to be 'required' or 'done'")
+            needs.append(("drying", "drying to be 'required' or 'done'"))
         if needs:
+            # The issue's path names the first unmet field, so unfilled PA
+            # missing its drying declaration points at drying, not at a nozzle
+            # it was never required to declare.
             issues.append(
                 ValidationIssue(
                     "material-decision-filled-material-unguarded",
-                    "material_decision.nozzle",
-                    f"Family {family!r} requires " + " and ".join(needs)
+                    f"material_decision.{needs[0][0]}",
+                    f"Family {family!r} requires " + " and ".join(msg for _, msg in needs)
                     + "; abrasive and hygroscopic filaments are not drop-in.",
                 )
             )

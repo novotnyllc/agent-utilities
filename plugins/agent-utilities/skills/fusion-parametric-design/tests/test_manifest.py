@@ -686,6 +686,26 @@ class ManifestValidationTests(unittest.TestCase):
                     else:
                         self.assertNotIn("material-decision-filled-material-unguarded", codes)
 
+        # The issue path names the unmet field: unfilled PA missing drying
+        # points at drying, an abrasive family missing its nozzle points at
+        # nozzle.
+        for family, overrides, expected_path in (
+            ("PA", {}, "material_decision.drying"),
+            ("PA_CF", {}, "material_decision.nozzle"),
+            ("PET_CF", {"nozzle": "brass"}, "material_decision.nozzle"),
+            ("PA_CF", {"nozzle": "ruby"}, "material_decision.drying"),
+        ):
+            with self.subTest(family=family, path=expected_path):
+                data = self._with_decision(
+                    family=family, formulation=f"Some {family}", unresolved_risks=[], **overrides
+                )
+                paths = [
+                    issue.path
+                    for issue in validate_manifest_data(data)
+                    if issue.code == "material-decision-filled-material-unguarded"
+                ]
+                self.assertEqual([expected_path], paths)
+
         # Unfilled families are not asked for either guard.
         self.assertEqual([], validate_manifest_data(self._with_decision()))
 

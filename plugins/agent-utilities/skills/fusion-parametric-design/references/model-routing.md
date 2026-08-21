@@ -26,7 +26,14 @@ The skill's CLI and generated transactions validate fail-closed: a malformed man
 
 ## The tier principle
 
-**Whatever is making decisions runs high, xhigh, or max — likely xhigh or max; whatever is executing decisions runs lower, on instructions the decider wrote.** Design choices, join selection, geometry strategy, research synthesis, and failure triage are decision work and get the top tiers. Driving Fusion through an already-decided feature sequence, captures, exports, and lookups are execution work and run lower, briefed precisely by the decider. The decider writes the executor's instructions; the executor does not re-litigate them, and anything that turns out to need a decision escalates back up — the escalate-on-non-mechanical-refusal rule below is this principle applied to refusals. A decider is always a **worker** doing architectural or design reasoning, never the dispatcher: routing, talking, and classifying are not decision work in this sense, so the shape is three-tiered — dispatcher at its modest default, decision workers at high/xhigh/max, execution workers lower and precisely briefed. The work-shape table that follows is the elaboration of this one rule.
+**Whatever is making decisions runs high, xhigh, or max — likely xhigh or max; whatever is executing decisions runs lower, on instructions the decider wrote.** Design choices, join selection, geometry strategy, research synthesis, and failure triage are decision work and get the top tiers. Driving Fusion through an already-decided feature sequence, captures, exports, and lookups are execution work and run lower, briefed precisely by the decider. The decider writes the executor's instructions; the executor does not re-litigate them, and anything that turns out to need a decision escalates back up — the escalate-on-non-mechanical-refusal rule below is this principle applied to refusals. A decider is always a **worker** doing architectural or design reasoning, never the dispatcher: routing, talking, and classifying are not decision work in this sense.
+
+This composes with the single-Fusion-operator contract because **decision workers are Fusion-free**: they reason over state the Fusion worker and dispatcher provide — screenshots, read results, refusal reports — and produce briefs; the one persistent Fusion-operating worker executes every Fusion call. Two shapes, by how heavy the decision work is:
+
+- **Ordinary tasks with small decisions** (most modeling): no separate decision worker exists. The single Fusion-operating worker simply runs at the tier the work needs — frontier for a task whose failure mode is a verified-but-wrong model, lower for mechanical driving — and makes its own in-flow calls.
+- **Tasks with genuinely heavy decision work** (a hard packing resolution, a research-backed strategy, a large integration): a Fusion-free decision worker at high/xhigh/max reasons and briefs; the Fusion worker executes the brief; the dispatcher stays at its modest default.
+
+The work-shape table that follows is the elaboration of this one rule.
 
 ## Frontier — deep design reasoning
 
