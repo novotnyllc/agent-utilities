@@ -13,10 +13,13 @@ the profile matters, and offset/extrude/loft to a clean occupancy solid.
 Scans are noisy; a close approximation of the outer shell with smoothed edges
 is the deliverable, produced in minutes, and it inherits the provisional
 rules — revisable, replaceable, fidelity scaled to what the task needs.
-Fusion's Mesh Section Sketch and Fit Curves to Mesh Section are UI-only (no
-API exists), so an MCP-driven envelope leans on extents, measurement, and
-ordinary sketching; in the rare case a mesh-section trace is genuinely needed,
-ask the user to run that one UI command. The pipeline below is invoked only
+Fusion's Mesh Section Sketch and Fit Curves to Mesh Section are currently not
+exposed through the API — probe before concluding, since Fusion updates — so
+an MCP-driven envelope leans on extents, measurement, and ordinary sketching.
+In the rare case a mesh-section trace is genuinely needed, drive that one UI
+command through the session's computer-use capability and verify the result
+through the API; ask the user to run it only when the session has no
+computer-use capability. The pipeline below is invoked only
 when the user actually wants the scanned object rebuilt as editable CAD.
 
 ## What conversion does and does not recover

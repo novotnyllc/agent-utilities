@@ -21,11 +21,11 @@ At session start, discover and record the current tool/resource schemas. Bind to
 | `READ_DOCUMENTATION` | Search/read current Fusion API documentation | Official Autodesk web documentation |
 | `READ_ACTIVE_DOCUMENT` | Inspect active document/product/design state | Execute the read-only inventory script |
 | `EXECUTE_FUSION_PYTHON` | Run Python in the active Fusion session and return output/errors | No safe modeling fallback; provide script for manual run |
-| `CAPTURE_VIEW` | Return current or requested canvas image | Ask user for a Fusion screenshot |
+| `CAPTURE_VIEW` | Return current or requested canvas image | Capture the Fusion window through the session's computer-use capability; without one, ask the user for a screenshot |
 | `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | Run the generated `emit-document-save` transaction through `EXECUTE_FUSION_PYTHON`; only when that too is unavailable, the user saves manually before mutation |
 | `UNDO_REDO` | Undo/redo recent document operations | Restore saved version/checkpoint |
-| `IMPORT_EXPORT` | Import reference data or export manufacturing files | User performs the documented Fusion command |
-| `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | User opens the intended document manually |
+| `IMPORT_EXPORT` | Import reference data or export manufacturing files | Drive the documented Fusion command through the session's computer-use capability and verify the result; without one, ask the user to run it |
+| `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | Drive the open/create through the session's computer-use capability; without one, the user opens the intended document |
 
 Do not bind a tool by name alone. Read its current schema, side effects, permissions, and result format.
 

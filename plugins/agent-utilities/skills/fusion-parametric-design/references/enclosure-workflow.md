@@ -110,7 +110,8 @@ not PCB design: the deliverable is a design that shows where wires run, at
 what gauge, ideally with the voltage and current each run carries, and with
 real terminations at the ends.
 
-**Wire runs are native geometry.** The expert technique is a 3D sketch path —
+**Wire runs are native geometry.** Prefer the Wire Generator add-in when it
+is installed (`references/add-ins.md`); otherwise the expert technique is a 3D sketch path —
 fit-point splines routed through the enclosure — swept with Pipe or Sweep at
 the run's overall outside diameter (insulation, conductor count, and jacket
 included, taken from the actual wire or its datasheet, never inferred from

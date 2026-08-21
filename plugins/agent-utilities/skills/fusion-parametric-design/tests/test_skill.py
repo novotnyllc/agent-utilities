@@ -137,6 +137,33 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("editable CAD model of the scanned object itself", text)
         self.assertIn("an envelope, not a reconstruction job", doctrine)
 
+    def test_free_add_ins_are_first_class_with_the_ui_capability_ladder(self) -> None:
+        # Installed add-ins are discovered live and preferred when one owns the
+        # job; free recommendations are unhesitant (unlike paid extensions);
+        # UI-only capabilities climb probe-API -> computer-use -> ask-user.
+        text = SKILL.read_text(encoding="utf-8")
+        addins = " ".join(
+            (SKILL_DIR / "references" / "add-ins.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        self.assertIn("Free add-ins are part of the toolkit", text)
+        for requirement in (
+            "Discover what is installed, live",
+            "Prefer the tool that owns the job",
+            "Probe the API at time of use",
+            "Drive the UI directly",
+            "only when the session has no computer-use capability at all",
+            "Recommend missing add-ins proactively",
+            "pricingModel=FREE",
+            "ParametricText",
+            "Wire Generator",
+        ):
+            self.assertIn(requirement, addins, requirement)
+        # The old fallback shape is gone: asking the user is last resort,
+        # never the first answer to a UI-only capability.
+        self.assertNotIn("ask the user to run that one UI command", text)
+
     def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
         # Wire runs are sweep/pipe modeling with recorded metadata;
         # electrical checking never becomes a host-side engine, and no native
@@ -154,6 +181,23 @@ class SkillContractTests(unittest.TestCase):
             "Terminations are components",
         ):
             self.assertIn(requirement, flat, requirement)
+
+    def test_anti_runaway_core_is_stated(self) -> None:
+        # The minute-one lane gate, zero repo artifacts for ordinary modeling,
+        # the screenshot heartbeat, shown-not-investigated failures, and the
+        # latency norms.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "The lane decision comes first, and ordinary modeling is the default",
+            "when in doubt, it is ordinary modeling",
+            "no files to the user's repository",
+            "misclassification signal",
+            "Progress is defined as the user seeing the model",
+            "no screenshot in about ten minutes is off the rails",
+            "Failures are shown, not silently investigated",
+            "within about thirty minutes",
+        ):
+            self.assertIn(requirement, text, requirement)
 
     def test_automation_lanes_are_conditional_and_modeling_is_single_operator(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
