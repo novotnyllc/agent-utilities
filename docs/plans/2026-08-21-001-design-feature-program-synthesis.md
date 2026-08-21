@@ -45,9 +45,10 @@ accepted regions:
    coincidentally concave join.
 3. A **bounded, deterministic best-first search** (§7) proposes candidate
    programs over the graph and selects among them by a **lexicographic
-   objective** (§6): held-out geometric fidelity, unexplained support,
-   unsupported inference, semantic contradictions, then compactness — gates,
-   not hidden scalar weights, per house rules.
+   objective** (§6): semantic contradictions first (absolute — so no
+   invalid candidate ever sets a relative gate's benchmark), then held-out
+   geometric fidelity, unexplained support, unsupported inference, and
+   compactness — gates, not hidden scalar weights, per house rules.
 4. The winning program is emitted, rebuilt, perturbed, and re-graded by the
    machinery that already exists (006 D7, 003 §1.3-as-amended); the losing
    candidates are recorded, and a tie between materially different programs
@@ -148,7 +149,7 @@ one command). The operation set the search may compose:
 | `sweep` / `loft` | 009's reserved rungs (design exists; emitters pending) | either, declared |
 | `pattern` (rectangular/circular) + `equal`/shared-parameter binding | new emission surface; licensed by regularity classes | inherits member polarity |
 | `component` | 004's assembly program | structural |
-| `slab-join` | 001's slab stack — **the fallback operation**: licensed only where no factored alternative survives its licence (001 Amendment B) | additive |
+| `slab-join` | 001's slab stack — **the fallback operation**: always admissible where the slab's own 001 licences hold; the selection gates, never admission, decide whether a factored alternative beats it (001 Amendment B) | additive |
 
 Closed set; `_reject_unknown_fields` discipline unchanged. Everything else —
 coil, split, move, freeform patches — stays out of vocabulary and lands in
@@ -211,7 +212,15 @@ and this corpus takes the gates. Candidate programs are compared in strict
 order; a candidate failing a gate is eliminated before the next gate is
 consulted; ties within a gate's declared tolerance proceed together:
 
-1. **G1 — held-out geometric fidelity.** Area-weighted residual of the
+1. **G1 — semantic contradictions.** Zero tolerance, no slack, and **first
+   in order because every later gate is relative to the surviving set**: a
+   candidate asserting a polarity against its evidence (§5), an operation
+   against its licence (§4 — unconstructible anyway), a relationship its
+   class certificate contradicts, or a claim level above its 004 licence is
+   eliminated here — before it can serve as any relative gate's benchmark.
+   A semantically invalid candidate that explains more support must never
+   set the bar the valid candidates are measured against.
+2. **G2 — held-out geometric fidelity.** Area-weighted residual of the
    candidate's predicted geometry against **reserved validation triangles**
    — the same blocked holdout machinery and freeze discipline as the split
    licence (002 §A.1): validation blocks are reserved before any hypothesis
@@ -220,23 +229,18 @@ consulted; ties within a gate's declared tolerance proceed together:
    Gate: residual ≤ `program_heldout_tolerance` (declared; rationale tied to
    the emission deviation thresholds — a program that cannot meet the grade
    the emitter will apply is dead on arrival).
-2. **G2 — unexplained support.** The area the candidate leaves unclaimed may
+3. **G3 — unexplained support.** The area the candidate leaves unclaimed may
    not exceed the best surviving candidate's unclaimed area by more than
    `program_unexplained_slack` (declared). Unclaimed stays a first-class
    outcome (007 §6); this gate only forbids *choosing* a program that
    explains less for no compensating reason.
-3. **G3 — unsupported inference.** Inferred geometry (virtual closures,
+4. **G4 — unsupported inference.** Inferred geometry (virtual closures,
    continuation completions, hidden caps — the derived-geometry ledger, 002
    §A.2 rule 7) is charged by area and count; a candidate may not carry more
    unsupported inference than the best surviving candidate plus
    `program_inference_slack` (declared). Nominal snaps count here too: a
    snap without its 007 §8.5 identifiability licence is unsupported
    inference by definition and is never emitted anyway.
-4. **G4 — semantic contradictions.** Zero tolerance, no slack: a candidate
-   asserting a polarity against its evidence (§5), an operation against its
-   licence (§4 — unconstructible anyway), a relationship its class
-   certificate contradicts, or a claim level above its 004 licence is
-   eliminated.
 5. **G5 — compactness.** Among survivors, minimize the program-complexity
    census, compared lexicographically within itself in declared order:
    unlicensed-duplicate parameter values (two independently fitted values a
@@ -262,9 +266,9 @@ protocol has run against the benchmark corpus — program selection changes
 output topology, so these values are exactly the class the sweep rule
 governs.
 
-The scoreboard connection is direct: G1 feeds RC/deviation, G2–G3 feed H's
-disposition accounting, G4 feeds V's precision (a hallucinated feature is a
-G4 kill before it can pollute precision), and G5 *is* the P cell's
+The scoreboard connection is direct: G2 feeds RC/deviation, G3–G4 feed H's
+disposition accounting, G1 feeds V's precision (a hallucinated feature is a
+G1 kill before it can pollute precision), and G5 *is* the P cell's
 optimizer-facing form (003 Amendment §7) — the metric and the objective are
 the same census, so the system cannot be optimized against one and measured
 against the other.
@@ -278,8 +282,14 @@ against the other.
   claim about history. Beam width `program_beam_width` (declared; default
   rationale: the licence table already prunes the space to near-linear on
   mechanical parts — the beam exists to cap the adversarial case, not to do
-  the selection's job). Candidate count and expansion count are recorded;
-  hitting the beam cap is a named census line, not a silent truncation.
+  the selection's job). Candidate count and expansion count are recorded.
+  **Hitting the beam cap refuses** — `program-search-budget-exceeded` for
+  the affected scope, naming the cap and the census of discarded prefixes —
+  unless a recorded dominance bound proves the discarded prefixes cannot
+  win any gate (in which case the bound is the census line). A truncated
+  search that still crowned a winner would break both the selection
+  guarantee and the `program-selection-ambiguous` guarantee, which is
+  exactly the silent first-rule-wins this design exists to end.
 - **Determinism:** KTD-8 discipline verbatim — every ordering derives from
   content-addressed hashes; gate comparisons use quantized values (007
   §2.3); ties break by candidate serial then node ID; numpy/BLAS build
@@ -304,7 +314,7 @@ against the other.
 | --- | --- | --- |
 | 002 region tree / cross-cut / gates | produces `surface-hypothesis` nodes; the split licence and lineage contract govern node validity | nothing — the tree stops asking "what should I emit?" and its terminals become evidence, which is what its partition invariant was always for |
 | 001 slabs / events / loops | produces `profile-hypothesis` nodes, occupancy-difference evidence (§5.3), and the `slab-join` fallback program | slab stack demoted from preferred representation to evidence + floor candidate (001 Amendment B); adaptive certification feeds interval-support evidence |
-| 007 relationships / snapping | produces `regularity-hypothesis` nodes; class certificates license `pattern`/equality bindings and shared parameters | relationships stop being decorative metadata: an adopted class is a constraint every candidate program must satisfy or contest, and its counterfactual cost shows up in G1 when it is wrong |
+| 007 relationships / snapping | produces `regularity-hypothesis` nodes; class certificates license `pattern`/equality bindings and shared parameters | relationships stop being decorative metadata: an adopted class is a constraint every candidate program must satisfy or contest, and its counterfactual cost shows up in G2 when it is wrong |
 | 010 execution model / convert | convert-derived faces are `surface-hypothesis` nodes with `fusion-convert` provenance under the same gates; the `plan` stage hosts the search | `plan` re-specified (010 Amendment B); everything else unchanged |
 | 004 componentization | `component-boundary-hypothesis` nodes are priors on program boundaries: a licensed geometric subobject proposes a program subtree per component; claim levels never upgraded by the search | R3's both-fit held-out comparison becomes one instance of the general G1–G5 competition (same holdout discipline, same record shape) |
 | 003 scoreboard | G1–G5 map onto RC/H/V-precision/P as stated in §6; the selection record is a scoreboard input artifact | P cell (Amendment §7) measures the same census G5 optimizes |
