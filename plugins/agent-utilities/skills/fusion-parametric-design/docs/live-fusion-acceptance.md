@@ -54,7 +54,6 @@ From the package root:
 
 ```bash
 "$SKILL_DIR/scripts/fusion-design" validate examples/electronics-enclosure/fusion-project.json
-"$SKILL_DIR/scripts/fusion-design" plan examples/electronics-enclosure/fusion-project.json
 "$SKILL_DIR/scripts/fusion-design" emit-inventory examples/electronics-enclosure/fusion-project.json -o build/inventory.py
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync examples/electronics-enclosure/fusion-project.json -o build/sync-parameters.py
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold examples/electronics-enclosure/fusion-project.json -o build/scaffold.py
@@ -66,9 +65,11 @@ retain its complete raw response. Accept exactly one JSON object between the
 report delimiters and require its `kind`, `manifest_sha256`, and success state
 to match the transaction.
 
-**Pass:** validation reports `ok: true`; the plan has nine phases and is not
-blocked; all four general transactions are emitted and the checked-in
-example-specific positive-control script compiles.
+**Pass:** validation reports `ok: true`; all four general transactions are emitted; each emitted
+script executes through the discovered Fusion Python capability and returns the expected report
+kind, manifest hash, and transaction-specific success state; and the checked-in example-specific
+positive-control script compiles. Emission and compilation alone never pass this gate — a
+malformed transaction is caught only by running it and reading its report.
 
 ### Pure-Python module cache smoke
 

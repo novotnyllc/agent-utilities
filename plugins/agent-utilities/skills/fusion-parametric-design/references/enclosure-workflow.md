@@ -4,17 +4,24 @@
 
 Record exact part numbers, board revisions, installed headers/hats, converter variants, connector orientation, buttons, antennas, microphones, fuses, wire gauges, terminal hardware, batteries, and cable overmolds. A bare-board drawing is not enough when the installed assembly is taller or routes wires differently.
 
-## 2. Build the reference system
+## 2. Build the reference system, proportionately
 
-For each item create:
+Use the fewest representations that answer the current design question — one
+canonical linked component or one dimensioned provisional envelope serves as
+both reference and packing geometry when it provides the required datums and
+occupancy. Create, when a question actually needs the extra representation:
 
-- `<Item> Reference` (role `reference`): editable dimensions and datums;
+- `<Item> Reference` (role `reference`): editable dimensions and datums, only
+  when the occupancy model cannot provide stable authoring datums;
 - `<Item> Envelope` (role `packing`): occupancy used for placement;
-- one or more `<Function> Keep-Out` (role `keepout`) components.
+- `<Function> Keep-Out` (role `keepout`) components for each specific volume
+  that materially constrains the design.
 
 Names are plain words for the browser; the role is the `role` attribute in the
-`fusion_parametric_design` group, written by the scaffold from the manifest
-(`references/design-doctrine.md` § Naming).
+`fusion_parametric_design` group (`references/design-doctrine.md` § Naming; in
+the automation lanes the scaffold writes it from the manifest). For a purchased
+part, the canonical linked catalog component is the reference model — source it
+first (`references/data-and-catalog.md`).
 
 The reference model should expose:
 
@@ -55,9 +62,7 @@ Board insertion angle, lid lift, component removal, fastener withdrawal, and cab
 
 ## 4. Establish datums and coordinate ledger
 
-Choose a stable product coordinate system. Record each packing occurrence's translation and rotation. Avoid arbitrary drag placement that cannot be reconstructed.
-
-The packing ledger should include:
+Choose a stable product coordinate system, and avoid arbitrary drag placement that cannot be reconstructed. In ordinary modeling, Fusion joints, origins, parameters, names, and component properties carry placement and identity — no separate coordinate ledger. A manifest-managed lane records each packing occurrence's transform after the user approves the arrangement; that lane's packing ledger includes:
 
 | Field | Meaning |
 |---|---|
@@ -88,7 +93,7 @@ Use minimum-distance measurements and interference analysis. Record the smallest
 
 ## 6. Author the product
 
-Create the base/lid around the settled internal system. Prefer parameters/equations such as:
+Author in two passes: a visible draft shell around the provisional arrangement first — unresolved details marked on the screenshot — then the settled internal system after the user confirms the direction (fit claims wait for pass 2). Prefer parameters/equations such as:
 
 ```text
 calc_inner_width = pack_width + 2 * clr_rigid_xy
@@ -97,9 +102,78 @@ calc_outer_width = calc_inner_width + 2 * fab_wall_thickness
 
 Supports should contact intended load-bearing surfaces. Retainers must not crush components or occupy connector/service zones. External port mouths must clear both the connector nose and overmold geometry.
 
+Decide the lid/base join — and any print-driven part split — and model it by
+default, stating the one-line reason in the visual loop. Fastener-free
+mechanical joins lead whenever load, cycle, and printable tolerance allow — a
+skirt-and-channel snap lid, dovetail, bayonet, or interference ring, printed
+in and invisible; screws with captive nuts or heat-set inserts take over for
+serviceability and higher loads; adhesive is never a default and appears only
+as an explicit, stated engineering choice. Fasteners, where used, are
+cataloged components positioned with joints so Interference and Measure
+validate engagement. Every
+joint is modeled complete — head seats (counterbore/countersink, spot-faced
+normal to the screw axis on angled surfaces), recesses, engagement, tolerance
+— and validated assembled: interference across the assembly, Measure at each
+mating interface, section through the joint. Spanning structure is dimensioned
+from the mating geometry's real position (a raised boss's actual top face),
+exists only for a stated load or function, and survives support removal.
+Prior designs in the user's hub with an established joining style are pattern
+sources — read and reuse them before inventing.
+
 For variable-height electronics, use local roof height where it materially reduces bulk, but preserve manufacturable transitions and lid structure.
 
-## 7. Closed and service assemblies
+## 7. Wiring and terminations
+
+Wiring is part of the design when the design is built around electrical
+modules — LED strips and displays, IMUs and sensors, buttons, step-down
+converters, power injection, existing boards. This is module-to-module hookup,
+not PCB design: the deliverable is a design that shows where wires run, at
+what gauge, ideally with the voltage and current each run carries, and with
+real terminations at the ends.
+
+**Wire runs are native geometry.** Prefer the Wire Generator add-in when it
+is installed (`references/add-ins.md`); otherwise the expert technique is a 3D sketch path —
+fit-point splines routed through the enclosure — swept with Pipe or Sweep at
+the run's overall outside diameter (insulation, conductor count, and jacket
+included, taken from the actual wire or its datasheet, never inferred from
+bare-conductor gauge), with appearances matching the real
+wire colors and bend radii the actual wire tolerates. Wire channels, strain
+relief, and grommet features in the enclosure are ordinary native modeling,
+and wire clearance is checked with native Measure and Interference like
+everything else.
+
+**Electrical metadata is base-tier recorded data.** Gauge, conductor count,
+voltage, and current per run live in component/body descriptions and
+attributes — no paid data-management extension assumed. The agent may add
+gentle advisory notes (a gauge that looks thin for a stated current is worth
+saying), but this is recorded data and advice, never a host-side
+electrical-validation engine: the validation-framework prohibition applies
+here exactly as it does to geometry, and electrical safety review stays
+outside CAD (`references/verification-contract.md`).
+
+**Terminations are components.** Ferrules, fork and ring terminals, JST and
+other connector housings, and headers get the same treatment as all purchased
+hardware: catalog or manufacturer CAD first, provisional simple geometry when
+that is enough, stored and reused through the catalog doctrine
+(`references/data-and-catalog.md`), and placed at wire ends so the assembly
+shows real terminations.
+
+**What Fusion does not provide, plainly.** Base Fusion has no general harness
+or cable-routing environment, and the Electronics workspace is PCB design —
+not the vehicle for module hookup (an MCP electronics-read capability, where
+present, reads that PCB-oriented workspace and is not this). Do not hunt for a
+nonexistent native harness tool, and do not invent a framework to fake one:
+wire modeling is ordinary sweep/pipe modeling with recorded metadata.
+
+Proportionality applies: wires appear when they matter to the design. Runs
+that constrain the enclosure — connector departure, overmold, bend envelope,
+service loop, channel, strain relief, a termination whose real shape changes
+fit — are modeled fully; a named keep-out or sketch path serves where that
+honestly answers the question; full colored harness detail with every
+termination placed comes when the exact geometry changes the product or the
+user asks for a harness model.
+
+## 8. Closed and service assemblies
 
 Verify at least these states:
 
@@ -112,9 +186,10 @@ Verify at least these states:
 
 For a wearable, also check smooth body-facing surfaces, local stiffness, garment attachment, and hard-edge isolation.
 
-## 8. Release evidence
+## 9. Release evidence
 
-Produce:
+After the user approves the shape, and when a release or handoff is requested,
+produce:
 
 - parameter/source ledger;
 - component transform ledger;

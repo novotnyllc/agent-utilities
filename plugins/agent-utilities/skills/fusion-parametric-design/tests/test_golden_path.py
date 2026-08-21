@@ -5,8 +5,7 @@ from pathlib import Path
 import unittest
 
 from fusion_design.export_handoff import emit_export_example_script, example_verification_report_bytes
-from fusion_design.manifest import load_manifest
-from fusion_design.planner import build_plan
+from fusion_design.manifest import validate_manifest_data, load_manifest
 from fusion_design.positive_control import _box_specs, emit_positive_control_script
 from fusion_design.scripts import manifest_sha256
 
@@ -39,7 +38,7 @@ class GoldenPathTests(unittest.TestCase):
 
     def test_enclosure_fixture_is_an_executable_golden_path(self) -> None:
         manifest = load_manifest(MANIFEST_PATH)
-        self.assertFalse(build_plan(manifest).blocked)
+        self.assertEqual([], [i for i in validate_manifest_data(manifest.data) if i.severity == "error"])
 
         digest = manifest_sha256(manifest)
         scripts = sorted(GENERATED.glob("*.py"))

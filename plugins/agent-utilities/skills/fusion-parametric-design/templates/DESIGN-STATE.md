@@ -1,6 +1,6 @@
 # Design State
 
-Use one copy per Fusion design. Replace the instructional text with project facts; do not mark an unperformed check as passed.
+Use one copy per Fusion design that runs the skill's automation and release lanes — a project with a manifest, verification evidence, or exports. Name it per design: any `*.design-state.md`, one ledger per design (`power-pod.design-state.md` beside `cable-clip.design-state.md`), with bare `DESIGN-STATE.md` the natural name in a single-design directory. Ordinary modeling keeps no state ledger at all — Fusion itself is the identity store. Replace the instructional text with project facts; do not mark an unperformed check as passed.
 
 ## Intent and current variant
 
@@ -19,6 +19,7 @@ Use one copy per Fusion design. Replace the instructional text with project fact
 - Fusion release: Not recorded.
 - Fusion MCP/package version: Not recorded.
 - Design type: Must be parametric before managed mutation.
+- Manifest file (`*.fusion-project.json`; the filename identifies which design's manifest): Not recorded.
 - Manifest SHA-256: Not recorded.
 - Latest inventory report: Not recorded.
 - Latest verification report: Not recorded.

@@ -1,5 +1,15 @@
 # Fusion MCP adapter contract
 
+MCP is transport. It is the channel through which the agent operates Fusion —
+never a programming environment in its own right. A Python snippet sent over it
+is short, direct, limited to one native operation or one tightly related
+feature sequence, and readable as the equivalent of a skilled user action in
+Fusion. Python sent over MCP must not become a CAD application, a
+geometry-generation framework, a persistent transaction system, a validation
+framework, a reporting framework, or a replacement for the Fusion browser and
+timeline. The generated transactions described below serve the skill's
+automation and release lanes; ordinary modeling is small direct operations.
+
 Autodesk's Fusion MCP advertises dynamic tools. This skill therefore defines capabilities, not fixed tool names.
 
 ## Capability binding
@@ -9,19 +19,41 @@ At session start, discover and record the current tool/resource schemas. Bind to
 | Capability | Required behavior | Safe fallback |
 |---|---|---|
 | `READ_DOCUMENTATION` | Search/read current Fusion API documentation | Official Autodesk web documentation |
-| `READ_ACTIVE_DOCUMENT` | Inspect active document/product/design state | Execute the read-only inventory script |
-| `EXECUTE_FUSION_PYTHON` | Run Python in the active Fusion session and return output/errors | No safe modeling fallback; provide script for manual run |
-| `CAPTURE_VIEW` | Return current or requested canvas image | Ask user for a Fusion screenshot |
-| `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | Run the generated `emit-document-save` transaction through `EXECUTE_FUSION_PYTHON`; only when that too is unavailable, the user saves manually before mutation |
-| `UNDO_REDO` | Undo/redo recent document operations | Restore saved version/checkpoint |
-| `IMPORT_EXPORT` | Import reference data or export manufacturing files | User performs the documented Fusion command |
-| `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | User opens the intended document manually |
+| `READ_ACTIVE_DOCUMENT` | Inspect active document/product/design state | Ordinary lane: the smallest inline read-only probe that answers the immediate question; machinery lanes: the generated inventory transaction |
+| `EXECUTE_FUSION_PYTHON` | Run Python in the active Fusion session and return output/errors | No modeling fallback: stop. In the ordinary lane, do not write or hand the user a persistent script as a substitute |
+| `CAPTURE_VIEW` | Return current or requested canvas image | Capture the Fusion window through the session's computer-use capability; without one, ask the user for a screenshot |
+| `SAVE_OR_VERSION` | Save current document or create a version/checkpoint | Ordinary lane: `Document.save`/`saveAs` inline, or Fusion's own UI; machinery lanes: the `emit-document-save` transaction; only when nothing is available, the user saves manually before mutation |
+| `UNDO_REDO` | Undo/redo recent document operations | Fusion Undo through the capability or UI; never restore an older document version automatically — without a bounded recovery mechanism, stop before a risky mutation |
+| `IMPORT_EXPORT` | Import reference data or export manufacturing files | Drive the documented Fusion command through the session's computer-use capability and verify the result; without one, ask the user to run it |
+| `DOCUMENT_MANAGEMENT` | Open/create/list documents or data items | Drive the open/create through the session's computer-use capability; without one, the user opens the intended document |
 
 Do not bind a tool by name alone. Read its current schema, side effects, permissions, and result format.
 
-## Transaction rules
+## Ordinary-lane execution
 
-Every mutation transaction must:
+Ordinary modeling does not use generated transaction contracts.
+
+- Read the active document with the smallest inline read-only probe that answers the immediate question; do not run generated inventory.
+- Save directly through the discovered save capability, `Document.save`/`Document.saveAs`, or Fusion's own UI; do not invoke a manifest-backed save emitter.
+- If Fusion Python execution is unavailable, stop; do not write or hand the user a persistent script as a fallback.
+- Use Fusion Undo/Redo through the available capability or UI; do not restore an older document version automatically, and stop before a risky mutation when no bounded recovery mechanism exists.
+
+An ordinary-lane snippet confirms the active document, active Design, and intended target component; performs one visible edit; reads the created or edited feature's native health or error; and returns no audit schema, diff report, or persistent state. Ordinary snippets are single-use actions and need not be idempotent — idempotence, managed-entity discovery, report protocols, and deterministic reruns belong only to generated lane transactions.
+
+Run `Compute All` and inspect timeline-wide health after a coherent feature group, before a fit claim, before a user review checkpoint, and before release — not after every individual feature.
+
+## Units at the API boundary
+
+Fusion user-facing dimensions use explicit units or named parameters.
+
+- Prefer `ValueInput.createByString` with an explicit unit or parameter expression for dimensional feature inputs.
+- Bare real-valued API lengths are Fusion database centimetres and bare real-valued angles are radians. Use them only when the API specifically requires database units, and perform the conversion once at the boundary.
+- Label and convert all dimensional readbacks before reporting them to the user.
+- Never mix user millimetres with API centimetres inside feature-construction arithmetic.
+
+## Generated lane transaction rules
+
+These rules govern generated lane transactions only. Every mutation transaction must:
 
 1. state its narrow goal;
 2. verify the active design and target component;
@@ -33,7 +65,7 @@ Every mutation transaction must:
 8. preserve enough output for audit and diff;
 9. be safe to run a second time.
 
-Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one tested Fusion script can atomically create the group. Conversely, do not pack the entire product into one opaque script.
+Prefer one coherent feature group per transaction. Do not make hundreds of single-entity MCP calls when one script can atomically create the group. Conversely, never pack the entire product into one opaque script: a monolithic product-construction transaction is the anti-pattern this contract exists to prevent, whatever lane it appears in.
 
 ## Main-thread responsiveness
 
@@ -50,12 +82,13 @@ Official guidance: [Python-specific issues](https://help.autodesk.com/cloudhelp/
 Fusion's embedded Python is its own runtime; do not assume that a module
 available to the host Python is importable in Fusion. **Probe it — never quote a
 note, including this one.** Run `emit-capability-probe` against the live Fusion
-and read its report. That command exists because this section previously carried
-a module inventory that was wrong, and the wrong inventory drove an architecture
-decision.
+and read its report. That command exists because any written module inventory
+goes stale the day Fusion auto-updates its interpreter, and a stale inventory
+drives wrong architecture decisions.
 
-What a later live probe actually found, and what the earlier note got wrong:
-`secrets`, `sqlite3`, `ctypes` and `ensurepip` all import. `numpy` raised a plain
+What a live probe finds on one recorded configuration, kept here as an example
+of what only a probe can establish: `secrets`, `sqlite3`, `ctypes` and
+`ensurepip` all import. `numpy` raised a plain
 `ModuleNotFoundError` — **not installed**, which is a different fact from
 unloadable, and it was corrected by installing a matching wheel: numpy 2.5.2 from
 a `cp314` / `macosx_11_0_arm64` wheel imported inside Fusion and ran
@@ -130,13 +163,14 @@ The bundle solves imports, not result transport. If the stdout sentinel is
 missing, stop; do not treat a direct bootstrap's empty response as
 machine-readable success.
 
-## Read → decide → write → prove loop
+## Read → decide → write → inspect loop
 
-1. **Read:** inventory, documentation, manifest, and current visual state.
-2. **Decide:** identify one behavior or feature group and its measurable acceptance criteria.
-3. **Write:** run the smallest idempotent transaction.
-4. **Prove:** recompute, inspect health, measure, check interference, and capture visual evidence.
-5. **Diff:** compare inventory reports when unintended scope is possible.
+1. **Read:** active document state, current visual state, and the exact documentation needed for the next action.
+2. **Decide:** identify one visible edit.
+3. **Write:** perform the smallest direct native operation.
+4. **Inspect:** read the native feature result and capture the visible state.
+
+Read manifests, generated inventories, and report diffs only in the lane that owns them.
 
 ## Report protocol
 
@@ -247,13 +281,13 @@ The local Fusion MCP has access to the live design session. Ask for the minimum 
 
 ## Error handling
 
-When an API call fails:
+When an ordinary-lane API call fails:
 
-1. inspect the returned exception and traceback;
-2. query current official API documentation through the MCP;
-3. inventory the target entity and design type;
-4. reproduce with the smallest test geometry when safe;
-5. fix one behavior;
-6. rerun from the saved checkpoint when the failed transaction left partial geometry.
+1. read the returned exception and traceback;
+2. read the one current official API entry for that call (the Autodesk product-help MCP's `search_help_content` when that capability is connected);
+3. verify the active document, Design, target component, and required object type with a read-only probe;
+4. correct the call once against the actual target.
 
-Do not guess at an obsolete API signature.
+Do not create test geometry, a probe harness, a diagnostic component, or a reproduction project. Do not search forums or unrelated API areas. If the corrected call fails or requires broader investigation, show the failure and stop. Do not guess at an obsolete API signature.
+
+Generated lanes follow only their documented refusal and retry contract.

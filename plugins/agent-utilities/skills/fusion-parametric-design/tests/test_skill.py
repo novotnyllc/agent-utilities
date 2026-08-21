@@ -56,19 +56,363 @@ class SkillContractTests(unittest.TestCase):
         self.assertTrue(description.group("value").startswith("Use when "))
         self.assertLess(len(frontmatter), 1024)
 
+    def test_expert_operator_philosophy_and_prohibitions_are_stated(self) -> None:
+        # The skill's spine: expert Fusion operation through thin MCP transport,
+        # with the validation-framework prohibition stated unconditionally.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "You are an expert Fusion user operating Fusion through MCP",
+            "sole authority for geometry, feature validity, interference, measurement, and inspection",
+            "Never create a validation framework",
+            "MCP is transport",
+            "stop and report the capability gap",
+            "Do not generate monolithic modeling scripts for ordinary design work",
+            "unless the user explicitly requests reusable automation, batch generation, or a repeatable product generator",
+            "Use Fusion's native built-in functionality comprehensively",
+        ):
+            self.assertIn(requirement, text, requirement)
+
+    def test_data_placement_and_catalog_gates_precede_geometry(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("Decide data placement before geometry", text)
+        self.assertIn(
+            "never begins in an arbitrary or unsaved `Untitled` document", text
+        )
+        self.assertIn("Insert Fastener", text)
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Insert Fastener",
+            "linked external components",
+            "canonical",
+            "two occurrences of one canonical",
+        ):
+            self.assertIn(requirement, catalog, requirement)
+
+    def test_base_fusion_first_and_no_extension_assumptions(self) -> None:
+        # Paid extensions (Manage, Simulation, ...) are never assumed present;
+        # part identity has a base-tier home and extensions get one gentle
+        # mention at most.
+        text = SKILL.read_text(encoding="utf-8")
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Base Fusion first",
+            "never assume an extension is present",
+            "part numbers and part identity require no Manage extension",
+            "no workflow built around the assumption of purchase",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("base-tier BOM", catalog)
+
+    def test_component_sourcing_is_proportionate(self) -> None:
+        # The CAD-search ladder is fitness-for-purpose, not absolute: a named
+        # provisional box is a legitimate occupancy component and sourcing
+        # never delays the visible-result loop.
+        text = SKILL.read_text(encoding="utf-8")
+        catalog = (SKILL_DIR / "references" / "data-and-catalog.md").read_text(
+            encoding="utf-8"
+        )
+        for document in (text, catalog):
+            flat = " ".join(document.split())
+            self.assertIn("not a failure to source", flat)
+            self.assertIn("frequently wrong", flat)
+        self.assertIn("Fitness for purpose decides the fidelity", text)
+        self.assertIn("never delays the visible-result loop", " ".join(catalog.split()))
+
+    def test_supplied_scan_defaults_to_envelope_not_reconstruction(self) -> None:
+        # A scan the design fits around is an occupancy envelope derived with
+        # native means; the reconstruction lane is only for rebuilding the
+        # scanned object itself as editable CAD.
+        text = SKILL.read_text(encoding="utf-8")
+        doctrine = (SKILL_DIR / "references" / "mesh-reconstruction.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "A supplied scan is usually an envelope source, not a reconstruction job",
+            text,
+        )
+        self.assertIn("editable CAD model of the scanned object itself", text)
+        self.assertIn("an envelope, not a reconstruction job", doctrine)
+
+    def test_manifests_are_named_per_design(self) -> None:
+        # A directory holds one manifest per design; the filename is part of
+        # the manifest's identity and every lane task names its manifest.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "any `*.fusion-project.json`, one per design",
+            "`power-pod.fusion-project.json`",
+            "names which manifest it operates on",
+        ):
+            self.assertIn(requirement, text, requirement)
+        template = (ROOT / "templates" / "DESIGN-STATE.md").read_text(encoding="utf-8")
+        self.assertIn("Manifest file", template)
+
+    def test_closure_is_confirmed_not_assumed(self) -> None:
+        # Watertightness: one native property read per claim, lane-
+        # proportionate — isSolid in the inspection loop, isClosed at mesh
+        # import, closed solids in the release contract.
+        text = SKILL.read_text(encoding="utf-8")
+        contract = (SKILL_DIR / "references" / "verification-contract.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Closure is confirmed, not assumed",
+            "`BRepBody.isSolid`",
+            "`MeshBody.isClosed`",
+            "measured for volume is closed first or the gap is named",
+            "Mesh check-and-repair is its own quick task",
+            "A crash is a resume, not a restart",
+            "Never rebuild from memory what the document may already contain",
+            "`MeshBody.isOriented`",
+            "An over-budget mesh gets fixed, not flagged",
+            "deviation-bounded, not count-targeted",
+            "order-of-magnitude guidance, not gates",
+            "a shape change fails the fix",
+            "Too many triangles and too few are the same failure",
+            "never blindly maximum, and state the resulting count",
+            "ask one specific question",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("BRepBody.isSolid", contract)
+
+    def test_plugin_hooks_are_wired_in_both_harnesses(self) -> None:
+        # Dual-harness parity: one shared hooks file, referenced by both
+        # plugin manifests; the fusion matcher tolerates each harness's MCP
+        # tool naming.
+        import json
+
+        plugin_root = SKILL_DIR.parents[1]
+        hooks_path = plugin_root / "hooks" / "hooks.json"
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        matchers = [
+            entry["matcher"]
+            for entry in hooks["hooks"]["PreToolUse"]
+            if "matcher" in entry
+        ]
+        self.assertIn(".*[Ff]usion.*", matchers)
+        for manifest_name in (".claude-plugin", ".codex-plugin"):
+            manifest = json.loads(
+                (plugin_root / manifest_name / "plugin.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("./hooks/hooks.json", manifest.get("hooks"), manifest_name)
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("both harnesses load them", text)
+
+    def test_free_add_ins_are_first_class_with_the_ui_capability_ladder(self) -> None:
+        # Installed add-ins are discovered live and preferred when one owns the
+        # job; free recommendations are unhesitant (unlike paid extensions);
+        # UI-only capabilities climb probe-API -> computer-use -> ask-user.
+        text = SKILL.read_text(encoding="utf-8")
+        addins = " ".join(
+            (SKILL_DIR / "references" / "add-ins.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        self.assertIn("Free add-ins are part of the toolkit", text)
+        for requirement in (
+            "Discover what is installed, live",
+            "Prefer the tool that owns the job",
+            "Probe the API at time of use",
+            "Drive the UI directly",
+            "only when the session has no computer-use capability at all",
+            "Recommend missing add-ins proactively",
+            "pricingModel=FREE",
+            "ParametricText",
+            "Wire Generator",
+        ):
+            self.assertIn(requirement, addins, requirement)
+        # The old fallback shape is gone: asking the user is last resort,
+        # never the first answer to a UI-only capability.
+        self.assertNotIn("ask the user to run that one UI command", text)
+
+    def test_joinery_is_decided_and_modeled_by_default(self) -> None:
+        # The expert chooses the join and builds it in — with cataloged
+        # fasteners and joints, pattern-matched against the user's prior
+        # designs — surfacing the reason in the visual loop, not proposing.
+        text = SKILL.read_text(encoding="utf-8")
+        workflow = " ".join(
+            (SKILL_DIR / "references" / "enclosure-workflow.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        for requirement in (
+            "Joinery is decided and modeled, not proposed",
+            "would print better split",
+            "heat-set inserts",
+            "without asking first",
+            "real geometry, never prose",
+            "reuse beats invention",
+            "Act, show, iterate",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("print-driven part split", workflow)
+        self.assertIn("model it by default", workflow)
+        self.assertIn("pattern sources", workflow)
+
+    def test_joint_execution_quality_is_normative(self) -> None:
+        # Complete joints: seats with the fastener, engineered snaps, chosen
+        # thread side with purchasable specifics, structure that earns its
+        # existence, mating dimensions from assembled reality, and
+        # assembled-fit validation as part of done.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "A joint is complete only when every element of it",
+            "Fastener seats are part of the fastener",
+            "never thread diameter straight through",
+            "seat normal to the screw axis",
+            "The thread side is a design choice too, and heat-set inserts are first-class",
+            "manufacturer-recommended bore and depth",
+            "always ready and specific",
+            "Snap fits are engineered, not gestured at",
+            "lead-in chamfers",
+            "Adhesive is never a default",
+            "fastener-free mechanical join",
+            "house specialty",
+            "Two proven fastener-free architectures",
+            "skirt-and-channel lid",
+            "ring-snap for round retention",
+            "proven by coupon, not guessed",
+            "Structure must earn its existence",
+            "print-survivability sanity check",
+            "Mating dimensions come from assembled reality, not assumptions",
+            "Assembled-fit validation is part of done",
+            "Measure at every mating interface",
+        ):
+            self.assertIn(requirement, text, requirement)
+
+    def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
+        # Wire runs are sweep/pipe modeling with recorded metadata;
+        # electrical checking never becomes a host-side engine, and no native
+        # harness environment is pretended into existence.
+        text = SKILL.read_text(encoding="utf-8")
+        workflow = (SKILL_DIR / "references" / "enclosure-workflow.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("never a host-side electrical-validation engine", text)
+        flat = " ".join(workflow.split())
+        for requirement in (
+            "Wiring and terminations",
+            "never a host-side electrical-validation engine",
+            "no general harness or cable-routing environment",
+            "Terminations are components",
+        ):
+            self.assertIn(requirement, flat, requirement)
+
+    def test_anti_runaway_core_is_stated(self) -> None:
+        # The minute-one lane gate, zero repo artifacts for ordinary modeling,
+        # the screenshot heartbeat, shown-not-investigated failures, and the
+        # latency norms.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "The lane decision comes first: classify once and lock the lane",
+            "When in doubt, the lane is `ordinary`",
+            "no agent-authored persistent host artifact anywhere",
+            "misclassification signal",
+            "Progress is defined as the user seeing the model",
+            "no screenshot in about ten minutes is off the rails",
+            "Failures are shown, not silently investigated",
+            "within about thirty minutes",
+        ):
+            self.assertIn(requirement, text, requirement)
+
+    def test_automation_lanes_are_conditional_and_modeling_is_single_operator(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("never invoked for ordinary modeling or visual edits", text)
+        self.assertIn("two direct native Fusion approaches fail", text)
+        self.assertIn("no review agents run on ordinary modeling", text)
+        routing = (SKILL_DIR / "references" / "model-routing.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "exactly one persistent Fusion-operating worker for the whole task",
+            routing,
+        )
+        self.assertIn("single-operator until the lane ends", routing)
+        # The dispatcher shape is the cost architecture: cheap responsive
+        # front, effort escalated in the worker, never a swarm.
+        self.assertIn("token and cost efficiency through tier-matching", routing)
+        self.assertIn("Effort escalates in the worker", routing)
+        self.assertIn("Whatever is making decisions runs high, xhigh, or max", routing)
+        self.assertIn("executor does not re-litigate", routing)
+        # Standalone harnesses run the same discipline as one agent; the tier
+        # shape is an optimization, never a prerequisite.
+        self.assertIn("Standalone degradation", routing)
+        self.assertIn("never a prerequisite", routing)
+
+    def test_product_help_capability_is_pinned(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("search_help_content", text)
+        self.assertIn("product-help MCP", text)
+        self.assertIn("FSN", text)
+        adapter = (SKILL_DIR / "references" / "mcp-adapter.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("search_help_content", adapter)
+
+    def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
+        # The adversarial-review hardening: the locked lane, the
+        # artifact-anywhere rule, cumulative thin scripting, bounded native
+        # inspection, the approach definition with global attempt accounting,
+        # frozen shipped machinery, explicit feature scope, maturity states,
+        # and the ordinary-lane execution rules in the adapter.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "LANE: ordinary",
+            "When in doubt, the lane is `ordinary`",
+            "never retroactively converts ordinary modeling",
+            "no agent-authored persistent host artifact anywhere",
+            "Thin means one visible edit, not one product goal",
+            "The restriction is cumulative",
+            "Reading a native result is a bounded action",
+            "An approach is one native construction strategy",
+            "The attempt budget belongs to the task",
+            "Do not create or modify task-specific machinery",
+            'never accept the default "all intersected bodies" behavior',
+            "Pass 1, visible draft",
+            "Label every visible checkpoint with its maturity state",
+            "Match the view before judging the shape",
+            "Rollback is temporary state",
+        ):
+            self.assertIn(requirement, text, requirement)
+        adapter = (SKILL_DIR / "references" / "mcp-adapter.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "## Ordinary-lane execution",
+            "## Generated lane transaction rules",
+            "## Units at the API boundary",
+            "database centimetres",
+            "need not be idempotent",
+        ):
+            self.assertIn(requirement, adapter, requirement)
+
+    def test_skill_and_references_carry_no_transition_language(self) -> None:
+        # The skill describes how things work, in the present tense.
+        paths = [SKILL, *sorted((SKILL_DIR / "references").glob("*.md"))]
+        for path in paths:
+            lowered = path.read_text(encoding="utf-8").lower()
+            for word in ("legacy", "migration", "previously"):
+                self.assertNotIn(word, lowered, f"{path.name}: {word}")
+
     def test_skill_preserves_fusion_native_source_of_truth_and_research_gate(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         self.assertIn("The Fusion document is the product", text)
         self.assertIn("Research before asking for measurements", text)
         self.assertIn("Do not start fit-dependent geometry", text)
         # Browser names are humane; machine roles ride on attributes, with the
-        # legacy shouty prefixes recognized only as an adoption fallback.
+        # shouty name prefixes recognized only as an adoption fallback.
         self.assertIn("References/", text)
         self.assertIn("PD Trigger Envelope:1", text)
         self.assertIn("role `reference`", text)
         self.assertIn("role `packing`", text)
         self.assertIn("role `keepout`", text)
         self.assertIn("adoption fallback", text)
+        # Timeline groups are created as the work happens, named humanely.
+        self.assertIn("The timeline reads like a table of contents", text)
+        self.assertIn("never as an afterthought pass", text)
         self.assertNotIn("00_REFERENCES", text)
 
     def test_mcp_onboarding_delegates_to_roundhouse_shim(self) -> None:
@@ -91,33 +435,24 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("checkable B-Rep envelope", text)
         self.assertIn("Mesh-only automated clearance and interference", unsupported)
 
-    def test_capability_matrix_covers_every_public_nurb_command(self) -> None:
-        matrix = (SKILL_DIR / "references" / "capability-matrix.md").read_text(encoding="utf-8")
-        commands = [
-            "new",
-            "dev",
-            "build",
-            "check",
-            "inspect",
-            "scan",
-            "rules",
-            "api",
-            "skill",
-            "update",
-            "card",
-            "diff",
-            "slice",
-            "stress",
-            "verify",
-            "render",
-            "export",
-            "extract",
-            "launcher",
-        ]
-        for command in commands:
-            self.assertIn(f"`nurb {command}`", matrix, command)
-        self.assertIn("Variants", matrix)
-        self.assertIn("printer.toml", matrix)
+    def test_capability_status_is_organized_by_our_lanes(self) -> None:
+        # The status reference speaks in the skill's own operations and lanes,
+        # and keeps the load-bearing boundaries visible.
+        status = (SKILL_DIR / "references" / "capability-status.md").read_text(encoding="utf-8")
+        for heading in (
+            "## Ordinary modeling",
+            "## Automation lane",
+            "## Release lane",
+            "## Reconstruction lane",
+        ):
+            self.assertIn(heading, status, heading)
+        for requirement in (
+            "Variants",
+            "exit 139",
+            "Slicer-authoritative",
+            "never approximated",
+        ):
+            self.assertIn(requirement, status, requirement)
 
     def test_unsupported_reference_names_non_equivalent_workflows(self) -> None:
         unsupported = (SKILL_DIR / "references" / "unsupported.md").read_text(encoding="utf-8")
@@ -196,13 +531,13 @@ class SkillContractTests(unittest.TestCase):
     def test_mesh_reconstruction_doctrine_states_the_gate_and_the_api_boundary(self) -> None:
         doctrine = (SKILL_DIR / "references" / "mesh-reconstruction.md").read_text(encoding="utf-8")
         skill = SKILL.read_text(encoding="utf-8")
-        capability = (SKILL_DIR / "references" / "capability-matrix.md").read_text(encoding="utf-8")
+        capability = (SKILL_DIR / "references" / "capability-status.md").read_text(encoding="utf-8")
         unsupported = (SKILL_DIR / "references" / "unsupported.md").read_text(encoding="utf-8")
         for requirement in ("mesh-edit", "faceted-brep", "parametric-rebuild"):
             self.assertIn(requirement, doctrine, requirement)
         self.assertIn("Classify the edit before converting", skill)
         self.assertIn("references/mesh-reconstruction.md", skill)
-        for document, name in ((capability, "capability-matrix"), (unsupported, "unsupported")):
+        for document, name in ((capability, "capability-status"), (unsupported, "unsupported")):
             self.assertIn("Mesh Section Sketch", document, name)
             self.assertIn("Fit Curves", document, name)
             self.assertIn("UI-only", document, name)

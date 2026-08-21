@@ -1,5 +1,15 @@
 # Verification contract
 
+Scope: this contract governs the skill's automation and release lanes — the
+generated verification transaction, the export binding, variants, and the
+reconstruction gates. During ordinary modeling, inspection is native and
+direct: Measure, Interference, Section Analysis, Properties, and feature
+health, read straight from Fusion at sensible boundaries. The evidence
+machinery below is applied when a release, handoff, repeatable generator, or
+reconstruction requires it, and it is never a license to build agent-authored
+validation — every check here is either a native Fusion result or a
+fail-closed judgment shipped in this skill's tested tooling.
+
 A release passes only the checks applicable to its intended use. “Generated successfully” is not a verification result.
 
 ## Digital model integrity
@@ -18,7 +28,7 @@ A release passes only the checks applicable to its intended use. “Generated su
 - No *undeclared* timeline feature is suppressed. Suppression silently changes the shape away from the recorded intent, so `timeline-suppressed` fails closed unless the manifest declares `verification.allow_suppressed_timeline_features: true` — the escape hatch for designs that model configurations by suppression. Declared suppression is still recorded in `timeline.suppressed`.
 - Required parameter names and expressions match the manifest.
 - Managed components and print parts exist once at the intended paths.
-- Each printable part resolves to exactly one positive-volume B-rep solid whose volume is at or above the declared `printable_parts[].minimum_volume_mm3` and whose name matches the declared `body_name` when one is given. A print part with no `printable_parts` entry fails: verification asserts declared expectations, never a bare "some body exists" threshold.
+- Each printable part resolves to exactly one positive-volume B-rep solid — closed by definition (`BRepBody.isSolid`; a surface body is open and never printable) — whose volume is at or above the declared `printable_parts[].minimum_volume_mm3` and whose name matches the declared `body_name` when one is given. A print part with no `printable_parts` entry fails: verification asserts declared expectations, never a bare "some body exists" threshold.
 - The declared floor is itself cross-checked against geometry the author did not choose: a floor below `print_part_rules.minimum_volume_bounding_box_fraction` of the part's own B-Rep bounding-box volume fails as `implausible-declared-minimum`, so a forged floor cannot re-open the sliver hole. The report separates `print_part_expectations` (manifest-declared) from `print_part_rules` (skill-wide constants) so a reader can tell them apart.
 - The verification report records each checked part's root-context occurrence transform (`occurrence_transforms`: raw Fusion `transform2.asArray()`, translation components in centimetres — deliberately unconverted, unlike the `*_mm` keys; the export index's per-artifact `transform` uses the same convention).
 - When the manifest declares `printable_parts`, its paths exactly match `verification.expected_print_parts`, and a declared `body_name` matches the resolved solid at export (`body-name-mismatch` fails closed).
@@ -91,7 +101,7 @@ Record the intended build direction and evaluate:
 - hole/insert compensation;
 - part orientation versus load path.
 
-Core generated scripts do not claim these checks automatically. Use a slicer, custom analyzer, or manual measured review and record the evidence.
+Core generated scripts do not claim these checks automatically. Use a configured slicer, an installed trusted add-in, an existing validated analyzer already present when the lane locked, manual measured review, or a physical coupon, and record the evidence — never an analyzer authored during the CAD task.
 
 ## Structural and safety
 
@@ -103,7 +113,7 @@ Core generated scripts do not claim these checks automatically. Use a slicer, cu
 - Material temperature assumptions are compatible with nearby heat sources.
 - Electrical insulation, fuse, wire gauge, and voltage separation are reviewed outside CAD by a qualified method.
 
-Do not infer electrical or thermal safety solely from geometric clearance.
+Do not infer electrical or thermal safety solely from geometric clearance. Fusion simulation is extension-gated and its presence is never assumed: the base-tier structural evidence is conservative geometry, a coupon, or a physical proof test with an explicit safety factor.
 
 ## Physical validation
 

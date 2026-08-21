@@ -1,0 +1,50 @@
+# Capability status
+
+What this skill's operations can and cannot do, organized by its own lanes.
+The connected Fusion MCP is dynamically discovered; every "supported" below
+means "through the discovered capability, against the connected release."
+`references/unsupported.md` carries the full detail behind each boundary.
+
+## Ordinary modeling
+
+| Operation | Status |
+|---|---|
+| Native parametric modeling — sketches, features, parameters, expressions, comments, attributes | Supported; small direct operations through MCP |
+| Visual iteration | Supported through the live Fusion canvas plus MCP screenshots; there is no separate viewer, slider UI, or hot-reload browser |
+| Native inspection — Measure, Interference, Section Analysis, Properties, feature and timeline health | Supported; results are read directly, never wrapped in a framework |
+| Assemblies and motion | Supported as components, joints, limits, and named critical poses with native Interference per pose; no one-call joint-range sweep |
+| Reusable design elements | Fusion-native: shared user parameters, derived/reference components, configurations, patterns; automatic duplicate-construction extraction is unsupported |
+| Decision log and rejected options | A workflow (`DESIGN-STATE.md` in the lanes that keep one); no auto-regenerated summary card |
+
+## Automation lane
+
+| Operation | Status |
+|---|---|
+| Manifest validation, parameter sync, component scaffold | Supported; the scaffold intentionally does not generate a whole part |
+| Inventory and verification transactions | Supported for B-Rep clearance, forbidden interference, expected-print-body, and timeline-health gates; complete FDM rules require a slicer or an existing analyzer |
+| Report diffs | Supported as deterministic before/after semantic diffs of parameters, component paths, bodies, and unhealthy timeline items — not a B-Rep or feature-history diff |
+| Variants | Supported and bounded: declared manifest `variants` (parameter sets or named Fusion Configurations) driven by `plan-variants`, with per-variant inventory, verification, optional export, and verified restoration. Configuration activation probes Fusion's configuration API and fails closed when the connected release lacks it |
+
+## Release lane
+
+| Operation | Status |
+|---|---|
+| Deterministic export | Supported where Fusion's export capability is exposed: `emit-export` generates the ExportManager transaction for STEP/3MF/STL with in-script hashing, no-overwrite outputs, and an evidence-bound handoff index |
+| PrusaSlicer project handoff | Supported: `prusaslicer-project` writes a deterministic project 3MF from the verified export index plus declared intent — objects, orientation, plate grouping, presets by identifier, bed-aware placement with fail-closed fit checks, justified overrides. Presets are named, never cloned; only the printer's `bed_shape`/`max_print_height` are read |
+| Headless slicing | Supported, opt-in (`--slice`): reports the produced G-code's own print time and filament use, bound to the project and G-code hashes. The full printer/print/filament preset set is required — a partial set segfaults PrusaSlicer (exit 139), so the adapter refuses to invoke it that way |
+| Print time and filament estimates | Only from a real slice; nothing is estimated without one |
+| Printer and material profiles | Slicer-authoritative; this package never duplicates a machine or filament profile |
+| Structural and stress claims | Conservative FDM assumptions, coupons, and proof testing; Fusion simulation only where the user holds the extension that gates it |
+| Material decision | Supported as a recorded decision (family, formulation, source, confidence, coupon, risk) per `references/material-selection.md`; the package ships no numeric property database and no filament profile |
+
+## Reconstruction lane
+
+| Operation | Status |
+|---|---|
+| Scan capture and classification | Supported: immutable capture bound by SHA-256 (`emit-mesh-capture`), units and provenance recorded, one enforced path — `mesh-edit`, `faceted-brep`, or `parametric-rebuild` |
+| Segmentation and fitting | Supported: Fusion's accurate face-group generation, then host-side sectioning and primitive fitting over `PolygonMesh` data. **Fusion's Mesh Section Sketch and Fit Curves to Mesh Section are UI-only — currently not exposed through the API** (`MeshSectionSketch`, `MeshPlaneCutFeature` do not exist; probe at time of use, and where genuinely UI-only they can be driven through a session's computer-use capability), so sectioning and fitting are this package's own arithmetic, fully testable offline |
+| Parametric rebuild | Supported under stated conditions: datum-frame derivation from the fitted primitives, archetype planning, and Sketch API emission of extrudes, revolves, holes and fillets in one data-driven transaction. A hole needs `orientation.material_side == "inside"` (watertight mesh); a fillet needs both neighbours rebuilt; anything else is unreconstructed with a named gate, never approximated |
+| Deviation grading | Supported on released APIs: `emit-mesh-deviation` grades a reconstruction against the immutable source in both directions with an asymmetric verdict — invented material is a hard failure, omitted detail is advisory. `PolygonMesh.compareWith` is **preview**-gated and cannot grade a B-Rep (a `BRepBody`'s mesh is a `TriangleMesh`, which has no `compareWith`), so it is corroboration only, never the mechanism |
+| Editability proof | Supported: each parameter perturbed against its declared observable and restored; `check-editability` is the offline gate; `interactions_exercised` is always `false` |
+| Coverage account | Supported: labels from the closed set `parametric-full` / `parametric-partial` / `reconstruction-refused`; the delivered fraction subtracts every planned archetype the build did not deliver |
+| Coverage guarantee | None: coverage is partial in principle and is reported as a fraction with every unreconstructed region named |

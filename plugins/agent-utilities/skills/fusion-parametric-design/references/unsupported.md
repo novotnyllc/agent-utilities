@@ -18,7 +18,7 @@ Use the live Fusion canvas, Parameters dialog, configurations, visibility/opacit
 
 **Status:** Not needed and not included.
 
-Fusion is already the long-lived interactive CAD host. Start Fusion normally, enable its MCP server, connect the agent, and keep one document open through the iteration. An operating-system launcher may automate those startup steps, but it would not reproduce Nurb's independent hot-reload viewer and is outside this package.
+Fusion is already the long-lived interactive CAD host. Start Fusion normally, enable its MCP server, connect the agent, and keep one document open through the iteration. An operating-system launcher may automate those startup steps, but it is outside this package: the live Fusion canvas is the viewer.
 
 ## Automatic skill update and synchronization
 
@@ -68,12 +68,14 @@ The package does not duplicate `printer.toml` as an incomplete model of a slicer
 
 **Status:** Not supplied by the core package.
 
-Fusion can expose B-Rep geometry, face normals, bounds, and measurements, but robust minimum-wall, bridge, overhang, trapped-support, and machine-specific checks need a custom analyzer or slicer. Recommended path:
+Fusion can expose B-Rep geometry, face normals, bounds, and measurements, but robust minimum-wall, bridge, overhang, trapped-support, and machine-specific checks need an analyzer or slicer. Recommended path:
 
 1. export the exact print bodies;
-2. run the configured slicer's analysis;
-3. add targeted B-Rep or mesh checks only for recurring high-value rules;
+2. run the configured slicer's analysis, an installed trusted Fusion add-in, or an existing validated analyzer already present when the lane locks;
+3. cover the remainder with manual measured review or a physical coupon;
 4. store results in the verification report.
+
+Do not author a B-Rep, mesh, or FDM analyzer during a CAD task. Developing a new analyzer is a separate software-engineering request; its implementation and testing do not occur inside the modeling or release run.
 
 ## Print time and filament mass
 
@@ -140,21 +142,17 @@ The skill can request Fusion viewport screenshots and section views when the con
 
 ## Automatic scan-to-parametric reconstruction
 
-**Status:** Unsupported as a reliable general workflow.
+**Status:** Partial and contract-bound.
 
-Import the scan as immutable mesh reference, establish coordinate system and scale, extract only needed sections/datums, rebuild native sketches/features, and validate with a fit coupon. Use external mesh tools for cleaning, registration, or cross-section extraction when Fusion API coverage is insufficient.
+`references/mesh-reconstruction.md` is the sole normative source for the reconstruction operations this package implements — capture, classification, segmentation, fitting, planning, rebuild emission, editability proof, coverage — and for their live-acceptance status. This file does not duplicate per-archetype implementation status.
 
-What this package *does* supply is in `references/mesh-reconstruction.md`: immutable capture bound by SHA-256, an enforced three-way classification gate, the faceted refusal ladder, offline sectioning and primitive fitting, design-intent proposals, and the asymmetric deviation verdict. What it deliberately does not supply:
-
-- whole-part auto-conversion — the abandoned upstream fitter and both commercial references agree this is where the difficulty sits;
-- organic and freeform surface recovery;
-- automatic assertion of design intent — coaxiality, perpendicularity, symmetry and nominal-value snapping are surfaced as proposals carrying their measured deviation, never applied silently;
-- coordinate-frame derivation from the fitted primitives — **not implemented**, despite being how both reference tools establish their frame;
-- Sketch API emission from the fits — **not implemented**; the fits and proposals stay host-side data today.
+The package does not provide reliable whole-part automatic reconstruction, organic or freeform surface recovery, guaranteed full coverage, or automatic recovery of the original designer's intent — coaxiality, perpendicularity, symmetry and nominal-value snapping are surfaced as proposals carrying their measured deviation, never applied silently. Use only the archetypes, gates, refusals, and coverage labels named in the reconstruction reference.
 
 ## Fusion Mesh Section Sketch and Fit Curves to Mesh Section
 
-**Status:** UI-only. No API exists, so a skill driving Fusion over MCP cannot use them.
+**Status:** UI-only when the current API probe exposes no callable equivalent.
+
+Probe the connected Fusion API at time of use. When no API exists and the session has computer-use capability, drive the single Fusion UI command directly and verify the resulting native sketch through the API and a screenshot; without computer use, ask the user to run that command. No emitted Python script calls a nonexistent mesh-section API — UI invocability and Python API availability are separate questions.
 
 `Create Mesh Section Sketch` and `Fit Curves to Mesh Section` are Fusion's only native parametric route from a mesh, and both are UI-only: there is no `MeshSectionSketch` class, nothing on `Sketch` that creates one, and no `MeshPlaneCutFeature`. Never emit a script that calls them.
 
@@ -347,9 +345,9 @@ The included report diff catches parameters, component paths, body summaries, an
 
 ## One-call joint-range collision sweep
 
-**Status:** Custom workflow.
+**Status:** Not supplied; native poses are the ordinary path.
 
-Fusion supports components, joints, transforms, measurements, and interference, but this package does not guess each mechanism's motion variable. Write a task-specific sampled sweep and report the first collision position.
+Fusion supports components, joints, transforms, measurements, and interference, but this package does not guess each mechanism's motion variable. For ordinary modeling, drive the joint through the user-relevant critical poses with Fusion's native joint controls and run native Interference at each named pose, including intermediate poses when the mechanism's geometry makes an intermediate collision credible. An automated sampled motion sweep requires an explicit automation request and unchanged pre-existing tooling; when no such tooling exists, report the capability boundary instead of writing a task-specific sweep.
 
 ## Automatic duplicate-feature extraction
 
@@ -382,11 +380,10 @@ that would have to be planned, constrained and verified.
 
 **Status:** Built — under the named conditions below, outside which they refuse.
 
-This entry previously read "not yet emitted", on the grounds that hole
-classification needs triangle winding to tell a bore from a boss and that
-evidence was not in the fit record. The evidence *is* in the fit record — the
-fitting stage measures `orientation.material_side` per region — and the planner
-now reads it. Both kinds emit. What remains unsupported is narrower, and worth
+Hole classification needs triangle winding to tell a bore from a boss, and
+that evidence *is* in the fit record — the fitting stage measures
+`orientation.material_side` per region — and the planner
+reads it. Both kinds emit. What remains unsupported is narrower, and worth
 stating precisely, because each of these leaves a region unreconstructed under
 the named gate rather than producing an approximate feature:
 

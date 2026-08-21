@@ -661,16 +661,21 @@ class ManifestValidationTests(unittest.TestCase):
         brass = self._with_decision(family="PET_CF", formulation="Some PET-CF", nozzle="brass")
         self.assertIn("material-decision-filled-material-unguarded", self._codes(brass))
 
-        # PA* additionally needs the drying state declared, and 'not_needed' is
-        # a declaration that the gate rejects rather than one it accepts.
-        for label, overrides, expected in (
-            ("nozzle only", {"nozzle": "ruby"}, True),
-            ("nozzle and drying required", {"nozzle": "ruby", "drying": "required"}, False),
-            ("nozzle and drying done", {"nozzle": "ruby", "drying": "done"}, False),
-            ("nozzle but drying not needed", {"nozzle": "ruby", "drying": "not_needed"}, True),
-            ("drying only", {"drying": "done"}, True),
+        # Abrasion and moisture are separate gates: PA_CF needs both an
+        # abrasion-resistant nozzle and a drying state; unfilled PA needs only
+        # the drying state, because hygroscopicity does not establish nozzle
+        # abrasion. 'not_needed' is a declaration the drying gate rejects
+        # rather than one it accepts.
+        for label, overrides, expected_by_family in (
+            ("nozzle only", {"nozzle": "ruby"}, {"PA": True, "PA_CF": True}),
+            ("nozzle and drying required", {"nozzle": "ruby", "drying": "required"}, {"PA": False, "PA_CF": False}),
+            ("nozzle and drying done", {"nozzle": "ruby", "drying": "done"}, {"PA": False, "PA_CF": False}),
+            ("nozzle but drying not needed", {"nozzle": "ruby", "drying": "not_needed"}, {"PA": True, "PA_CF": True}),
+            ("drying only", {"drying": "done"}, {"PA": False, "PA_CF": True}),
+            ("drying only, brass declared", {"nozzle": "brass", "drying": "done"}, {"PA": False, "PA_CF": True}),
         ):
             for family in ("PA", "PA_CF"):
+                expected = expected_by_family[family]
                 with self.subTest(case=label, family=family):
                     data = self._with_decision(
                         family=family, formulation=f"Some {family}", unresolved_risks=[], **overrides
@@ -680,6 +685,26 @@ class ManifestValidationTests(unittest.TestCase):
                         self.assertIn("material-decision-filled-material-unguarded", codes)
                     else:
                         self.assertNotIn("material-decision-filled-material-unguarded", codes)
+
+        # The issue path names the unmet field: unfilled PA missing drying
+        # points at drying, an abrasive family missing its nozzle points at
+        # nozzle.
+        for family, overrides, expected_path in (
+            ("PA", {}, "material_decision.drying"),
+            ("PA_CF", {}, "material_decision.nozzle"),
+            ("PET_CF", {"nozzle": "brass"}, "material_decision.nozzle"),
+            ("PA_CF", {"nozzle": "ruby"}, "material_decision.drying"),
+        ):
+            with self.subTest(family=family, path=expected_path):
+                data = self._with_decision(
+                    family=family, formulation=f"Some {family}", unresolved_risks=[], **overrides
+                )
+                paths = [
+                    issue.path
+                    for issue in validate_manifest_data(data)
+                    if issue.code == "material-decision-filled-material-unguarded"
+                ]
+                self.assertEqual([expected_path], paths)
 
         # Unfilled families are not asked for either guard.
         self.assertEqual([], validate_manifest_data(self._with_decision()))

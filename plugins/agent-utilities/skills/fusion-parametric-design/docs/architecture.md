@@ -5,7 +5,7 @@
 The system has three stores, each with a distinct responsibility:
 
 1. **Fusion document:** authoritative editable CAD, assembly, and parameter state.
-2. **`fusion-project.json`:** authoritative evidence and verification contract.
+2. **`*.fusion-project.json`** (one manifest per design; bare `fusion-project.json` in a single-design directory): authoritative evidence and verification contract.
 3. **Generated reports:** immutable observations used for audit and diff.
 
 Host-side Python is not a fourth CAD store. It generates narrow scripts that operate on Fusion's existing parametric model.
@@ -19,10 +19,6 @@ Host-side Python is not a fourth CAD store. It generates narrow scripts that ope
 ### Manifest validator
 
 `fusion_design.manifest` validates required project/list structure, provenance enumerations, parameter types and role prefixes, critical values, scan provisional status, dual reference/packing models, keep-outs or explicit no-keepout rationale, component paths, and verification structure. The standard-library validator is the CLI gate; the JSON Schema is supplied for editor and ecosystem tooling.
-
-### Planner
-
-`fusion_design.planner` converts a valid manifest into a gated sequence. A plan blocks before modeling when a critical expression or evidence item is absent.
 
 ### Script emitter
 

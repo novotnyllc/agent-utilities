@@ -6,15 +6,36 @@ This reference is the skill's **standalone doctrine**. The skill is used in harn
 
 ## The dispatcher operating shape
 
-The thread that uses this skill is a **dispatcher, not a worker**. It stays responsive to the user, classifies each piece of work by the work-shape table below, and hands every substantial piece — Fusion MCP mutations, long CLI runs, exports, verification passes — to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
+The thread that uses this skill is a **dispatcher, not a worker**, and the shape exists for token and cost efficiency through tier-matching. The conversational thread stays responsive at a modest tier and effort by default — talking to the user and routing work does not need high effort, and probably should not run there. It classifies each piece of work by the work-shape table below and hands substantial work to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
 
-Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
+Effort escalates in the worker, where the work demands it: research passes, hard geometry strategy, and integration work get high effort as needed, while routine Fusion operation is tool-driving and usually mid-tier per the work-shape table. The cost architecture is a cheap responsive front, one persistent Fusion-operating worker at the tier the modeling actually needs, and escalated-effort workers only for the genuinely hard reasoning pieces — never a swarm. Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
 
-The dispatcher also arbitrates the single live Fusion writer: at most one mutating worker at a time; read-only workers may run concurrently. Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
+Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
+
+## Single Fusion operator
+
+The dispatcher spawns **exactly one persistent Fusion-operating worker for the whole task**, and that worker is the only thing that touches Fusion. Every Fusion call — mutations and read-only Python alike — serializes through that one live session: Fusion's active document, UI state, and stdout stream are shared, so concurrent Fusion callers can receive one another's report blocks. The parent does not duplicate design reasoning, spawn parallel analysts, create candidate workers, or replace the worker between attempts, and foreign-report detection in the adapter is defensive handling for an external violation — it never authorizes concurrent Fusion execution.
+
+Ordinary modeling remains single-operator until the lane ends, not merely until the first screenshot: no reviewers, no parallel candidate builders, no swarm — a simple modeling task is never an agent-orchestration exercise. One read-only specialist consultation is allowed only after the hard stop and after the user directs the work to continue; the specialist does not touch Fusion, create artifacts, propose infrastructure, or reset the attempt budget, and its answer must identify one specific native Fusion action. Advice that proposes infrastructure instead of a Fusion action is declined.
+
+**Standalone degradation.** The dispatcher/decision-worker/executor shape applies when the session has subagent facilities. A session running this skill standalone — no worker facility at all — performs everything as the single agent in one live Fusion session: the same lane lock, attempt budgets, screenshot heartbeat, and single-operator discipline hold unchanged, with effort escalated within itself for decision-heavy moments. The tier shape is an optimization of the same discipline, never a prerequisite for it.
+
+Host-only work that never touches Fusion — documentation reads, offline computations, report diffs, project builds, cache warms — may run in parallel only in an activated machinery lane.
 
 ## Why economy is safe here at all
 
 The skill's CLI and generated transactions validate fail-closed: a malformed manifest is refused, a missing preset is refused before PrusaSlicer runs, a drifted export binding fails the transaction, a deviation run that cannot establish containment reports `not-established`. A weak model driving these paths can therefore produce refusals — never silent wrongness. That property is the entire justification for routing mechanical work to a cheap model; where it does not hold (open-ended design judgment the contract cannot check), the frontier tier holds the pen.
+
+## The tier principle
+
+**Whatever is making decisions runs high, xhigh, or max — likely xhigh or max; whatever is executing decisions runs lower, on instructions the decider wrote.** Design choices, join selection, geometry strategy, research synthesis, and failure triage are decision work and get the top tiers. Driving Fusion through an already-decided feature sequence, captures, exports, and lookups are execution work and run lower, briefed precisely by the decider. The decider writes the executor's instructions; the executor does not re-litigate them, and anything that turns out to need a decision escalates back up — the escalate-on-non-mechanical-refusal rule below is this principle applied to refusals. A decider is always a **worker** doing architectural or design reasoning, never the dispatcher: routing, talking, and classifying are not decision work in this sense.
+
+This composes with the single-Fusion-operator contract because **decision workers are Fusion-free**: they reason over state the Fusion worker and dispatcher provide — screenshots, read results, refusal reports — and produce briefs; the one persistent Fusion-operating worker executes every Fusion call. Two shapes, by how heavy the decision work is:
+
+- **Ordinary tasks with small decisions** (most modeling): no separate decision worker exists. The single Fusion-operating worker simply runs at the tier the work needs — frontier for a task whose failure mode is a verified-but-wrong model, lower for mechanical driving — and makes its own in-flow calls.
+- **Tasks with genuinely heavy decision work** (a hard packing resolution, a research-backed strategy, a large integration): a Fusion-free decision worker at high/xhigh/max reasons and briefs; the Fusion worker executes the brief; the dispatcher stays at its modest default.
+
+The work-shape table that follows is the elaboration of this one rule.
 
 ## Frontier — deep design reasoning
 

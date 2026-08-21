@@ -39,10 +39,15 @@ MATERIAL_DECISION_FIELDS = {
     "drying",
 }
 
-# Filled and hygroscopic families are not drop-in filaments: carbon and glass
-# fill chew through a brass nozzle, and PA absorbs enough water from the room to
-# change what actually prints. Both must be declared, not assumed away.
-FILLED_FAMILIES = {family for family in MATERIAL_FAMILIES if family.endswith("_CF")} | {"PA"}
+# Abrasion and moisture are separate gates. A declared abrasive fill chews
+# through a brass nozzle, so it requires an abrasion-resistant nozzle; a
+# hygroscopic polyamide absorbs enough water from the room to change what
+# actually prints, so it requires a drying state. A polymer family alone does
+# not establish nozzle abrasion: unfilled PA needs drying, not a hardened
+# nozzle. Both constraints must be declared, not assumed away.
+ABRASIVE_FAMILIES = {family for family in MATERIAL_FAMILIES if family.endswith("_CF")}
+HYGROSCOPIC_FAMILIES = {family for family in MATERIAL_FAMILIES if family.startswith("PA")}
+FILLED_FAMILIES = ABRASIVE_FAMILIES | HYGROSCOPIC_FAMILIES
 
 # The machine constraints are closed enums, not prose. A safety gate read out of
 # free text is satisfiable by text that denies the constraint ("No hardened
@@ -305,19 +310,26 @@ def _validate_material_decision(
     if family in FILLED_FAMILIES:
         # Only the structured fields discharge this. An unresolved risk is
         # advisory here — "Lid colour not chosen yet." is a risk, and it says
-        # nothing about the nozzle that is about to wear open.
-        guarded = nozzle in ABRASION_RESISTANT_NOZZLES
-        if guarded and family.startswith("PA"):
-            guarded = drying in {"required", "done"}
-        if not guarded:
+        # nothing about the nozzle that is about to wear open. Abrasion and
+        # moisture are separate gates: each fires only for the property the
+        # family actually establishes.
+        needs: list[tuple[str, str]] = []
+        if family in ABRASIVE_FAMILIES and nozzle not in ABRASION_RESISTANT_NOZZLES:
+            needs.append(
+                ("nozzle", "nozzle to be one of " + ", ".join(sorted(ABRASION_RESISTANT_NOZZLES)))
+            )
+        if family in HYGROSCOPIC_FAMILIES and drying not in {"required", "done"}:
+            needs.append(("drying", "drying to be 'required' or 'done'"))
+        if needs:
+            # The issue's path names the first unmet field, so unfilled PA
+            # missing its drying declaration points at drying, not at a nozzle
+            # it was never required to declare.
             issues.append(
                 ValidationIssue(
                     "material-decision-filled-material-unguarded",
-                    "material_decision.nozzle",
-                    f"Family {family!r} requires nozzle to be one of "
-                    f"{', '.join(sorted(ABRASION_RESISTANT_NOZZLES))}"
-                    + (" and drying to be 'required' or 'done'" if family.startswith("PA") else "")
-                    + "; filled and hygroscopic filaments are not drop-in.",
+                    f"material_decision.{needs[0][0]}",
+                    f"Family {family!r} requires " + " and ".join(msg for _, msg in needs)
+                    + "; abrasive and hygroscopic filaments are not drop-in.",
                 )
             )
 

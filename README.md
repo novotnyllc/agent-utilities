@@ -23,11 +23,36 @@ readiness, machine administration, and UniFi in
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
 | `fleet-chezmoi` | Reconcile chezmoi source and live-state drift with roundhouse when present. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
+| `fusion-parametric-design` | Design real parametric CAD in Autodesk Fusion as an expert operator over MCP. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `onedrive-fileprovider-repair` | Diagnose and safely repair macOS OneDrive File Provider churn. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
+
+### Fusion parametric design
+
+The `fusion-parametric-design` skill turns an agent into an expert Autodesk
+Fusion operator over MCP. It designs real parametric models with Fusion's own
+vocabulary — native sketches, features, assemblies, and joints; joinery
+decided and built in, with engineered fastener-free joins (snap skirts,
+ring-snaps, dovetails) as a house specialty; wiring as real swept geometry
+with recorded electrical metadata; purchased parts sourced from manufacturer
+CAD, Insert Fastener, and supplier catalogs into a shared linked-component
+library. It inspects with Fusion's own tools — Measure, Interference, Section
+Analysis, feature health — and works in a tight visible-result loop:
+screenshots as the heartbeat, drafts in minutes, the user's judgment steering
+every iteration.
+
+Beyond interactive modeling, the skill carries conditional automation,
+release, and reconstruction lanes: manifest-backed evidence chains,
+deterministic verification-bound exports, PrusaSlicer project handoff with
+real headless slicing, declared variant matrices, and a gated mesh→CAD
+reconstruction pipeline that rebuilds scanned parts as editable feature
+history — each activated only on explicit request, never for ordinary
+modeling. Dual-harness like everything in this repo: Claude Code and Codex
+are both first-class. The full story is in the
+[skill's README](plugins/agent-utilities/skills/fusion-parametric-design/README.md).
 
 ### Why the OneDrive repair skill exists
 
