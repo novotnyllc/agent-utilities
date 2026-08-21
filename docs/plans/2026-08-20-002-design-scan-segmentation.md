@@ -1260,14 +1260,14 @@ census):
    authored before the sweep, same independence rule as the C denominator).
 2. **Sweep:** each threshold over a declared **domain-aware** grid, others
    held at defaults. Unbounded-above parameters: log-spaced over at least
-   [default/4, default×4]. Parameters with a bounded domain (fractions in
-   (0, 1] — `split_min_improved_fraction` and
-   `split_min_children_explained` at default 0.5 cannot span to 2):
-   log-spaced in a transform that respects the domain (logit for
-   fractions), spanning the transformed equivalent of the ×4 range and
-   clamped to the declared domain, with the clamp recorded as the explicit
-   exception to the span rule — grid points outside a parameter's valid
-   domain are never generated. Declared pairwise interactions (e.g.
+   [default/4, default×4]. Parameters with a bounded fraction domain in
+   (0, 1) — `split_min_improved_fraction` and
+   `split_min_children_explained` at default 0.5 cannot span to 2 — sweep
+   in **odds space**: grid points pᵢ = oᵢ/(1 + oᵢ) with oᵢ log-spaced over
+   [odds(default)/4, odds(default)×4], odds(p) = p/(1 − p). The grid is
+   finite by construction, never leaves (0, 1), and preserves the ×4 span
+   in odds (default 0.5 → odds 1 → p ∈ [0.2, 0.8]); the transform used is
+   recorded beside the grid. Declared pairwise interactions (e.g.
    loss-improvement × improved-fraction) swept jointly on the reduced
    grid.
 3. **Publish sensitivity curves** for: over-split rate and under-split rate

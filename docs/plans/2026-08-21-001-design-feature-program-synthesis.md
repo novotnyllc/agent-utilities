@@ -225,25 +225,29 @@ consulted; ties within a gate's declared tolerance proceed together:
    validation triangles**: one blocked reservation per part, drawn **before
    any hypothesis evidence is extracted** — not merely before fitting —
    with block scale from the frozen correlation record's held-out
-   derivation (002 §B.1). The reservation contract extends 002 §A.1's
-   topology/loss distinction to every evidence lane, because sections and
-   slabs traverse raw dump triangles (001 §B) and a per-fit holdout alone
-   would let profile hypotheses see the validation geometry: extractors
-   **may traverse reserved triangles for topology only** (loop closure,
-   connectivity, adjacency, track correspondence — the invariants 002 §A.1
-   already exempts from holdout, for the same reason: the restriction
-   exists to protect loss grading), but **no reserved triangle contributes
-   to any fitted parameter, station estimate, profile-entity fit, residual,
-   classification vote, or occupancy count** — section segments whose
-   source triangle is reserved are carried for chaining and excluded from
-   entity fitting and material consensus, the same mechanics as 001 §A.4's
-   closure segments. G2 then grades predicted surfaces against the reserved
-   triangles alone. Gate: residual ≤ `program_heldout_tolerance` (declared;
-   rationale tied to the emission deviation thresholds — a program that
-   cannot meet the grade the emitter will apply is dead on arrival). The
-   residual exposure is stated honestly: reserved-triangle topology is
-   visible to construction; reserved-triangle *geometry* is not, and
-   geometry is what G2 grades.
+   derivation (002 §B.1). The reservation contract is total: **candidate
+   construction conditions on no reserved geometry at all** — not
+   parameters, not residuals, and not topology. Sections and slabs traverse
+   raw dump triangles (001 §B), so their extractors run **on the
+   non-reserved subset only**: no reserved triangle contributes a section
+   segment, a fitted parameter, a station estimate, a profile-entity fit, a
+   classification vote, or an occupancy count. A loop chain interrupted
+   *only* at reserved-triangle spans is bridged by a straight chord between
+   the flanking non-reserved segments' endpoints, labelled
+   `reservation-gap` — no reserved-triangle geometry is consulted to place
+   it — recorded per loop, and excluded from entity fitting and material
+   consensus (the 001 §A.4 closure-segment mechanics, reused). When the
+   bridged fraction of a loop's length exceeds
+   `reservation_gap_max_fraction` (declared), the loop is **ungradable for
+   construction** and hypotheses needing it are not constructed — the
+   conservative substitution, same shape as 002 §A.1's ungradable child:
+   reservation may cost candidates, never inform them. (Vertex sharing at
+   reserved-block boundaries is accepted for the same reason 002's blocked
+   holdout accepts it: block scale ≥ the recorded correlation range.) G2
+   then grades predicted surfaces against the reserved triangles alone.
+   Gate: residual ≤ `program_heldout_tolerance` (declared; rationale tied
+   to the emission deviation thresholds — a program that cannot meet the
+   grade the emitter will apply is dead on arrival).
 3. **G3 — unexplained support.** The area the candidate leaves unclaimed may
    not exceed the best surviving candidate's unclaimed area by more than
    `program_unexplained_slack` (declared). Unclaimed stays a first-class

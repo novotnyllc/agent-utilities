@@ -1257,7 +1257,6 @@ empty list):
 | `disconnected-source-topology` | the thing's support is a connected component of the source mesh sharing no edge with any other owner's support (dual-graph check over the immutable triangle IDs) |
 | `observed-gap-or-seam` | a measured gap/crease bounding the full contact perimeter: boundary-edge band or dihedral crease along the entire contact curve, width/angle and coverage fraction recorded against declared floors |
 | `mutual-occlusion-boundary` | an occlusion contour record: capture boundary edges where one surface's support ends *because* another's begins, with the shadowing geometry identified |
-| `uniquely-constrained-repeated-instance` | a complete instance of the same class elsewhere on the part (004 §4.7 instancing licence) whose observed full boundary uniquely determines this instance's hidden continuation — the R5 `inferred-by-continuation` uniqueness check, passed |
 | `second-view-interface` | a registered second capture (its own hash-bound dump) observing part of the interface, with the registration transform and its uncertainty on record |
 | `caller-declaration` | an explicit declaration in the spec, quoted, with the declaring key — never inferred |
 
@@ -1266,7 +1265,14 @@ registration tolerance) are declared through `_declared_number`, labelled
 `experimental-default` under 002 §B.2's sweep rule. Anything not on this
 list is not physical-thing evidence — in particular "base and subobject
 both reconstruct" (§0 rule 1, unchanged) and R3's held-out preference
-(§A.6, unchanged) remain geometric-only. The census and scoreboard cite
+(§A.6, unchanged) remain geometric-only. **A uniquely constrained repeated
+instance is deliberately absent from this table**: the external review's
+Phase A listed it as a physical channel, but R5's own binding rule wins —
+a repeated complete instance whose boundary uniquely determines a hidden
+continuation licenses `inferred-by-continuation` geometric completion and
+therefore `componentized-geometric` at most (repeated integral molded
+bosses pass the instance and continuation checks while remaining one
+physical part). It nominates; it never evidences physical identity. The census and scoreboard cite
 predicates by name, so a `physical-thing-evidenced` claim is auditable
 without re-running detection.
 
