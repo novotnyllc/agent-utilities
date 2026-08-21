@@ -107,6 +107,43 @@ class CliTests(unittest.TestCase):
             self.assertEqual(2, code)
             self.assertIn("critical-parameter-missing-source", output.getvalue())
 
+    def test_two_design_manifests_share_a_directory_independently(self) -> None:
+        # One directory holds one manifest per design (*.fusion-project.json):
+        # each validates and emits against its own identity, with the path
+        # reported back, so a second design never collides with the first.
+        data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as scratch:
+            paths = {}
+            for name, document in (
+                ("power-pod.fusion-project.json", "Power Pod"),
+                ("cable-clip.fusion-project.json", "Cable Clip"),
+            ):
+                variant = json.loads(json.dumps(data))
+                variant["project"]["fusion_document"] = document
+                path = Path(scratch) / name
+                path.write_text(json.dumps(variant), encoding="utf-8")
+                paths[name] = path
+            digests = set()
+            for name, path in paths.items():
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(0, main(["validate", str(path)]), name)
+                payload = json.loads(output.getvalue())
+                self.assertTrue(payload["ok"], name)
+                self.assertEqual(str(path), payload["manifest"], name)
+                script_path = Path(scratch) / (name + ".inventory.py")
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(
+                        0, main(["emit-inventory", str(path), "-o", str(script_path)]), name
+                    )
+                script = script_path.read_text(encoding="utf-8")
+                expected = "Power Pod" if "power-pod" in name else "Cable Clip"
+                self.assertIn(f"FUSION_DOCUMENT_NAME = '{expected}'", script, name)
+                digest = re.search(r"MANIFEST_SHA256 = '([0-9a-f]{64})'", script)
+                self.assertIsNotNone(digest, name)
+                digests.add(digest.group(1))
+            self.assertEqual(2, len(digests), "each design binds its own manifest hash")
+
     def test_validate_refuses_a_manifest_whose_bytes_and_object_disagree(self) -> None:
         # `validate` is the command a human runs to sign a manifest off
         # (SKILL.md). It read the file with a bare json.loads, so a duplicate

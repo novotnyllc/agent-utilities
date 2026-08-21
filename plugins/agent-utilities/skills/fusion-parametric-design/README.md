@@ -85,8 +85,10 @@ to the evidence behind it.
 
 ### The evidence contract
 
-A lane-managed project keeps `fusion-project.json` (validated against
-`schema/fusion-project.schema.json`) recording what geometry alone cannot
+A lane-managed design keeps a manifest — any `*.fusion-project.json`, one per
+design, with bare `fusion-project.json` the natural single-design name —
+validated against `schema/fusion-project.schema.json` and recording what
+geometry alone cannot
 explain — sources, provisional dimensions, clearances, forbidden
 interferences, the material decision, per-part manufacturing intent — and a
 `DESIGN-STATE.md` (from `templates/DESIGN-STATE.md`) as the handoff ledger.

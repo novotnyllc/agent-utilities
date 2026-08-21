@@ -257,6 +257,8 @@ Change, recover, and iterate with Fusion's own tools: Edit Feature, Edit Sketch,
 
 **Closure is confirmed, not assumed.** Every body claimed as printable, exportable, or fit-checked is confirmed watertight with one native property read — `BRepBody.isSolid` is true exactly when the body is closed; a surface body is open — folded into the normal inspection loop with zero ceremony. An unexpectedly open body — a stray surface, a failed stitch — is a named finding: show it, and fix it through the native route (Stitch, Boundary Fill, or editing the responsible feature). For meshes, `MeshBody.isClosed` answers natively (closed means no edge carries only one triangle); a mesh serving only as an occupancy or envelope reference may stay open, stated as such, while a mesh being converted, printed, or measured for volume is closed first or the gap is named. Fusion's Mesh Repair tools — Close Holes, Stitch, the repair rebuild modes — are the native fix; the repair rebuild types carry a preview API surface, so probe at time of use and take the standard capability ladder for the UI commands.
 
+**A crash is a resume, not a restart.** When Fusion dies mid-session or the MCP connection drops: reconnect (relaunching Fusion when needed), reopen the working document from its latest cloud save — identity by name and attribute stamp per the placement rules — and diff reality against the last known state: the timeline tail against the features the conversation recorded, the viewport against the latest screenshot. State plainly what was lost since the last save, and resume from there. Never rebuild from memory what the document may already contain — read it first — and never treat a crash as a reason to switch lanes, spawn machinery, or abandon the attempt budget; the save-at-risk-boundaries cadence exists precisely so this moment costs minutes.
+
 **Assembled-fit validation is part of done.** Before a fit-relevant iteration is called complete — and before it is shown as finished — put the components together as they will assemble (joints, real positions) and ask Fusion: Interference across the assembly, Measure at every mating interface, section analysis through the joints. A column dimensioned to a nominal height that lands on a raised boss too long is exactly the class this catches — spanning elements are checked against the mating geometry's real position, not the assumption that produced them.
 
 Close geometric, dimensional, feature-health, and fit claims with native measurements, native interference results, native feature health, a documented capability limitation, or physical evidence — never with "it looks fine." Close appearance, proportion, smoothness, and photograph-matching questions with a legible Fusion view and the user's visual judgment: do not invent a numerical proxy for an aesthetic decision, and do not use visual approval as dimensional evidence.
@@ -313,10 +315,10 @@ The machinery in this section — the project manifest, generated transactions, 
 
 ### The project manifest as evidence contract
 
-A project in these lanes has `fusion-project.json` and a `DESIGN-STATE.md` copied from `templates/DESIGN-STATE.md`. The manifest records facts that Fusion geometry alone cannot explain: source identity, locator, revision, and confidence; critical dimensions and whether they are provisional; fabrication assumptions; reference, packing, and keep-out components; required component paths; clearances and forbidden interferences; the `material_decision` (family, formulation, source, confidence, coupon binding, machine constraints); and slicer-neutral manufacturing intent per printable part (`printable_parts`: stable id, quantity, `minimum_volume_mm3` floor, `print_as`, build orientation with rationale, support policy, strength intent, protected features, material assumption status). Intent, never a printer/filament/process profile — those stay in the slicer.
+A lane-managed design keeps a manifest: any `*.fusion-project.json`, one per design — `power-pod.fusion-project.json` beside `cable-clip.fusion-project.json` in the same directory — with bare `fusion-project.json` the natural name for a single-design directory. Every lane task names which manifest it operates on: the path goes in explicitly on every command, and whatever records the manifest — `DESIGN-STATE.md`, report bindings — records its filename alongside the `manifest_sha256` that is its content identity. A design also keeps a `DESIGN-STATE.md` copied from `templates/DESIGN-STATE.md`. The manifest records facts that Fusion geometry alone cannot explain: source identity, locator, revision, and confidence; critical dimensions and whether they are provisional; fabrication assumptions; reference, packing, and keep-out components; required component paths; clearances and forbidden interferences; the `material_decision` (family, formulation, source, confidence, coupon binding, machine constraints); and slicer-neutral manufacturing intent per printable part (`printable_parts`: stable id, quantity, `minimum_volume_mm3` floor, `print_as`, build orientation with rationale, support policy, strength intent, protected features, material assumption status). Intent, never a printer/filament/process profile — those stay in the slicer.
 
 ```bash
-"$SKILL_DIR/scripts/fusion-design" validate fusion-project.json
+"$SKILL_DIR/scripts/fusion-design" validate power-pod.fusion-project.json
 ```
 
 A valid manifest permits work; it does not create the geometry. Mirror its parameters and provenance into Fusion user parameters, comments, and attributes; Fusion remains editable even if the manifest or agent is unavailable later.
@@ -324,8 +326,8 @@ A valid manifest permits work; it does not create the geometry. Mirror its param
 The document-save transaction implements the placement and identity rules of section 3 against the manifest:
 
 ```bash
-"$SKILL_DIR/scripts/fusion-design" emit-document-save fusion-project.json -o build/save.py
-"$SKILL_DIR/scripts/fusion-design" emit-document-save fusion-project.json --document-id <recorded dataFile id> -o build/save.py
+"$SKILL_DIR/scripts/fusion-design" emit-document-save power-pod.fusion-project.json -o build/save.py
+"$SKILL_DIR/scripts/fusion-design" emit-document-save power-pod.fusion-project.json --document-id <recorded dataFile id> -o build/save.py
 ```
 
 Without `--document-id` it adopts the active document: an unsaved one is saved as `project.fusion_document` into the active project's folder (or the manifest's `project.document_folder`), one already saved under the target name gets a version checkpoint, and a *different* saved document is refused. With `--document-id` it reconnects by identity. Every unresolvable state — offline data API, no active project, missing declared folder, missing recorded id — is a named refusal, never a silently kept Untitled. Read the report's `data_file_id_stable`: the id right after a first save is a local staging path that becomes the stable `urn:` lineage id only after cloud sync, so a `false` means record the id provisionally and refresh it from the next checkpoint save's report. Inventory and verification reports also carry `document_saved_state`, so an unsaved or renamed working document is visible in every pass.
@@ -335,7 +337,7 @@ Without `--document-id` it adopts the active document: an unsaved one is saved a
 Run the host-generated inventory before and after a change when scope matters:
 
 ```bash
-"$SKILL_DIR/scripts/fusion-design" emit-inventory fusion-project.json -o build/inventory.py
+"$SKILL_DIR/scripts/fusion-design" emit-inventory power-pod.fusion-project.json -o build/inventory.py
 "$SKILL_DIR/scripts/fusion-design" diff-reports build/before.json build/after.json
 ```
 
@@ -358,7 +360,7 @@ The reconstruction pipeline runs in this order: `emit-mesh-capture`, then `emit-
 Use the deterministic export transaction instead of manual export selection:
 
 ```bash
-"$SKILL_DIR/scripts/fusion-design" emit-export fusion-project.json \
+"$SKILL_DIR/scripts/fusion-design" emit-export power-pod.fusion-project.json \
   --verification-report verify-report.json \
   --verification-nonce <nonce printed by emit-verification> \
   --export-dir /path/on/the/fusion/host/exports \
@@ -376,7 +378,7 @@ A declared product family runs through `plan-variants`: each manifest `variants`
 When the user runs PrusaSlicer, the export index plus its declared `manufacturing_intent` becomes a real PrusaSlicer project:
 
 ```bash
-"$SKILL_DIR/scripts/fusion-design" prusaslicer-project fusion-project.json \
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-project power-pod.fusion-project.json \
   --export-index export-index__<run>.json \
   --output build/project.3mf \
   --printer "<installed printer preset>" \

@@ -14,7 +14,7 @@
 
 // Unambiguously this skill's artifacts, wherever they land.
 const FUSION_SMELLS = [
-  /(^|[\\/])fusion-project\.json$/i,
+  /(^|[\\/])([^\\/]+\.)?fusion-project\.json$/i,
   /(^|[\\/])fusion-design-report-[^\\/]*\.json$/i,
 ];
 

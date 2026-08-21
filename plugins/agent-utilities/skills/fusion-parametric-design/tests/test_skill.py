@@ -137,6 +137,19 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("editable CAD model of the scanned object itself", text)
         self.assertIn("an envelope, not a reconstruction job", doctrine)
 
+    def test_manifests_are_named_per_design(self) -> None:
+        # A directory holds one manifest per design; the filename is part of
+        # the manifest's identity and every lane task names its manifest.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "any `*.fusion-project.json`, one per design",
+            "`power-pod.fusion-project.json`",
+            "names which manifest it operates on",
+        ):
+            self.assertIn(requirement, text, requirement)
+        template = (ROOT / "templates" / "DESIGN-STATE.md").read_text(encoding="utf-8")
+        self.assertIn("Manifest file", template)
+
     def test_closure_is_confirmed_not_assumed(self) -> None:
         # Watertightness: one native property read per claim, lane-
         # proportionate — isSolid in the inspection loop, isClosed at mesh
@@ -151,6 +164,8 @@ class SkillContractTests(unittest.TestCase):
             "`MeshBody.isClosed`",
             "measured for volume is closed first or the gap is named",
             "Mesh check-and-repair is its own quick task",
+            "A crash is a resume, not a restart",
+            "Never rebuild from memory what the document may already contain",
             "`MeshBody.isOriented`",
             "An over-budget mesh gets fixed, not flagged",
             "deviation-bounded, not count-targeted",

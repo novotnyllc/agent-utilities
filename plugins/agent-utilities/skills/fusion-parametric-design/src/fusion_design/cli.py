@@ -115,7 +115,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     # Warnings are reported but do not block: they record something the manifest
     # left undeclared rather than something it got wrong.
     blocking = [issue for issue in issues if issue.severity == "error"]
-    payload = {"ok": not blocking, "issues": [asdict(issue) for issue in issues]}
+    payload = {"ok": not blocking, "manifest": str(args.manifest), "issues": [asdict(issue) for issue in issues]}
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if not blocking else 2
 

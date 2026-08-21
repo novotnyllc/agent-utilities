@@ -19,6 +19,7 @@ Use one copy per Fusion design that runs the skill's automation and release lane
 - Fusion release: Not recorded.
 - Fusion MCP/package version: Not recorded.
 - Design type: Must be parametric before managed mutation.
+- Manifest file (`*.fusion-project.json`; the filename identifies which design's manifest): Not recorded.
 - Manifest SHA-256: Not recorded.
 - Latest inventory report: Not recorded.
 - Latest verification report: Not recorded.

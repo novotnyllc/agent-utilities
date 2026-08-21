@@ -19,6 +19,7 @@ const write = (file_path) => ({ tool_name: "Write", tool_input: { file_path } })
 test("nudges on ordinary-modeling artifact smells outside the skill tree", () => {
   for (const input of [
     write("/Users/someone/dev/LEDs/power-pod/fusion-project.json"),
+    write("/Users/someone/dev/LEDs/designs/power-pod.fusion-project.json"),
     write("/Users/someone/dev/LEDs/power-pod-fusion/DESIGN-STATE.md"),
     write("/Users/someone/dev/LEDs/power-pod-fusion/transactions/09_lid.py"),
     write("/tmp/build/fusion-design-report-verification-abc123-1.json"),
