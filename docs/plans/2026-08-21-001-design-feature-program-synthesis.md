@@ -232,13 +232,22 @@ consulted; ties within a gate's declared tolerance proceed together:
    evidence extraction. Calibration's small-patch measurements may touch
    later-reserved triangles; that exposure is a candidate-independent
    scalar (range/sill) and is stated on the reservation record
-   (`blocking-basis: correlation-record`, with the record hash). **Where no
-   frozen record exists before reservation** (fresh scan, no regime
-   record, or `correlation-model-unidentified`), block scale falls back to
-   the declared default ≈ 8 ℓ_med (007 §10.3's documented approximate
-   scale), recorded as `blocking-basis: default-8lmed` — the reservation is
-   never deferred until after evidence extraction to wait for a better
-   scale. The reservation contract is total: **candidate
+   (`blocking-basis: correlation-record`, with the record hash). **Where
+   calibration was not required** for the scan's regime (clean
+   tessellations under the regime dispatch), block scale falls back to the
+   declared default ≈ 8 ℓ_med (007 §10.3's documented approximate scale),
+   recorded as `blocking-basis: default-8lmed` — the reservation is never
+   deferred until after evidence extraction to wait for a better scale.
+   **Where calibration ran and refused** (`correlation-model-unidentified`),
+   the 002 fail-closed rule governs — held-out grading is unlicensed for
+   this scan, so the program *competition* is unlicensed: no factored
+   candidate may be selected on ungradable fidelity, the search emits only
+   the licence-floor program (the `slab-join` fallback / today's degenerate
+   planner output, whose own admission does not depend on G2), and the
+   selection record carries `program-competition-unlicensed` (new
+   closed-set token) naming the refused calibration. No default block
+   scale is ever substituted for a calibration that measurably could not
+   identify one. The reservation contract is total: **candidate
    construction conditions on no reserved geometry at all** — not
    parameters, not residuals, and not topology. Sections and slabs traverse
    raw dump triangles (001 §B), so their extractors run **on the
@@ -359,7 +368,8 @@ against the other.
 # 9. Refusals (closed-set additions)
 
 `polarity-contradictory`, `program-selection-ambiguous`,
-`program-search-budget-exceeded`, plus per-licence refusals already owned by
+`program-search-budget-exceeded`, `program-competition-unlicensed`, plus
+per-licence refusals already owned by
 the source designs (nothing re-tokenized). All join the closed vocabulary
 with the existing validator discipline.
 
