@@ -1574,11 +1574,19 @@ order:
    `experimental-default` under -002 §B.2).
 2. **Parametric bootstrap under the simpler kind** where held-out support is
    too thin to be decisive: simulate replicates from the fitted simpler
-   model plus the measured scan-error model (correlation record's noise
-   structure, not iid), fit both kinds to each replicate, and compare the
-   observed richer-kind improvement against the simulated null
-   distribution. Replicate count and seed discipline per KTD-8; blocks per
-   -002 §A.4.
+   model plus the measured scan-error model — the correlation record's
+   noise structure where a record exists; in the no-record regime (the
+   regime dispatch determined calibration unnecessary — clean
+   tessellations), the measured σ̂ iid model, which is then the *licensed*
+   noise model rather than a forbidden substitute. Fit both kinds to each
+   replicate and compare the observed richer-kind improvement against the
+   simulated null distribution. Replicate count and seed discipline per
+   KTD-8; blocks per -002 §A.4. **Where calibration ran and refused**
+   (`correlation-model-unidentified`): neither path is licensed — the
+   comparison fails closed to the simpler kind, recorded
+   `nested-kind-comparison-unlicensed` (the parsimony default is the
+   conservative verdict, exactly as the §5.8 demotions already prefer the
+   simpler kind at the identifiability boundary).
 
 The verdict is recorded as **model-selection evidence** (`nested-kind
 comparison`, with both scores, the margin, and the method used) — never as

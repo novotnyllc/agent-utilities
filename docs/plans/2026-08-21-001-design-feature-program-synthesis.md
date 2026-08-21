@@ -297,13 +297,19 @@ consulted; ties within a gate's declared tolerance proceed together:
    the review's rule adopted verbatim: the compact program wins whenever it
    explains the same observations within the same fidelity budget.
 6. **Tie at the end** — materially different programs surviving all five
-   gates within tolerances: refuse `program-selection-ambiguous`, enumerate
+   gates within tolerances (after G5 they are, by construction, tied on the
+   compactness census too): refuse `program-selection-ambiguous`, enumerate
    the candidates with their full gate vectors, and emit nothing for the
-   contested scope (or, under a declared `program_selection: prefer-compact`
-   spec escape, emit the compactness winner with the ambiguity recorded on
-   the program header). "Materially different" is itself defined: differing
-   in operation multiset, polarity, or dependency topology — not in
-   parameter values within combined uncertainty.
+   contested scope. The declared spec escape is
+   `program_selection: resolve-by-order`: among the fully tied candidates,
+   the deterministic KTD-8 candidate ordering (content-addressed serial)
+   picks one, the choice is recorded on the program header as
+   `ambiguity-resolved-by-declared-policy` with the full tied set beside
+   it, and the report never presents the pick as evidence-preferred — the
+   escape resolves *which* to emit, never *whether* the ambiguity existed.
+   "Materially different" is itself defined: differing in operation
+   multiset, polarity, or dependency topology — not in parameter values
+   within combined uncertainty.
 
 Every gate's number is a declared threshold through `_declared_number` with
 a rationale, labelled `experimental-default` until the 002 §B.2 sweep

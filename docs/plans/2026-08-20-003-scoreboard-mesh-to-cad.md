@@ -123,7 +123,7 @@ reports `RC-scripted`, never a higher rung, and the pre-gate "8 of 16"
 census is *script-existence only* — weaker even than `RC-scripted`, and
 flagged as such below. Identical score values are never reported across
 different gates. This gate is **PR 0a** in the canonical
-implementation order (`docs/reviews/2026-08-20-oracle-design-review.md` §2),
+implementation order (`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3, which extends and supersedes the 2026-08-20 review's §2),
 ahead of everything else, and the v0.12.0 **"8 of 16 emit" census and its
 23.3% area-weighted figure are flagged pending recomputation under it** —
 the 0.0%-area part does not count as emitting.

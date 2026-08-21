@@ -781,8 +781,8 @@ stands beside it, unchanged.
 
 ## 6. PR sequence
 
-**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 — PR C-1 is itself the
+**[Ordering superseded 2026-08-20, pointer updated 2026-08-21: the canonical cross-lane order lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (extending and superseding the 2026-08-20 review's §2; FHG ratification and the scoreboard P/precision/causal-E cells precede any emitter optimization) — PR C-1 is itself the
 step that lands the §0 ontology in the schema (the bootstrap that satisfies
 the prerequisite; nothing precedes it on this lane), and C-2/C-3 require
 C-1; C-4 only after 002 §A.2's lineage contract is implemented; slab tracks

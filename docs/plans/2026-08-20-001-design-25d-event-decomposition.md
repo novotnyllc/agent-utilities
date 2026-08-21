@@ -648,8 +648,8 @@ mechanism working, not breaking.
 
 # PR sequence — each lands green, each improves something measurable
 
-**[Ordering note 2026-08-20: cross-lane sequencing defers to
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 — the slab-track graph
+**[Ordering note 2026-08-20, pointer updated 2026-08-21: cross-lane sequencing defers to
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (which extends and supersedes the 2026-08-20 review's §2; FHG ratification and the scoreboard P/precision/causal-E cells precede any emitter optimization) — the slab-track graph
 and virtual-closure contract (Amendment §A.1–§A.4) must land before design
 -004's C3 per-thing parametric recursion; PR 0a's non-vacuity gate precedes
 this lane's re-measures.]**

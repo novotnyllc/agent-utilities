@@ -442,9 +442,12 @@ shipment-1 number adjusts predictions; this one reorders the plan.
 
 ## 6. PR sequence
 
-**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 (PR 0a/0b first); PR
-contents below stand, amended per §A.1–§A.6.]**
+**[Ordering superseded 2026-08-20, pointer updated 2026-08-21: the
+canonical cross-lane order lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (PR 0a/0b
+first, then FHG ratification and the scoreboard P/precision/causal-E cells
+before any emitter optimization — see §A.8); PR contents below stand,
+amended per §A.1–§A.6 and Amendment B.]**
 
 One opus worker, one PR at a time, tree green after each, each PR names the
 measured claim it must move and re-runs the Dig-Next-2 artifacts to prove it.
@@ -1173,16 +1176,21 @@ until the named PR migrates them, and the migration is recorded, not silent:
 thing-support floor → `min_thing_support_extent` are those documents' rows;
 see review file §3.
 
-### A.8 Sequencing superseded [see also Amendment B]
+### A.8 Sequencing superseded [amended by Amendment B — the canonical order is now the 2026-08-21 review file §3]
 
-§6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to the
-canonical cross-lane order in `docs/reviews/2026-08-20-oracle-design-review.md`
-§2: PR 0a (non-vacuity gate, emission lane) and PR 0b (§A.6) precede
-everything here; the amended split licence (§A.1) is design-complete before
-the region-tree skeleton lands; the lineage contract (§A.2) ships *inside*
-the region-tree PR; cross-cut + correlation model remain one shipment with
-§A.3's certificates and the lateral-cell proxy refinement. PR contents in §6
-are otherwise unchanged.
+§6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to
+the canonical cross-lane order, which as of 2026-08-21 lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (extending and
+superseding the 2026-08-20 review file's §2 as the single reference): PR 0a
+(non-vacuity gate, emission lane) and PR 0b (§A.6) precede everything here;
+**then the FHG design (2026-08-21-001) is ratified and the scoreboard's
+P/precision/causal-E cells land before any emitter is optimized**; only then
+do this lane's steps run — the amended split licence (§A.1) design-complete
+before the region-tree skeleton lands; the lineage contract (§A.2) shipping
+*inside* the region-tree PR; cross-cut + correlation model one shipment with
+§A.3's certificates and the lateral-cell proxy refinement — each PR stating
+which FHG node kinds its output feeds. PR contents in §6 are otherwise
+unchanged.
 
 ---
 
