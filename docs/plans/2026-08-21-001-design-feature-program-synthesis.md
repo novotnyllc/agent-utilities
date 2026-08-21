@@ -152,7 +152,8 @@ versions at once. The operation set the search may compose:
 | `shell` | archetype kind `shell`, operation token `hollow` — 001 §D's exact vocabulary, reused unchanged (no second token is minted) | subtractive |
 | `fillet` / `chamfer` | `fillet` (`finish`); chamfer is a vocabulary addition with its own licence | dressing |
 | `sweep` / `loft` | 009's reserved rungs (design exists; emitters pending) | either, declared |
-| `pattern` (rectangular/circular) + `equal`/shared-parameter binding | new emission surface; licensed by regularity classes | inherits member polarity |
+| `equal` (shared-parameter binding) | expression/parameter sharing on existing archetypes | inherits member polarity |
+| `pattern` (rectangular/circular) | new emission surface | inherits member polarity |
 | `component` | 004's assembly program | structural |
 | `slab-join` | 001's slab stack — **the fallback operation**: always admissible where the slab's own 001 licences hold; the selection gates, never admission, decide whether a factored alternative beats it (001 Amendment B) | additive |
 
@@ -176,7 +177,8 @@ implicit rule" to "a named admission condition the record cites":
 | `fillet` / `chamfer` | torus/blend-cylinder adjacency to exactly two accepted primary regions with tangency (007 §6 blend rule); chamfer: planar strip at a licensed angle between two primaries, same adjacency shape |
 | `revolve` | router revolution verdict; axis licensed by the datum or a coaxial class; **polarity declared and evidenced per §5** — a subtractive revolve additionally requires material-outside / occupancy-removal evidence, the same polarity bar as `cut-extrude` |
 | `sweep` / `loft` | 009's rung licences, unchanged |
-| `pattern` | a regularity class (complete linkage or joint fit — 002 §A.6 semantics; union-find banned) **plus** a lattice/circle fit passing its declared gate (004 consensus item 6); otherwise members stay independent and the compactness term simply pays for it |
+| `equal` | the regularity class certificate alone (complete linkage or joint fit — 002 §A.6 semantics; union-find banned): an adopted equality class licenses one shared parameter across its members, which is how equal-radius bores reach their compact representation without any lattice requirement |
+| `pattern` | an `equal`-licensed class **plus** a lattice/circle fit passing its declared gate (004 consensus item 6); a class whose members are equal but not lattice-arranged stays at `equal`, and members of no adopted class stay independent — the compactness census then simply pays for it |
 | `component` | 004 §0/§4.1's licences at the claimed level, unchanged — the FHG never upgrades a claim level |
 | `slab-join` | the slab's own 001 licences (loop ladder, track edges). Always admissible where those hold — which is what makes it the honest floor every factored program must beat |
 
@@ -244,15 +246,21 @@ consulted; ties within a gate's declared tolerance proceed together:
    calibration runs **on the non-reserved subset only**, so the frozen
    record, the fit covariances, and every licence derived through them
    contain no reserved-triangle information; (2) all FHG evidence
-   extraction, under the same restriction. The measured range then
-   *audits* the reservation instead of sizing it: if the frozen record's
-   range exceeds the reservation's block scale, the blocks are too small
-   to guarantee separation — G2 grading is unlicensed for this scan,
-   recorded `holdout-separation-insufficient` (new closed-set token), and
-   the competition falls to the licence-floor outcome exactly as under
-   `program-competition-unlicensed`. Undersized separation fails closed;
-   it is never patched by re-drawing blocks with data calibration has
-   already seen.
+   extraction, under the same restriction. The reservation is **buffered,
+   not merely blocked**: adjacent blocks touch, so block size alone is
+   not separation — around every reserved block a buffer margin of one
+   block width is excluded from *both* construction and validation
+   support (it is dispositioned `holdout-buffer`, counted in neither
+   side's evidence, and still owned in the H accounting). The measured
+   range then *audits* the reservation instead of sizing it: if the
+   frozen record's range exceeds the buffer width, construction
+   triangles can sit within one correlation length of reserved ones and
+   separation is not established — G2 grading is unlicensed for this
+   scan, recorded `holdout-separation-insufficient` (new closed-set
+   token), and the competition falls to the licence-floor outcome exactly
+   as under `program-competition-unlicensed`. Undersized separation fails
+   closed; it is never patched by re-drawing blocks with data calibration
+   has already seen.
    **Where calibration ran and refused** (`correlation-model-unidentified`),
    the 002 fail-closed rule governs — held-out grading is unlicensed for
    this scan, so the program *competition* is unlicensed: no factored
