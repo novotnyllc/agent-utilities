@@ -29,6 +29,14 @@ At session start, discover and record the current tool/resource schemas. Bind to
 
 Do not bind a tool by name alone. Read its current schema, side effects, permissions, and result format.
 
+### apiDocumentation query grammar
+
+Probe the live `READ_DOCUMENTATION` schema at session start; remembered grammar is never authoritative. Always qualify an `apiDocumentation` query with both `apiCategory` and `filter`. A bare `searchPattern` has returned success-with-no-content; treat that shape as unreliable, never as proof that the API member does not exist. Do not retry a synonym ladder unqualified: identify the owning class, put its fully qualified namespace in `filter`, and request the relevant category. Example shape:
+
+> {"queryType":"apiDocumentation","apiCategory":"member","searchPattern":"setOneSideExtent","filter":"adsk.fusion.ExtrudeFeatureInput"}
+
+This is [verified-live, August 2026] against the local Fusion MCP, not an Autodesk specification of the server behavior.
+
 ## Ordinary-lane execution
 
 Ordinary modeling does not use generated transaction contracts.

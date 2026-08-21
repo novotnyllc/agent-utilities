@@ -77,6 +77,9 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 **Load references on demand** — the smallest relevant section for the current lane and operation, never automation references as preparation for ordinary modeling:
 
 - `references/design-doctrine.md` for any modeling work, with the relevant capability entry in `references/mcp-adapter.md`
+- `references/native-feature-selection.md` before choosing Shell, surface closure, Thicken, or direct-model repair
+- `references/brep-and-offset-mental-model.md` before debugging Shell, offset, fillet, or loft topology
+- `references/kernel-failure-playbook.md` when a native feature returns a kernel or feature-health error
 - `references/data-and-catalog.md` before creating or importing any component
 - `references/add-ins.md` when reaching for an add-in or recommending one
 - `references/material-selection.md` when the geometry is about to depend on material
