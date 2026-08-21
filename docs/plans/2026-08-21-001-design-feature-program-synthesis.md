@@ -246,7 +246,14 @@ consulted; ties within a gate's declared tolerance proceed together:
    calibration runs **on the non-reserved subset only**, so the frozen
    record, the fit covariances, and every licence derived through them
    contain no reserved-triangle information; (2) all FHG evidence
-   extraction, under the same restriction. The reservation is **sparse and
+   extraction, under the same restriction — where "evidence extraction"
+   names **every record-producing stage, not just sections**: under 010's
+   execution model the reservation is drawn in the `anchor` stage, before
+   `segment-fit` ever runs, and the construction/validation mask
+   propagates through `segment-fit` and `frame-relate` — fits,
+   covariances, datum contributions, and relationship licences are
+   computed on construction support only, so no record the FHG consumes
+   carries reserved-triangle influence. The reservation is **sparse and
    buffered, not a parity checkerboard**: under 007 §10.3's checkerboard
    every construction cell touches a reserved cell, so buffering it would
    consume the entire opposite parity and leave nothing to construct
