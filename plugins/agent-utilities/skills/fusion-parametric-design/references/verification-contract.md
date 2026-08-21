@@ -12,6 +12,11 @@ fail-closed judgment shipped in this skill's tested tooling.
 
 A release passes only the checks applicable to its intended use. “Generated successfully” is not a verification result.
 
+A `FUSION_ENCLOSURE_FEATURE_RESULT` is likewise an operation receipt, not a
+release verdict. It can report created native objects, parameter names, feature
+health, and body solidity for that transaction. It does not prove assembled
+fit, insert performance, printability, strength, cycle life, or physical fit.
+
 ## Digital model integrity
 
 - Active product is a Fusion Design.

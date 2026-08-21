@@ -45,3 +45,21 @@ Key architectural consequences:
 - Export manager: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/ExportManager.htm
 - Mesh import: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/MeshBodies.htm
 - July 2026 API additions including mesh comparison: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/WhatsNew.htm
+
+## Base-Fusion enclosure feature recipes
+
+Accessed 2026-08-21.
+
+- Autodesk Boss UI: https://help.autodesk.com/view/fusion360/ENU/?guid=PLASTIC-BOSS
+- Boss API collection: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/BossFeatures.htm
+- Extrude participant bodies: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/ExtrudeFeatureInput_participantBodies.htm
+- Explicit Combine input: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/CombineFeatures_createInput.htm
+- Timeline groups: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/TimelineGroups.htm
+- Custom Feature preview status: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/CustomFeatures_UM.htm
+
+The public Boss API does not establish base-account entitlement. V1 therefore
+uses ordinary features. `participantBodies` scopes the bore cut; the boss join
+uses a new tool body plus explicit `Combine(targetBody, toolBodies)` because
+participant bodies do not define a Join target. Numeric insert dimensions are
+not copied into this package: the request must cite the exact insert source and
+keeps coupon/physical performance outside the CAD claim.

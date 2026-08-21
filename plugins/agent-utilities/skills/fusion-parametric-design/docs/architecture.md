@@ -31,6 +31,26 @@ Host-side Python is not a fourth CAD store. It generates narrow scripts that ope
 
 Generated scripts emit delimited JSON for reliable parsing.
 
+### Enclosure feature emitter
+
+`fusion_design.enclosure_features` is the narrower automation surface for one
+managed native feature instance. Host-only dataclasses validate recipe,
+selection, expression, and evidence inputs; the emitter returns one standalone
+Fusion Python transaction and writes nothing. V1 builds a socket-head insert
+boss with optional orthogonal gussets from ordinary base-Fusion features, with
+explicit target joins and participant-body-scoped cuts. Fusion
+user parameters, attributes, sketches, features, and the timeline group are
+the durable instance; entity tokens are returned only as resolvable handles.
+
+Lifecycle emitters require the complete creation receipt. Edit rolls parameter
+changes back when recompute or managed health fails; inspect reports native
+health; delete removes the timeline group as one bounded unit and reports an
+explicit dirty state if Fusion only partially deletes it.
+
+This package is separate from `fusion_design.scripts`: it has no manifest,
+release-report protocol, whole-model generation, geometry search, or parallel
+identity database.
+
 ### Report diff
 
 `fusion_design.report_diff` compares semantic inventory state: parameter expressions, component paths, per-component geometry summaries, and added/removed unhealthy timeline records.

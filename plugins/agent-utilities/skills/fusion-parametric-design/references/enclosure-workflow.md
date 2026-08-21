@@ -1,5 +1,10 @@
 # Electronics enclosure and packing workflow
 
+For repeated boss creation, use the bounded base-Fusion recipe in
+`references/enclosure-features.md`; it creates one explicit managed boss
+instance and does not replace the assembly, packing, mating-geometry, section,
+interference, or physical-fit work below.
+
 ## 1. Identify the actual build
 
 Record exact part numbers, board revisions, installed headers/hats, converter variants, connector orientation, buttons, antennas, microphones, fuses, wire gauges, terminal hardware, batteries, and cable overmolds. A bare-board drawing is not enough when the installed assembly is taller or routes wires differently.

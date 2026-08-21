@@ -2,6 +2,18 @@
 
 Status date: 2026-08-17. Fusion and its MCP expose dynamic capabilities; verify the connected Fusion release and MCP schema rather than treating this file as a fixed tool catalog.
 
+## Design Extension plastic features as a base-Fusion dependency
+
+**Status:** Unsupported assumption.
+
+Autodesk documents Boss, Snap Fit, Lip, Rest, Plastic Rules, and Presets as
+Design Extension capabilities. A public `BossFeatures` API exists, but API
+presence does not prove that creation is entitled on a base account. The
+shipped v1 boss therefore uses ordinary sketches/extrudes/cuts. Do not invoke
+hidden command IDs or private APIs, and do not ship a dependency on preview
+`CustomFeature`. A future native Boss backend needs the same-script live
+entitlement probe on base and entitled accounts before it can become optional.
+
 ## Fixed MCP tool names
 
 **Status:** Unsupported assumption.

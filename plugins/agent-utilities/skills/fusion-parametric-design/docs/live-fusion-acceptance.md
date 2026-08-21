@@ -778,6 +778,38 @@ inventory again.
 **Pass:** the disposable document is closed, the prior document is active, and
 its saved/modified state is unchanged from the initial checkpoint.
 
+## 15. Bounded enclosure-feature recipe
+
+Use a separate disposable **saved parametric** document; never run this fixture
+against the user's active design. Record whether the account has Design
+Extension, but run the base recipe regardless.
+
+1. Create one box body, choose one planar support face, and create one explicit
+   sketch or construction point. Record their entity tokens.
+2. Build `BossRequest("boss.heat_set_insert", version 1)` with explicit
+   target/support/placement references, namespaced Fusion expressions, and
+   manufacturer-specified coupon-sensitive bore/depth values.
+3. Emit and execute `emit_create_boss`. Retain the complete
+   `FUSION_ENCLOSURE_FEATURE_RESULT` block and a screenshot.
+4. Confirm the result names two sketches, the boss tool/new-body extrude, the
+   explicit Combine join, and the bore cut; target-body count remains one,
+   neighboring bodies are unchanged, the target reports solid, and every
+   object/parameter has the feature UUID attribute.
+5. Execute `emit_edit_feature` with a changed bore expression and the complete
+   returned parameter/object/group receipt. Confirm Compute All and every
+   managed object's native health. Save/reopen the disposable document and
+   repeat `emit_inspect_feature` with that receipt.
+6. Execute `emit_delete_feature` with the complete returned receipt. Confirm no
+   untagged entity was deleted. If it reports `failed-dirty`, do not retry;
+   record its deleted/remaining roles and discard the disposable fixture.
+   Close the fixture and restore the prior document without changing its
+   saved/modified state.
+
+**Pass:** the recipe succeeds without Design Extension, the parameter edit
+recomputes, save/reopen preserves the managed dependency, target ownership is
+explicit, and cleanup touches only the created managed instance. Offline source
+tests or an extension-entitled run do not substitute for this base-account gate.
+
 ## Acceptance boundary
 
 Passing this procedure validates the package against one recorded Fusion/MCP release. It does not prove FDM printability, electrical/thermal safety, physical fit, structural load capacity, comfort, ingress protection, or future Fusion-release compatibility. Those remain separate evidence gates.

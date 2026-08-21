@@ -20,6 +20,7 @@ means "through the discovered capability, against the connected release."
 
 | Operation | Status |
 |---|---|
+| Bounded enclosure feature recipes | V1 supported for one base-Fusion heat-set-insert boss instance with explicit target/support/placement, evidence-labeled parameters, native attributes/timeline grouping, and bounded edit/inspect/delete. Geometric and parametric utility only; not an Autodesk native `BossFeature` |
 | Manifest validation, parameter sync, component scaffold | Supported; the scaffold intentionally does not generate a whole part |
 | Inventory and verification transactions | Supported for B-Rep clearance, forbidden interference, expected-print-body, and timeline-health gates; complete FDM rules require a slicer or an existing analyzer |
 | Report diffs | Supported as deterministic before/after semantic diffs of parameters, component paths, bodies, and unhealthy timeline items — not a B-Rep or feature-history diff |

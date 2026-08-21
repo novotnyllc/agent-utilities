@@ -2,7 +2,7 @@
 name: fusion-parametric-design
 description: Use when creating, designing, editing, repairing, inspecting, or validating a CAD model, Autodesk Fusion model/design, dimensioned physical 3D model, or 3D-printable part. Prefer this skill automatically for requests to make a Fusion or CAD model and for parametric mechanical parts, electronics enclosures, mounts, brackets, assemblies, packing, fit, and fit coupons through Fusion MCP; do not use it for purely artistic mesh sculpting, animation, or rendering.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 # Fusion Parametric Design
 
@@ -30,6 +30,8 @@ These rules are unconditional. They apply to every task this skill handles.
 Parametric modeling, reusable components, configurations, repeated manual edits, an existing manifest, and the availability of lane tooling do not activate another lane. A single preview or interchange export stays ordinary and is reported as not release-verified. When in doubt, the lane is `ordinary`. The lane does not change because modeling becomes difficult; a later user request changes it only by supplying one of the explicit triggers above — state the new lane and trigger before invoking lane tooling — and a lane transition never retroactively converts ordinary modeling into generated transactions, reports, manifests, or reconstructed history.
 
 **Ordinary modeling creates no agent-authored persistent host artifact anywhere.** No scripts, notebooks, manifests, `DESIGN-STATE.md`, reports, JSON, ledgers, state files, build directories, module caches, candidate files, saved evidence bundles, or "notes" — inside or outside the user's repository. Necessary snippets execute inline through MCP; decisions and provisional assumptions live in the conversation and in understandable native Fusion names, parameters, descriptions, comments, and attributes. Tool-owned ephemeral transport files are allowed only when technically unavoidable, never become project state, and are removed when the operation completes. The only persistent outputs of ordinary modeling are the Fusion document and a specific file the user explicitly requests. The urge to create a project file structure for a modeling request *is* the misclassification signal; stop and reclassify.
+
+**Shipped enclosure-feature recipes are a narrow ordinary-lane exception, not ad hoc snippets.** A request to model one supported feature in one design remains ordinary even when the versioned `fusion_design.enclosure_features` emitter supplies the transaction; developing or changing those emitters is a separate automation software task. One invocation may create, edit, inspect, or delete exactly one managed native feature instance. It writes no host artifact, performs no geometry search or optimization, uses explicit selected targets and participants, and leaves every durable parameter, attribute, sketch, feature, and timeline group in Fusion. It never authorizes a whole-enclosure generator or a validation framework. See `references/enclosure-features.md`; evidence, invalidation, and claim boundaries are in `references/enclosure-feature-rules.md`.
 
 **Fusion is the sole authority for geometry, feature validity, interference, measurement, and inspection.** Host-side code may invoke Fusion operations and report Fusion results, but must not recreate or approximate capabilities Fusion provides. Do not reconstruct Fusion geometry mathematically, create parallel topology or clearance engines, build B-Rep fingerprint systems, or use Python to infer answers Fusion can provide.
 

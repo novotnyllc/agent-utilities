@@ -8,10 +8,11 @@
 //    measured incident, and the shipped tooling's own test suite asserts no
 //    emitted transaction starts a process. No exemption.
 // 2. Ad hoc script payloads over the size threshold are blocked unless they
-//    carry the shipped tooling's signature. Generated lane transactions
-//    legitimately run long and always carry the report-protocol prelude
-//    (FUSION_DESIGN_REPORT_BEGIN) or the bootstrap header; an ad hoc monolith
-//    is exactly what the thin-transport rule prohibits.
+//    carry the shipped tooling's signature. Generated lane transactions and
+//    bounded ordinary feature recipes legitimately run long and carry either
+//    the report-protocol prelude (FUSION_DESIGN_REPORT_BEGIN) or the shipped
+//    generator header; an ad hoc monolith is exactly what the thin-transport
+//    rule prohibits.
 //
 // Fail-open discipline: anything this gate cannot parse or recognize is
 // allowed with a DEGRADED note on stderr. The gate must never break a
@@ -230,7 +231,8 @@ function gate(raw) {
             `transport bound (${MAX_ADHOC_LINES} lines / ${MAX_ADHOC_BYTES} ` +
             "bytes). Thin means one visible edit, not one product goal " +
             "(SKILL.md §1): split into one visible edit per snippet, or run " +
-            "the shipped lane tooling — generated transactions carry the " +
+            "the shipped tooling — generated transactions and bounded feature " +
+            "recipes carry the " +
             "report-protocol marker and pass this gate unchanged.",
         );
       }

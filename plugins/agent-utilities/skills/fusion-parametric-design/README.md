@@ -47,6 +47,24 @@ The full operating rules are `SKILL.md`; the doctrine references beside it
 (`references/`) carry design method, data placement and cataloging, add-ins,
 material selection, wiring, and capability status.
 
+## Bounded enclosure feature recipes
+
+The automation lane also ships a small host-side emitter for one managed
+enclosure feature at a time. V1 creates a socket-head/heat-set-insert boss,
+optionally with four orthogonal gussets, from ordinary base-Fusion sketches,
+extrudes, combines, and cuts; it does not call Autodesk's
+Design-Extension Boss feature. Requests carry explicit body/face/placement
+tokens and evidence-labeled Fusion expressions. The emitted transaction leaves
+human-readable native history, user parameters, attributes, and a timeline
+group in Fusion, with no manifest or host-side feature database.
+
+Import `fusion_design.enclosure_features` and call `emit_create_boss`,
+`emit_edit_feature`, `emit_inspect_feature`, or `emit_delete_feature`. The
+source is passed directly to Fusion's Python execution capability; no CLI or
+host file is required. Lifecycle calls reuse the complete parameter, object,
+and timeline-group receipt returned by creation. See `references/enclosure-features.md` and
+`references/enclosure-feature-rules.md`.
+
 ## Connect Fusion MCP
 
 In Fusion, enable the local MCP server under `Preferences > General > API`.
@@ -68,7 +86,7 @@ Two plugin hooks ship as mechanical nudges, registered by the plugin in both
 harnesses — Claude Code and Codex share the hook contract, and both manifests
 reference the same `hooks/hooks.json`: a gate on the Fusion execute tool
 (process-spawning constructs refused; oversized ad hoc scripts refused unless
-they carry the shipped lane tooling's report signature) and a warn-only
+they carry a shipped lane or bounded-feature generator signature) and a warn-only
 reminder on ordinary-modeling artifact writes, riding the Write/Edit tools
 where the harness exposes them. They fail open; the doctrine is the
 cross-harness authority.

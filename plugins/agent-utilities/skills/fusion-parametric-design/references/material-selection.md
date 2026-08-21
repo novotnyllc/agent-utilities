@@ -2,6 +2,12 @@
 
 Filament choice is a geometry decision, not a slicer setting. A snap arm that flexes and recovers in one polymer fractures in another. A press fit sized against one material's shrinkage is loose or immovable in a second. A living hinge that survives its service life in a third splits on the first close. Choose the material before committing the geometry that depends on it, then record the choice — family, formulation, source, confidence, coupon, unresolved risk — where the lane keeps state: in ordinary modeling, in Fusion parameter comments, component descriptions or attributes, and the conversation; in a manifest-managed lane, in the manifest's `material_decision`.
 
+Enclosure-feature recipes preserve the same boundary: insert bores and depths
+must cite the exact hardware source and remain coupon-sensitive; boss outside
+diameter may be provisional when labeled; no recipe emits pull-out, torque,
+strength, or fatigue claims. Changing insert, formulation, nozzle/process, or
+orientation reopens the dependent values (`references/enclosure-feature-rules.md`).
+
 This file carries no property values. It states what each family does to geometry, and where the numbers have to come from.
 
 ## Three rules
