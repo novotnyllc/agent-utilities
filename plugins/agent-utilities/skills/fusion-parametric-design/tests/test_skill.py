@@ -286,6 +286,9 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("role `packing`", text)
         self.assertIn("role `keepout`", text)
         self.assertIn("adoption fallback", text)
+        # Timeline groups are created as the work happens, named humanely.
+        self.assertIn("The timeline reads like a table of contents", text)
+        self.assertIn("never as an afterthought pass", text)
         self.assertNotIn("00_REFERENCES", text)
 
     def test_mcp_onboarding_delegates_to_roundhouse_shim(self) -> None:

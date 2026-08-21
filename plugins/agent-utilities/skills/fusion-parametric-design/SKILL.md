@@ -203,6 +203,8 @@ Validation/
 
 Names are for people: plain words with spaces, short but descriptive, named the moment the component is created — never a slug, a number prefix, or an ALL_CAPS role tag (`references/design-doctrine.md` § Naming). Fusion appends the immutable `:1` instance suffix to every occurrence, so a name must read well in front of it: `PD Trigger Envelope:1`, not `PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE:1`.
 
+**The timeline reads like a table of contents.** Real sessions produce a lot of features, so the timeline is actively kept under control: related features are grouped into sensibly named timeline groups as the work happens — a group per coherent design chunk ("Base", "Lid retention", "USB opening", "Wiring") — never as an afterthought pass. Native timeline groups first (the API creates and names them directly); the TimelineManager add-in's group commands where they genuinely help (`references/add-ins.md`). Group names follow the same humane rules as everything else: plain words a person would write.
+
 Machine-readable roles (`reference`, `packing`, `keepout`, `product`, `fixture`, `validation`) ride on the `fusion_parametric_design` attribute group as `role`, never on display names; in the automation lanes the scaffold writes them from the manifest. Inventory reads the role attribute first and recognizes the `REF__`/`PACK__`/`KEEP__`/`PROD__`/`FIX__`/`VAL__` name prefixes only as an adoption fallback when no attribute answers, reported with its own provenance value rather than silently. Tag managed entities with Fusion attributes and locate them by stable component path, managed id, and attributes — never by timeline index, and never by comparing entity-token strings as identity.
 
 ### Pack the assembly before sculpting the shell
