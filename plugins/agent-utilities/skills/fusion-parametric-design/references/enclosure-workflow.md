@@ -100,10 +100,14 @@ calc_outer_width = calc_inner_width + 2 * fab_wall_thickness
 Supports should contact intended load-bearing surfaces. Retainers must not crush components or occupy connector/service zones. External port mouths must clear both the connector nose and overmold geometry.
 
 Decide the lid/base join — and any print-driven part split — and model it by
-default, stating the one-line reason in the visual loop: snap fit, screws with
-captive nuts, press fit, heat-set inserts, or keys/dovetails per the
-materials, loads, and open/close cycle, fasteners as cataloged components
-positioned with joints so Interference and Measure validate engagement. Every
+default, stating the one-line reason in the visual loop. Fastener-free
+mechanical joins lead whenever load, cycle, and printable tolerance allow — a
+skirt-and-channel snap lid, dovetail, bayonet, or interference ring, printed
+in and invisible; screws with captive nuts or heat-set inserts take over for
+serviceability and higher loads; adhesive is never a default and appears only
+as an explicit, stated engineering choice. Fasteners, where used, are
+cataloged components positioned with joints so Interference and Measure
+validate engagement. Every
 joint is modeled complete — head seats (counterbore/countersink, spot-faced
 normal to the screw axis on angled surfaces), recesses, engagement, tolerance
 — and validated assembled: interference across the assembly, Measure at each
