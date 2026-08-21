@@ -4,13 +4,18 @@
 
 Record exact part numbers, board revisions, installed headers/hats, converter variants, connector orientation, buttons, antennas, microphones, fuses, wire gauges, terminal hardware, batteries, and cable overmolds. A bare-board drawing is not enough when the installed assembly is taller or routes wires differently.
 
-## 2. Build the reference system
+## 2. Build the reference system, proportionately
 
-For each item create:
+Use the fewest representations that answer the current design question — one
+canonical linked component or one dimensioned provisional envelope serves as
+both reference and packing geometry when it provides the required datums and
+occupancy. Create, when a question actually needs the extra representation:
 
-- `<Item> Reference` (role `reference`): editable dimensions and datums;
+- `<Item> Reference` (role `reference`): editable dimensions and datums, only
+  when the occupancy model cannot provide stable authoring datums;
 - `<Item> Envelope` (role `packing`): occupancy used for placement;
-- one or more `<Function> Keep-Out` (role `keepout`) components.
+- `<Function> Keep-Out` (role `keepout`) components for each specific volume
+  that materially constrains the design.
 
 Names are plain words for the browser; the role is the `role` attribute in the
 `fusion_parametric_design` group (`references/design-doctrine.md` § Naming; in
@@ -57,9 +62,7 @@ Board insertion angle, lid lift, component removal, fastener withdrawal, and cab
 
 ## 4. Establish datums and coordinate ledger
 
-Choose a stable product coordinate system. Record each packing occurrence's translation and rotation. Avoid arbitrary drag placement that cannot be reconstructed.
-
-The packing ledger should include:
+Choose a stable product coordinate system, and avoid arbitrary drag placement that cannot be reconstructed. In ordinary modeling, Fusion joints, origins, parameters, names, and component properties carry placement and identity — no separate coordinate ledger. A manifest-managed lane records each packing occurrence's transform after the user approves the arrangement; that lane's packing ledger includes:
 
 | Field | Meaning |
 |---|---|
@@ -90,7 +93,7 @@ Use minimum-distance measurements and interference analysis. Record the smallest
 
 ## 6. Author the product
 
-Create the base/lid around the settled internal system. Prefer parameters/equations such as:
+Author in two passes: a visible draft shell around the provisional arrangement first — unresolved details marked on the screenshot — then the settled internal system after the user confirms the direction (fit claims wait for pass 2). Prefer parameters/equations such as:
 
 ```text
 calc_inner_width = pack_width + 2 * clr_rigid_xy
@@ -162,9 +165,13 @@ present, reads that PCB-oriented workspace and is not this). Do not hunt for a
 nonexistent native harness tool, and do not invent a framework to fake one:
 wire modeling is ordinary sweep/pipe modeling with recorded metadata.
 
-Proportionality applies: wires appear when they matter to the design — exits,
-channel sizing, clearances, service loops — and not every task needs a full
-harness model.
+Proportionality applies: wires appear when they matter to the design. Runs
+that constrain the enclosure — connector departure, overmold, bend envelope,
+service loop, channel, strain relief, a termination whose real shape changes
+fit — are modeled fully; a named keep-out or sketch path serves where that
+honestly answers the question; full colored harness detail with every
+termination placed comes when the exact geometry changes the product or the
+user asks for a harness model.
 
 ## 8. Closed and service assemblies
 

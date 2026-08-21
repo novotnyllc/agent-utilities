@@ -6,17 +6,19 @@ This reference is the skill's **standalone doctrine**. The skill is used in harn
 
 ## The dispatcher operating shape
 
-The thread that uses this skill is a **dispatcher, not a worker**. It stays responsive to the user, classifies each piece of work by the work-shape table below, and hands every substantial piece — Fusion MCP mutations, long CLI runs, exports, verification passes — to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
+The thread that uses this skill is a **dispatcher, not a worker**. It stays responsive to the user, classifies each piece of work by the work-shape table below, and hands substantial work to a spawned worker (a Claude Code subagent, a Codex spawned agent/thread). Inline work is limited to cheap read-only lookups needed to answer the user or classify the task: reading a manifest, listing presets, checking MCP connectivity.
 
 Which model and effort each worker gets: defer to the tier table and, when present, the session routing policy — that boundary is stated above and it holds here.
 
-The dispatcher also arbitrates the single live Fusion writer: at most one mutating worker at a time; read-only workers may run concurrently. Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
+Workers return raw results — reports, refusals, artifact paths — and the dispatcher relays outcomes to the user in plain language.
 
-## Ordinary modeling: one Fusion operator, no reviewers
+## Single Fusion operator
 
-For ordinary Fusion modeling and visual edits, the dispatcher spawns **one Fusion-operating worker** and keeps it. That single worker inserts components, builds features, inspects natively, captures views, and iterates on the user's feedback. There is no reviewer before a visible result, no parallel candidate builders, and no swarm — a simple modeling task is never an agent-orchestration exercise.
+The dispatcher spawns **exactly one persistent Fusion-operating worker for the whole task**, and that worker is the only thing that touches Fusion. Every Fusion call — mutations and read-only Python alike — serializes through that one live session: Fusion's active document, UI state, and stdout stream are shared, so concurrent Fusion callers can receive one another's report blocks. The parent does not duplicate design reasoning, spawn parallel analysts, create candidate workers, or replace the worker between attempts, and foreign-report detection in the adapter is defensive handling for an external violation — it never authorizes concurrent Fusion execution.
 
-The one exception is narrow: a specialist consultation for a missing Fusion capability or a documented API question, spawned only after direct native attempts have failed, and only when its answer leads directly to one native Fusion action. Advice that proposes infrastructure instead of a Fusion action is declined. Fan-out beyond the single modeling worker belongs to the automation lanes — parallel host-side report diffs, project builds, cache warms — never to modeling.
+Ordinary modeling remains single-operator until the lane ends, not merely until the first screenshot: no reviewers, no parallel candidate builders, no swarm — a simple modeling task is never an agent-orchestration exercise. One read-only specialist consultation is allowed only after the hard stop and after the user directs the work to continue; the specialist does not touch Fusion, create artifacts, propose infrastructure, or reset the attempt budget, and its answer must identify one specific native Fusion action. Advice that proposes infrastructure instead of a Fusion action is declined.
+
+Host-only work that never touches Fusion — documentation reads, offline computations, report diffs, project builds, cache warms — may run in parallel only in an activated machinery lane.
 
 ## Why economy is safe here at all
 

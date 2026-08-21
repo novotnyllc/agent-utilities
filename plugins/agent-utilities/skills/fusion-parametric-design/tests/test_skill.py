@@ -243,9 +243,9 @@ class SkillContractTests(unittest.TestCase):
         # latency norms.
         text = SKILL.read_text(encoding="utf-8")
         for requirement in (
-            "The lane decision comes first, and ordinary modeling is the default",
-            "when in doubt, it is ordinary modeling",
-            "no files to the user's repository",
+            "The lane decision comes first: classify once and lock the lane",
+            "When in doubt, the lane is `ordinary`",
+            "no agent-authored persistent host artifact anywhere",
             "misclassification signal",
             "Progress is defined as the user seeing the model",
             "no screenshot in about ten minutes is off the rails",
@@ -258,12 +258,52 @@ class SkillContractTests(unittest.TestCase):
         text = SKILL.read_text(encoding="utf-8")
         self.assertIn("never invoked for ordinary modeling or visual edits", text)
         self.assertIn("two direct native Fusion approaches fail", text)
-        self.assertIn("No review agents before a visible result", text)
+        self.assertIn("no review agents run on ordinary modeling", text)
         routing = (SKILL_DIR / "references" / "model-routing.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("one Fusion-operating worker", routing)
-        self.assertIn("no reviewer before a visible result", routing)
+        self.assertIn(
+            "exactly one persistent Fusion-operating worker for the whole task",
+            routing,
+        )
+        self.assertIn("single-operator until the lane ends", routing)
+
+    def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
+        # The adversarial-review hardening: the locked lane, the
+        # artifact-anywhere rule, cumulative thin scripting, bounded native
+        # inspection, the approach definition with global attempt accounting,
+        # frozen shipped machinery, explicit feature scope, maturity states,
+        # and the ordinary-lane execution rules in the adapter.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "LANE: ordinary",
+            "When in doubt, the lane is `ordinary`",
+            "never retroactively converts ordinary modeling",
+            "no agent-authored persistent host artifact anywhere",
+            "Thin means one visible edit, not one product goal",
+            "The restriction is cumulative",
+            "Reading a native result is a bounded action",
+            "An approach is one native construction strategy",
+            "The attempt budget belongs to the task",
+            "Do not create or modify task-specific machinery",
+            'never accept the default "all intersected bodies" behavior',
+            "Pass 1, visible draft",
+            "Label every visible checkpoint with its maturity state",
+            "Match the view before judging the shape",
+            "Rollback is temporary state",
+        ):
+            self.assertIn(requirement, text, requirement)
+        adapter = (SKILL_DIR / "references" / "mcp-adapter.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "## Ordinary-lane execution",
+            "## Generated lane transaction rules",
+            "## Units at the API boundary",
+            "database centimetres",
+            "need not be idempotent",
+        ):
+            self.assertIn(requirement, adapter, requirement)
 
     def test_skill_and_references_carry_no_transition_language(self) -> None:
         # The skill describes how things work, in the present tense.

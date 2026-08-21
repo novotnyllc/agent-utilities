@@ -101,7 +101,7 @@ Record the intended build direction and evaluate:
 - hole/insert compensation;
 - part orientation versus load path.
 
-Core generated scripts do not claim these checks automatically. Use a slicer, custom analyzer, or manual measured review and record the evidence.
+Core generated scripts do not claim these checks automatically. Use a configured slicer, an installed trusted add-in, an existing validated analyzer already present when the lane locked, manual measured review, or a physical coupon, and record the evidence — never an analyzer authored during the CAD task.
 
 ## Structural and safety
 
