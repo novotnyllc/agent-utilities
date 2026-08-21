@@ -311,7 +311,6 @@ A project in these lanes has `fusion-project.json` and a `DESIGN-STATE.md` copie
 
 ```bash
 "$SKILL_DIR/scripts/fusion-design" validate fusion-project.json
-"$SKILL_DIR/scripts/fusion-design" plan fusion-project.json
 ```
 
 A valid manifest permits work; it does not create the geometry. Mirror its parameters and provenance into Fusion user parameters, comments, and attributes; Fusion remains editable even if the manifest or agent is unavailable later.
@@ -389,7 +388,6 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 
 ```text
 "$SKILL_DIR/scripts/fusion-design" validate <manifest>
-"$SKILL_DIR/scripts/fusion-design" plan <manifest>
 "$SKILL_DIR/scripts/fusion-design" emit-inventory <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-parameter-sync <manifest> [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" emit-scaffold <manifest> [-o file.py]

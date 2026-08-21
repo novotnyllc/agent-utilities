@@ -103,7 +103,6 @@ Available commands:
 
 ```text
 scripts/fusion-design validate <manifest>
-scripts/fusion-design plan <manifest>
 scripts/fusion-design emit-inventory <manifest> [-o file.py]
 scripts/fusion-design emit-parameter-sync <manifest> [-o file.py]
 scripts/fusion-design emit-scaffold <manifest> [-o file.py]

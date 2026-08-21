@@ -20,10 +20,6 @@ Host-side Python is not a fourth CAD store. It generates narrow scripts that ope
 
 `fusion_design.manifest` validates required project/list structure, provenance enumerations, parameter types and role prefixes, critical values, scan provisional status, dual reference/packing models, keep-outs or explicit no-keepout rationale, component paths, and verification structure. The standard-library validator is the CLI gate; the JSON Schema is supplied for editor and ecosystem tooling.
 
-### Planner
-
-`fusion_design.planner` converts a valid manifest into a gated sequence. A plan blocks before modeling when a critical expression or evidence item is absent.
-
 ### Script emitter
 
 `fusion_design.scripts` emits four Fusion Python transactions:

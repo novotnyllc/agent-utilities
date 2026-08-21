@@ -111,7 +111,7 @@ class CliTests(unittest.TestCase):
         # `validate` is the command a human runs to sign a manifest off
         # (SKILL.md). It read the file with a bare json.loads, so a duplicate
         # key that silently flips provisional true->false reported ok: true
-        # while `plan` refused the same file.
+        # while the object-based loaders refused the same file.
         text = EXAMPLE.read_text(encoding="utf-8").replace(
             '"provisional": false,\n      "description": "Measured PD trigger board length."',
             '"provisional": true,\n      "provisional": false,'

@@ -37,7 +37,6 @@ from .mesh_source import (
     verify_manifest_mesh_sources,
 )
 from .module_cache import emit_module_bootstrap, prepare_module_bundle
-from .planner import build_plan
 from .prusaslicer_project import build_project, resolve_presets
 from .prusaslicer_slice import slice_project
 from .report_diff import diff_reports
@@ -108,7 +107,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     # Load through the same door as every other command. A bare json.loads here
     # skipped the duplicate-key guard, the root-type check and JSONDecodeError
     # reporting, so the one command a human runs to sign a manifest off was the
-    # one command that did not see what `plan` and the emitters see.
+    # one command that did not see what the emitters see.
     try:
         issues = validate_manifest_data(load_manifest(args.manifest).data)
     except ManifestValidationError as error:
@@ -119,12 +118,6 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     payload = {"ok": not blocking, "issues": [asdict(issue) for issue in issues]}
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if not blocking else 2
-
-
-def _cmd_plan(args: argparse.Namespace) -> int:
-    plan = build_plan(load_manifest(args.manifest))
-    print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
-    return 2 if plan.blocked else 0
 
 
 def _cmd_emit_document_save(args: argparse.Namespace) -> int:
@@ -617,7 +610,7 @@ def _cmd_emit_module_bootstrap(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fusion-design",
-        description="Validate a Fusion design manifest, produce a workflow plan, and emit small Fusion Python transactions.",
+        description="Validate a Fusion design manifest and emit small Fusion Python transactions.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -625,9 +618,6 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("manifest")
     validate.set_defaults(handler=_cmd_validate)
 
-    plan = subparsers.add_parser("plan", help="Produce the gated research/model/verification plan.")
-    plan.add_argument("manifest")
-    plan.set_defaults(handler=_cmd_plan)
 
     emitters = {
         "emit-inventory": emit_inventory_script,
