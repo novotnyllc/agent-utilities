@@ -22,6 +22,10 @@ else
     areas+=("$(printf '%s' "$arg" | tr '-' '_')")
   done
   for area in "${areas[@]}"; do
+    if [[ ! $area =~ ^[a-z0-9_]+$ ]]; then
+      echo "error: invalid area '$area' (areas are snake_case module fragments)" >&2
+      exit 1
+    fi
     if ! compgen -G "tests/test_${area}*.py" >/dev/null; then
       echo "error: no test module matches area '$area' (looked for tests/test_${area}*.py)" >&2
       exit 1
