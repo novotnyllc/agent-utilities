@@ -104,6 +104,16 @@ test("parenthesized multiline from-os imports still block; benign lists pass", (
   assert.equal(benign.status, 0);
 });
 
+test("wildcard os imports block; named benign imports pass", () => {
+  const hostile = run(
+    execute({ script: "from os import *\nsystem('echo hi')" }),
+  );
+  assert.equal(hostile.status, 2);
+  assert.match(hostile.stderr, /wildcard os import/);
+  const benign = run(execute({ script: "from os import path\nprint(path.sep)" }));
+  assert.equal(benign.status, 0);
+});
+
 test("with stripping disabled the gate degrades to a conservative raw scan", () => {
   const result = run(
     execute({ script: "PROJECT_NAME = 'subprocess fixture'" }),

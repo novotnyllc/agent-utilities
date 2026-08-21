@@ -38,6 +38,9 @@ const SPAWN_PATTERNS = [
   [/\bfrom\s+os\s+import\b[^\n]*\b(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API import"],
   // Parenthesized import lists span lines; [^)]* crosses newlines.
   [/\bfrom\s+os\s+import\s*\([^)]*\b(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b[^)]*\)/, "an os process API import"],
+  // A wildcard import of os exposes every process API as a bare name; no
+  // thin snippet has business wildcard-importing os.
+  [/\bfrom\s+os\s+import\s*\*/, "a wildcard os import"],
   [/\bpty\b/, "pty"],
   // Aliasing os away from its name has no honest use in a thin snippet; the
   // aliased member calls it enables would otherwise slip the qualified-name
