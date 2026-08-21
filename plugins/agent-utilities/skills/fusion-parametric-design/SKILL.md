@@ -24,7 +24,7 @@ These rules are unconditional. They apply to every task this skill handles.
 
 **Fusion is the sole authority for geometry, feature validity, interference, measurement, and inspection.** Host-side code may invoke Fusion operations and report Fusion results, but must not recreate or approximate capabilities Fusion provides. Do not reconstruct Fusion geometry mathematically, create parallel topology or clearance engines, build B-Rep fingerprint systems, or use Python to infer answers Fusion can provide.
 
-**Never create a validation framework.** This prohibition includes custom geometry validators, topology signatures, B-Rep probe systems, volume fingerprints, clearance matrices, acceptance harnesses, rollback auditors, temporary candidate-build systems, and Python substitutes for Fusion Inspect tools. Invoke native Fusion inspection, read native results, run a validator this skill's tooling already supplies when its lane applies, or report a missing capability — nothing else. If Fusion cannot answer a required question through the available MCP/API capability, stop and report the capability gap; never invent a substitute geometry system.
+**Never create a validation framework.** This prohibition includes custom geometry validators, topology signatures, B-Rep probe systems, volume fingerprints, clearance matrices, acceptance harnesses, rollback auditors, temporary candidate-build systems, and Python substitutes for Fusion Inspect tools. Invoke native Fusion inspection, read native results, run a validator this skill's tooling already supplies when its lane applies, or report a missing capability — nothing else. If Fusion cannot answer a required question through the available MCP/API capability — or, for a genuinely UI-only capability, through the session's computer-use capability driving Fusion's own UI — stop and report the capability gap; never invent a substitute geometry system.
 
 **MCP is transport.** Use it to operate the active Fusion design directly. Python snippets are short, direct, limited to one native operation or one tightly related feature sequence, and easy to understand as the equivalent of a skilled user action. Python must not become a CAD application, a geometry-generation framework, a persistent transaction system, a validation framework, a reporting framework, or a replacement for the Fusion browser and timeline.
 
@@ -232,7 +232,7 @@ For rapid visual edits — smooth this surface, remove this obstruction, round t
 Hard stop conditions — stop and ask the user when:
 
 - two direct native Fusion approaches fail;
-- a required native capability is not exposed through MCP;
+- a required native capability is not exposed through MCP and cannot be driven through the session's computer-use capability;
 - the correct project/file location is ambiguous;
 - required source dimensions cannot be resolved;
 - a change would require restructuring beyond the request.
