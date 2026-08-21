@@ -263,10 +263,19 @@ consulted; ties within a gate's declared tolerance proceed together:
    the declared `program_validation_fraction` of area — and around each a
    one-cell buffer shell is excluded from *both* construction and
    validation support (dispositioned `holdout-buffer`, counted in neither
-   side's evidence, still owned in the H accounting). Validation plus
-   buffer area is bounded by construction (sparse selection caps the
-   buffer at the shell of each isolated cell) and both fractions are
-   recorded on the reservation. The measured
+   side's evidence, still owned in the H accounting). Selection is greedy in
+   content-addressed order under a **surviving-construction floor**: cells
+   are added only while construction support (everything outside
+   validation + buffer) stays above the declared
+   `min_construction_fraction` — a maximally spread sparse selection can
+   otherwise tile the whole grid with buffer shells. Selection stops at
+   the validation-fraction target or at the floor, whichever binds first;
+   if the floor prevents reaching the declared minimum validation area,
+   G2 is unlicensed for the scan (`holdout-separation-insufficient`,
+   reason `insufficient-validation-support`) and the competition falls to
+   the licence floor, exactly as for an undersized buffer. All three
+   fractions (validation, buffer, surviving construction) are recorded on
+   the reservation. The measured
    range then *audits* the reservation instead of sizing it: if the
    frozen record's range exceeds the buffer width, construction
    triangles can sit within one correlation length of reserved ones and
