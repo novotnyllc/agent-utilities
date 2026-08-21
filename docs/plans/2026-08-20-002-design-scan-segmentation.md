@@ -1258,10 +1258,18 @@ census):
    model), and ≥ 2 real scans with manually annotated major
    surfaces/features (Dig-Next-2 plus one more capture; the annotation is
    authored before the sweep, same independence rule as the C denominator).
-2. **Sweep:** each threshold over a declared grid spanning at least
-   [default/4, default×4] (log-spaced), others held at defaults; declared
-   pairwise interactions (e.g. loss-improvement × improved-fraction) swept
-   jointly on the reduced grid.
+2. **Sweep:** each threshold over a declared **domain-aware** grid, others
+   held at defaults. Unbounded-above parameters: log-spaced over at least
+   [default/4, default×4]. Parameters with a bounded domain (fractions in
+   (0, 1] — `split_min_improved_fraction` and
+   `split_min_children_explained` at default 0.5 cannot span to 2):
+   log-spaced in a transform that respects the domain (logit for
+   fractions), spanning the transformed equivalent of the ×4 range and
+   clamped to the declared domain, with the clamp recorded as the explicit
+   exception to the span rule — grid points outside a parameter's valid
+   domain are never generated. Declared pairwise interactions (e.g.
+   loss-improvement × improved-fraction) swept jointly on the reduced
+   grid.
 3. **Publish sensitivity curves** for: over-split rate and under-split rate
    against ground truth, feature recall (and precision, 003 Amendment §7),
    geometric coverage, and runtime — per fixture class.

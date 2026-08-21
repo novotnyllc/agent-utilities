@@ -692,22 +692,31 @@ the five-cell vector repeats the non-vacuity failure in slow motion.
 An eighty-feature slab-and-primitive timeline and a twelve-feature
 human-quality timeline can tie on RC, kind recall, parameter liveness,
 component count, and zero silent area. P is what separates them. Measured
-per part, from the program and selection records alone:
+per part, from the program and selection records alone, in two labelled
+halves:
 
-- feature count; sketch count; parameter count;
-- fully constrained sketch rate (constrained DOF ÷ total sketch DOF);
-- redundant/duplicated dimensional variables (independently represented
-  values whose regularity class licenses one shared parameter);
-- repeated geometry represented independently rather than by
-  equality/pattern where the pattern licence held;
-- feature dependency depth; unnecessary construction geometry count;
-- where CAD ground truth exists: program-size ratio against the reference
-  timeline, and feature-graph similarity.
+**The shared census** — identical, item for item and in the same declared
+order, to the FHG compactness gate G5 (design 2026-08-21-001 §6), so the
+system cannot be optimized against one definition and measured against
+another:
 
-P is reported as this census, never collapsed to a scalar (§1.6's rule).
-It is the same census the FHG selection objective's compactness gate G5
-optimizes (design 2026-08-21-001 §6) — deliberately, so the system cannot
-be optimized against one definition and measured against another. Ranking
+1. unlicensed-duplicate parameter values (independently represented values
+   whose regularity class licenses one shared parameter);
+2. repeated geometry represented independently rather than by
+   equality/pattern where the pattern licence held;
+3. feature count;
+4. sketch count;
+5. redundant construction planes/geometry;
+6. unconstrained sketch degrees of freedom.
+
+**Diagnostics** — reported under P, explicitly *outside* the P≡G5 identity
+(G5 cannot optimize them — either ground-truth-only or reporting-only):
+parameter count; fully constrained sketch rate; feature dependency depth;
+and, where CAD ground truth exists, program-size ratio against the
+reference timeline and feature-graph similarity.
+
+P is reported as this census-plus-diagnostics, never collapsed to a scalar
+(§1.6's rule); the identity claim binds the shared census only. Ranking
 position: after E, before C (§1.6 marker). H remains the guardrail over
 all.
 

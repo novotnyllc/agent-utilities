@@ -221,14 +221,29 @@ consulted; ties within a gate's declared tolerance proceed together:
    A semantically invalid candidate that explains more support must never
    set the bar the valid candidates are measured against.
 2. **G2 — held-out geometric fidelity.** Area-weighted residual of the
-   candidate's predicted geometry against **reserved validation triangles**
-   — the same blocked holdout machinery and freeze discipline as the split
-   licence (002 §A.1): validation blocks are reserved before any hypothesis
-   is fitted, no candidate's construction sees them, and block scale comes
-   from the frozen correlation record's held-out derivation (002 §B.1).
-   Gate: residual ≤ `program_heldout_tolerance` (declared; rationale tied to
-   the emission deviation thresholds — a program that cannot meet the grade
-   the emitter will apply is dead on arrival).
+   candidate's predicted geometry against **program-level reserved
+   validation triangles**: one blocked reservation per part, drawn **before
+   any hypothesis evidence is extracted** — not merely before fitting —
+   with block scale from the frozen correlation record's held-out
+   derivation (002 §B.1). The reservation contract extends 002 §A.1's
+   topology/loss distinction to every evidence lane, because sections and
+   slabs traverse raw dump triangles (001 §B) and a per-fit holdout alone
+   would let profile hypotheses see the validation geometry: extractors
+   **may traverse reserved triangles for topology only** (loop closure,
+   connectivity, adjacency, track correspondence — the invariants 002 §A.1
+   already exempts from holdout, for the same reason: the restriction
+   exists to protect loss grading), but **no reserved triangle contributes
+   to any fitted parameter, station estimate, profile-entity fit, residual,
+   classification vote, or occupancy count** — section segments whose
+   source triangle is reserved are carried for chaining and excluded from
+   entity fitting and material consensus, the same mechanics as 001 §A.4's
+   closure segments. G2 then grades predicted surfaces against the reserved
+   triangles alone. Gate: residual ≤ `program_heldout_tolerance` (declared;
+   rationale tied to the emission deviation thresholds — a program that
+   cannot meet the grade the emitter will apply is dead on arrival). The
+   residual exposure is stated honestly: reserved-triangle topology is
+   visible to construction; reserved-triangle *geometry* is not, and
+   geometry is what G2 grades.
 3. **G3 — unexplained support.** The area the candidate leaves unclaimed may
    not exceed the best surviving candidate's unclaimed area by more than
    `program_unexplained_slack` (declared). Unclaimed stays a first-class
@@ -241,12 +256,16 @@ consulted; ties within a gate's declared tolerance proceed together:
    `program_inference_slack` (declared). Nominal snaps count here too: a
    snap without its 007 §8.5 identifiability licence is unsupported
    inference by definition and is never emitted anyway.
-5. **G5 — compactness.** Among survivors, minimize the program-complexity
-   census, compared lexicographically within itself in declared order:
+5. **G5 — compactness.** Among survivors, minimize the **shared
+   program-complexity census** — the same list, item for item and in the
+   same order, as the P cell's shared census (003 Amendment §7.1); P's
+   ground-truth-only and reporting-only fields are diagnostics outside this
+   gate. Compared lexicographically within itself in declared order:
    unlicensed-duplicate parameter values (two independently fitted values a
-   regularity class says should be one), repeated geometry not expressed as
-   a pattern/equality where its licence holds, feature count, sketch count,
-   redundant construction planes, unconstrained sketch degrees of freedom.
+   regularity class says should be one); repeated geometry not expressed as
+   a pattern/equality where its licence holds; feature count; sketch count;
+   redundant construction planes/geometry; unconstrained sketch degrees of
+   freedom.
    This is the gate at which a base+pocket+pattern program beats the
    equivalent slab stack — *only* having tied or won G1–G4 first, which is
    the review's rule adopted verbatim: the compact program wins whenever it
