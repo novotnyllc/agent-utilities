@@ -230,19 +230,29 @@ consulted; ties within a gate's declared tolerance proceed together:
    validation triangles**: one blocked reservation per part, drawn **before
    any hypothesis evidence is extracted** — not merely before fitting.
    Block-scale ordering, stated because the correlation record itself comes
-   from measurement (002 §A.4): the phase order is (0) the 002 §A.4
-   correlation calibration — candidate-independent by construction, frozen
-   before any candidate acceptance — then (1) the G2 reservation, sized by
-   the frozen record's held-out derivation (002 §B.1), then (2) all FHG
-   evidence extraction. Calibration's small-patch measurements may touch
-   later-reserved triangles; that exposure is a candidate-independent
-   scalar (range/sill) and is stated on the reservation record
-   (`blocking-basis: correlation-record`, with the record hash). **Where
-   calibration was not required** for the scan's regime (clean
-   tessellations under the regime dispatch), block scale falls back to the
-   declared default ≈ 8 ℓ_med (007 §10.3's documented approximate scale),
-   recorded as `blocking-basis: default-8lmed` — the reservation is never
-   deferred until after evidence extraction to wait for a better scale.
+   from measurement (002 §A.4) and its residual field feeds
+   construction-facing derivations (covariance inflation → relation and
+   snap licences — 002 §B.1), so calibration touching reserved triangles
+   would leak reserved geometry into candidate construction through the
+   record, not merely through a scalar. The order is therefore
+   **reservation first**: (0) the G2 reservation is drawn over the raw
+   mesh at a scale needing no measurement of this scan — the declared
+   default ≈ 8 ℓ_med (007 §10.3; ℓ_med is a mesh property, not a candidate
+   statistic), or a *pre-existing regime record's* range where one is on
+   file, whichever is larger — recorded as `blocking-basis: default-8lmed`
+   or `blocking-basis: regime-record`; (1) the 002 §A.4 correlation
+   calibration runs **on the non-reserved subset only**, so the frozen
+   record, the fit covariances, and every licence derived through them
+   contain no reserved-triangle information; (2) all FHG evidence
+   extraction, under the same restriction. The measured range then
+   *audits* the reservation instead of sizing it: if the frozen record's
+   range exceeds the reservation's block scale, the blocks are too small
+   to guarantee separation — G2 grading is unlicensed for this scan,
+   recorded `holdout-separation-insufficient` (new closed-set token), and
+   the competition falls to the licence-floor outcome exactly as under
+   `program-competition-unlicensed`. Undersized separation fails closed;
+   it is never patched by re-drawing blocks with data calibration has
+   already seen.
    **Where calibration ran and refused** (`correlation-model-unidentified`),
    the 002 fail-closed rule governs — held-out grading is unlicensed for
    this scan, so the program *competition* is unlicensed: no factored
@@ -386,7 +396,8 @@ against the other.
 # 9. Refusals (closed-set additions)
 
 `polarity-contradictory`, `program-selection-ambiguous`,
-`program-search-budget-exceeded`, `program-competition-unlicensed`, plus
+`program-search-budget-exceeded`, `program-competition-unlicensed`,
+`holdout-separation-insufficient`, plus
 per-licence refusals already owned by
 the source designs (nothing re-tokenized). All join the closed vocabulary
 with the existing validator discipline.
