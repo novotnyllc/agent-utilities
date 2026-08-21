@@ -12,7 +12,7 @@ Before modeling, determine and record:
 |---|---|
 | Which Hub? | The hub the user's team already works in; ask when more than one is active. |
 | Existing project or new? | Repository/product identity is a strong default: work belonging to an existing product goes in that product's project. A new project marks a distinct ownership, permissions, or lifecycle boundary — not a new part. |
-| New design file or existing? | A new deliverable is a new design file with a human-sensible name. Edits to an existing product open its recorded document by dataFile id. |
+| New design file or existing? | A new deliverable is a new design file with a human-sensible name. Edits to an existing product reopen its document — in the ordinary lane found in the Data Panel by name and recency (and its attribute stamp when one exists), in manifest-managed lanes located by the recorded dataFile id. |
 | Internal or external component? | Internal components for assembly-specific geometry designed and released together (a base and cover of one enclosure). Separate design files, inserted as linked external components, for anything independently reusable or independently versioned. |
 | Catalog placement? | Every cross-product reusable part lives in the shared component catalog project and is linked in, never copied. |
 

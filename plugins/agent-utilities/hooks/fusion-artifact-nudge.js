@@ -41,7 +41,11 @@ function main(raw) {
         : "";
     if (!filePath || SKILL_TREE.test(filePath)) process.exit(0);
     const content =
-      typeof input.tool_input.content === "string" ? input.tool_input.content : "";
+      typeof input.tool_input.content === "string"
+        ? input.tool_input.content
+        : typeof input.tool_input.new_string === "string"
+          ? input.tool_input.new_string
+          : "";
     const smells =
       FUSION_SMELLS.some((pattern) => pattern.test(filePath)) ||
       (CONTEXT_SMELLS.some((pattern) => pattern.test(filePath)) &&

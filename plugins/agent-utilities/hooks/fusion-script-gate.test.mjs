@@ -24,6 +24,10 @@ test("blocks every process-invoking construct, marker or not", () => {
     "import subprocess",
     "os.system('open -a Fusion')",
     "os.execv(path, args)",
+    "os.popen('echo hi')",
+    "os.spawnl(os.P_NOWAIT, exe)",
+    "os.posix_spawn(exe, argv, env)",
+    "import pty; pty.spawn(['sh'])",
     "from multiprocessing import Pool",
     "Popen(['ls'])",
   ]) {

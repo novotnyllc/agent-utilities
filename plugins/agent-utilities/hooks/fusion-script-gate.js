@@ -29,8 +29,8 @@ const MAX_ADHOC_BYTES = 8192;
 // Always blocked, marker or not: these invoke a process when reached.
 const SPAWN_PATTERNS = [
   [/\bsubprocess\b/, "subprocess"],
-  [/\bos\.system\b/, "os.system"],
-  [/\bos\.exec\w*\b/, "os.exec*"],
+  [/\bos\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|startfile)\b/, "an os process API"],
+  [/\bpty\b/, "pty"],
   [/\bmultiprocessing\b/, "multiprocessing"],
   [/\bPopen\b/, "Popen"],
 ];

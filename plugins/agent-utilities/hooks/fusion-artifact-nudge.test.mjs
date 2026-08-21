@@ -30,6 +30,15 @@ test("nudges on ordinary-modeling artifact smells outside the skill tree", () =>
         content: '{"kind": "verification", "fusion_document": "Pod"}',
       },
     },
+    // Edit carries its signal in new_string, not content.
+    {
+      tool_name: "Edit",
+      tool_input: {
+        file_path: "/repo/product/DESIGN-STATE.md",
+        old_string: "- Fusion document: Not recorded.",
+        new_string: "- Fusion document: White Coat - 12V Pod",
+      },
+    },
   ]) {
     const result = run(input);
     const p = input.tool_input.file_path;

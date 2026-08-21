@@ -295,7 +295,7 @@ Fusion supplies geometry, measurements, physical properties, and interference. C
 
 ### Handoff and persistent design state
 
-Before handoff, create or update `DESIGN-STATE.md` from `templates/DESIGN-STATE.md`: user intent and current variant, Fusion document identity and version, resolved sources and provisional measurements, parameter table, component/packing ledger, verification results, material and orientation, unsupported checks and required physical tests, decisions rejected and why, exact exports and hashes. Leave the Fusion document understandable without the agent: named parameters, named components, named features, source comments, and no mysterious one-off bodies.
+Before an evidence-bound lane handoff, create or update `DESIGN-STATE.md` from `templates/DESIGN-STATE.md` (an ordinary preview or interchange export creates no ledger — deliver the file and state it is not release-verified): user intent and current variant, Fusion document identity and version, resolved sources and provisional measurements, parameter table, component/packing ledger, verification results, material and orientation, unsupported checks and required physical tests, decisions rejected and why, exact exports and hashes. Leave the Fusion document understandable without the agent: named parameters, named components, named features, source comments, and no mysterious one-off bodies.
 
 ## 11. Automation, release, and reconstruction lanes
 
