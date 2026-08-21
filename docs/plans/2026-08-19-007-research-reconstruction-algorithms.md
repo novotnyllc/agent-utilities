@@ -1612,8 +1612,12 @@ closed per -002 §A.4 instead), flagged approximate exactly as §7.3 already
 flags its own inflation; the `joint_rms_growth` backstop is retained unconditionally
 in both modes. **Exact-fit branch, defined** (clean tessellations can
 yield `SSR_free` at numerical zero, making the F statistic 0/0 or a
-division by zero): when `SSR_free` falls below a declared numerical floor
-(machine-epsilon-scaled to the residual magnitude, `_declared_number`),
+division by zero): when `SSR_free` is **at or below** a declared numerical floor with a
+positive reference scale — `n · (ε_mach · extent)²`, squared units
+matching SSR, with extent the scaled-frame data extent
+(`_declared_number`; a floor scaled to a zero residual would itself be
+zero and the branch unreachable on exactly the clean fixtures it exists
+for),
 the F verdict is replaced deterministically — a constrained fit also
 below the floor accepts the relation (both fits exact; the relation costs
 nothing measurable), a constrained fit above it hands the verdict to the

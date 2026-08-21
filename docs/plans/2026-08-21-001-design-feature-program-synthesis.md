@@ -352,13 +352,18 @@ consulted; ties within a gate's declared tolerance proceed together:
    gate. Compared lexicographically within itself in declared order:
    unlicensed-duplicate parameter values (two independently fitted values a
    regularity class says should be one); repeated geometry not expressed as
-   a pattern/equality where its licence holds; **fallback-operation count**
-   (`slab-join` operations in the program — ranked ahead of raw feature
-   count precisely so a two-slab encoding can never beat `base-extrude +
-   two cuts` on having fewer timeline items: a licensed semantic
-   factorization that tied G1–G4 always beats the slab encoding it
-   replaces, which is the review's adopted competition rule and the
-   difference between compact and merely short); feature count; sketch
+   a pattern/equality where its licence holds; **unnecessary-fallback count**
+   — `slab-join` operations whose support some tied candidate factors into
+   licensed semantic operations **within the declared expansion budget**
+   (`semantic_factorization_max_expansion`, a declared multiple of the
+   fallback's operation count for that support, `experimental-default`
+   under the sweep rule): ranked ahead of raw feature count so a two-slab
+   encoding never beats `base-extrude + two cuts` on timeline length,
+   while a factored replacement so fragmented it exceeds the budget earns
+   no preference and falls through to feature count — the preference
+   rewards factorization, never fragmentation, in either direction. A
+   fallback no tied candidate factors within budget costs nothing here;
+   feature count; sketch
    count; redundant construction planes/geometry; unconstrained sketch
    degrees of freedom.
    This is the gate at which a base+pocket+pattern program beats the
