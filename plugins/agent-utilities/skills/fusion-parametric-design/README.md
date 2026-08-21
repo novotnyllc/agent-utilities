@@ -166,7 +166,7 @@ a closed label set. Every stage refuses rather than approximates, and
 ### An example, end to end
 
 `examples/electronics-enclosure/` holds a lane-managed manifest to walk the
-machinery: `validate` and `plan` it, emit and run inventory, parameter sync,
+machinery: `validate` it, then emit and run inventory, parameter sync,
 scaffold, and verification through the connected MCP, and read the delimited
 reports. The example verification fails while the scaffold components are
 empty — intentionally: existence is not a substitute for modeled geometry or
