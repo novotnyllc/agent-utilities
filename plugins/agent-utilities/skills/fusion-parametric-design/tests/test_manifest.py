@@ -50,6 +50,49 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one component owns one role"):
             Manifest(data).component_roles()
 
+    def test_validation_reports_the_same_cross_role_collision_emitters_refuse(self) -> None:
+        # One reference's authoring model used as another's packing model must
+        # fail at validate, not first at emit-scaffold via component_roles().
+        data = copy.deepcopy(self.data)
+        data["references"][1]["packing_component"] = data["references"][0]["authoring_component"]
+        issues = validate_manifest_data(data)
+        self.assertIn("contradictory-component-role", {issue.code for issue in issues})
+        with self.assertRaisesRegex(ValueError, "one component owns one role"):
+            Manifest(data).component_roles()
+
+    def test_explicit_component_roles_flow_into_the_derivation(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["component_tree"].append("Fixtures/Lid Print Cradle")
+        data["component_roles"] = {"Fixtures/Lid Print Cradle": "fixture"}
+        self.assertEqual([], validate_manifest_data(data))
+        self.assertEqual(
+            "fixture", Manifest.from_data(data).component_roles()["Fixtures/Lid Print Cradle"]
+        )
+
+    def test_explicit_component_roles_are_validated(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["component_roles"] = {"Product/Base": "spaceship"}
+        self.assertIn(
+            "unknown-component-role", {issue.code for issue in validate_manifest_data(data)}
+        )
+        data["component_roles"] = {"Product/Ghost": "product"}
+        self.assertIn(
+            "component-role-not-in-tree", {issue.code for issue in validate_manifest_data(data)}
+        )
+        # Contradicting a reference-derived role is refused.
+        data["component_roles"] = {"References/PD Trigger Envelope": "keepout"}
+        self.assertIn(
+            "contradictory-component-role", {issue.code for issue in validate_manifest_data(data)}
+        )
+        # printable_parts is a fallback fill, so a specific explicit role wins
+        # over it -- the same precedence that lets a printable coupon stay
+        # "validation" -- and restating the fallback is also fine.
+        data["component_roles"] = {"Product/Base": "product"}
+        self.assertEqual([], validate_manifest_data(data))
+        data["component_roles"] = {"Product/Base": "fixture"}
+        self.assertEqual([], validate_manifest_data(data))
+        self.assertEqual("fixture", Manifest.from_data(data).component_roles()["Product/Base"])
+
     def test_critical_source_parameter_requires_source(self) -> None:
         data = copy.deepcopy(self.data)
         data["parameters"][0].pop("source_id")

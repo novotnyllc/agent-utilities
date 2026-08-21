@@ -82,7 +82,10 @@ class FakeAttributes:
     def itemByName(self, group, name):
         if (group, name) not in self.values:
             return None
-        return SimpleNamespace(value=self.values[(group, name)])
+        return SimpleNamespace(
+            value=self.values[(group, name)],
+            deleteMe=lambda: self.values.pop((group, name), None) is not None,
+        )
 
     def add(self, group, name, value):
         self.values[(group, name)] = value
@@ -769,6 +772,29 @@ class ScaffoldRunTests(unittest.TestCase):
             self.assertEqual(
                 "true", component.attributes.itemByName(ATTRIBUTE_GROUP, "managed").value
             )
+
+    def test_scaffold_removes_a_role_the_manifest_no_longer_claims(self) -> None:
+        # A revision kept the path in component_tree but dropped its
+        # classification; the stale attribute must go, or inventory
+        # (attribute-first) keeps reporting the obsolete role.
+        manifest = load_manifest(EXAMPLE)
+        namespace = load_generated_script(emit_scaffold_script(manifest))
+        unclassified = next(
+            path for path in manifest.component_tree if path not in manifest.component_roles()
+        )
+        root = FakeComponent("Root")
+        root.occurrences = GrowableOccurrences([])
+        namespace["_ensure_component_path"](root, unclassified)
+        component = namespace["_find_child"](root, unclassified.split("/")[0]).component
+        component.attributes.add(ATTRIBUTE_GROUP, "role", "packing")
+
+        _, attribute_updates = namespace["_ensure_component_path"](root, unclassified)
+
+        self.assertIsNone(component.attributes.itemByName(ATTRIBUTE_GROUP, "role"))
+        self.assertIn(
+            {"component_path": unclassified.split("/")[0], "attributes": ["role-removed"]},
+            attribute_updates,
+        )
 
     def test_document_change_discloses_the_components_left_behind(self) -> None:
         manifest = load_manifest(EXAMPLE)

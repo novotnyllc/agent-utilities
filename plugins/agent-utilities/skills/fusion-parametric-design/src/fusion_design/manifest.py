@@ -189,22 +189,23 @@ class Manifest:
 
     def component_roles(self) -> dict[str, str]:
         """Component path -> semantic role, derived from the manifest blocks
-        that already own the classification: references (reference, packing,
-        keepout), material_decision (validation), printable_parts (product).
+        that already own the classification — references (reference, packing,
+        keepout), material_decision (validation) — plus the explicit
+        `component_roles` block for components no other block can own, such as
+        a reconstruction manifest's mesh reference.
 
         Browser names stay human; this derivation is what the scaffold writes
         into the `fusion_parametric_design` `role` attribute. A path claimed by
-        two different specific roles is a manifest contradiction: fail closed.
+        two different specific roles is a manifest contradiction: fail closed
+        (validate_manifest_data reports the same contradiction as an issue).
         A printable part may additionally be a validation coupon; the specific
         role (validation) wins and printable "product" fills only unclaimed
         paths.
         """
         roles: dict[str, str] = {}
-
-        def claim(raw_path: Any, role: str) -> None:
-            path = str(raw_path or "").strip()
-            if not path:
-                return
+        for path, role, _origin in _component_role_claims(self.data):
+            if role not in COMPONENT_ROLE_TOKENS:
+                raise ValueError(f"Component {path!r} declares unknown role {role!r}.")
             existing = roles.get(path)
             if existing is not None and existing != role:
                 raise ValueError(
@@ -212,15 +213,6 @@ class Manifest:
                     "one component owns one role."
                 )
             roles[path] = role
-
-        for reference in _as_list(self.data.get("references")):
-            if not isinstance(reference, dict):
-                continue
-            claim(reference.get("authoring_component"), "reference")
-            claim(reference.get("packing_component"), "packing")
-            for keepout in _as_list(reference.get("keepout_components")):
-                claim(keepout, "keepout")
-        claim(self.material_decision.get("coupon_component"), "validation")
         for part in self.printable_parts:
             if isinstance(part, dict):
                 path = str(part.get("path") or "").strip()
@@ -234,6 +226,43 @@ class Manifest:
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+# The closed set of semantic component roles the scaffold writes as the
+# `role` attribute in the `fusion_parametric_design` group.
+COMPONENT_ROLE_TOKENS = {"reference", "packing", "keepout", "product", "fixture", "validation"}
+
+
+def _component_role_claims(data: Any) -> list[tuple[str, str, str]]:
+    """Every (path, role, origin) a manifest claims about a component.
+
+    One walk shared by validate_manifest_data and Manifest.component_roles so
+    the validation gate and the emitters can never disagree about what counts
+    as a classification. printable_parts is deliberately absent: it is a
+    fallback fill for unclaimed paths, not a claim that can contradict one.
+    """
+    claims: list[tuple[str, str, str]] = []
+
+    def add(raw_path: Any, role: str, origin: str) -> None:
+        path = str(raw_path or "").strip()
+        if path:
+            claims.append((path, role, origin))
+
+    for index, reference in enumerate(_as_list(data.get("references"))):
+        if not isinstance(reference, dict):
+            continue
+        add(reference.get("authoring_component"), "reference", f"references[{index}].authoring_component")
+        add(reference.get("packing_component"), "packing", f"references[{index}].packing_component")
+        for keepout in _as_list(reference.get("keepout_components")):
+            add(keepout, "keepout", f"references[{index}].keepout_components")
+    decision = data.get("material_decision")
+    if isinstance(decision, dict):
+        add(decision.get("coupon_component"), "validation", "material_decision.coupon_component")
+    explicit = data.get("component_roles")
+    if isinstance(explicit, dict):
+        for path, role in explicit.items():
+            add(path, str(role), f"component_roles[{str(path)!r}]")
+    return claims
 
 
 def _duplicates(values: Iterable[str]) -> set[str]:
@@ -364,6 +393,7 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
             "sources",
             "parameters",
             "component_tree",
+            "component_roles",
             "references",
             "verification",
             "printable_parts",
@@ -922,6 +952,52 @@ def validate_manifest_data(data: Any) -> list[ValidationIssue]:
                 f"Packing component {duplicate!r} is claimed by more than one reference.",
             )
         )
+
+    # One component owns one role. component_roles() refuses a contradictory
+    # classification at emit time; the validation gate must refuse the same
+    # manifest here, so validate and the emitters never disagree.
+    raw_explicit_roles = data.get("component_roles")
+    if raw_explicit_roles is not None and not isinstance(raw_explicit_roles, dict):
+        issues.append(
+            ValidationIssue(
+                "component-roles-must-be-object",
+                "component_roles",
+                "component_roles must map component paths to role tokens.",
+            )
+        )
+    claimed_roles: dict[str, tuple[str, str]] = {}
+    for role_path, role, origin in _component_role_claims(data):
+        if origin.startswith("component_roles["):
+            if role not in COMPONENT_ROLE_TOKENS:
+                issues.append(
+                    ValidationIssue(
+                        "unknown-component-role",
+                        origin,
+                        f"Role must be one of {', '.join(sorted(COMPONENT_ROLE_TOKENS))}.",
+                    )
+                )
+                continue
+            if role_path not in component_path_set:
+                issues.append(
+                    ValidationIssue(
+                        "component-role-not-in-tree",
+                        origin,
+                        f"Component path {role_path!r} is not declared in component_tree.",
+                    )
+                )
+                continue
+        previous = claimed_roles.get(role_path)
+        if previous is not None and previous[0] != role:
+            issues.append(
+                ValidationIssue(
+                    "contradictory-component-role",
+                    origin,
+                    f"Component {role_path!r} is classified as both {previous[0]!r} (from {previous[1]}) "
+                    f"and {role!r}; one component owns one role.",
+                )
+            )
+            continue
+        claimed_roles[role_path] = (role, origin)
 
     verification = data.get("verification")
     if not isinstance(verification, dict):

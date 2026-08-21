@@ -57,6 +57,10 @@
     "Product",
     "Product/Honeycomb Rebuild"
   ],
+  "component_roles": {
+    "References/Honeycomb Mesh Reference": "reference",
+    "Product/Honeycomb Rebuild": "product"
+  },
   "references": [],
   "verification": {
     "required_components": [

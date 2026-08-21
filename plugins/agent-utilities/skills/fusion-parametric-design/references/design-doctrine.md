@@ -89,10 +89,13 @@ Synthesis, applied by this skill:
   only shouts.
 - Children are plain named: `PD Trigger Reference`, `PD Trigger Envelope`,
   `USB-C Insertion Keep-Out`, `Base`, `Lid`, `PD Fit Coupon`.
-- Roles (`reference`, `packing`, `keepout`, `product`, `validation`) are
-  derived from the manifest blocks that already own the classification and
-  written by the scaffold as the `role` attribute in
-  `fusion_parametric_design`. A name never encodes a role.
+- Roles (`reference`, `packing`, `keepout`, `product`, `fixture`,
+  `validation`) are derived from the manifest blocks that already own the
+  classification — with an explicit `component_roles` block for components no
+  other block can own — and written by the scaffold as the `role` attribute in
+  `fusion_parametric_design`, which also removes a role the current manifest
+  no longer claims. A name never encodes a role, and one component owns one
+  role: a contradictory classification is a validation error.
 - Adoption is by attribute or legacy name: an existing design keeps resolving
   because every lookup is by the manifest's own component paths, and inventory
   reads the `role` attribute first, recognizing the legacy

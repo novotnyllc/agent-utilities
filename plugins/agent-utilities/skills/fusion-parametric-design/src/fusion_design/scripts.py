@@ -719,8 +719,20 @@ def _ensure_component_path(root_component, path):
         if _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256):
             changed_attributes.append("manifest_sha256")
         role = COMPONENT_ROLES.get("/".join(current_parts))
-        if role and _ensure_component_attribute(occurrence.component, "role", role):
-            changed_attributes.append("role")
+        if role:
+            if _ensure_component_attribute(occurrence.component, "role", role):
+                changed_attributes.append("role")
+        else:
+            # A manifest revision that drops a path's classification must also
+            # retract the previously written role: inventory is attribute-first,
+            # so a stale attribute would keep reporting the obsolete role.
+            stale = occurrence.component.attributes.itemByName(ATTRIBUTE_GROUP, "role")
+            if stale:
+                if not stale.deleteMe():
+                    raise RuntimeError(
+                        "Fusion failed to remove the stale role attribute on " + "/".join(current_parts)
+                    )
+                changed_attributes.append("role-removed")
         if changed_attributes:
             attribute_updates.append({{
                 "component_path": "/".join(current_parts),
