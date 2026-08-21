@@ -1,0 +1,29 @@
+{
+  "description": "Two Claude-side mechanical nudges for the fusion-parametric-design doctrine: a blocking gate on the Fusion MCP execute tool (process-spawning constructs are always refused; oversized ad hoc scripts are refused unless they carry the shipped lane tooling's report-protocol signature), and a warn-only reminder when Write/Edit targets ordinary-modeling artifact smells (fusion-project.json, DESIGN-STATE.md, transactions/, verification reports) outside the skill's own tree. The doctrine text is the cross-harness authority; these hooks fail open on their own confusion.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*[Ff]usion.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/fusion-script-gate.js\"",
+            "commandWindows": "if (Get-Command node -ErrorAction SilentlyContinue) { node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\fusion-script-gate.js\" }",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/fusion-artifact-nudge.js\"",
+            "commandWindows": "if (Get-Command node -ErrorAction SilentlyContinue) { node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\fusion-artifact-nudge.js\" }",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

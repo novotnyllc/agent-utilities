@@ -357,33 +357,24 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("checkable B-Rep envelope", text)
         self.assertIn("Mesh-only automated clearance and interference", unsupported)
 
-    def test_capability_matrix_covers_every_public_nurb_command(self) -> None:
-        matrix = (SKILL_DIR / "references" / "capability-matrix.md").read_text(encoding="utf-8")
-        commands = [
-            "new",
-            "dev",
-            "build",
-            "check",
-            "inspect",
-            "scan",
-            "rules",
-            "api",
-            "skill",
-            "update",
-            "card",
-            "diff",
-            "slice",
-            "stress",
-            "verify",
-            "render",
-            "export",
-            "extract",
-            "launcher",
-        ]
-        for command in commands:
-            self.assertIn(f"`nurb {command}`", matrix, command)
-        self.assertIn("Variants", matrix)
-        self.assertIn("printer.toml", matrix)
+    def test_capability_status_is_organized_by_our_lanes(self) -> None:
+        # The status reference speaks in the skill's own operations and lanes,
+        # and keeps the load-bearing boundaries visible.
+        status = (SKILL_DIR / "references" / "capability-status.md").read_text(encoding="utf-8")
+        for heading in (
+            "## Ordinary modeling",
+            "## Automation lane",
+            "## Release lane",
+            "## Reconstruction lane",
+        ):
+            self.assertIn(heading, status, heading)
+        for requirement in (
+            "Variants",
+            "exit 139",
+            "Slicer-authoritative",
+            "never approximated",
+        ):
+            self.assertIn(requirement, status, requirement)
 
     def test_unsupported_reference_names_non_equivalent_workflows(self) -> None:
         unsupported = (SKILL_DIR / "references" / "unsupported.md").read_text(encoding="utf-8")
@@ -462,13 +453,13 @@ class SkillContractTests(unittest.TestCase):
     def test_mesh_reconstruction_doctrine_states_the_gate_and_the_api_boundary(self) -> None:
         doctrine = (SKILL_DIR / "references" / "mesh-reconstruction.md").read_text(encoding="utf-8")
         skill = SKILL.read_text(encoding="utf-8")
-        capability = (SKILL_DIR / "references" / "capability-matrix.md").read_text(encoding="utf-8")
+        capability = (SKILL_DIR / "references" / "capability-status.md").read_text(encoding="utf-8")
         unsupported = (SKILL_DIR / "references" / "unsupported.md").read_text(encoding="utf-8")
         for requirement in ("mesh-edit", "faceted-brep", "parametric-rebuild"):
             self.assertIn(requirement, doctrine, requirement)
         self.assertIn("Classify the edit before converting", skill)
         self.assertIn("references/mesh-reconstruction.md", skill)
-        for document, name in ((capability, "capability-matrix"), (unsupported, "unsupported")):
+        for document, name in ((capability, "capability-status"), (unsupported, "unsupported")):
             self.assertIn("Mesh Section Sketch", document, name)
             self.assertIn("Fit Curves", document, name)
             self.assertIn("UI-only", document, name)

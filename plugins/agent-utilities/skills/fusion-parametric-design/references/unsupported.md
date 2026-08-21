@@ -18,7 +18,7 @@ Use the live Fusion canvas, Parameters dialog, configurations, visibility/opacit
 
 **Status:** Not needed and not included.
 
-Fusion is already the long-lived interactive CAD host. Start Fusion normally, enable its MCP server, connect the agent, and keep one document open through the iteration. An operating-system launcher may automate those startup steps, but it would not reproduce Nurb's independent hot-reload viewer and is outside this package.
+Fusion is already the long-lived interactive CAD host. Start Fusion normally, enable its MCP server, connect the agent, and keep one document open through the iteration. An operating-system launcher may automate those startup steps, but it is outside this package: the live Fusion canvas is the viewer.
 
 ## Automatic skill update and synchronization
 

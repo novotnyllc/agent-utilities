@@ -2,7 +2,7 @@
 
 The skill is an expert Fusion operator: the agent operates Fusion through MCP the way a skilled human user operates it — correct Fusion project and file placement first, purchased parts sourced and cataloged as linked components, native features built and edited directly in small bounded operations, native Inspect tools for every measurement and interference question, and quick visual iteration with the user. Fusion is the sole geometry and validation authority; MCP is transport; the agent never writes its own validation framework.
 
-It also carries a Fusion-native adaptation of the strongest workflow disciplines in Nurb: research before geometry, explicit measurement provenance, editable parameters, reference and packing models, functional keep-outs, numerical inspection, assembly verification, print-aware handoff, and honest unsupported-capability boundaries.
+Its design disciplines: research before geometry, explicit measurement provenance, editable parameters, reference and packing models, functional keep-outs, numerical inspection, assembly verification, print-aware handoff, and honest unsupported-capability boundaries.
 
 The central architectural rule:
 
@@ -25,26 +25,15 @@ tests/
 docs/
 ```
 
-## What it preserves from the Nurb approach
+## How the disciplines land in Fusion
 
-- research and source provenance before fit-dependent design;
-- a distinction between visual observation and dimensional proof;
-- plain-language parameters;
-- scans and downloaded meshes treated as evidence rather than recovered design intent;
-- assemblies and obstacles checked together;
-- fit coupons for provisional geometry;
-- numerical checks and explicit handoff state;
-- print cost/safety claims separated from what the CAD kernel can actually prove.
-
-## What changes for Fusion
-
-- User parameters and feature expressions replace Python keyword defaults.
-- The Fusion timeline and component tree replace regenerated part functions.
-- Fusion attributes retain source and managed-entity metadata.
+- Research and source provenance come before fit-dependent design, and visual observation is distinct from dimensional proof.
+- User parameters and feature expressions carry every governing dimension; Fusion attributes retain source and managed-entity metadata.
 - Reference, packing, and keep-out components separate editable reference geometry, physical occupancy, and functional space; the browser names stay human and the role rides on a Fusion attribute.
-- Fusion's measurement and interference APIs provide packing evidence.
+- Scans and downloaded meshes are evidence, never recovered design intent; fit coupons settle provisional geometry.
+- Fusion's measurement and interference APIs provide packing evidence, with assemblies and obstacles checked together.
 - MCP scripts are discovered dynamically and used as short transactions.
-- Print analysis remains external where Fusion does not provide an equivalent; slicing is delegated to PrusaSlicer through an opt-in adapter that reports the G-code's own statistics.
+- Print analysis remains external where Fusion does not provide an equivalent; slicing is delegated to PrusaSlicer through an opt-in adapter that reports the G-code's own statistics, and print cost/safety claims stay separated from what the CAD kernel can actually prove.
 
 ## Install the host tooling
 
@@ -234,7 +223,7 @@ Use `docs/live-fusion-acceptance.md` for the exact positive and negative control
 
 The package intentionally does not pretend to supply:
 
-- a Nurb-style independent browser viewer with sliders;
+- an independent browser viewer with sliders;
 - a complete FDM wall/overhang/support checker;
 - slicer-independent time or filament estimates (the PrusaSlicer adapter reports what a real slice produced; nothing is estimated without one);
 - trustworthy one-button FDM load ratings;
@@ -248,6 +237,6 @@ The package intentionally does not pretend to supply:
 
 See `references/unsupported.md` for recommended fallbacks.
 
-## Attribution
+## Credit
 
-This is an independent implementation inspired by the publicly documented design workflow in [Shpigford/nurb](https://github.com/Shpigford/nurb). It does not include Nurb source code. See `THIRD_PARTY_NOTICES.md`.
+The skill's early direction drew inspiration from Josh Pigford's [nurb](https://github.com/Shpigford/nurb) — with thanks. See `THIRD_PARTY_NOTICES.md`.
