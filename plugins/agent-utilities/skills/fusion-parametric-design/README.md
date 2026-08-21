@@ -1,53 +1,103 @@
 # Fusion Parametric Design Skill
 
-The skill is an expert Fusion operator: the agent operates Fusion through MCP the way a skilled human user operates it — correct Fusion project and file placement first, purchased parts sourced and cataloged as linked components, native features built and edited directly in small bounded operations, native Inspect tools for every measurement and interference question, and quick visual iteration with the user. Fusion is the sole geometry and validation authority; MCP is transport; the agent never writes its own validation framework.
+The skill is an expert Fusion user operating Fusion through MCP. Fusion owns
+the model, feature history, geometry, inspection, and validation; MCP is
+transport carrying small bounded operations, each the equivalent of one
+skilled user action. The agent organizes real parts as reusable linked Fusion
+components, searches for existing manufacturer CAD, places files in the
+correct Fusion project, models directly with native features, asks Fusion for
+measurements and interference, and shows the user the result quickly. The
+agent never writes its own validation framework.
 
-Its design disciplines: research before geometry, explicit measurement provenance, editable parameters, reference and packing models, functional keep-outs, numerical inspection, assembly verification, print-aware handoff, and honest unsupported-capability boundaries.
+> **The Fusion document — not Python — is the product and the editable CAD
+> source of truth.**
 
-The central architectural rule:
+## The ordinary modeling loop
 
-> **The Fusion document—not generated Python—is the editable CAD source of truth.**
+Ordinary work — design this, model this, change this, fix this, make it look
+like this — is interactive Fusion operation, and it is the default lane:
 
-The host tooling below serves the skill's automation and release lanes — manifest-backed evidence, verification-bound exports, variant matrices, PrusaSlicer handoff, and mesh reconstruction. Python emitted by this package is limited to narrow, single-purpose transactions — inventory, parameter synchronization, component scaffolding, document save/reconnect, verification, mesh capture and reconstruction stages, export, and variant-plan steps — each bounded, report-emitting, and designed to refuse rather than improvise. Product geometry lives as ordinary Fusion sketches, constraints, features, components, joints, and configurations.
+- **Data placement first.** Hub, project, and file decided before geometry;
+  the working document is named and saved, never left `Untitled`. In this
+  lane, Fusion itself is the identity store — the saved document in the Data
+  Panel is the durable record.
+- **Purchased parts are sourced, not guessed.** Insert Fastener and native
+  part sources first, then manufacturer and distributor CAD, into a shared
+  linked-component catalog. Fidelity is fitness-for-purpose: a named
+  provisional envelope is a legitimate occupancy component, and sourcing never
+  delays the visible-result loop.
+- **Native features, built and edited directly.** Sketches, extrudes, lofts,
+  shells, fillets, holes, patterns, joints — small MCP operations, each one
+  visible edit. Joinery is decided and modeled, not proposed, with engineered
+  fastener-free joins (snap skirts, ring-snaps, dovetails) as a house
+  specialty and adhesive never a default. Wiring is real swept geometry with
+  recorded electrical metadata where it matters to the design.
+- **Native inspection only.** Measure, Interference, Section Analysis,
+  Properties, feature and timeline health — read directly, never wrapped in an
+  agent-authored layer. Assembled-fit validation is part of done.
+- **The screenshot heartbeat.** Progress is the user seeing the model:
+  a capture after every meaningful change, drafts in minutes, hard stop
+  conditions and a two-approach attempt budget, the user's judgment steering
+  every iteration.
+- **Zero artifacts.** Ordinary modeling creates no agent-authored persistent
+  host artifact anywhere — no manifests, scripts, reports, or state files.
+  The Fusion document and the conversation hold everything.
 
-Project-specific geometry transactions are intentionally created against the connected Fusion release and its current API documentation; the host CLI does not ship a generic sketch/extrude generator that would become a second CAD source of truth.
+The full operating rules are `SKILL.md`; the doctrine references beside it
+(`references/`) carry design method, data placement and cataloging, add-ins,
+material selection, wiring, and capability status.
 
-## Package contents
+## Connect Fusion MCP
+
+In Fusion, enable the local MCP server under `Preferences > General > API`.
+Autodesk currently documents the default endpoint as:
 
 ```text
-SKILL.md
-references/
-src/fusion_design/                 host-side manifest and script tooling
-schema/fusion-project.schema.json
-examples/electronics-enclosure/
-templates/DESIGN-STATE.md
-tests/
-docs/
+http://127.0.0.1:27182/mcp
 ```
 
-## How the disciplines land in Fusion
+If the harness does not already expose a usable Fusion MCP connection, use the
+external `roundhouse:mcp-shim` skill to register this endpoint. Install
+Roundhouse first only when that skill is absent. Keep Fusion open for live CAD
+operations and seed the shim's tool cache once with Fusion's MCP enabled.
 
-- Research and source provenance come before fit-dependent design, and visual observation is distinct from dimensional proof.
-- User parameters and feature expressions carry every governing dimension; Fusion attributes retain source and managed-entity metadata.
-- Reference, packing, and keep-out components separate editable reference geometry, physical occupancy, and functional space; the browser names stay human and the role rides on a Fusion attribute.
-- Scans and downloaded meshes are evidence, never recovered design intent; fit coupons settle provisional geometry.
-- Fusion's measurement and interference APIs provide packing evidence, with assemblies and obstacles checked together.
-- MCP scripts are discovered dynamically and used as short transactions.
-- Print analysis remains external where Fusion does not provide an equivalent; slicing is delegated to PrusaSlicer through an opt-in adapter that reports the G-code's own statistics, and print cost/safety claims stay separated from what the CAD kernel can actually prove.
+Do not encode current MCP tool names in the skill. Autodesk documents dynamic
+tooling, so the agent discovers the current schemas at connection time.
 
-## Install the host tooling
+Two Claude Code plugin hooks ship with the plugin as mechanical nudges — a
+gate on the Fusion execute tool (process-spawning constructs refused;
+oversized ad hoc scripts refused unless they carry the shipped lane tooling's
+report signature) and a warn-only reminder on ordinary-modeling artifact
+writes. They fail open; the doctrine is the cross-harness authority.
 
-Python 3.11 or later is required.
+## The conditional lanes: automation, release, reconstruction
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -e .
-```
+Everything below this line is lane tooling, activated only by an explicit
+request — a repeatable generator or batch run (automation), an evidence-bound
+manufacturing handoff (release), or rebuilding a scanned mesh as editable CAD
+(reconstruction). None of it runs for ordinary modeling or visual edits. A
+lane's machinery is fail-closed by design: manifests declare intent,
+generated transactions refuse rather than improvise, and every artifact binds
+to the evidence behind it.
 
-The self-contained `scripts/fusion-design` wrapper is the preferred entrypoint
-when this skill is installed as a plugin; it uses the bundled source tree and
-does not require an editable install.
+### The evidence contract
+
+A lane-managed project keeps `fusion-project.json` (validated against
+`schema/fusion-project.schema.json`) recording what geometry alone cannot
+explain — sources, provisional dimensions, clearances, forbidden
+interferences, the material decision, per-part manufacturing intent — and a
+`DESIGN-STATE.md` (from `templates/DESIGN-STATE.md`) as the handoff ledger.
+The manifest permits work; it does not create geometry, and the Fusion
+document stays editable without it.
+
+### The host CLI
+
+The companion `fusion-design` CLI validates the evidence contract, plans lane
+workflows, emits narrow single-purpose Fusion transactions — each bounded,
+report-emitting, and designed to refuse rather than improvise — and compares
+reports. The self-contained `scripts/fusion-design` wrapper runs from the
+installed plugin without any install; for development, Python 3.11+ and
+`python3 -m pip install -e .` also work.
 
 Available commands:
 
@@ -80,130 +130,44 @@ scripts/fusion-design prepare-module-bundle <package-dir> <entry-module> [--cach
 scripts/fusion-design emit-module-bootstrap <bundle.json> [-o bootstrap.py]
 ```
 
-The mesh commands implement the reconstruction gate in
-`references/mesh-reconstruction.md`: capture is read-only and re-verifies every
-declared source hash before emitting, and `emit-mesh-extract`,
-`emit-mesh-convert`, `emit-mesh-deviation` and `emit-mesh-rebuild` all refuse
-unless a recorded classification chose a path they implement, for that exact
-mesh source.
+Generated transactions print delimited JSON reports to stdout and tee them
+beside their inputs for transport-timeout recovery; the exact report protocol,
+module-bundle contract, and units boundary are in
+`references/mcp-adapter.md`. `emit-verification` mints a single-use nonce that
+`emit-export` requires, so an export binds only to a report produced by
+actually running the emitted verification — the full chain manifest →
+verification → export → PrusaSlicer project → slice is described in
+`references/verification-contract.md`.
 
-`fit-regions` takes no new flags, but its `--spec` declares one regime
-selector and seven more thresholds, each with a rationale like every other: `regime`
-(`auto` | `tessellation` | `scan`), `tessellation_sigma_over_extent` and
-`vertex_precision_rel` for the measurement regime and its noise floor;
-`min_normal_axis_eigengap` and `normal_sigma_theta_floor_deg` for taking a
-cylinder's axis from its facet normals rather than from two rings of vertices
-that cannot determine one; `min_cylinder_normal_directions_per_turn` for
-refusing a prism of planar walls whose corners happen to lie on the circle a
-cylinder would fit; `max_fillet_radius_rel_spread` for chaining a fragmented
-edge round into one fillet; and `boundary_circle_sigmas` for checking a bore
-against the circle its own group boundary traces. `record.regime` is the first
-thing to read: an exact tessellation and a scan need different noise floors, the
-record states which it decided and on what evidence, and `record.noise` names
-which of the two estimators `sigma` was taken from and why — on a tessellation
-the dihedral estimator is measuring facet turn angles rather than noise, so it
-is reported as the discretization scale instead of as the noise.
+### Release: verified export and slicing
 
-`emit-mesh-rebuild` sections the mesh dump the program was fitted from to derive
-its sketch profiles, and reads that dump only after its bytes hash to the
-program's recorded `dump_sha256`. `emit-mesh-editability` then proves the result
-is editable rather than asserting it: each parameter is perturbed, its declared
-observable (`volume`, `centroid` or `bbox`) must move, and the model must return
-within the declared epsilon on restore. `check-editability` is the gate — it
-cannot pass a report that asserts more than the run performed.
+`emit-export` re-measures each printable part against its passing verification
+report and fails closed on drift; `prusaslicer-project` turns the export index
+plus declared manufacturing intent into a real PrusaSlicer project, presets by
+identifier and never cloned, and `--slice` runs a real headless slice whose
+G-code statistics are reported as produced, never estimated. `plan-variants`
+drives a declared product family through per-variant verification with
+verified restoration.
 
-`emit-capability-probe` is the cheapest thing to run against a live Fusion: it
-creates nothing and starts no process. It records the embedded interpreter's
-`(python_version, abi, platform)` triple — pip's own `--python-version` /
-`--abi` / `--platform` flag values — its writable `sys.path` entries, which
-preview mesh and construction APIs exist, and, when a probe spec binds a body,
-that body's face-group histogram and whether a file written from Fusion's
-interpreter reads back. Nothing here is hardcoded, because Fusion auto-updates
-its Python and a stale tag fails as `ModuleNotFoundError`, which reads like "not
-installed".
+### Reconstruction: mesh → editable CAD
 
-`emit-mesh-face-groups` is the segmentation stage and runs before extraction. It
-sets `meshGenerateFaceGroupsMethodType` to `AccurateGenerateFaceGroupsType`
-explicitly, reads the value back off the input before adding the feature, and
-refuses if it did not stick — the default, Fast, was measured producing a solid
-Fusion reported healthy and 7.6% wrong on volume. The method is not a spec
-field, because the only other value is the one that is wrong. It reports the
-per-triangle grouping and each group's area, centroid, bounding box and
-planarity. `fit-regions` then fits each of those groups and refuses
-`face-groups-absent` on a dump extracted before this ran.
+The reconstruction lane rebuilds a scanned part as native feature history
+under an enforced classification gate, staged as capture → accurate
+face-group segmentation → extraction → fitting → planning → one data-driven
+rebuild transaction → a measured editability proof → a coverage account with
+a closed label set. Every stage refuses rather than approximates, and
+`references/mesh-reconstruction.md` is the sole normative contract.
+`docs/live-fusion-acceptance.md` carries the live acceptance procedure.
 
-`emit-mesh-extract` writes an indexed mesh dump — millimetre vertices, triangle
-indices, per-triangle face-group ids when Fusion has them — and reports the
-SHA-256 of the bytes it wrote, re-read from disk. The host reader re-hashes
-before it parses, so nothing downstream can describe content that was not the
-content measured. If Fusion cannot write the file, the same bytes come back
-chunked and base64-encoded over the report, each chunk carrying its own digest,
-under a declared size ceiling.
+### An example, end to end
 
-For reusable pure-Python helpers, prepare a content-addressed module bundle and
-send the verified emitted bootstrap through Fusion's Python-execution
-capability. The persistent cache is outside project repositories: on macOS it
-defaults to `~/Library/Caches/fusion-parametric-design/mcp-modules`, and on
-other POSIX systems to `$XDG_CACHE_HOME` or `~/.cache`. Set
-`FUSION_MCP_MODULE_CACHE` to an absolute path to override it. The cache requires
-POSIX owner/permission semantics and fails closed on native Windows. Bundles
-accept regular `.py` files only; install native or third-party dependencies in
-the host environment and pass only their results into Fusion.
-
-Generated transactions print one delimited JSON report to stdout. Preflight
-the Fusion execution capability with a unique sentinel and stop if the exact
-sentinel is absent; an empty success response is not execution proof.
-
-## Connect Fusion MCP
-
-In Fusion, enable the local MCP server under `Preferences > General > API`. Autodesk currently documents the default endpoint as:
-
-```text
-http://127.0.0.1:27182/mcp
-```
-
-If the harness does not already expose a usable Fusion MCP connection, use
-the external `roundhouse:mcp-shim` skill to register this endpoint. Install
-Roundhouse first only when that skill is absent. Keep Fusion open for live CAD
-operations and seed the shim's tool cache once with Fusion's MCP enabled.
-
-Do not encode current MCP tool names in the skill. Autodesk documents dynamic tooling, so the agent must discover the current schemas at connection time.
-
-## First workflow
-
-```bash
-./scripts/fusion-design validate examples/electronics-enclosure/fusion-project.json
-./scripts/fusion-design plan examples/electronics-enclosure/fusion-project.json
-./scripts/fusion-design emit-inventory examples/electronics-enclosure/fusion-project.json -o build/inventory.py
-./scripts/fusion-design emit-parameter-sync examples/electronics-enclosure/fusion-project.json -o build/sync-parameters.py
-./scripts/fusion-design emit-scaffold examples/electronics-enclosure/fusion-project.json -o build/scaffold.py
-./scripts/fusion-design emit-verification examples/electronics-enclosure/fusion-project.json -o build/verify.py
-cp templates/DESIGN-STATE.md DESIGN-STATE.md
-```
-
-Then, through the connected Fusion MCP:
-
-1. run `inventory.py` using the discovered Python-execution capability;
-2. save/version the document;
-3. run `sync-parameters.py`;
-4. run `scaffold.py`;
-5. create the native Fusion reference and product feature groups;
-6. run `verify.py` after the packing and product components contain geometry;
-7. capture the delimited JSON reports and viewport images.
-
-`emit-verification` prints a single-use nonce on stderr and embeds it in the script it emits. Keep it: `emit-export` requires that nonce, and only the report produced by running that script carries it, so an export cannot be bound to a report that never ran.
-
-The example verification script will initially fail because the scaffold components are empty. That is intentional: existence is not a substitute for modeled geometry or fit evidence.
-
-## Electronics packing model
-
-Each installed object has both:
-
-- an **editable authoring model** (role `reference`) for dimensions, datums, mounting holes, and connector centers;
-- an **exact or conservative packing model** (role `packing`) for occupancy, including a checkable B-Rep envelope for automated clash checks even when an exact mesh is also retained;
-- one or more **functional keep-outs** (role `keepout`) for cable departure, insertion, service, thermal, RF, acoustic, or tool space. A genuinely keep-out-free datum/reference must carry an explicit rationale instead of an empty omission.
-
-This directly addresses the common enclosure failure where a board fits but its plugs, wires, levers, fasteners, or removal path do not.
+`examples/electronics-enclosure/` holds a lane-managed manifest to walk the
+machinery: `validate` and `plan` it, emit and run inventory, parameter sync,
+scaffold, and verification through the connected MCP, and read the delimited
+reports. The example verification fails while the scaffold components are
+empty — intentionally: existence is not a substitute for modeled geometry or
+fit evidence. The modeling between those transactions is ordinary native
+Fusion work, exactly as in the default lane.
 
 ## Validation and tests
 
@@ -211,13 +175,13 @@ This directly addresses the common enclosure failure where a board fits but its 
 ./scripts/test.sh
 ```
 
-The helper sets the repository's `src/` layout explicitly, so it works from a
-fresh checkout before an editable install. After `python3 -m pip install -e .`,
-the same suite can also be run directly with `python3 -m unittest discover -s tests -v`.
-
-The host tooling is tested offline. The generated scripts are syntax-checked, but this package was not executed against a live Fusion MCP session in the build environment. Run the included example in a saved, disposable Fusion document first and adjust only where the connected Fusion release's dynamically discovered API contract differs.
-
-Use `docs/live-fusion-acceptance.md` for the exact positive and negative controls required before treating a connected Fusion release as validated.
+The suite runs offline against a stubbed API and covers the manifest
+contract, transaction emitters, reconstruction pipeline, and the plugin's
+Claude-side hooks; it works from a fresh checkout before any install. The
+generated scripts are syntax-checked offline, so run the included example in a
+saved, disposable Fusion document before treating a connected Fusion release
+as validated — `docs/live-fusion-acceptance.md` has the exact positive and
+negative controls.
 
 ## Important gaps
 
@@ -235,8 +199,11 @@ The package intentionally does not pretend to supply:
 - a duplicate approximation of the slicer's authoritative printer/material profile;
 - a bundled headless renderer and report compositor.
 
-See `references/unsupported.md` for recommended fallbacks.
+See `references/unsupported.md` for the fallbacks, and
+`references/capability-status.md` for the full status by lane.
 
 ## Credit
 
-The skill's early direction drew inspiration from Josh Pigford's [nurb](https://github.com/Shpigford/nurb) — with thanks. See `THIRD_PARTY_NOTICES.md`.
+The skill's early direction drew inspiration from Josh Pigford's
+[nurb](https://github.com/Shpigford/nurb) — with thanks. See
+`THIRD_PARTY_NOTICES.md`.
