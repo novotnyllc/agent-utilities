@@ -159,7 +159,12 @@ other's streams. Additional rules, each of which has bitten someone:
 
 σ is the foundation: it sizes neighbourhoods (§4), the RANSAC band ε (§5.5),
 the unclaimed threshold (§6), the covariance scale (§7), and every statistical
-test (§8, §10). Two independent estimators, cross-checked.
+test (§8, §10). Two independent estimators, cross-checked. **[Scoped
+2026-08-21, Amendment §2: σ̂ here is the *local point-jitter* scale, and it
+legitimately sizes the local consumers (neighbourhoods, ε). Form error,
+spatial correlation structure, held-out independence, and parameter
+covariance are distinct estimands with their own estimators — design -002
+§A.4/§B.1. No single scalar automatically calibrates every consumer.]**
 
 ### 3.1 Estimator A — local-plane residual (primary)
 
@@ -1140,6 +1145,12 @@ The split is deterministic (octree is deterministic; parity is arithmetic).
 
 ### 10.4 Nested-kind parsimony — which primitive kind wins
 
+**[Superseded 2026-08-21, Amendment §1: these are singular/boundary limits,
+not regular nests — the F statistic below is replaced by spatially blocked
+held-out comparison and/or a parametric bootstrap under the simpler kind.
+The parsimony *principle*, the Jaccard trigger, and the demotion vocabulary
+stand.]**
+
 The kinds nest: cylinder ⊂ cone (ω = 0), cylinder ⊂ torus (R → ∞),
 sphere ⊂ torus (R = 0). When both a simpler and a richer kind survive the
 gates on essentially the same point set (inlier Jaccard ≥ 0.8), the richer
@@ -1222,6 +1233,10 @@ biting. `ponytail:` tuples first, arrays when measured.
 point noise up to σ ≈ ℓ_med (noise comparable to the triangle edge length),
 and resolves features down to ~10 σ; the contested case σ = 0.05 mm on
 ℓ = 0.5 mm triangles is handled with an order of magnitude of margin.**
+**[Conditioned 2026-08-21, Amendment §2: the ~10σ floor is the
+iid-point-noise regime bound its derivation actually supports — it is not a
+universal identifiability law. Resolution reporting is the measured
+detector power conditional on regime.]**
 
 Reasoning, stage by stage at the contested case:
 
@@ -1520,3 +1535,84 @@ section→sketch→feature workflow), was abandoned and never granted):
   fit-validate-refuse loop as the disproof gates here and in plan 005 —
   cited so a future reader knows the architecture matches the current
   frontier rather than being invented ad hoc.
+
+---
+
+## Amendment — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (finding
+4; adoptions 6–7; abandonments 3–4). Markers were placed at §3, §10.4 and
+§12.1; this section carries the substance. Everything else in this document
+stands — in particular §8.4's relation-rollback F test is examined and
+retained (§1 below), and §7.3's AR(1) inflation was already flagged
+approximate and already superseded-when-a-record-exists by design -002
+§A.4/§B.1.*
+
+### §1 Nested-kind model selection without the singular F test (adoption 7)
+
+§10.4 treated cylinder ⊂ cone (ω = 0), cylinder ⊂ torus (R → ∞), and
+sphere ⊂ torus (R = 0) as ordinary nested models. They are not: R → ∞ is a
+singular limit (the parameter leaves the space; R confounds with axis
+position — this document's own §7.1/§12.3 says so), and ω = 0 places the
+parameter on a boundary where identifiability changes. The classical
+finite-sample F distribution is not licensed merely by writing one model as
+a limiting case of another. §10.4's statistic is replaced by, in precedence
+order:
+
+1. **Spatially blocked held-out predictive comparison** — the §10.3
+   machinery, applied to the pair: fit both kinds on the same non-validation
+   blocks (block scale from the -002 correlation record's held-out
+   derivation where it exists, the ≈ 8 ℓ_med default otherwise), compare
+   held-out RMS; the richer kind is kept only when its held-out advantage
+   exceeds a declared margin (`nested_kind_heldout_margin`,
+   `experimental-default` under -002 §B.2).
+2. **Parametric bootstrap under the simpler kind** where held-out support is
+   too thin to be decisive: simulate replicates from the fitted simpler
+   model plus the measured scan-error model (correlation record's noise
+   structure, not iid), fit both kinds to each replicate, and compare the
+   observed richer-kind improvement against the simulated null
+   distribution. Replicate count and seed discipline per KTD-8; blocks per
+   -002 §A.4.
+
+The verdict is recorded as **model-selection evidence** (`nested-kind
+comparison`, with both scores, the margin, and the method used) — never as
+an exact classical p-value whose assumptions are unverified. The §5.8
+covariance-triggered demotions (`torus-demoted-cylinder`, `-sphere`,
+`cone-unidentifiable`) are unchanged — they fire on identifiability, which
+is precisely where they belong. **§8.4's per-member rollback F test
+stands**: adopting a relation constrains parameters in the *interior* of
+one model's space (a regular nest), so its F interpretation is not subject
+to this finding; its known calibration softness under correlated residuals
+was already guarded by the `joint_rms_growth` backstop and is further
+served by the -002 §B.1 covariance derivation.
+
+### §2 σ scoped; resolution claims made regime-conditional (adoption 6; abandonment 4)
+
+- σ̂ (§3) remains the local point-jitter scale and keeps its local
+  consumers. The claim it loses is universality: form error (the -002
+  σ_form lane), spatial correlation structure (-002 §A.4's frozen record),
+  held-out independence, and parameter covariance are consumer-specific
+  estimands; §7.3's global n/n_eff inflation is the fallback when no
+  correlation record exists, exactly as -002 §A.4 already provides.
+- The "~10σ" feature-resolution floor (§12.1) is retained as what its
+  derivation supports — a distance-band separability bound under iid point
+  noise — and abandoned as a universal claim. Identifiability depends on
+  support area, sampling density, feature geometry, direction, spatial
+  correlation, repeated evidence, and prior structure. The reported number
+  is the **measured detector power in the relevant regime**: per feature
+  family, from the detector's own accept/refuse behaviour on fixtures with
+  known ground truth (the -002 §B.2 sweep fixtures serve double duty), and
+  the record reports that conditional power beside σ̂ rather than a single
+  10σ̂ line. A caller-facing floor derived from iid arithmetic on a
+  correlated scan is exactly the substitution this corpus refuses
+  elsewhere.
+
+### §3 Threshold defaults under the sweep rule
+
+This document's declared defaults that change acceptance topology
+(`moran_z_max`, `heldout_ratio_max`, the §10.1 span floors,
+`min_feature_size`/`min_resolvable_surface_scale`, the nested-kind margin
+above) carry the `experimental-default` label under design -002 §B.2's
+protocol until swept; the sweep record then backs them. The rename
+`min_feature_size` → `min_resolvable_surface_scale` (registered in the
+2026-08-20 review file §3) rides the first PR that touches the spec schema.

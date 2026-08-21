@@ -150,7 +150,10 @@ Why this is the honest number and the two existing numbers are not:
 
 ### 1.2 Vocabulary score (V)
 
-**Features recognized by kind ÷ features evident, per part.**
+**Features recognized by kind ÷ features evident, per part.** **[Amended
+2026-08-21, §7.2: V is a precision/recall pair — the ratio above is the
+recall half; feature precision (correct recovered ÷ all emitted) is reported
+beside it and never collapsed into one number.]**
 
 - Where STEP/F3D ground truth exists (honeycomb, unicorn horn): the denominator
   is the ground-truth census (the manifest's `feature_kinds` for the F3D; the
@@ -170,6 +173,11 @@ Why this is the honest number and the two existing numbers are not:
   **negative** entry, listed by name.
 
 ### 1.3 Editability (E)
+
+**[Amended 2026-08-21, §7.3: proving a parameter drives *something* is a
+liveness smoke test, not the scored proof — E's proof standard is now the
+local-causal influence map; volume/centroid/bbox observables are demoted to
+smoke tests.]**
 
 **Parameters proven to drive ÷ parameters emitted**, under the U5 perturbation
 standard exactly as declared (plan 005 R11; design 006 E10/D7): per parameter —
@@ -294,6 +302,10 @@ as unmeasured, never assumed zero — and the exact-zero target binds per
 stage as each record arrives.
 
 ### 1.6 No scalar; a headline ordering
+
+**[Amended 2026-08-21, §7.1: the vector gains a sixth scored cell, P
+(program quality); the ranking order becomes RC, V (precision/recall pair),
+E (causal), P, C, with H the guardrail.]**
 
 A single weighted scalar would let a vocabulary win paper over a silent-area
 regression. The scoreboard is the vector. For ranking work, cells are ordered:
@@ -663,3 +675,98 @@ Source: `docs/reviews/2026-08-20-oracle-design-review.md` (findings 4, 11.1,
   one. The `unclaimed_components` population is renamed
   `unclaimed-surface-component` at its next schema touch (design -002 §A.7)
   to end the collision with Fusion/physical components.
+
+---
+
+## 7. Amendment — deep-research reconciliation incorporation (2026-08-21)
+
+Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (finding 6;
+adoptions 3, 4, 5; abandonment 6). §1.2, §1.3 and §1.6 carry in-place
+markers pointing here. Per the canonical order (review file §3, step 5),
+**these cells land before any emitter is optimized** — metrics create the
+optimizer, and adding P/precision/causal-E after code has been tuned against
+the five-cell vector repeats the non-vacuity failure in slow motion.
+
+### 7.1 P — program quality (new scored cell)
+
+An eighty-feature slab-and-primitive timeline and a twelve-feature
+human-quality timeline can tie on RC, kind recall, parameter liveness,
+component count, and zero silent area. P is what separates them. Measured
+per part, from the program and selection records alone:
+
+- feature count; sketch count; parameter count;
+- fully constrained sketch rate (constrained DOF ÷ total sketch DOF);
+- redundant/duplicated dimensional variables (independently represented
+  values whose regularity class licenses one shared parameter);
+- repeated geometry represented independently rather than by
+  equality/pattern where the pattern licence held;
+- feature dependency depth; unnecessary construction geometry count;
+- where CAD ground truth exists: program-size ratio against the reference
+  timeline, and feature-graph similarity.
+
+P is reported as this census, never collapsed to a scalar (§1.6's rule).
+It is the same census the FHG selection objective's compactness gate G5
+optimizes (design 2026-08-21-001 §6) — deliberately, so the system cannot
+be optimized against one definition and measured against another. Ranking
+position: after E, before C (§1.6 marker). H remains the guardrail over
+all.
+
+### 7.2 V grows feature precision
+
+    feature recall    = correct recovered feature instances ÷ ground-truth (or evident-table) instances
+    feature precision = correct recovered feature instances ÷ all emitted feature instances
+
+Recall alone is gameable by over-emission: a system that finds the five
+real holes and hallucinates six more keeps perfect recall. V is the pair,
+reported as a pair. "Correct" is judged against ground truth where it
+exists and the human-reviewed evident-features table otherwise (the §1.2
+denominator discipline, unchanged — including `unmeasured` where no table
+exists); the §1.4 circularity rule applies to precision's numerator
+verbatim: the detector never authors the table it is scored against. Also
+carried per part where ground truth allows: operation-family accuracy,
+Boolean-polarity accuracy, and dependency-graph agreement — the review's
+list, adopted as reported diagnostics under V.
+
+### 7.3 E upgraded to local-causal influence maps
+
+A parameter is not proven because *something* changed: a hole-diameter
+parameter that scales the whole body moves volume and bbox beautifully; a
+symmetric pair-spacing edit leaves the centroid fixed; a shared station
+parameter can drive six unrelated slabs. The scored standard becomes, per
+parameter:
+
+1. **Expected influence set**, authored from the program's own dependency
+   edges (the FHG knows which support each parameter should move — design
+   2026-08-21-001 §8): the regions expected to move, with direction and
+   magnitude class; the regions expected NOT to move; the local observable
+   (local radius, local signed-distance field over the target region's
+   triangles).
+2. **Perturb, recompute, and verify**: the intended support moved in the
+   expected direction/magnitude; **non-target support stayed invariant
+   within declared tolerance**; constraints and feature health stayed
+   valid; restore reproduced the baseline (the existing D7 loop,
+   unchanged as mechanics).
+3. **Interaction cases**: coupled parameters (shared stations, equality
+   classes, expressions over two parameters) get declared pairwise
+   perturbation cases; `interactions_exercised` stops being a permanent
+   `false` — it reports the exercised fraction of declared interaction
+   cases.
+
+Global observables (volume/centroid/bbox) are retained as cheap smoke
+tests and may still gate early (`parameter-inert` keeps its meaning), but
+they are never the scored proof: E's numerator counts parameters passing
+the influence-map standard. Until influence-map reports exist, E rows read
+`unmeasured (causal)` beside any legacy global-observable count — the two
+standards are never conflated in one number (the §1.1 "identical values
+never reported across different gates" rule, applied to E).
+
+### 7.4 Tokens and artifacts
+
+New closed-set additions: `parameter-nontarget-moved` (the non-target
+invariance failure, distinct from `parameter-inert`), `influence-map-absent`
+(a parameter emitted without an expected influence set — a program defect,
+not a proof gap). The editability spec schema gains the influence-set
+fields; the selection record (design 2026-08-21-001) is a scoreboard input
+artifact. §4 Run A's procedure gains: author influence maps from the
+selection record rather than hand-written observables where the program
+carries FHG provenance.

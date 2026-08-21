@@ -51,7 +51,7 @@ None of these blocks the architecture; each selects between two designed outcome
 - **P1 — `faceGroups` semantics and quality (downgraded to candidate input).** The property exists (V3) but `MeshFaceGroup`/`MeshFaceGroups` members could not be inspected without a mesh body loaded — inconclusive. Segmentation stays ours regardless (it is load-bearing for per-region convert); if the probe shows `faceGroups` carries meaningful groups on imported meshes, they become a cheap *candidate partition* checked against our own — agreement statistic recorded, exactly the KTD4 discipline from 005. Probe (same session as P2b): group histogram on an imported STL, generate groups where absent, compare boundaries against measured dihedral creases.
 - **P3 — `calculateCollisionsWithRay` semantics.** Existence verified (V4); unknown: return shape (hit points? count?), behaviour on grazing/coplanar hits and on open meshes. Probe: cast against a known closed mesh and a deliberately holed copy. Inside/outside by hit parity is only claimed when `isClosed` is true — an open mesh refuses the containment question, as today.
 - **P4 — `measureManager` accepts transient geometry.** Distances/angles between fitted transient surfaces and curves, not just design entities. Probe: `measureMinimumDistance` between two transient cylinders. Fallback is trivial (the closed-form distance between fitted parameters — a few lines, not a module).
-- **P5 — a route from `NurbsSurface` to a held body.** `BRepBodyDefinition` (or similar) accepting V1's surfaces to produce a body a base feature can hold. Probe: construct one patch, attempt the round trip. Only the optional "surfaced remainder" outcome depends on this.
+- **P5 — deleted (2026-08-21).** The probe existed only to serve the "surfaced remainder" outcome, which is deleted by Amendment B (it required a base feature, which the codebase bans — review B1). No probe remains; nothing conditions on it.
 - **P6 — loft/sweep recompute under parameter and section edits** (009's C5–C7, unchanged). First loft/sweep emission run settles them.
 - **P7 — in-document trial geometry is cheap and cleanly deletable.** The in-Fusion fitting loop creates trial sketches/splines/features and deletes them; probe that `deleteMe` on a trial sketch leaves no timeline residue and that a scratch sketch in a scratch component does not pollute undo beyond one group. Fallback: trial curves via transient `NurbsCurve3D` evaluators (V2) where a real sketch is not needed.
 
@@ -63,7 +63,7 @@ The inventory the pivot was asked for. "Delete" means delete — no fallback ret
 | --- | --- | --- | --- |
 | Linear algebra | `_jacobi_eigen`, `_symmetric_eigen`, `_solve` (Gauss–Jordan), `_covariance`, n×n Jacobi router extension (`mesh_fitting.py:165–257` and callers) | `numpy.linalg.eigh`, `lstsq`, vectorized covariance (V11) | **Delete.** Every call site becomes a numpy one-liner. |
 | Per-triangle bulk work (normals, areas, adjacency, dihedrals, noise floor) | tight CPython loops across `mesh_segmentation.py` | numpy vectorization over `nodeCoordinatesAsDouble` / `triangleNodeIndices` / `normalVectors` (V9, V11) | **Delete the loops.** Same math, ~20× less code, ~50× faster. Fusion even supplies the normals; we recompute area-weighted ones only if the probe shows `normalVectors` disagrees with winding. |
-| Spatial grid index | `_Topology` grid (`mesh_segmentation.py:786`) | numpy broadcasting for neighbourhoods at our mesh sizes | **Delete.** |
+| Spatial grid index | `_Topology` grid (`mesh_segmentation.py:786`) | a bounded-memory numpy neighbourhood strategy — hashed voxel/grid cells built by numpy sorting (or Morton-coded cells), blockwise distance evaluation after spatial binning; **never** literal broadcast pairwise distances, whose O(N²) intermediate is infeasible at the 10⁶-triangle target (Amendment B) | **Replace, not delete-to-broadcasting.** The hand-rolled CPython grid still goes; its replacement states its data structure, memory bound, and target size before the old one is removed. |
 | Segmentation | crease region-growing + Potts ICM refinement (`mesh_segmentation.py:1632–1723`) | none reliable at scale — `faceGroups` provenance/quality unverified (P1), prismatic convert degrades with triangle count | **Keep, numpy-ified.** Load-bearing twice: it produces the regions the gates judge, and it partitions the mesh so prismatic convert can be invoked per small coherent patch instead of per 2M-triangle body. The hand loops and hand linalg inside it are still deleted. |
 | Primitive fitting | Efficient-RANSAC engine + exact fitters: candidate constructors, sampling, miss-probability schedule (`mesh_segmentation.py:1166–1636`) | **prismatic Convert Mesh per region** (V12, P2a/P2b) as an *accelerator*: read `face.geometry` (`Plane`/`Cylinder`/`Cone`/`Sphere`/`Torus`) as candidate fits where convert succeeds on a patch | **Keep the engine — it is the workhorse at scale**, rewritten on numpy (hand Jacobi/Gauss–Jordan and the CPython scoring loops deleted). Converted faces enter as candidates with provenance `fusion-convert`; native fits carry `native-fit`; **both pass the same disproof gates** — a converted face that fails support span, residual structure, or held-out is rejected exactly as ours would be. Where both sources fit one region: agreement is recorded corroboration, disagreement beyond the uncertainty is surfaced (`fit-source-conflict`), never silently resolved by preferring either. |
 | Primitive refinement | hand LM over JᵀJ, axis search | `numpy.linalg.lstsq`/`eigh`; Gauss–Newton in a few lines where a fit is nonlinear | **Delete**, rewrite small. |
@@ -107,7 +107,7 @@ The design's position on `MeshConvertFeatures` (V12), stated precisely, because 
 2. **Same gates, both sources.** Every converted face is audited against the anchor mesh exactly as a native fit would be. Failing faces are rejected with the same named reasons; the region falls through to the native path.
 3. **Comparison where both fit.** Agreement within uncertainty is recorded corroboration; disagreement beyond it is `fit-source-conflict`, surfaced in the fit record, never resolved by silent preference.
 4. **Provenance with a size predictor.** Every accepted fit records `fusion-convert` or `native-fit` plus the region's triangle count, so the reliability boundary is learned from evidence across runs rather than rediscovered per part.
-5. **Fallible by default.** Named refusals: `convert-unavailable` (P2a entitlement), `convert-failed` (operation error or give-up), `convert-timeout` (declared wall-clock budget per region), `convert-rejected` (faces failed the gates — with the counts). None of these stops the pipeline; all route the region to the native path, recorded.
+5. **Fallible by default.** Named refusals: `convert-unavailable` (P2a entitlement), `convert-failed` (operation error or give-up), `convert-budget-exceeded` (the region exceeds the **pre-call** triangle/complexity budget derived from measured conversion behaviour — replaces `convert-timeout`, which promised a preemption a synchronous `add()` cannot deliver; Amendment B), `convert-rejected` (faces failed the gates — with the counts). Every convert call additionally records **post-call elapsed-time telemetry** keyed by triangle count, which is the data the pre-call budget is re-derived from. None of these stops the pipeline; all route the region to the native path, recorded.
 
 # The revised execution model
 
@@ -117,7 +117,7 @@ The design's position on `MeshConvertFeatures` (V12), stated precisely, because 
 2. `anchor` — canonicalize the bound mesh (vertices, triangles, group ids, units, transform) from `nodeCoordinatesAsDouble`, hash it, write the dump into the session evidence directory. The dump no longer transports anything; it is the **evidence anchor** the whole chain binds to.
 3. `segment-fit` — noise gate, our segmentation (with `faceGroups` as a checked candidate partition, P1), then per region: prismatic convert where entitled and within budget (candidates with provenance `fusion-convert`), the native RANSAC/exact-fit path (provenance `native-fit`), the disproof gates over both, source comparison, router verdicts on disclaimed regions. Produces the fit record.
 4. `frame-relate` — datum frame, relationship proposals. Produces frame + proposal records.
-5. `plan` — archetype planning into the reconstruction program (unchanged artifact, unchanged validator).
+5. `plan` — feature-program synthesis: FHG construction over the fit/frame/relationship records and bounded program selection per `docs/plans/2026-08-21-001-design-feature-program-synthesis.md`, producing the reconstruction program plus the selection record (winning program, losing candidates' gate vectors). Same artifact discipline, same validator family. *(Was: deterministic archetype planning — superseded by Amendment B.)*
 6. **— review pause —** the program and records are on disk; the agent (and user) read them before anything mutates. This gap is deliberate and survives from the old architecture: fit and emit are separate invocations with a human-readable, hash-bound artifact between them.
 7. `emit` — re-derive the anchor hash from the live mesh (refuse `dump-hash-mismatch`), then planes → parameters → sketches → constraints → dimensions → features in program order, with the D3/D8 ladder, rollback, and replan loop — now in-session: a loft deviation iteration is a function call, not a host round-trip, so 009's "minutes per iteration" loop becomes seconds.
 8. `prove` — the perturbation proof, unchanged in substance.
@@ -136,7 +136,7 @@ The design's position on `MeshConvertFeatures` (V12), stated precisely, because 
 - Refusals are still total: a failed emission rolls back and produces no geometry; `replan-without` / `replan-with-sections` remain explicit recorded commands.
 - Every stage record cites the probe record for the Fusion version it ran under.
 
-**Main-thread honesty and the scaling story:** everything here runs on Fusion's UI thread; `adsk.doEvents()` is pumped between stages as today. 007's pure-Python budget was 2–6 minutes at 200k vertices; numpy changes that in our favour, and the estimates below are stated so the first live benchmark can falsify them rather than a vague "fast" surviving unmeasured. Vectorized per-triangle stages (normals, adjacency, dihedrals, noise floor): **sub-second at 200k triangles, a few seconds at 2M**. RANSAC with vectorized inlier scoring plus the disproof gates: **seconds at 200k, tens of seconds at 500k, low minutes at 2M** — dominated by the superlinear pieces (fit-driven splitting, ICM sweeps), which is where the practical ceiling sits. **Expected ceiling: ~2M triangles** on the UI thread with event pumping; the **triangle budget stays** and refuses above the declared limit — its rationale is now three-fold: the superlinear tail, the noise-not-information argument (unchanged from 005 R2), and UI-thread occupancy. Per-region convert calls carry their own declared `convert-timeout` so one large region cannot stall the stage.
+**Main-thread honesty and the scaling story:** everything here runs on Fusion's UI thread; `adsk.doEvents()` is pumped between stages as today. 007's pure-Python budget was 2–6 minutes at 200k vertices; numpy changes that in our favour, and the estimates below are stated so the first live benchmark can falsify them rather than a vague "fast" surviving unmeasured. Vectorized per-triangle stages (normals, adjacency, dihedrals, noise floor): **sub-second at 200k triangles, a few seconds at 2M**. RANSAC with vectorized inlier scoring plus the disproof gates: **seconds at 200k, tens of seconds at 500k, low minutes at 2M** — dominated by the superlinear pieces (fit-driven splitting, ICM sweeps), which is where the practical ceiling sits. **Expected ceiling: ~2M triangles** on the UI thread with event pumping; the **triangle budget stays** and refuses above the declared limit — its rationale is now three-fold: the superlinear tail, the noise-not-information argument (unchanged from 005 R2), and UI-thread occupancy. Per-region convert calls are bounded **before** the call by the declared pre-call complexity budget (`convert-budget-exceeded`) so one large region cannot stall the stage, and their elapsed time is recorded after the fact — a synchronous `add()` cannot be preempted mid-flight, so no wall-clock "timeout" is claimed (Amendment B).
 
 # Verification model
 
@@ -155,7 +155,7 @@ Per the user's direction, offline coverage is a non-requirement and does not sha
 
 # Freeform, reconsidered
 
-V1/V2 falsify 009's API-side claim: Fusion **can hold** constructed NURBS curves and (pending P5's body route) NURBS surfaces. What V1 does **not** change is the distinction 009 got right, restated precisely because it must not blur:
+V1/V2 falsify 009's API-side claim: Fusion **can hold** constructed NURBS curves and surfaces. What V1 does **not** change is the distinction 009 got right, restated precisely because it must not blur:
 
 - A surface Fusion can **hold** is geometry in the document: visible, exportable, usable by CAM, measurable. If it arrives through a base feature it recomputes without responding to any parameter — it is frozen the moment it is born.
 - A feature the user can **edit with a dimension** is one whose driving values are user parameters or live sketch geometry, provable by the perturbation loop. No constructed NURBS patch is that, on any API path that exists: no dimension drives a control point, and `U5` has nothing to perturb.
@@ -163,7 +163,7 @@ V1/V2 falsify 009's API-side claim: Fusion **can hold** constructed NURBS curves
 What genuinely changes:
 
 1. **The editable-freeform ladder (009 rungs 1–3) gets stronger, not different.** Fitted splines are now a measured quantity (V10: degree-5 rational, interpolating, movable fit points) driven live by the in-Fusion loop; loft/sweep/ruled are verified-present features (V5); the loft refinement loop is in-session and fast. "Editable" continues to mean exactly what 009's honesty table says per rung, and that table stands.
-2. **A new, optional, clearly-labelled outcome: the surfaced remainder.** On P5 success, regions the ladder cannot claim may be fitted (numpy tensor-product least squares is now feasible for regions with a trivial parameterization — height-field or four-sided; arbitrary-region parameterization still needs sparse solvers we do not have) and delivered as smooth **reference surfaces** in a base feature, explicitly labelled non-parametric, counted in a separate `surfaced_nonparametric` bucket that is **never** added to `covered_area_fraction`. This is strictly better reference geometry than a faceted mesh for downstream manufacturing, and strictly not reconstruction. If P5 fails, the remainder stays reference mesh, as today.
+2. **The rung-5 outcome (rewritten 2026-08-21, Amendment B; was "the surfaced remainder", deleted).** Regions the editable ladder cannot claim **stay reference mesh and are counted unreconstructed**, with their gates named. The earlier draft's surfaced-remainder outcome — NURBS reference surfaces delivered in a base feature, "explicitly labelled non-parametric" — is deleted entirely: base features are banned by this codebase (005 R9, and the hard-constraint statement bans them outright), the label did not cure the violation, and a patch quilt carries no design intent anyway (review B1/abandonment 1). There is no product value in violating the central no-history-free-B-Rep rule to make the visual result look more complete.
 3. **`ruledSurfaceFeatures` remains folded into loft** (009 rung 4's YAGNI holds — a ruled transition is a two-section loft).
 
 The over-claim boundary in one sentence, for the doctrine: *we emit editable features where a dimension can drive them, we hold labelled reference surfaces where it cannot, and the report never lets one count as the other.*
@@ -180,7 +180,7 @@ The over-claim boundary in one sentence, for the doctrine: *we emit editable fea
 | **M3** | `frame-relate` + `plan` in-Fusion (mostly a move: numpy trims to `mesh_datum`, program untouched). Transport deleted: `mesh_dump`/`mesh_extract` shrink to the anchor writer. | ~1,100 — transport, base64 fallback, host readers | Full fit→program path native; review pause works on the evidence dir. |
 | **M4** | `emit` + `prove` as in-Fusion modules: planner and executor merge, generation layer and byte-pinned executor examples deleted; spline loop drives real sketch splines (P7); replan loops in-session. | ~1,300 — emitter/template halves of `mesh_rebuild`/`mesh_editability`, `_json_literal` plumbing, host estimate of Fusion's interpolant | End-to-end native reconstruction; old generated-transaction mesh path deleted. |
 | **M5** | `grade` via `compareWith`/ray parity; measure-manager adoption (P4); doctrine rewrite (`mesh-reconstruction.md`, `unsupported.md`, `mcp-adapter.md` execution-model section); live acceptance run recorded. | ~400 | Doctrine matches reality; acceptance on record. |
-| **M6** | Freeform additions per P5 (surfaced remainder, labelled) — optional, last. | 0 (additive, small) | — |
+| **M6** | *Deleted (2026-08-21, Amendment B)* — was the P5 surfaced-remainder step; the rung-5 outcome is now "mesh stays reference, region counted unreconstructed", which needs no migration step. | 0 | — |
 
 **Deletion ledger, totalled:** **~4,000–4,500 source lines** (M2 ~1,700 + M3 ~1,100 + M4 ~1,300 + M5 ~400), plus the test lines bound to the deleted code (the dump/extract suites, the emitter-template suites, and the hand-numerics tests — several thousand lines; logic and gate tests are kept). This is deliberately lower than earlier drafts of this design estimated: the detection engine, ICM, and segmentation stay because Fusion's converter is unreliable in the scan-sized regime, and their tests stay with them. What is **salvaged**: segmentation/detection/gates (numpy-smaller, semantics intact), the rung-1 router and budgets from `feat/mesh-irregular`, `reconstruction_program.py` (1,626), `mesh_datum`'s tie-break logic, the constraint-ladder and perturbation-proof logic, `module_cache.py`, the report validator, and the doctrine. What is **replaced**: every hand-rolled numeric kernel, by numpy; inside/outside, by ray parity; the interpolant model, by Fusion's real splines; transport and generation, by being in-process. What is **added, small**: the per-region convert wrapper, provenance/comparison records, and the convert refusal tokens.
 
@@ -200,5 +200,50 @@ CLI note: `fusion-design` remains the orchestration surface — its mesh command
 - **Fusion genuinely replaces:** linear algebra and bulk numerics (numpy, in-Fusion, confirmed live), inside/outside (`calculateCollisionsWithRay`), NURBS evaluation (real fitted splines + `SurfaceEvaluator`; V10 gives the interpolant family), measurement/OBB (`measureManager`), loft/sweep/ruled as native features, and — per region, gated, provenance-tracked — segmentation-plus-fitting via prismatic convert where it holds up. **Only looked replaceable:** the detection engine (convert is size-fragile), the disproof gates, thresholds, the kinematic router, relationship licensing, datum determinism, program vocabulary, editability proof, mesh sectioning (no mesh-section API — settled, V13), and the stats tails (no scipy cp314 wheel).
 - **Verification:** offline coverage is a non-requirement per the user; live acceptance plus self-checking hash-chained stages and the retained host-side report validator are the gate; every report-honesty mechanism survives unchanged.
 - **Scaling, priced:** vectorized stages sub-second at 200k triangles and a few seconds at 2M; detection-plus-gates seconds at 200k, tens of seconds at 500k, low minutes at 2M; practical UI-thread ceiling ~2M with the triangle budget refusing above it; per-region convert calls under their own timeout. Estimates stated to be falsified by the first live benchmark.
-- **Migration:** M0 probes including a real multi-size prismatic conversion trial (P2a/P2b settle first, they shape M2) → M1 runtime beachhead → M2 native segment/fit with per-region convert and rung-1 router/budgets salvaged → M3 native frame/plan + transport deletion → M4 native emit/prove + generation-layer deletion → M5 grade + doctrine + acceptance → M6 optional freeform. The old path keeps working until each native stage runs live; no step leaves the tree broken.
-- **Honest unknowns, each with its probe:** prismatic convert entitlement (P2a), its output shape and its quality-vs-size boundary (P2b), `faceGroups` provenance on imported meshes (P1, downgraded to candidate input), the NurbsSurface→body route (P5). All outcomes are designed; only the accelerator's share of the work moves.
+- **Migration:** M0 probes including a real multi-size prismatic conversion trial (P2a/P2b settle first, they shape M2) → M1 runtime beachhead → M2 native segment/fit with per-region convert and rung-1 router/budgets salvaged → M3 native frame/plan + transport deletion → M4 native emit/prove + generation-layer deletion → M5 grade + doctrine + acceptance (M6 deleted, Amendment B). The old path keeps working until each native stage runs live; no step leaves the tree broken.
+- **Honest unknowns, each with its probe:** prismatic convert entitlement (P2a), its output shape and its quality-vs-size boundary (P2b), `faceGroups` provenance on imported meshes (P1, downgraded to candidate input). All outcomes are designed; only the accelerator's share of the work moves.
+
+# Amendment B — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (review B1,
+adoptions 10–11; user override §2). The passages above marked "Amendment B"
+were revised in place; this section records what changed and why, and the one
+thing that deliberately did not.*
+
+- **The BaseFeature / surfaced-remainder path is deleted** (review B1,
+  decisive): probe P5, freeform outcome 2, migration step M6, and the
+  `surfaced_nonparametric` bucket. The rung-5 outcome is: the mesh stays
+  reference and the region is counted unreconstructed with its gate named.
+  Base features are banned totally — not "banned except when labelled".
+- **`convert-timeout` is replaced by an enforceable resource policy**
+  (adoption 10): Autodesk's `MeshConvertFeatures.add(input)` is synchronous,
+  so a Python wall-clock timer observes an overrun only after control
+  returns — the old token promised a refusal semantics the execution model
+  cannot deliver. Now: a **pre-call** triangle/complexity budget
+  (`convert-budget-exceeded`, derived from the measured conversion-behaviour
+  record that P2b/M0 seed and the per-call telemetry keeps feeding) plus
+  **post-call elapsed-time telemetry**. Explicit user cancellation enters
+  only if a probe ever verifies a real Fusion cancellation API.
+- **The spatial-index verdict is corrected** (adoption 11): "delete the grid,
+  numpy broadcasting covers it" was underspecified to the point of danger —
+  literal broadcast pairwise distances at N ≈ 10⁶ is an O(N²) intermediate.
+  The replacement must state its data structure, asymptotic, and memory
+  bound: hashed voxel/grid cells via numpy sorting (or Morton codes),
+  blockwise distances after binning, or Fusion-supplied topology where it
+  matches the required neighbourhood. The hand-rolled CPython grid still
+  goes; it goes to a stated replacement, not to a slogan.
+- **The `plan` stage hosts feature-program synthesis**: FHG construction and
+  bounded program selection per
+  `docs/plans/2026-08-21-001-design-feature-program-synthesis.md`. The
+  review pause gains the selection record (winning program plus losing
+  candidates' gate vectors).
+- **What did not change — Preview APIs (user override, review file §2):**
+  the review recommended demoting GFG/MeshConvert because their API surfaces
+  are documented Preview. The user's ruling — *"I'm okay with using preview
+  APIs anytime it's the right thing"* — is recorded there and governs here:
+  Preview status alone never disqualifies; convert's boundary remains the
+  measured reliability-at-scale one this design already draws, and the probe
+  record already makes any Preview-surface change a loud, named, per-version
+  detectable refusal. The designed absence/failure refusals
+  (`convert-unavailable`, `convert-failed`) stand unchanged — they were
+  never about release stability.

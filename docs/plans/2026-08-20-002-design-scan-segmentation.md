@@ -1081,7 +1081,8 @@ to reject. PR 4 is respecified:
   approximate; this is the upgrade it anticipated); (3) covariance /
   effective-sample-size inflation (replacing the lag-1 AR(1) ρ̄ of 007 §7.3
   when the record exists); (4) relation and snap uncertainty through the
-  inflated covariances.
+  inflated covariances. **[Amended 2026-08-21, §B.1: the consumers share the
+  *record*, not one transformed statistic — each derives its own.]**
 - **Deterministic block construction** (decision 5): blocks are the point
   sets of octree cells at the smallest level whose cell edge ≥ the recorded
   range; block resampling uses the stage RNG under the content-addressed
@@ -1172,7 +1173,7 @@ until the named PR migrates them, and the migration is recorded, not silent:
 thing-support floor → `min_thing_support_extent` are those documents' rows;
 see review file §3.
 
-### A.8 Sequencing superseded
+### A.8 Sequencing superseded [see also Amendment B]
 
 §6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to the
 canonical cross-lane order in `docs/reviews/2026-08-20-oracle-design-review.md`
@@ -1182,3 +1183,91 @@ the region-tree skeleton lands; the lineage contract (§A.2) ships *inside*
 the region-tree PR; cross-cut + correlation model remain one shipment with
 §A.3's certificates and the lateral-cell proxy refinement. PR contents in §6
 are otherwise unchanged.
+
+---
+
+## Amendment B — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (findings
+4 and 8; adoption 6; abandonment 7; the "threshold rationales are not yet
+calibration" finding). §B.1 amends §A.4's decision 6 in place (marker
+above); §B.2 defines the sweep protocol every topology-changing threshold
+now cites. The canonical implementation order moves to that review file's
+§3, which extends the 2026-08-20 file's §2 (§A.8 unchanged in substance).*
+
+### B.1 One shared substrate, per-consumer derived statistics (finding 8, accepted with modification)
+
+What stays: **one frozen, candidate-independent correlation record per scan
+(or per regime)**, calibrated before any candidate acceptance — §A.4's
+non-circularity property is load-bearing and untouched. What changes: the
+record is a **measured substrate** (residual field over the calibration
+population, directional range(s), sill, source-region ids, estimator
+params, hash), not one transformed statistic that every consumer reads as
+its answer. One correlation length is useful *input* to all of the
+consumers; it is not their common *answer*:
+
+- **held-out validation** derives the spatial separation sufficient to
+  limit leakage (block scale ≥ the recorded range in the relevant
+  direction);
+- **the Moran bootstrap** derives its block *design* (octree-cell blocks at
+  the recorded range, refit inside every replicate — §A.4's mechanics
+  unchanged) and its own weight/null construction;
+- **primitive-parameter covariance** derives effective-sample-size
+  inflation through its own estimator over blocked variation in fitted
+  parameters — not by scaling with a single global n/n_eff ratio (007
+  §7.3's AR(1) inflation remains the fallback where no record exists,
+  flagged approximate exactly as 007 already flags it);
+- **relation and snap uncertainty** consume the inflated covariances of the
+  specific parameter combinations they test (the §8.1 delta-method path),
+  never a raw length.
+
+Each consumer's derivation is recorded beside the verdict it produced,
+citing the record's hash. No consumer's derived statistic is an input to
+another consumer; only the frozen record is shared. Spatial effective
+sample size is not one universal scalar, and the record refusing to reach a
+sill (`correlation-model-unidentified`) still terminates the affected
+candidates as T3 — unchanged.
+
+The judgment record (review file §4.1) is explicit about one thing this
+amendment does *not* concede: the review's motivating σ example (6–14×
+under-estimate) was refuted to the digit by the shipment-1 readout
+(addendum above). The consumer-separation argument is accepted on its own
+merits, not on that example.
+
+### B.2 Sensitivity sweeps — thresholds relabelled `experimental-default` (finding "rationales are not yet calibration", accepted)
+
+A declared rationale is necessary but not sufficient for a value that
+directly changes segmentation or program topology. Every such threshold —
+§A.1's `split_min_loss_improvement`, `split_min_improved_fraction`,
+`split_min_children_explained`, `split_boundary_cost`,
+`split_validation_fraction`; §4.2's ε-quantile parameters and station
+bandwidth choices; the selection-gate tolerances of design 2026-08-21-001
+§6 — carries the label **`experimental-default`** in its
+`_declared_number` record until the sweep protocol below has run, at which
+point the label becomes `swept` with the sweep record's hash. The label is
+reported wherever the value is; an `experimental-default` never silently
+reads as a statistically licensed constant.
+
+**The sweep protocol** (owned by the lane that owns the threshold; first
+target: the §A.1 split-licence set, swept against the first post-splitter
+census):
+
+1. **Fixtures, three classes:** clean CAD tessellations (the committed
+   benchmark four), synthetic noisy scans with known ground-truth regions
+   (generated: known primitives + the measured correlation record's noise
+   model), and ≥ 2 real scans with manually annotated major
+   surfaces/features (Dig-Next-2 plus one more capture; the annotation is
+   authored before the sweep, same independence rule as the C denominator).
+2. **Sweep:** each threshold over a declared grid spanning at least
+   [default/4, default×4] (log-spaced), others held at defaults; declared
+   pairwise interactions (e.g. loss-improvement × improved-fraction) swept
+   jointly on the reduced grid.
+3. **Publish sensitivity curves** for: over-split rate and under-split rate
+   against ground truth, feature recall (and precision, 003 Amendment §7),
+   geometric coverage, and runtime — per fixture class.
+4. **Re-derive or confirm** each default from the curves, with the chosen
+   operating point's rationale recorded; flat curves are recorded as
+   insensitivity (a finding, not a failure); cliff edges move the default
+   away from the cliff by a declared margin.
+5. The sweep record (grid, curves, chosen values, fixture hashes) is a
+   committed artifact cited by every `swept` label.
