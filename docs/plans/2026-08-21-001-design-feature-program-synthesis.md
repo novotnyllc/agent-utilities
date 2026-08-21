@@ -257,7 +257,9 @@ consulted; ties within a gate's declared tolerance proceed together:
    **reservation first**: (0) the G2 reservation is drawn over the raw
    mesh at a scale needing no measurement of this scan — the declared
    default ≈ 8 ℓ_med (007 §10.3; ℓ_med is a mesh property, not a candidate
-   statistic), or a *pre-existing regime record's* range where one is on
+   statistic), or a *pre-existing regime record's* range — the conservative
+   **maximum over its directional ranges** where the record is
+   anisotropic (002 §A.4 records directional ranges) — where one is on
    file, whichever is larger — recorded as `blocking-basis: default-8lmed`
    or `blocking-basis: regime-record`; (1) the 002 §A.4 correlation
    calibration runs **on the non-reserved subset only**, so the frozen
@@ -293,8 +295,11 @@ consulted; ties within a gate's declared tolerance proceed together:
    the licence floor, exactly as for an undersized buffer. All three
    fractions (validation, buffer, surviving construction) are recorded on
    the reservation. The measured
-   range then *audits* the reservation instead of sizing it: if the
-   frozen record's range exceeds the buffer width, construction
+   range then *audits* the reservation instead of sizing it — "range"
+   meaning the conservative **maximum over the frozen record's
+   directional ranges**, recorded on the reservation as the audited
+   value, so an anisotropic record's long axis can never hide behind an
+   isotropic summary: if that maximum exceeds the buffer width, construction
    triangles can sit within one correlation length of reserved ones and
    separation is not established — G2 grading is unlicensed for this
    scan, recorded `holdout-separation-insufficient` (new closed-set

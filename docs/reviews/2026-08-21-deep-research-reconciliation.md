@@ -88,7 +88,7 @@ the reviewer's reasoning wherever they conflict.
 | 10 | Replace convert-timeout with enforceable resource policy | **accept** — pre-call triangle/complexity budgets from measured conversion behaviour + post-call elapsed-time telemetry; no claimed preemption of a synchronous call | 010 Amendment B |
 | 11 | Explicit bounded-memory spatial indexing | **accept** | 010 Amendment B |
 | 12 | Machine-checkable physical-thing evidence predicates | **accept** | 004 Amendment B |
-| 13 | Canonical supersession matrix for mesh-reconstruction.md | **accept, deferred** behind PR #65 (§6) — the six-question one-answer contract is fixed now (§6 states it); the rewrite lands on the merged text |
+| 13 | Canonical supersession matrix for mesh-reconstruction.md | **accept, deferred** behind PR #65 — the six-question one-answer contract is fixed now; the rewrite lands on the merged text | §6 |
 
 ### 1.5 The abandonment list of 8, judged
 

@@ -725,12 +725,20 @@ another:
    no selection record the item reads `unmeasured` (ahead of feature count
    so a slab encoding never wins on timeline length against the
    factorization it stands in for). **Cross-lane comparisons evaluate
-   necessity against the union of the compared lanes' recorded candidate
-   sets** — selection records are committed artifacts, so a slab-join is
-   unnecessary if *any* compared lane's record factors its support within
-   budget; otherwise a lane that fails to generate semantic alternatives
-   records zero unnecessary fallbacks and beats the lane that found the
-   factorization, ranking the weaker hypothesis generator first;
+   necessity against one pre-committed candidate universe per scoreboard
+   run, never per comparison pair**: the run declares its lane roster up
+   front, and the universe is the union of *every* rostered lane's
+   committed selection record, computed once and recorded with the run —
+   so a lane's unnecessary-fallback count is a function of (lane, run),
+   identical in every pairwise comparison within the run, and the G5
+   ordering key is stable. Selection records are committed artifacts, so
+   a slab-join is unnecessary if *any* rostered lane's record factors its
+   support within budget; otherwise a lane that fails to generate
+   semantic alternatives records zero unnecessary fallbacks and beats the
+   lane that found the factorization, ranking the weaker hypothesis
+   generator first. Where no rostered lane carries a selection record the
+   item reads `unmeasured` for every lane — never zero, which would
+   reward exactly the missing evidence;
 4. feature count;
 5. sketch count;
 6. redundant construction planes/geometry;
@@ -822,7 +830,12 @@ parameter:
    classes, expressions over two parameters) get declared pairwise
    perturbation cases; `interactions_exercised` stops being a permanent
    `false` — it reports the exercised fraction of declared interaction
-   cases.
+   cases. A part declaring zero interaction cases has a zero denominator
+   and reads `interactions_exercised: unmeasured-no-declared-cases` —
+   never 0 (nothing failed) and never 1 (nothing was exercised);
+   aggregates skip such parts with the skipped count reported beside the
+   aggregate, and the token is distinct from the causal-E ratio, so an
+   absent interaction set is never read as failure or as full coverage.
 
 Global observables (volume/centroid/bbox) are retained as cheap smoke
 tests and may still gate early (`parameter-inert` keeps its meaning), but
