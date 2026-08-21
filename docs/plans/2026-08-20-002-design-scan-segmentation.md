@@ -442,9 +442,12 @@ shipment-1 number adjusts predictions; this one reorders the plan.
 
 ## 6. PR sequence
 
-**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 (PR 0a/0b first); PR
-contents below stand, amended per §A.1–§A.6.]**
+**[Ordering superseded 2026-08-20, pointer updated 2026-08-21: the
+canonical cross-lane order lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (PR 0a/0b
+first, then FHG ratification and the scoreboard P/precision/causal-E cells
+before any emitter optimization — see §A.8); PR contents below stand,
+amended per §A.1–§A.6 and Amendment B.]**
 
 One opus worker, one PR at a time, tree green after each, each PR names the
 measured claim it must move and re-runs the Dig-Next-2 artifacts to prove it.
@@ -800,8 +803,8 @@ here; this amendment supersedes the specific passages it names and nothing
 else. House rules apply throughout: verified facts carry sources, assumptions
 are labelled, every new threshold is caller-declared through
 `_declared_number` with a rationale, and every new token joins a closed set.
-The PR ordering in §6 is subordinated to the canonical cross-lane order in the
-review file §2 (see §A.8).*
+The PR ordering in §6 is subordinated to the canonical cross-lane order —
+now the 2026-08-21 reconciliation review file §3 (see §A.8).*
 
 ### A.1 The split licence, made reason-aware (finding 2 — accepted)
 
@@ -1001,7 +1004,8 @@ source_triangle_id
 `invalidated-by-partition` joins the closed vocabulary. This contract is the
 substrate that makes 003's H rule enforceable (silently-unclaimed = 0, exact,
 by triangle identity — 003 §1.5 amended) and the precondition for 004's PR
-C-4 (canonical order, review file §2, step 7). Missing decision 7 (where
+C-4 (canonical order, 2026-08-21 review file §3, step 6 — `plan-decomposition`
+in the lane sequence). Missing decision 7 (where
 decomposition sits relative to frame/relationships) is decided in design
 -004 §A.2 *on top of* this contract: whatever ran earlier against a replaced
 partition version is invalidated by rule 5, so the ordering question loses
@@ -1039,7 +1043,9 @@ protection each boundary actually had:
   when the containing cell's joint fit rejects, the proxy-distance refinement
   splitter (§4.3) **must** run there. This moves the proxy refinement for
   mixed lateral cells from PR 5's conditional census gate into the
-  correctness path: it ships in the PR 3/4 cycle (canonical order step 5).
+  correctness path: it ships in the PR 3/4 cycle (canonical order: the
+  cross-cut + correlation-model entry of the 2026-08-21 review file §3
+  step 6 lane sequence).
   PR 5's remaining scope (HFP merge, gate (b); standalone grower, gate (c))
   keeps its census gates.
 - A child boundary with neither an observed crease nor a statistically
@@ -1081,7 +1087,8 @@ to reject. PR 4 is respecified:
   approximate; this is the upgrade it anticipated); (3) covariance /
   effective-sample-size inflation (replacing the lag-1 AR(1) ρ̄ of 007 §7.3
   when the record exists); (4) relation and snap uncertainty through the
-  inflated covariances.
+  inflated covariances. **[Amended 2026-08-21, §B.1: the consumers share the
+  *record*, not one transformed statistic — each derives its own.]**
 - **Deterministic block construction** (decision 5): blocks are the point
   sets of octree cells at the smallest level whose cell edge ≥ the recorded
   range; block resampling uses the stage RNG under the content-addressed
@@ -1172,13 +1179,126 @@ until the named PR migrates them, and the migration is recorded, not silent:
 thing-support floor → `min_thing_support_extent` are those documents' rows;
 see review file §3.
 
-### A.8 Sequencing superseded
+### A.8 Sequencing superseded [amended by Amendment B — the canonical order is now the 2026-08-21 review file §3]
 
-§6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to the
-canonical cross-lane order in `docs/reviews/2026-08-20-oracle-design-review.md`
-§2: PR 0a (non-vacuity gate, emission lane) and PR 0b (§A.6) precede
-everything here; the amended split licence (§A.1) is design-complete before
-the region-tree skeleton lands; the lineage contract (§A.2) ships *inside*
-the region-tree PR; cross-cut + correlation model remain one shipment with
-§A.3's certificates and the lateral-cell proxy refinement. PR contents in §6
-are otherwise unchanged.
+§6's internal PR order (1 → 2 → 3+4 → conditional 5/6) is subordinated to
+the canonical cross-lane order, which as of 2026-08-21 lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (extending and
+superseding the 2026-08-20 review file's §2 as the single reference): PR 0a
+(non-vacuity gate, emission lane) and PR 0b (§A.6) precede everything here;
+**then the FHG design (2026-08-21-001) is ratified and the scoreboard's
+P/precision/causal-E cells land before any emitter is optimized**; only then
+do this lane's steps run — the amended split licence (§A.1) design-complete
+before the region-tree skeleton lands; the lineage contract (§A.2) shipping
+*inside* the region-tree PR; cross-cut + correlation model one shipment with
+§A.3's certificates and the lateral-cell proxy refinement — each PR stating
+which FHG node kinds its output feeds. PR contents in §6 are otherwise
+unchanged.
+
+---
+
+## Amendment B — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (findings
+4 and 8; adoption 6; abandonment 7; the "threshold rationales are not yet
+calibration" finding). §B.1 amends §A.4's decision 6 in place (marker
+above); §B.2 defines the sweep protocol every topology-changing threshold
+now cites. The canonical implementation order moves to that review file's
+§3, which extends the 2026-08-20 file's §2 (§A.8 unchanged in substance).*
+
+### B.1 One shared substrate, per-consumer derived statistics (finding 8, accepted with modification)
+
+What stays: **one frozen, candidate-independent correlation record per scan
+(or per regime)**, calibrated before any candidate acceptance — §A.4's
+non-circularity property is load-bearing and untouched. What changes: the
+record is a **measured substrate** (residual field over the calibration
+population, directional range(s), sill, source-region ids, estimator
+params, hash), not one transformed statistic that every consumer reads as
+its answer. One correlation length is useful *input* to all of the
+consumers; it is not their common *answer*:
+
+- **held-out validation** derives the spatial separation sufficient to
+  limit leakage (block scale ≥ the recorded range in the relevant
+  direction);
+- **the Moran bootstrap** derives its block *design* (octree-cell blocks at
+  the recorded range, refit inside every replicate — §A.4's mechanics
+  unchanged) and its own weight/null construction;
+- **primitive-parameter covariance** derives effective-sample-size
+  inflation through its own estimator over blocked variation in fitted
+  parameters — not by scaling with a single global n/n_eff ratio (007
+  §7.3's AR(1) inflation remains the fallback where no record exists,
+  flagged approximate exactly as 007 already flags it);
+- **relation and snap uncertainty** consume the fit record's inflated
+  parameter covariances through the 007 §8.1 delta-method path — stated
+  precisely so the no-sharing rule below is not self-contradictory:
+  covariance inflation is a **fit-record derivation** (it becomes part of
+  each fit's own record, like the fit parameters themselves), not a peer
+  consumer's private statistic, so relations reading fit-record covariances
+  is the ordinary record→consumer flow the pipeline has always had.
+
+Each consumer's derivation is recorded beside the verdict it produced,
+citing the record's hash and, for covariance-mediated consumers, the fit
+record's covariance-derivation hash. No consumer's *own* derived statistic
+(block design, separation scale, null construction) is an input to another
+consumer; only the frozen record — and fit records built on it — are
+shared. Spatial effective
+sample size is not one universal scalar, and the record refusing to reach a
+sill (`correlation-model-unidentified`) still terminates the affected
+candidates as T3 — unchanged.
+
+The judgment record (review file §4.1) is explicit about one thing this
+amendment does *not* concede: the review's motivating σ example (6–14×
+under-estimate) was refuted to the digit by the shipment-1 readout
+(addendum above). The consumer-separation argument is accepted on its own
+merits, not on that example.
+
+### B.2 Sensitivity sweeps — thresholds relabelled `experimental-default` (finding "rationales are not yet calibration", accepted)
+
+A declared rationale is necessary but not sufficient for a value that
+directly changes segmentation or program topology. Every such threshold —
+§A.1's `split_min_loss_improvement`, `split_min_improved_fraction`,
+`split_min_children_explained`, `split_boundary_cost`,
+`split_validation_fraction`; §4.2's ε-quantile parameters and station
+bandwidth choices; the selection-gate tolerances of design 2026-08-21-001
+§6 — carries the label **`experimental-default`** in its
+`_declared_number` record until the sweep protocol below has run, at which
+point the label becomes `swept` with the sweep record's hash. The label is
+reported wherever the value is; an `experimental-default` never silently
+reads as a statistically licensed constant.
+
+**The sweep protocol** (owned by the lane that owns the threshold; first
+target: the §A.1 split-licence set, swept against the first post-splitter
+census):
+
+1. **Fixtures, three classes:** clean CAD tessellations (the committed
+   benchmark four), synthetic noisy scans with known ground-truth regions
+   (generated: known primitives + the measured correlation record's noise
+   model), and ≥ 2 real scans with manually annotated major
+   surfaces/features (Dig-Next-2 plus one more capture; the annotation is
+   authored before the sweep, same independence rule as the C denominator).
+2. **Sweep:** each threshold over a declared **domain-aware** grid, others
+   held at defaults. Unbounded-above parameters: log-spaced over at least
+   [default/4, default×4]. Parameters with a bounded fraction domain in
+   (0, 1) — `split_min_improved_fraction` and
+   `split_min_children_explained` at default 0.5 cannot span to 2 — sweep
+   in **odds space**: grid points pᵢ = oᵢ/(1 + oᵢ) with oᵢ log-spaced over
+   [odds(default)/4, odds(default)×4], odds(p) = p/(1 − p). The grid is
+   finite by construction, never leaves (0, 1), and preserves the ×4 span
+   in odds (default 0.5 → odds 1 → p ∈ [0.2, 0.8]); the transform used is
+   recorded beside the grid. Declared pairwise interactions (e.g.
+   loss-improvement × improved-fraction) swept jointly on the reduced
+   grid.
+3. **Publish sensitivity curves** for: over-split rate and under-split rate
+   against ground truth, feature recall (and precision, 003 Amendment §7),
+   geometric coverage, and runtime — per fixture class.
+4. **Re-derive or confirm** each default from the curves, with the chosen
+   operating point's rationale recorded; flat curves are recorded as
+   insensitivity (a finding, not a failure); cliff edges move the default
+   away from the cliff by a declared margin. **Selection is validated on
+   held-out fixtures**: the operating point is chosen on a subset of each
+   fixture class and confirmed on fixtures that played no part in choosing
+   it (leave-one-fixture-out for the real-scan class, whose population is
+   smallest) — a default confirmed only on the fixtures that selected it
+   is calibration overfit wearing a sweep record.
+5. The sweep record (grid, curves, chosen values, fixture hashes) is a
+   committed artifact cited by every `swept` label.

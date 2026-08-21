@@ -42,8 +42,9 @@ number below and are stated once here:
 
 ## 1. The scoreboard, defined
 
-Five cells per part, all computable from pipeline artifacts alone (fit record,
-program, emission report, rebuild report, editability report, coverage
+Six cells per part — RC, V, E, P (added 2026-08-21, §7.1), C, H — all
+computable from pipeline artifacts alone (fit record, program, selection
+record, emission report, rebuild report, editability report, coverage
 account). The vector is reported whole; no scalar is invented (§1.6).
 
 ### 1.1 Recognition coverage (RC) — the headline
@@ -123,7 +124,7 @@ reports `RC-scripted`, never a higher rung, and the pre-gate "8 of 16"
 census is *script-existence only* — weaker even than `RC-scripted`, and
 flagged as such below. Identical score values are never reported across
 different gates. This gate is **PR 0a** in the canonical
-implementation order (`docs/reviews/2026-08-20-oracle-design-review.md` §2),
+implementation order (`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3, which extends and supersedes the 2026-08-20 review's §2),
 ahead of everything else, and the v0.12.0 **"8 of 16 emit" census and its
 23.3% area-weighted figure are flagged pending recomputation under it** —
 the 0.0%-area part does not count as emitting.
@@ -150,7 +151,10 @@ Why this is the honest number and the two existing numbers are not:
 
 ### 1.2 Vocabulary score (V)
 
-**Features recognized by kind ÷ features evident, per part.**
+**Features recognized by kind ÷ features evident, per part.** **[Amended
+2026-08-21, §7.2: V is a precision/recall pair — the ratio above is the
+recall half; feature precision (correct recovered ÷ all emitted) is reported
+beside it and never collapsed into one number.]**
 
 - Where STEP/F3D ground truth exists (honeycomb, unicorn horn): the denominator
   is the ground-truth census (the manifest's `feature_kinds` for the F3D; the
@@ -170,6 +174,11 @@ Why this is the honest number and the two existing numbers are not:
   **negative** entry, listed by name.
 
 ### 1.3 Editability (E)
+
+**[Amended 2026-08-21, §7.3: proving a parameter drives *something* is a
+liveness smoke test, not the scored proof — E's proof standard is now the
+local-causal influence map; volume/centroid/bbox observables are demoted to
+smoke tests.]**
 
 **Parameters proven to drive ÷ parameters emitted**, under the U5 perturbation
 standard exactly as declared (plan 005 R11; design 006 E10/D7): per parameter —
@@ -295,18 +304,34 @@ stage as each record arrives.
 
 ### 1.6 No scalar; a headline ordering
 
+**[Amended 2026-08-21, §7.1: the vector gains a sixth scored cell, P
+(program quality); the ranking order becomes RC, V (precision/recall pair),
+E (causal), P, C, with H the guardrail.]**
+
 A single weighted scalar would let a vocabulary win paper over a silent-area
 regression. The scoreboard is the vector. For ranking work, cells are ordered:
 
 **RC first** (it is the goal sentence made measurable: area standing as
 editable features), then **V** (the "as many recognized things" clause — RC can
-rise while everything is one extrude; V is what says the *things* were
-recognized), then **E** (editable is the adjective; an inert parameter fails
-the sentence), then **C** (componentized is the other adjective; the single-object
-cell is already covered by the raw scripted count, so what ranks here is
-assembly decomposition, uniformly zero until a lane can move it), with **H** as
-a guardrail rather than a rank: any change that grows silent area is rejected
-regardless of its other deltas.
+rise while everything is one extrude; V, a precision/recall pair per §7.2, is
+what says the *things* were recognized and not hallucinated; within V the
+comparison is **set-level Pareto layering** — the compared lanes are
+partitioned into Pareto fronts on (precision, recall), and a lane's V rank
+is its front index (front 1 = non-dominated), which is transitive by
+construction; lanes in one front are tied at V, the trade recorded, rank
+passing to the next cell rather than being resolved by an implementer's
+arbitrary weighting (pairwise incomparability treated as an ordinary tie
+would make the composed ordering cyclic), then **E**
+(editable is the adjective; an inert parameter fails the sentence — the
+causal standard of §7.3), then **P** (program quality, §7.1 — RC, V, and E
+can all hold while the timeline is slab/primitive confetti; P is what says
+the program is one a competent user would keep, compared by G5's
+lexicographic census), then **C** (componentized is the other adjective; the
+single-object cell is already covered by the raw scripted count, so what
+ranks here is assembly decomposition, uniformly zero until a lane can move
+it), with **H** as a guardrail rather than a rank: any change that grows
+silent area is rejected regardless of its other deltas. *(Paragraph revised
+2026-08-21 with Amendment §7 — the marker above records the change.)*
 
 ---
 
@@ -663,3 +688,181 @@ Source: `docs/reviews/2026-08-20-oracle-design-review.md` (findings 4, 11.1,
   one. The `unclaimed_components` population is renamed
   `unclaimed-surface-component` at its next schema touch (design -002 §A.7)
   to end the collision with Fusion/physical components.
+
+---
+
+## 7. Amendment — deep-research reconciliation incorporation (2026-08-21)
+
+Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (finding 6;
+adoptions 3, 4, 5; abandonment 6). §1.2, §1.3 and §1.6 carry in-place
+markers pointing here. Per the canonical order (review file §3, step 5),
+**these cells land before any emitter is optimized** — metrics create the
+optimizer, and adding P/precision/causal-E after code has been tuned against
+the five-cell vector repeats the non-vacuity failure in slow motion.
+
+### 7.1 P — program quality (new scored cell)
+
+An eighty-feature slab-and-primitive timeline and a twelve-feature
+human-quality timeline can tie on RC, kind recall, parameter liveness,
+component count, and zero silent area. P is what separates them. Measured
+per part, from the program and selection records alone, in two labelled
+halves:
+
+**The shared census** — identical, item for item and in the same declared
+order, to the FHG compactness gate G5 (design 2026-08-21-001 §6), so the
+system cannot be optimized against one definition and measured against
+another:
+
+1. unlicensed-duplicate parameter values (independently represented values
+   whose regularity class licenses one shared parameter);
+2. repeated geometry represented independently rather than by
+   equality/pattern where the pattern licence held;
+3. unnecessary-fallback count — the same bounded definition as G5:
+   `slab-join` operations whose support some recorded candidate factors
+   into licensed semantic operations within the declared
+   `semantic_factorization_max_expansion` budget; a fallback with no
+   within-budget factored alternative costs nothing (ranked ahead of
+   feature count so a slab encoding never wins on timeline length against
+   the factorization it stands in for). A lane's fallback operations are
+   read from its emitted program, so a lane needs no selection record of
+   its own to receive a numeric count — necessity comes from the shared
+   universe below, and the item reads `unmeasured` only where that
+   universe is empty; inside one lane's own G5 the universe is its own
+   G1–G4-tied candidate set, unchanged. **Cross-lane comparisons evaluate
+   necessity against one pre-committed candidate universe per scoreboard
+   run, never per comparison pair**: the run declares its lane roster up
+   front, and the universe is the union of *every* rostered lane's
+   committed selection record, computed once and recorded with the run —
+   so a lane's unnecessary-fallback count is a function of (lane, run),
+   identical in every pairwise comparison within the run, and the G5
+   ordering key is stable. Selection records are committed artifacts, so
+   a slab-join is unnecessary if *any* rostered lane's record factors its
+   support within budget; otherwise a lane that fails to generate
+   semantic alternatives records zero unnecessary fallbacks and beats the
+   lane that found the factorization, ranking the weaker hypothesis
+   generator first. Where no rostered lane carries a selection record the
+   item reads `unmeasured` for every lane — never zero, which would
+   reward exactly the missing evidence;
+4. feature count;
+5. sketch count;
+6. redundant construction planes/geometry;
+7. unconstrained sketch degrees of freedom.
+
+**Diagnostics** — reported under P, explicitly *outside* the P≡G5 identity
+(G5 cannot optimize them — either ground-truth-only or reporting-only):
+parameter count; fully constrained sketch rate; feature dependency depth;
+and, where CAD ground truth exists, program-size ratio against the
+reference timeline and feature-graph similarity.
+
+P is reported as this census-plus-diagnostics, never collapsed to a scalar
+(§1.6's rule); the identity claim binds the shared census only. Where P
+must *rank* two candidates or two lanes (the §1.6 ordering), the comparator
+is exactly G5's: lexicographic over the shared census in its declared
+order, lower is better on every item; diagnostics never rank anything.
+Ranking position: after E, before C (§1.6 marker). H remains the guardrail
+over all.
+
+### 7.2 V grows feature precision
+
+```text
+feature recall    = correct recovered feature instances ÷ ground-truth (or evident-table) instances
+feature precision = correct recovered feature instances ÷ all emitted feature instances
+```
+
+Zero emitted instances makes precision's denominator zero: the part reads
+`precision: unmeasured-no-emissions` — never 1 (nothing was hallucinated)
+and never 0 (nothing was wrong) — and aggregates skip such parts with the
+skipped count reported beside the aggregate; a zero-denominator recall
+(empty evident table) already reads `unmeasured` under the §1.2 rule.
+
+A lane whose *every* evaluated part reads `unmeasured-no-emissions`
+therefore has no numeric precision coordinate at all, and §1.6's Pareto
+layering needs a defined answer rather than an implementation-dependent
+one. The rule is closed: **fronts are formed over the lanes carrying a
+numeric (precision, recall) pair only**; every lane without a numeric
+precision coordinate is placed together in one trailing front whose index
+is (last measured front + 1), recorded `v-rank-basis: no-emissions` — tied
+with the other silent lanes, ranked behind every measured lane, and never
+assigned a fabricated precision of 1 or 0. Rationale: against any
+non-empty evident table a zero-emission lane's recall is a measured 0 —
+it recognized nothing — so no measured lane may be dominated by it; but
+its silence is a fact about emission volume, not correctness, so it takes
+a deterministic trailing rank instead of a synthesized coordinate. Where
+the evident table itself is empty the whole cell is already `unmeasured`
+(§1.2) and no front is formed.
+
+Recall alone is gameable by over-emission: a system that finds the five
+real holes and hallucinates six more keeps perfect recall. V is the pair,
+reported as a pair. "Correct" is judged against ground truth where it
+exists and the human-reviewed evident-features table otherwise (the §1.2
+denominator discipline, unchanged — including `unmeasured` where no table
+exists); the §1.4 circularity rule applies to precision's numerator
+verbatim: the detector never authors the table it is scored against. Also
+carried per part where ground truth allows: operation-family accuracy,
+Boolean-polarity accuracy, and dependency-graph agreement — the review's
+list, adopted as reported diagnostics under V.
+
+### 7.3 E upgraded to local-causal influence maps
+
+A parameter is not proven because *something* changed: a hole-diameter
+parameter that scales the whole body moves volume and bbox beautifully; a
+symmetric pair-spacing edit leaves the centroid fixed; a shared station
+parameter can drive six unrelated slabs. The scored standard becomes, per
+parameter:
+
+1. **Expected influence set**, authored from the program's dependency
+   edges **and validated against the evidence that licensed them** — the
+   map is never taken on the candidate's own word, or causal E would
+   certify exactly the over-coupling it exists to detect (a program that
+   wrongly shares one parameter across unrelated regions lists them all as
+   expected targets and passes trivially). Every multi-region coupling in
+   the expected set must cite the licence that coupled it: the regularity
+   class certificate (equality/pattern — measured, candidate-independent
+   evidence) or the geometric construction that makes the coupling
+   necessary (a station bounding the features on its plane). A coupling
+   with no licence is `influence-map-unlicensed` — a program defect
+   surfaced by the proof, not a passing map. The set then lists: the
+   regions expected to move, with direction and magnitude class; the
+   regions expected NOT to move; the local observable (local radius, local
+   signed-distance field over the target region's triangles).
+2. **Perturb, recompute, and verify**: the intended support moved in the
+   expected direction/magnitude; **non-target support stayed invariant
+   within declared tolerance**; constraints and feature health stayed
+   valid; restore reproduced the baseline (the existing D7 loop,
+   unchanged as mechanics).
+3. **Interaction cases**: coupled parameters (shared stations, equality
+   classes, expressions over two parameters) get declared pairwise
+   perturbation cases; `interactions_exercised` stops being a permanent
+   `false` — it reports the exercised fraction of declared interaction
+   cases. A part declaring zero interaction cases has a zero denominator
+   and reads `interactions_exercised: unmeasured-no-declared-cases` —
+   never 0 (nothing failed) and never 1 (nothing was exercised);
+   aggregates skip such parts with the skipped count reported beside the
+   aggregate, and the token is distinct from the causal-E ratio, so an
+   absent interaction set is never read as failure or as full coverage.
+   The U5 report schema and its shipped host-side validator accept only
+   the literal `interactions_exercised: false` today; the implementation
+   PR that lands these interaction cases amends the U5 schema, validator,
+   and tests in the same PR (006 U5, amended marker) — the two contracts
+   are never allowed to disagree in a shipped state.
+
+Global observables (volume/centroid/bbox) are retained as cheap smoke
+tests and may still gate early (`parameter-inert` keeps its meaning), but
+they are never the scored proof: E's numerator counts parameters passing
+the influence-map standard. Until influence-map reports exist, E rows read
+`unmeasured (causal)` beside any legacy global-observable count — the two
+standards are never conflated in one number (the §1.1 "identical values
+never reported across different gates" rule, applied to E).
+
+### 7.4 Tokens and artifacts
+
+New closed-set additions: `parameter-nontarget-moved` (the non-target
+invariance failure, distinct from `parameter-inert`), `influence-map-absent`
+(a parameter emitted without an expected influence set — a program defect,
+not a proof gap), `influence-map-unlicensed` (a multi-region coupling in
+the expected set citing no class certificate or necessary construction —
+§7.3's anti-circularity rule). The editability spec schema gains the influence-set
+fields; the selection record (design 2026-08-21-001) is a scoreboard input
+artifact. §4 Run A's procedure gains: author influence maps from the
+selection record rather than hand-written observables where the program
+carries FHG provenance.

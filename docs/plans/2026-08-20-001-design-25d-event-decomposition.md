@@ -56,7 +56,15 @@ Deriving cut-vs-join from neighbour relations is a decision that can be wrong;
 joining each slab's *measured* profile cannot be, because the profile is the
 material at that station. Cuts remain what they are today — holes — because a
 hole carries design intent (shared diameters, dimensioned placement) that
-absence-in-a-profile does not.
+absence-in-a-profile does not. **[Amended 2026-08-21, §B.1: the join-only
+stack is demoted from the preferred final representation to (a) the evidence
+and topology representation and (b) the honest fallback program. Where the
+semantic-factorization licences hold, a factored base+cut+boss+hole program
+competes and wins under the FHG selection gates
+(`docs/plans/2026-08-21-001-design-feature-program-synthesis.md` §6); the
+"no decision in it" property that justified join-only is preserved by making
+the factored alternative *earn* its decisions with polarity evidence rather
+than by refusing to make them.]**
 
 # Verified facts (this repository, 2026-08-20, main @ 0ee1c02)
 
@@ -196,7 +204,12 @@ sectioned at its **midpoint** — maximally far from both boundary planes, the
 same coplanar-triangle argument `_extrude_profile` already records — and, per
 the constancy guard below, at two more declared fractions.
 
-**Constancy guard.** One section is a sample, not a proof of the slab premise.
+**Constancy guard.** **[Superseded 2026-08-21, §B.2: fixed three-station
+confirmation is replaced by adaptive certification terminating on evidence —
+three deterministic samples cannot exclude a local event living entirely
+between them. The section mechanics, tolerances, and refusal below survive as
+the per-station machinery the adaptive loop drives.]** One section is a
+sample, not a proof of the slab premise.
 Each slab is additionally sectioned at declared fractions (doctrine default
 0.25 and 0.75 of `h_k`, each recorded), and the three sections must agree:
 same loop count, same per-loop classification, per-loop point-to-polyline
@@ -374,7 +387,9 @@ steps: enumerate `sketch.profiles`, match each planned loop by centroid and
 area within `entity_match_tolerance_mm`, refuse `profile-set-mismatch` on any
 zero-or-multiple match (S3), and hand the matched collection to one extrude.
 
-**Operations are join-only.** Slab 0 is `new-body`; every subsequent slab is
+**Operations are join-only.** **[Amended 2026-08-21, §B.1: join-only is the
+fallback program's rule; the preferred emission is the factored program where
+its licences hold.]** Slab 0 is `new-body`; every subsequent slab is
 `join`. The brief's cut-derivation rule (a slab whose section is a subset of
 its neighbour's is a step; a material-outside loop present only here is a
 pocket → cut) is adopted as *reporting*, not as emission: each slab records
@@ -598,8 +613,10 @@ mechanism working, not breaking.
   validator: `event_merge_sigmas`, `slab_constancy_tolerance_mm` (+ the two
   extra station fractions), `loop_material_consensus_fraction`,
   `loop_attribution_min_fraction`, `shell_thickness_sigmas`,
-  `shell_footprint_overlap_min`. Everything per-pair is derived from the
-  fits' own sigmas; no new millimetre constants.
+  `shell_footprint_overlap_min`; Amendment B.2 adds
+  `slab_certification_max_sections` and `reservation_gap_max_fraction`
+  (the latter shared with design 2026-08-21-001 §6 G2). Everything per-pair
+  is derived from the fits' own sigmas; no new millimetre constants.
 - House rules held: numpy in-Fusion only (this design's host-side additions
   are stdlib arithmetic over ≤17k-triangle dumps); `setByPlane` never
   appears (every plane is an offset of origin geometry, A/C); no process is
@@ -633,8 +650,8 @@ mechanism working, not breaking.
 
 # PR sequence — each lands green, each improves something measurable
 
-**[Ordering note 2026-08-20: cross-lane sequencing defers to
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 — the slab-track graph
+**[Ordering note 2026-08-20, pointer updated 2026-08-21: cross-lane sequencing defers to
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (which extends and supersedes the 2026-08-20 review's §2; FHG ratification and the scoreboard P/precision/causal-E cells precede any emitter optimization) — the slab-track graph
 and virtual-closure contract (Amendment §A.1–§A.4) must land before design
 -004's C3 per-thing parametric recursion; PR 0a's non-vacuity gate precedes
 this lane's re-measures.]**
@@ -893,3 +910,115 @@ failing globally:
   meaning: orientation/winding failure on a mesh whose boundary is either
   empty or fully licensed). Design -004 and the scoreboard can rely on the
   shared token being the one actually emitted.
+
+---
+
+# Amendment B — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (findings
+5 and "three sections"; adoptions 2 and 8; abandonment 5). §B.1 and §B.2
+supersede the passages marked in place above; everything else in this design
+— events, loops, tracks, shells, refusals, the whole evidence machinery —
+stands, and becomes more load-bearing, not less.*
+
+## B.1 Slab demotion and the semantic-factorization stage (review finding 5; adoption 2; abandonment 5)
+
+The review's attack is accepted: a union of appropriately profiled slabs can
+reproduce a 2.5D boundary while encoding the wrong conceptual structure — a
+block with two shallow pockets emitted as several changing cross-sections
+joined in sequence passes geometric deviation with every parameter live, yet
+a user opening Fusion sees slab boundaries where a designer sees `extrude
+base → cut pocket A → cut pocket B → fillet`. Join-only preserved geometry by
+refusing decisions; the correction is not to start guessing but to make the
+decisions *earn licences*.
+
+Slabs keep two roles and lose one:
+
+1. **Evidence generator (kept, primary).** The event stations, loop
+   classifications, track graph, occupancy differences, and constancy
+   records are the highest-value topology evidence the pipeline produces;
+   they feed the FHG's profile layer directly.
+2. **Fallback program (kept).** The join-only stack (§C, track semantics of
+   §A.1) remains always-admissible where its own licences hold — the honest
+   floor every factored candidate must beat under the selection gates.
+3. **Preferred final representation (lost).** Emission preference now
+   belongs to the FHG competition
+   (`docs/plans/2026-08-21-001-design-feature-program-synthesis.md`).
+
+**The semantic-factorization stage** runs over slab occupancy differences,
+immediately after slab classification, producing feature hypotheses (never
+emissions — the search decides):
+
+```text
+slab occupancy differences (adjacent-station profile deltas, per track)
+├── persistent added loop (material-inside)      → boss / additive-extrude candidate
+├── persistent removed loop (material-outside)   → pocket / cut-extrude candidate
+├── concentric circular removal                  → hole / counterbore candidate
+├── constant-offset cavity (§D pairing evidence) → shell candidate
+├── repeated congruent changes (regularity class)→ pattern candidate
+└── unexplained difference                       → slab fallback retains it
+```
+
+Each candidate carries the polarity evidence (winding first, parity
+cross-check, occupancy differencing — design 2026-08-21-001 §5), the events
+that bound it, and the loop provenance already on the record. The factored
+program wins **only** when it explains the same measured support within the
+same fidelity budget (selection gates G1–G4) and is more compact (G5); a
+factored candidate that loses or cannot be licensed leaves the slab stack's
+emission exactly as designed above. The cost stated in §C ("a pocket is not
+one named pocket feature in the timeline") is thereby paid only when the
+evidence genuinely cannot say "pocket".
+
+`relation_to_below` reporting is unchanged — it was this factorization's
+seed all along, and its verdicts now feed hypotheses instead of ending as
+prose.
+
+## B.2 Adaptive section certification (review "three sections"; adoption 8)
+
+The fixed quarter/mid/three-quarter confirmation is superseded. Three
+deterministic samples cannot prove no local topological event lies between
+them: a narrow boss, slot, chamfer termination, local rib, or scan defect can
+live entirely inside an interval — and the event machinery does not close the
+gap, because an event exists only where a bounding plane was accepted or a
+side-region endpoint was measured, and the very features most likely to hide
+are the ones whose planes the fitters refused. The fix is not more fixed
+stations; it is termination on evidence:
+
+1. **Predict** interval invariance from the fitted side surfaces and the
+   event/track hypotheses (what the generative model says each interval's
+   section must be).
+2. **Verify** with sparse sections first (the existing mid + declared
+   fractions remain the seed set; all mechanics, tolerances, and the
+   complete-linkage loop correspondence of §A.2 unchanged).
+3. **Compare** each interval's triangle support against the generative
+   prediction. Insertion is triggered only by **unexplained or
+   prediction-contradicting** support: side-region residual structure
+   exceeding the fitted model's bound over a sub-interval, triangles the
+   fitted side surfaces do not explain, or side-region endpoint evidence
+   inside the interval. **Model-consistent unsectioned support does not
+   trigger** — a constant slab's many axial triangle rows are certified by
+   the fitted side surfaces' own residual bound, not by sectioning every
+   row, otherwise the loop degenerates to one section per row and exhausts
+   the budget refusing valid slabs. Candidate stations are generated deterministically — the
+   quantized location of the implicating evidence (residual-peak station,
+   provenance-gap midpoint, endpoint station), quantization and tie-breaks
+   by the 007 §2.3 idiom — so two runs section the same stations; the exact
+   residual aggregation statistic is the implementing PR's
+   `_declared_number` scope, declared with rationale like every other
+   threshold.
+4. **Insert and repeat** until every interval is certified below the
+   declared geometric uncertainty bound (`slab_constancy_tolerance_mm`, same
+   declared number, same rationale) — or **refuse** `slab-section-inconstant`
+   naming the interval and the unresolved evidence, exactly as before.
+5. **Budget:** `slab_certification_max_sections` (declared, with rationale;
+   registered in the consolidated threshold list of §Vocabulary alongside
+   the other declared numbers, `experimental-default` under 002 §B.2's
+   sweep rule, value recorded hash-bound in the certification record)
+   caps the loop; exhausting it is the refusal, never a silent pass. The
+   certification record lists every station sectioned, which evidence
+   demanded it, and the bound each interval achieved.
+
+Certification thereby terminates on evidence, not on a station count; the
+three-station wording in §A ("confirmed by sections at two more declared
+stations") and §A.2's "the three constancy sections" are read as the seed
+set of this loop wherever they appear.

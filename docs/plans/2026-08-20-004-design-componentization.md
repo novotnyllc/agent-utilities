@@ -47,8 +47,13 @@ sources' summaries, not re-derived): no commercial scan-to-CAD tool promises
 automatic decomposition of a fused multi-object scan — the documented industry
 answer is "disassemble and scan separately," and service bureaus bill manual
 mesh cropping per part. The first shipped stage of this lane (C2, placed
-reference-mesh components) therefore exceeds the documented commercial bar,
-not merely approaches it.
+reference-mesh components) is therefore **a useful intermediate capability no
+documented commercial workflow automates** — it preserves the fused scan's
+placement datum, which the disassemble-and-rescan workflow throws away.
+**[Narrowed 2026-08-21, Amendment §B.1: the earlier "exceeds the documented
+commercial bar" claim was too broad — placement preservation exceeds one
+aspect of one workflow, and reference meshes are not the editable parametric
+reconstruction the commercial bar is about.]**
 
 Module paths below are relative to
 `plugins/agent-utilities/skills/fusion-parametric-design/`.
@@ -84,7 +89,7 @@ it supports:
 | --- | --- | --- |
 | **`surface-region`** | these triangles share a geometric model | a gated fit (the segmentation lane's product) |
 | **`geometric-subobject`** | the exterior surface admits a stable separable partition here | boundary/separability evidence + partition stability + exact ownership + closure accounting (the C1 partition licence, §4.1) |
-| **`physical-thing`** | independent-object evidence exists **beyond** geometric separability | an independent channel: an observed gap or seam, disconnected source topology, a mutually occluding boundary, a uniquely evidenced assembly interface, or an explicit caller declaration |
+| **`physical-thing`** | independent-object evidence exists **beyond** geometric separability | an independent channel, machine-checkable per Amendment §B.2's exact predicate names: `observed-gap-or-seam`, `disconnected-source-topology` (closed, non-nested), or `caller-declaration` — tier-S; `mutual-occlusion-boundary` and `second-view-interface` corroborate only. (A second capture *showing* separation satisfies `observed-gap-or-seam` from that capture; the earlier prose "uniquely evidenced assembly interface" resolves to that predicate, not to a predicate of its own.) |
 | **`delivery-component`** | the output policy chooses a Fusion component as an editing unit | the C2 delivery licence (§4.1) |
 
 Rules that follow, binding on every stage and record below:
@@ -99,8 +104,9 @@ Rules that follow, binding on every stage and record below:
    scoreboard's C cell counts them distinctly (003 §1.4 amended: the
    numerator's claim level is named).
 3. The product story survives intact — an editing decomposition of a fused
-   scan into placed, statused components is the deliverable and still
-   exceeds the documented commercial bar — it just stops asserting
+   scan into placed, statused components is the deliverable, a useful
+   intermediate capability no documented commercial workflow automates
+   (Amendment §B.1's narrowed claim) — it just stops asserting
    physics it has not measured. A user who wants the bosses as components
    gets them, labelled as what the evidence supports.
 4. Every refusal and licence in this document is re-read under this table:
@@ -775,8 +781,8 @@ stands beside it, unchanged.
 
 ## 6. PR sequence
 
-**[Ordering superseded 2026-08-20: the canonical cross-lane order lives in
-`docs/reviews/2026-08-20-oracle-design-review.md` §2 — PR C-1 is itself the
+**[Ordering superseded 2026-08-20, pointer updated 2026-08-21: the canonical cross-lane order lives in
+`docs/reviews/2026-08-21-deep-research-reconciliation.md` §3 (extending and superseding the 2026-08-20 review's §2; FHG ratification and the scoreboard P/precision/causal-E cells precede any emitter optimization) — PR C-1 is itself the
 step that lands the §0 ontology in the schema (the bootstrap that satisfies
 the prerequisite; nothing precedes it on this lane), and C-2/C-3 require
 C-1; C-4 only after 002 §A.2's lineage contract is implemented; slab tracks
@@ -1206,3 +1212,97 @@ thinghood — the injection-molded-lid case defeats it by construction, since
 both readings explain the observed exterior. `decomposition-preferred-on-held-out`
 therefore licenses `componentized-geometric` delivery, and the physical-thing
 channels of §0 remain the only path to `physical-thing-evidenced`.
+
+---
+
+## Amendment B — deep-research reconciliation incorporation (2026-08-21)
+
+*Source: `docs/reviews/2026-08-21-deep-research-reconciliation.md` (finding
+9, adoption 12). The reviewer's strongest-attack verdict on this document —
+"keep this ontology substantially unchanged; it independently converges on
+the identifiability boundary" — is recorded as external corroboration of §0;
+nothing in the four-concept table changes. Two claims narrow (markers in
+place above), one evidence bar becomes machine-checkable, and one open item
+is reaffirmed as blocking.*
+
+### B.1 The two narrowed claims (finding 9, accepted)
+
+- **C2 vs the commercial bar.** "Exceeds the documented commercial bar" was
+  too broad: preserving the fused scan's placement datum exceeds one aspect
+  of the disassemble-and-rescan workflow, but placed reference meshes are
+  not the editable parametric reconstruction the bar is about. C2 is now
+  described everywhere as a **useful intermediate capability** — the stakes
+  paragraph and §0 rule 3 are revised in place.
+- **The v1 detection lane is a restricted scope, and the narrative says
+  so.** Detection is deliberately strongest for candidates attached to
+  accepted base faces across planar contact-style interfaces, with honest
+  refusals for non-planar (`interface-not-planar`), through
+  (`interface-pierced`), and unsupported interfaces. That is a good v1
+  scope, not a general componentization solution; any external or product
+  description of this lane names the supported interface family rather
+  than claiming general automatic decomposition. The general evidence
+  channels remain the long-term architecture (review divergence table,
+  "attached design for v1; Phase A for long-term").
+
+### B.2 Machine-checkable physical-thing evidence predicates (adoption 12)
+
+§0's "independent channel" prose becomes a **closed predicate set**, each a
+record-backed check the C cell's `physical-thing-evidenced` numerator must
+cite by name (field: `physical_evidence[]`; the validator rejects an
+evidenced claim with an empty tier-S set, and **resolves every
+`record-ref`**: the referenced record must exist, its hash and
+`partition_version` must verify, its subject must be the claiming thing,
+and its predicate result must pass the predicate's own declared thresholds
+— an unrelated or stale record entry is a validation failure, not
+evidence). The set is **two-tiered**, because
+several observations are consistent with one part observing itself: a
+hollow molding's inner shell is dual-graph-disconnected from its exterior,
+an integral boss self-occludes its base, and a second view of an interface
+region says nothing about whether it is a joint. Only tier-S predicates
+license the claim; tier-C entries corroborate and are recorded but **never
+sufficient, alone or in combination with each other**:
+
+**Tier S — standalone-sufficient** (each entry
+`{predicate, record-ref}`; at least one required):
+
+| Predicate | Machine check |
+| --- | --- |
+| `disconnected-source-topology` | the thing's support is a connected component of the source mesh sharing no edge with any other owner's support (dual-graph check over the immutable triangle IDs) — **and observed-closed**: every boundary edge of the component is either absent (watertight) or licensed to a recorded interface **whose separation evidence is itself tier-S observed** (the open-gap standard) — a §4.6 virtual closure (`inferred-by-contact` / `inferred-by-continuation`) never satisfies this predicate's boundary condition, because an inferred cap is geometric inference, not observed separation; a component carrying unlicensed capture-boundary edges (`capture-boundary-unclosed` scope) cannot claim this predicate, because a missing triangle band can split one physical part into two dual-graph fragments and C1/C2 deliberately proceed under that token — apparent disconnection across a capture hole is a capture fact, not a physical one — **and not nested**: a component whose support lies entirely inside another component's closed volume (ray-parity containment, closed-mesh licence) is that part's interior shell, not a separate thing, and stays `componentized-geometric` |
+| `observed-gap-or-seam` | a measured **open gap** bounding the full contact perimeter: a boundary-edge band with measured gap width above the declared floor, i.e. observed absence of material between the two supports — coverage fraction recorded against declared floors — **where the gap is bounded by observed support on both sides** at every counted perimeter station and **no counted edge lies in a `capture-boundary-unclosed` scope** (§4.6): a missing capture band produces the same boundary edges while saying nothing about material, and a capture hole is a capture fact, not a physical one — the same exclusion `disconnected-source-topology` already applies. **Closed continuous material never qualifies, whatever its profile**: a plain dihedral crease fails (the §0 molded-boss counterexample carries a crease around its full contact perimeter while being one physical part), and a reentrant seam groove fails for the same reason on measured depth/width alone — an integral molded boss with a deep circumferential relief groove passes any depth/width floor while remaining one part, so groove geometry is tier-C `reentrant-seam-groove` below, never standalone; crease-only and groove-only matches stay `componentized-geometric`. A second registered capture (hash-bound dump, registration transform + uncertainty on record) whose geometry shows this same open-gap standard at the interface satisfies this predicate from that capture — that is what a second view must *show*, not merely look at |
+| `caller-declaration` | an explicit declaration in the run's hash-bound input spec, quoted, with the declaring key — never inferred. The spec is the only declaring principal: the validator resolves the quote against the spec the run's record hash-binds, and a declaration appearing in any pipeline-produced artifact never satisfies this predicate — a producer cannot self-attest thinghood into the C numerator |
+
+**Tier C — corroborating-only** (recorded in `physical_evidence[]` with
+`tier: corroborating`; strengthens a tier-S claim, licenses nothing by
+itself):
+
+| Predicate | Machine check |
+| --- | --- |
+| `mutual-occlusion-boundary` | an occlusion contour record: capture boundary edges where one surface's support ends *because* another's begins, shadowing geometry identified. Corroborating-only because self-occlusion defeats it — an integral boss shadows its own base |
+| `second-view-interface` | a registered second capture observing the interface region without meeting the open-gap standard — evidence the interface was *looked at*, not that separation was *seen* |
+| `reentrant-seam-groove` | a reentrant seam groove around the full contact perimeter whose measured depth/width exceeds what a fillet/blend explains (declared floors, coverage fraction recorded). Corroborating-only because continuous material defeats it — an integral molded boss with a decorative relief groove satisfies every geometric floor while being one part; separation must be *observed* (tier-S) before groove geometry can strengthen the claim |
+
+Each predicate's thresholds (gap-width floor, seam-depth floor,
+gap-coverage fraction, registration tolerance) are declared through
+`_declared_number`, labelled
+`experimental-default` under 002 §B.2's sweep rule. Anything not on this
+list is not physical-thing evidence — in particular "base and subobject
+both reconstruct" (§0 rule 1, unchanged) and R3's held-out preference
+(§A.6, unchanged) remain geometric-only. **A uniquely constrained repeated
+instance is deliberately absent from this table**: the external review's
+Phase A listed it as a physical channel, but R5's own binding rule wins —
+a repeated complete instance whose boundary uniquely determines a hidden
+continuation licenses `inferred-by-continuation` geometric completion and
+therefore `componentized-geometric` at most (repeated integral molded
+bosses pass the instance and continuation checks while remaining one
+physical part). It nominates; it never evidences physical identity. The census and scoreboard cite
+predicates by name, so a `physical-thing-evidenced` claim is auditable
+without re-running detection.
+
+### B.3 Stable thing-ID remains the C5 blocker (reaffirmed)
+
+§A.4's open item is elevated by the canonical order (review file §3, step
+7): **no joint, update-in-place, or instance semantics may depend on
+component identity until the stable thing-ID design note lands** (owner: PR
+C-4, before C-5 relies on stable ids). This was already the registered
+state; the reconciliation makes it a named ordering constraint rather than
+a note.
