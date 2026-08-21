@@ -169,7 +169,7 @@ Blocking is not required, but committing is. Rough the feature out if it helps t
 
 A documented user default is **proposed, never silently assumed**. Say which material you are proposing and why, and confirm before the geometry depends on it. Re-confirm explicitly whenever the use case conflicts with the default — an outdoor, high-heat, chemically exposed, sustained-load, or repeatedly flexing part under a PLA default is exactly that conflict, and it is the agent's job to raise it rather than to print the default into the model.
 
-Record the outcome in `material_decision` with its source and confidence, and bind a provisional decision to a `VAL__` coupon or a stated risk. Select from requirements, and take every number from the formulation's data sheet or a printed coupon: `references/material-selection.md`.
+Record the outcome in `material_decision` with its source and confidence, and bind a provisional decision to a validation coupon or a stated risk. Select from requirements, and take every number from the formulation's data sheet or a printed coupon: `references/material-selection.md`.
 
 ## 4. Parameterize in the user's language
 
@@ -199,11 +199,11 @@ Once a native feature references these parameters, later MCP changes should norm
 
 For every manufactured part, cable interface, or mating object, maintain the representations that answer different questions:
 
-### A. Editable reference model — `REF__...`
+### A. Editable reference model — role `reference`
 
 A simple Fusion-native parametric model whose dimensions can be inspected and changed. It should contain the planes, axes, mounting holes, connector centers, support faces, and datum geometry needed to author the enclosure. It need not reproduce irrelevant cosmetic detail.
 
-### B. Packing model — `PACK__...`
+### B. Packing model — role `packing`
 
 The best available physical occupancy model:
 
@@ -211,11 +211,11 @@ The best available physical occupancy model:
 - an imported mesh retained as immutable exact-shape evidence;
 - or a conservative solid envelope when exact geometry is unavailable.
 
-For automated minimum-distance, interference, positive-volume, and precise-bound checks, the `PACK__` component must contain—or be paired with—a **checkable B-Rep envelope** in the same installed position. Fusion's tight occurrence bounds and interference workflow are B-Rep-oriented; an exact mesh may coexist for visual or deviation evidence but must not silently stand in for checkable clash geometry.
+For automated minimum-distance, interference, positive-volume, and precise-bound checks, the packing component must contain—or be paired with—a **checkable B-Rep envelope** in the same installed position. Fusion's tight occurrence bounds and interference workflow are B-Rep-oriented; an exact mesh may coexist for visual or deviation evidence but must not silently stand in for checkable clash geometry.
 
 Use the packing system for placement, bounds, clearance, interference, and visual plausibility. Do not derive editable product geometry from fragile face identities on an uncontrolled imported model when stable datums or parameters will do.
 
-### C. Functional keep-outs — `KEEP__...`
+### C. Functional keep-outs — role `keepout`
 
 Separate solids or components for space the object needs but does not physically occupy at rest. Common electronics keep-outs include:
 
@@ -240,21 +240,23 @@ For electronics enclosures, having only a board-shaped box is incomplete. The co
 Create or preserve this hierarchy unless the existing document already has a coherent equivalent:
 
 ```text
-00_REFERENCES/
-  REF__<part>__PARAMETRIC
-  PACK__<part>__EXACT_OR_CONSERVATIVE
-  KEEP__<function>
-10_PRODUCT/
-  PROD__BASE
-  PROD__LID
-  PROD__MOUNTS
-20_FIXTURES/
-  FIX__<manufacturing-or-assembly-aid>
-90_VALIDATION/
-  VAL__<fit-coupon-or-test-article>
+References/
+  <Part> Reference
+  <Part> Envelope
+  <Function> Keep-Out
+Product/
+  Base
+  Lid
+  Mounts
+Fixtures/
+  <manufacturing or assembly aid>
+Validation/
+  <fit coupon or test article>
 ```
 
-The hierarchy is semantic, not decorative: when the document follows this convention, an agent can inventory it and know which components are evidence, product, fixtures, or tests without relying on browser order. Nothing in the tooling enforces the prefixes — the manifest's `references` and `verification` blocks are the authoritative classification, so keep the tree and the manifest in step yourself.
+Names are for people: plain words with spaces, short but descriptive, named the moment the component is created — what a person would write in the browser, never a slug, a number prefix, or an ALL_CAPS role tag (`references/design-doctrine.md` § Naming). Fusion appends the immutable `:1` instance suffix to every occurrence, so a name must read well in front of it: `PD Trigger Envelope:1`, not `PACK__PD_TRIGGER__EXACT_OR_CONSERVATIVE:1`.
+
+The hierarchy is still semantic: the manifest's `references`, `printable_parts`, and `material_decision` blocks are the authoritative classification — plus an explicit `component_roles` block for components no other block can own (a reconstruction manifest's mesh reference, a print fixture) — and the scaffold writes each component's role (`reference`, `packing`, `keepout`, `product`, `fixture`, `validation`) into the `fusion_parametric_design` attribute group as `role`, removing a previously written role the current manifest no longer claims. Machine-readable roles ride on attributes, never on display names. Inventory reads the role attribute first and recognizes the legacy `REF__`/`PACK__`/`KEEP__`/`PROD__`/`FIX__`/`VAL__` name prefixes only as an adoption fallback for documents built before roles were attributes.
 
 Tag managed entities with Fusion attributes. Locate them by stable component path, managed id, and attributes. Do not rely on a timeline index. Do not compare entity-token strings as identity; resolve tokens back through the design when tokens are necessary.
 
@@ -284,8 +286,8 @@ A generated helper script must be idempotent: find-or-create, update only what d
 
 For an enclosure or packed product:
 
-1. place all `PACK__` components in installed position;
-2. place all `KEEP__` components;
+1. place all packing components in installed position;
+2. place all keep-out components;
 3. define support faces, mounting datums, and insertion order;
 4. settle wire and cable routes, including relaxed loops;
 5. settle service access and removal paths;
@@ -321,7 +323,7 @@ For moving mechanisms, create Fusion joints and limits where practical. A motion
 
 A photo can identify shape and interfaces but normally cannot establish millimeters. A scan can supply reference geometry but is not automatically metrology. Mark scan-derived critical parameters provisional until a fit coupon or direct measurement confirms them.
 
-When a downloaded mesh arrives, do not pretend it is an editable parametric model. Import it into a `PACK__` or reference component, inspect its units and bounds, and rebuild only the dimensions and datums the product needs. Preserve the mesh as exact-shape evidence and add a conservative native B-Rep envelope when the model participates in automated clearance or interference checks. Prefer a manufacturer STEP/B-rep when available.
+When a downloaded mesh arrives, do not pretend it is an editable parametric model. Import it into a packing or reference component, inspect its units and bounds, and rebuild only the dimensions and datums the product needs. Preserve the mesh as exact-shape evidence and add a conservative native B-Rep envelope when the model participates in automated clearance or interference checks. Prefer a manufacturer STEP/B-rep when available.
 
 Do not convert a dense mesh to B-rep merely to claim parametric editability. Conversion can create thousands of fragile faces and does not recover design intent. Keep the original mesh immutable.
 
@@ -400,7 +402,7 @@ Then prove the result. `designType == ParametricDesignType` establishes nothing 
 
 The end-to-end procedure against a live Fusion — every command, what to look at in each report, and what a failure at each stage means — is `docs/live-fusion-acceptance.md` §13.
 
-When fit depends on an irregular scan, create a small `VAL__` coupon containing only the critical mating profile before committing to the full print.
+When fit depends on an irregular scan, create a small validation coupon containing only the critical mating profile before committing to the full print.
 
 ## 11. Verify numerically after every meaningful change
 
@@ -436,7 +438,7 @@ Fusion's canvas replaces Nurb's live browser viewer. Do not work through a long 
 After a meaningful visual change:
 
 - fit the camera to the relevant components;
-- set useful visibility and opacity for `PACK__` and `KEEP__` components;
+- set useful visibility and opacity for packing and keep-out components;
 - capture a screenshot when supported;
 - state what is provisional and what the user should judge;
 - keep the same active document and camera context when possible.

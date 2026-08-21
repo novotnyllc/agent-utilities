@@ -73,7 +73,7 @@ missing:
 
 ## Packing and component ledger
 
-| Item | Installed transform/orientation | `REF__` authoring model | `PACK__` checking model | `KEEP__` volumes | Support/retention | Insertion/removal sequence | Confidence |
+| Item | Installed transform/orientation | Authoring (reference) model | Packing (checking) model | Keep-out volumes | Support/retention | Insertion/removal sequence | Confidence |
 |---|---|---|---|---|---|---|---|
 | None recorded | — | — | — | — | — | — | — |
 

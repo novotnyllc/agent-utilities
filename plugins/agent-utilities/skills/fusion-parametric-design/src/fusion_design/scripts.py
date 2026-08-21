@@ -401,6 +401,42 @@ def _timeline_health(design):
 def emit_inventory_script(manifest: Manifest) -> str:
     expected = manifest.component_tree
     return _script_prelude(manifest) + f'''EXPECTED_COMPONENT_PATHS = json.loads({_json_literal(expected)})
+ATTRIBUTE_GROUP = "fusion_parametric_design"
+
+# Adoption fallback for designs built before roles rode on attributes: the old
+# convention encoded the role in a shouty name prefix. An attribute always wins
+# over a name; the prefix is only read when no role attribute is present, and
+# the provenance says which one answered.
+LEGACY_ROLE_PREFIXES = {{
+    "REF__": "reference",
+    "PACK__": "packing",
+    "KEEP__": "keepout",
+    "PROD__": "product",
+    "FIX__": "fixture",
+    "VAL__": "validation",
+}}
+
+
+def _component_role(occurrence, path):
+    attribute_error = None
+    try:
+        attribute = occurrence.component.attributes.itemByName(ATTRIBUTE_GROUP, "role")
+        if attribute and attribute.value:
+            return {{"role": attribute.value, "provenance": "attribute"}}
+    except Exception as error:
+        # Fail closed: an unreadable probe is disclosed, never silently blank.
+        attribute_error = str(error)
+    name = path.rsplit("/", 1)[-1]
+    for prefix, role in LEGACY_ROLE_PREFIXES.items():
+        if name.startswith(prefix):
+            row = {{"role": role, "provenance": "legacy-name"}}
+            if attribute_error:
+                row["attribute_error"] = attribute_error
+            return row
+    row = {{"role": None, "provenance": "attribute-unreadable" if attribute_error else "undeclared"}}
+    if attribute_error:
+        row["attribute_error"] = attribute_error
+    return row
 
 
 def run(context):
@@ -429,7 +465,9 @@ def run(context):
         bounding_boxes = {{}}
         brep_bounding_boxes = {{}}
         geometry = {{}}
+        roles = {{}}
         for path, occurrence in occurrence_map.items():
+            roles[path] = _component_role(occurrence, path)
             geometry[path] = _body_summary(occurrence)
             try:
                 bounding_boxes[path] = _all_geometry_bbox_mm(occurrence)
@@ -452,6 +490,7 @@ def run(context):
             "is_parametric": design.designType == adsk.fusion.DesignTypes.ParametricDesignType,
             "parameters": parameters,
             "component_paths": component_paths,
+            "component_roles": roles,
             "duplicate_semantic_paths": duplicate_semantic_paths,
             "missing_expected_components": sorted(set(EXPECTED_COMPONENT_PATHS) - set(component_paths)),
             "ambiguous_expected_components": sorted(
@@ -636,7 +675,9 @@ def run(context):
 
 def emit_scaffold_script(manifest: Manifest) -> str:
     paths = manifest.component_tree
+    roles = manifest.component_roles()
     return _script_prelude(manifest) + f'''COMPONENT_PATHS = json.loads({_json_literal(paths)})
+COMPONENT_ROLES = json.loads({_json_literal(roles)})
 ATTRIBUTE_GROUP = "fusion_parametric_design"
 
 
@@ -677,6 +718,21 @@ def _ensure_component_path(root_component, path):
             changed_attributes.append("managed")
         if _ensure_component_attribute(occurrence.component, "manifest_sha256", MANIFEST_SHA256):
             changed_attributes.append("manifest_sha256")
+        role = COMPONENT_ROLES.get("/".join(current_parts))
+        if role:
+            if _ensure_component_attribute(occurrence.component, "role", role):
+                changed_attributes.append("role")
+        else:
+            # A manifest revision that drops a path's classification must also
+            # retract the previously written role: inventory is attribute-first,
+            # so a stale attribute would keep reporting the obsolete role.
+            stale = occurrence.component.attributes.itemByName(ATTRIBUTE_GROUP, "role")
+            if stale:
+                if not stale.deleteMe():
+                    raise RuntimeError(
+                        "Fusion failed to remove the stale role attribute on " + "/".join(current_parts)
+                    )
+                changed_attributes.append("role-removed")
         if changed_attributes:
             attribute_updates.append({{
                 "component_path": "/".join(current_parts),

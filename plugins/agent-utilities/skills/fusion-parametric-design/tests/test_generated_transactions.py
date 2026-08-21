@@ -17,7 +17,12 @@ import unittest
 
 from fusion_design.manifest import Manifest, load_manifest
 from fusion_design.positive_control import emit_positive_control_script
-from fusion_design.scripts import emit_scaffold_script, emit_verification_script, manifest_sha256
+from fusion_design.scripts import (
+    emit_inventory_script,
+    emit_scaffold_script,
+    emit_verification_script,
+    manifest_sha256,
+)
 
 from test_scripts import load_generated_script
 
@@ -77,7 +82,10 @@ class FakeAttributes:
     def itemByName(self, group, name):
         if (group, name) not in self.values:
             return None
-        return SimpleNamespace(value=self.values[(group, name)])
+        return SimpleNamespace(
+            value=self.values[(group, name)],
+            deleteMe=lambda: self.values.pop((group, name), None) is not None,
+        )
 
     def add(self, group, name, value):
         self.values[(group, name)] = value
@@ -257,10 +265,10 @@ class OccurrenceMapTests(unittest.TestCase):
 
     def test_root_context_map_keys_paths_and_records_duplicates_as_a_dict(self) -> None:
         occurrence_map = self.namespace["_root_context_occurrence_map"]
-        first = FakeOccurrence("10_PRODUCT:1+PROD__BASE:1", FakeComponent("PROD__BASE"))
-        duplicate = FakeOccurrence("10_PRODUCT:1+PROD__BASE:2", FakeComponent("PROD__BASE"))
-        lid = FakeOccurrence("10_PRODUCT:1+PROD__LID:1", FakeComponent("PROD__LID"))
-        parent = FakeOccurrence("10_PRODUCT:1", FakeComponent("10_PRODUCT"))
+        first = FakeOccurrence("Product:1+Base:1", FakeComponent("Base"))
+        duplicate = FakeOccurrence("Product:1+Base:2", FakeComponent("Base"))
+        lid = FakeOccurrence("Product:1+Lid:1", FakeComponent("Lid"))
+        parent = FakeOccurrence("Product:1", FakeComponent("Product"))
         root_itself = FakeOccurrence("Root:1", FakeComponent("Root"))
         root = SimpleNamespace(
             name="Root",
@@ -270,15 +278,15 @@ class OccurrenceMapTests(unittest.TestCase):
         paths, mapping, duplicates = occurrence_map(root)
 
         self.assertEqual(
-            ["10_PRODUCT", "10_PRODUCT/PROD__BASE", "10_PRODUCT/PROD__LID"], paths
+            ["Product", "Product/Base", "Product/Lid"], paths
         )
-        self.assertIs(first, mapping["10_PRODUCT/PROD__BASE"])
+        self.assertIs(first, mapping["Product/Base"])
         self.assertIsInstance(duplicates, dict)
         self.assertEqual(
             {
-                "10_PRODUCT/PROD__BASE": [
-                    "10_PRODUCT:1+PROD__BASE:1",
-                    "10_PRODUCT:1+PROD__BASE:2",
+                "Product/Base": [
+                    "Product:1+Base:1",
+                    "Product:1+Base:2",
                 ]
             },
             duplicates,
@@ -286,11 +294,11 @@ class OccurrenceMapTests(unittest.TestCase):
 
     def test_body_summary_classifies_sliver_surface_and_mesh_bodies(self) -> None:
         occurrence = FakeOccurrence(
-            "10_PRODUCT:1+PROD__BASE:1",
+            "Product:1+Base:1",
             FakeComponent(
-                "PROD__BASE",
+                "Base",
                 bodies=[
-                    FakeBody("PROD__BASE__SOLID", 5000.0),
+                    FakeBody("Base__SOLID", 5000.0),
                     FakeBody("SLIVER", 1e-6),
                     FakeBody("SURFACE", 0.0, is_solid=False),
                 ],
@@ -309,7 +317,7 @@ class OccurrenceMapTests(unittest.TestCase):
         self.assertTrue(summary["has_positive_solid"])
         self.assertAlmostEqual(5000.0 + 1e-6, summary["total_solid_volume_mm3"])
         self.assertEqual(
-            ["PROD__BASE__SOLID", "SLIVER", "SURFACE"],
+            ["Base__SOLID", "SLIVER", "SURFACE"],
             [row["name"] for row in summary["bodies"]],
         )
 
@@ -344,14 +352,14 @@ class VerificationRunTests(unittest.TestCase):
         self.assertEqual([5.0], [row["distance_mm"] for row in report["clearance_results"]])
         self.assertTrue(all(row["ok"] for row in report["clearance_results"]))
         self.assertEqual([0, 0], [row["count"] for row in report["interference_results"]])
-        self.assertEqual(IDENTITY, report["occurrence_transforms"]["10_PRODUCT/PROD__BASE"])
+        self.assertEqual(IDENTITY, report["occurrence_transforms"]["Product/Base"])
         self.assertEqual(
             {"is_suppressed": False, "is_light_bulb_on": True, "is_visible": True},
-            report["occurrence_states"]["10_PRODUCT/PROD__BASE"],
+            report["occurrence_states"]["Product/Base"],
         )
         self.assertEqual(
             {"min": [0.0, 0.0, 0.0], "max": [20.0, 20.0, 12.5]},
-            report["brep_bounding_boxes_mm"]["10_PRODUCT/PROD__BASE"],
+            report["brep_bounding_boxes_mm"]["Product/Base"],
         )
 
     def test_checked_names_only_the_gates_the_run_performed(self) -> None:
@@ -458,7 +466,7 @@ class VerificationRunTests(unittest.TestCase):
     def test_extra_solid_body_fails_the_declared_body_count(self) -> None:
         def two_solids(path):
             bodies = solid_part(path)
-            if path == "10_PRODUCT/PROD__BASE":
+            if path == "Product/Base":
                 bodies.append(FakeBody("VESTIGIAL", 4000.0))
             return bodies
 
@@ -470,7 +478,7 @@ class VerificationRunTests(unittest.TestCase):
         failure = next(
             row
             for row in reports[0]["print_part_failures"]
-            if row["path"] == "10_PRODUCT/PROD__BASE"
+            if row["path"] == "Product/Base"
         )
         self.assertEqual("solid-body-count", failure["reason"])
         self.assertEqual(1, failure["expected"])
@@ -488,11 +496,11 @@ class VerificationRunTests(unittest.TestCase):
         failure = next(
             row
             for row in reports[0]["print_part_failures"]
-            if row["path"] == "10_PRODUCT/PROD__BASE"
+            if row["path"] == "Product/Base"
         )
         self.assertEqual("body-name-mismatch", failure["reason"])
         self.assertEqual("PROD_BASE_SHELL", failure["expected"])
-        self.assertEqual("PROD__BASE__BODY", failure["actual"])
+        self.assertEqual("Base__BODY", failure["actual"])
 
     def test_print_part_without_a_declared_expectation_fails(self) -> None:
         data = self.manifest.to_dict()
@@ -547,7 +555,7 @@ class VerificationRunTests(unittest.TestCase):
         # The hard-coded rules are reported apart from the declared expectations.
         self.assertEqual(
             {"minimum_volume_mm3"},
-            set(report["print_part_expectations"]["10_PRODUCT/PROD__BASE"]),
+            set(report["print_part_expectations"]["Product/Base"]),
         )
         self.assertEqual(1, report["print_part_rules"]["solid_body_count"])
 
@@ -565,7 +573,7 @@ class VerificationRunTests(unittest.TestCase):
                     raise RuntimeError("Fusion did not expose isSuppressed")
                 return getattr(self._inner, name)
 
-        target = "00_REFERENCES/KEEP__USB_C_INSERTION"
+        target = "References/USB-C Insertion Keep-Out"
         occurrences[target] = OpaqueOccurrence(occurrences[target])
         namespace, _, _ = verification_harness(self.manifest, occurrences)
 
@@ -579,7 +587,7 @@ class VerificationRunTests(unittest.TestCase):
         self.assertIsNone(report["occurrence_states"][target]["is_suppressed"])
 
     def test_declared_suppression_is_recorded_and_passes(self) -> None:
-        target = "00_REFERENCES/KEEP__USB_C_INSERTION"
+        target = "References/USB-C Insertion Keep-Out"
         data = self.manifest.to_dict()
         data["verification"]["allowed_suppressed_paths"] = [target]
         data["verification"]["allow_suppressed_timeline_features"] = True
@@ -614,7 +622,7 @@ class VerificationRunTests(unittest.TestCase):
 
     def test_suppressed_occurrence_is_recorded_and_fails(self) -> None:
         occurrences = build_occurrences(
-            self.manifest, solid_part, suppressed=("00_REFERENCES/KEEP__USB_C_INSERTION",)
+            self.manifest, solid_part, suppressed=("References/USB-C Insertion Keep-Out",)
         )
         namespace, _, _ = verification_harness(self.manifest, occurrences)
 
@@ -622,9 +630,9 @@ class VerificationRunTests(unittest.TestCase):
 
         report = reports[0]
         self.assertIn("suppressed-occurrence", report["failures"])
-        self.assertEqual(["00_REFERENCES/KEEP__USB_C_INSERTION"], report["suppressed_occurrences"])
+        self.assertEqual(["References/USB-C Insertion Keep-Out"], report["suppressed_occurrences"])
         self.assertTrue(
-            report["occurrence_states"]["00_REFERENCES/KEEP__USB_C_INSERTION"]["is_suppressed"]
+            report["occurrence_states"]["References/USB-C Insertion Keep-Out"]["is_suppressed"]
         )
 
     def test_clearance_below_the_manifest_minimum_fails(self) -> None:
@@ -642,8 +650,8 @@ class VerificationRunTests(unittest.TestCase):
         occurrences = build_occurrences(self.manifest, solid_part)
         interference = SimpleNamespace(
             interferenceBody=SimpleNamespace(volume=0.25),
-            entityOne=SimpleNamespace(fullPathName="00_REFERENCES:1+KEEP__USB_C_INSERTION:1"),
-            entityTwo=SimpleNamespace(fullPathName="10_PRODUCT:1+PROD__BASE:1"),
+            entityOne=SimpleNamespace(fullPathName="References:1+USB-C Insertion Keep-Out:1"),
+            entityTwo=SimpleNamespace(fullPathName="Product:1+Base:1"),
         )
         namespace, _, _ = verification_harness(
             self.manifest, occurrences, interferences=(interference,)
@@ -658,27 +666,136 @@ class VerificationRunTests(unittest.TestCase):
         self.assertFalse(first["ok"])
         self.assertAlmostEqual(250.0, first["total_interference_volume_mm3"])
         self.assertEqual(
-            "00_REFERENCES:1+KEEP__USB_C_INSERTION:1", first["pairs"][0]["entity_one"]
+            "References:1+USB-C Insertion Keep-Out:1", first["pairs"][0]["entity_one"]
         )
 
     def test_duplicate_semantic_path_on_a_checked_component_fails(self) -> None:
         occurrences = build_occurrences(self.manifest, solid_part)
         clone = FakeOccurrence(
-            "10_PRODUCT:1+PROD__BASE:2",
-            FakeComponent("PROD__BASE", bodies=solid_part("10_PRODUCT/PROD__BASE")),
+            "Product:1+Base:2",
+            FakeComponent("Base", bodies=solid_part("Product/Base")),
         )
-        occurrences["10_PRODUCT/PROD__BASE__clone"] = clone
+        occurrences["Product/Base__clone"] = clone
         namespace, _, _ = verification_harness(self.manifest, occurrences)
 
         reports, _ = run_and_capture(namespace)
 
         report = reports[0]
         self.assertIn("ambiguous-components", report["failures"])
-        self.assertEqual(["10_PRODUCT/PROD__BASE"], report["ambiguous_component_paths"])
-        self.assertIn("10_PRODUCT/PROD__BASE", report["duplicate_semantic_paths"])
+        self.assertEqual(["Product/Base"], report["ambiguous_component_paths"])
+        self.assertIn("Product/Base", report["duplicate_semantic_paths"])
+
+
+class InventoryRoleTests(unittest.TestCase):
+    """Roles are read attribute-first; legacy shouty names are an adoption
+    fallback, and an unreadable probe is disclosed, never silently blank."""
+
+    def setUp(self) -> None:
+        self.role = load_generated_script(emit_inventory_script(load_manifest(EXAMPLE)))[
+            "_component_role"
+        ]
+
+    def occurrence(self, name, attributes=None):
+        return FakeOccurrence(full_path_name(name), FakeComponent(name, attributes=attributes))
+
+    def test_attribute_wins_over_a_legacy_name(self) -> None:
+        occurrence = self.occurrence(
+            "PACK__OLD_THING", attributes={(ATTRIBUTE_GROUP, "role"): "keepout"}
+        )
+        self.assertEqual(
+            {"role": "keepout", "provenance": "attribute"},
+            self.role(occurrence, "References/PACK__OLD_THING"),
+        )
+
+    def test_legacy_prefix_answers_when_no_attribute_is_present(self) -> None:
+        occurrence = self.occurrence("PACK__OLD_THING")
+        self.assertEqual(
+            {"role": "packing", "provenance": "legacy-name"},
+            self.role(occurrence, "00_REFERENCES/PACK__OLD_THING"),
+        )
+
+    def test_plain_unmanaged_component_is_undeclared(self) -> None:
+        occurrence = self.occurrence("Base")
+        self.assertEqual(
+            {"role": None, "provenance": "undeclared"}, self.role(occurrence, "Product/Base")
+        )
+
+    def test_unreadable_probe_is_disclosed_not_blanked(self) -> None:
+        occurrence = self.occurrence("Base")
+
+        def broken(group, name):
+            raise RuntimeError("attributes offline")
+
+        occurrence.component.attributes.itemByName = broken
+        report = self.role(occurrence, "Product/Base")
+        self.assertEqual("attribute-unreadable", report["provenance"])
+        self.assertIsNone(report["role"])
+        self.assertIn("attributes offline", report["attribute_error"])
+
+
+class GrowableOccurrences(FakeList):
+    """The one Fusion behavior _ensure_component_path needs: addNewComponent."""
+
+    def addNewComponent(self, matrix):
+        component = FakeComponent("unnamed")
+        component.occurrences = GrowableOccurrences([])
+        occurrence = SimpleNamespace(component=component)
+        self.items.append(occurrence)
+        return occurrence
 
 
 class ScaffoldRunTests(unittest.TestCase):
+    def test_scaffold_writes_role_attributes_from_the_manifest(self) -> None:
+        manifest = load_manifest(EXAMPLE)
+        namespace = load_generated_script(emit_scaffold_script(manifest))
+        root = FakeComponent("Root")
+        root.occurrences = GrowableOccurrences([])
+
+        components = {}
+        for path in manifest.component_tree:
+            namespace["_ensure_component_path"](root, path)
+            parent = root
+            for name in path.split("/"):
+                occurrence = namespace["_find_child"](parent, name)
+                parent = occurrence.component
+            components[path] = parent
+
+        roles = manifest.component_roles()
+        self.assertTrue(roles)
+        for path, component in components.items():
+            attribute = component.attributes.itemByName(ATTRIBUTE_GROUP, "role")
+            if path in roles:
+                self.assertEqual(roles[path], attribute.value, path)
+            else:
+                # Group containers carry no role; names stay organizational.
+                self.assertIsNone(attribute, path)
+            self.assertEqual(
+                "true", component.attributes.itemByName(ATTRIBUTE_GROUP, "managed").value
+            )
+
+    def test_scaffold_removes_a_role_the_manifest_no_longer_claims(self) -> None:
+        # A revision kept the path in component_tree but dropped its
+        # classification; the stale attribute must go, or inventory
+        # (attribute-first) keeps reporting the obsolete role.
+        manifest = load_manifest(EXAMPLE)
+        namespace = load_generated_script(emit_scaffold_script(manifest))
+        unclassified = next(
+            path for path in manifest.component_tree if path not in manifest.component_roles()
+        )
+        root = FakeComponent("Root")
+        root.occurrences = GrowableOccurrences([])
+        namespace["_ensure_component_path"](root, unclassified)
+        component = namespace["_find_child"](root, unclassified.split("/")[0]).component
+        component.attributes.add(ATTRIBUTE_GROUP, "role", "packing")
+
+        _, attribute_updates = namespace["_ensure_component_path"](root, unclassified)
+
+        self.assertIsNone(component.attributes.itemByName(ATTRIBUTE_GROUP, "role"))
+        self.assertIn(
+            {"component_path": unclassified.split("/")[0], "attributes": ["role-removed"]},
+            attribute_updates,
+        )
+
     def test_document_change_discloses_the_components_left_behind(self) -> None:
         manifest = load_manifest(EXAMPLE)
         namespace = load_generated_script(emit_scaffold_script(manifest))
@@ -801,14 +918,14 @@ class PositiveControlRunTests(unittest.TestCase):
 
     def test_verdict_is_rederived_after_the_final_pump(self) -> None:
         namespace, _, design, occurrences = positive_control_harness(self.manifest)
-        target = "10_PRODUCT/PROD__BASE"
+        target = "Product/Base"
         pumps = {"count": 0}
 
         def edit_document_during_processing():
             pumps["count"] += 1
             if pumps["count"] != 2:
                 return
-            clone = FakeOccurrence(full_path_name(target), FakeComponent("PROD__BASE"))
+            clone = FakeOccurrence(full_path_name(target), FakeComponent("Base"))
             design.rootComponent.allOccurrences.items.append(clone)
             occurrences[target].component.attributes.values[
                 (ATTRIBUTE_GROUP, "managed")
@@ -827,7 +944,7 @@ class PositiveControlRunTests(unittest.TestCase):
 
     def test_revoked_scaffold_identity_after_the_pump_fails_the_verdict(self) -> None:
         namespace, _, _, occurrences = positive_control_harness(self.manifest)
-        target = "10_PRODUCT/PROD__BASE"
+        target = "Product/Base"
         pumps = {"count": 0}
 
         def revoke_identity():

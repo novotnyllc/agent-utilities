@@ -24,9 +24,9 @@ from test_variant_matrix import _FakeFusion, seed_reports
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "electronics-enclosure" / "fusion-project.json"
 # The parts the example manifest declares printable; the index must name these.
-EXAMPLE_BASE = "10_PRODUCT/PROD__BASE"
-EXAMPLE_LID = "10_PRODUCT/PROD__LID"
-EXAMPLE_COUPON = "90_VALIDATION/VAL__PD_FIT_COUPON"
+EXAMPLE_BASE = "Product/Base"
+EXAMPLE_LID = "Product/Lid"
+EXAMPLE_COUPON = "Validation/PD Fit Coupon"
 
 
 class PlanReconstructionCliTests(unittest.TestCase):
@@ -722,12 +722,12 @@ class PrusaSlicerProjectCliTests(unittest.TestCase):
             root = Path(temporary)
             manifest = load_manifest(EXAMPLE)
             fixture = _Fixture(root)
-            fixture.add_part("10_PRODUCT/PROD__STOWAWAY")
+            fixture.add_part("Product/PROD__STOWAWAY")
             index = fixture.write_index(manifest=manifest)
             output = root / "p.3mf"
             code, _, errors = self._run(self._argv(index, output, _config_root(root)))
             self.assertEqual(2, code)
-            self.assertIn("does not declare as printable: 10_PRODUCT/PROD__STOWAWAY", errors)
+            self.assertIn("does not declare as printable: Product/PROD__STOWAWAY", errors)
             self.assertFalse(output.exists())
 
     def test_malformed_source_mesh_exits_two_rather_than_crashing(self) -> None:

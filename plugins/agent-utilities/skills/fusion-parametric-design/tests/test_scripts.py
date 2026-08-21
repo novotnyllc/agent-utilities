@@ -377,7 +377,10 @@ class ScriptEmissionTests(unittest.TestCase):
             source.index("preexisting_duplicate_semantic_paths"),
             source.index("_ensure_component_path(design.rootComponent"),
         )
-        self.assertNotIn("deleteMe", source)
+        # Scaffolding deletes no geometry; the single deletion retracts a
+        # stale role *attribute* the current manifest no longer claims.
+        self.assertEqual(1, source.count("deleteMe"))
+        self.assertIn("stale.deleteMe()", source)
 
         namespace = load_generated_script(source)
         real_ensure_component_path = namespace["_ensure_component_path"]

@@ -75,6 +75,23 @@
       },
       "uniqueItems": true
     },
+    "component_roles": {
+      "description": "Explicit component-path -> role declarations for components no other block classifies (e.g. a reconstruction manifest's mesh reference). Roles derived from references, material_decision, and printable_parts must not be contradicted here; one component owns one role.",
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "enum": [
+          "reference",
+          "packing",
+          "keepout",
+          "product",
+          "fixture",
+          "validation"
+        ]
+      }
+    },
     "references": {
       "type": "array",
       "items": {

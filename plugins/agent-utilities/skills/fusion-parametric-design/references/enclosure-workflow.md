@@ -8,9 +8,13 @@ Record exact part numbers, board revisions, installed headers/hats, converter va
 
 For each item create:
 
-- `REF__<item>__PARAMETRIC`: editable dimensions and datums;
-- `PACK__<item>__EXACT_OR_CONSERVATIVE`: occupancy used for placement;
-- one or more `KEEP__<function>` components.
+- `<Item> Reference` (role `reference`): editable dimensions and datums;
+- `<Item> Envelope` (role `packing`): occupancy used for placement;
+- one or more `<Function> Keep-Out` (role `keepout`) components.
+
+Names are plain words for the browser; the role is the `role` attribute in the
+`fusion_parametric_design` group, written by the scaffold from the manifest
+(`references/design-doctrine.md` § Naming).
 
 The reference model should expose:
 
@@ -60,8 +64,8 @@ The packing ledger should include:
 | id | Stable item id |
 | source | Evidence source/revision |
 | transform | Installed translation and rotation |
-| authoring model | Editable `REF__` component |
-| packing model | `PACK__` occurrence |
+| authoring model | Editable reference component |
+| packing model | Packing-envelope occurrence |
 | keep-outs | Functional spaces |
 | support | Ledges, screws, pads, saddles, adhesive, etc. |
 | clearance | Required rigid and service spacing |
