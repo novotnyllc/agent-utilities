@@ -717,14 +717,18 @@ another:
    whose regularity class licenses one shared parameter);
 2. repeated geometry represented independently rather than by
    equality/pattern where the pattern licence held;
-3. unnecessary-fallback count — the same bounded, tied-candidate
-   definition as G5: `slab-join` operations whose support the selection
-   record shows some G1–G4-tied candidate factoring within the declared
+3. unnecessary-fallback count — the same bounded definition as G5:
+   `slab-join` operations whose support some recorded candidate factors
+   into licensed semantic operations within the declared
    `semantic_factorization_max_expansion` budget; a fallback with no
-   within-budget factored alternative costs nothing, and on a program with
-   no selection record the item reads `unmeasured` (ahead of feature count
-   so a slab encoding never wins on timeline length against the
-   factorization it stands in for). **Cross-lane comparisons evaluate
+   within-budget factored alternative costs nothing (ranked ahead of
+   feature count so a slab encoding never wins on timeline length against
+   the factorization it stands in for). A lane's fallback operations are
+   read from its emitted program, so a lane needs no selection record of
+   its own to receive a numeric count — necessity comes from the shared
+   universe below, and the item reads `unmeasured` only where that
+   universe is empty; inside one lane's own G5 the universe is its own
+   G1–G4-tied candidate set, unchanged. **Cross-lane comparisons evaluate
    necessity against one pre-committed candidate universe per scoreboard
    run, never per comparison pair**: the run declares its lane roster up
    front, and the universe is the union of *every* rostered lane's
@@ -836,6 +840,11 @@ parameter:
    aggregates skip such parts with the skipped count reported beside the
    aggregate, and the token is distinct from the causal-E ratio, so an
    absent interaction set is never read as failure or as full coverage.
+   The U5 report schema and its shipped host-side validator accept only
+   the literal `interactions_exercised: false` today; the implementation
+   PR that lands these interaction cases amends the U5 schema, validator,
+   and tests in the same PR (006 U5, amended marker) — the two contracts
+   are never allowed to disagree in a shipped state.
 
 Global observables (volume/centroid/bbox) are retained as cheap smoke
 tests and may still gate early (`parameter-inert` keeps its meaning), but
