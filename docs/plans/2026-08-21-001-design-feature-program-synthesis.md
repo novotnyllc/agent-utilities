@@ -182,6 +182,23 @@ implicit rule" to "a named admission condition the record cites":
 | `component` | 004 §0/§4.1's licences at the claimed level, unchanged — the FHG never upgrades a claim level |
 | `slab-join` | the slab's own 001 licences (loop ladder, track edges). Always admissible where those hold — which is what makes it the honest floor every factored program must beat |
 
+One condition is uniform across the table rather than repeated per row:
+every **modifying** operation — one whose emission joins to or subtracts
+from existing material (`boss-extrude`, `hole`, `shell`, `fillet`/`chamfer`,
+a subtractive `revolve`, and `cut-extrude` as already stated; `sweep`/`loft`
+in their join/cut modes) — additionally requires a **licensed target**: the
+candidate prefix must contain the program element(s) producing the body the
+operation modifies, themselves licensed over the union of both supports —
+the enclosing-program-element condition `cut-extrude` states, generalized to
+every operation that presupposes a solid. Where the base profile is refused,
+an added loop does not admit a `boss-extrude` and an inward cylinder does
+not admit a `hole`: with no licensed body to join to or subtract from, the
+operation is not constructed, exactly as for any other unmet licence — a
+program may never presuppose material no hypothesis in its prefix claims,
+and the emitter is never handed an operation it cannot construct. §7's
+dependency-derived proposal order names this target dependency as an
+ordinary dependency edge.
+
 A candidate program containing one unlicensed operation is not scored low —
 it is **not constructed**. The search space is licence-bounded by
 construction, which is both the fail-closed rule and the tractability
@@ -432,10 +449,19 @@ against the other.
   exactly the silent first-rule-wins this design exists to end.
 - **Determinism:** KTD-8 discipline verbatim — every ordering derives from
   content-addressed hashes; gate comparisons use quantized values (007
-  §2.3); ties break by the candidate's **content hash over its canonical
-  serialized program** (input collections canonically ordered first), then
-  by node content hash — never by an incidental construction serial, which
-  would leak expansion order into selection; numpy/BLAS build
+  §2.3). Content hashes order **traversal and records, never selection**:
+  expansion priority among dependency-equivalent prefixes, candidate
+  enumeration, and the serialization of the selection record all follow the
+  candidate's **content hash over its canonical serialized program** (input
+  collections canonically ordered first), then node content hash — never an
+  incidental construction serial, which would leak expansion order into the
+  record. No hash ever ranks gate-tied candidates: programs tied within
+  every gate's declared tolerance stay tied all the way to §6's terminal
+  rule, where the tie is refused by name (`program-selection-ambiguous`) or
+  resolved only under the declared `resolve-by-order` escape — the single
+  place the content-addressed order may pick a program, and it is recorded
+  as a policy resolution with the full tied set, never presented as a
+  ranking. numpy/BLAS build
   recorded. Two runs on one dump produce byte-identical selection records.
 - **Bounded memory:** the graph stores support as ranges over the partition
   permutation (002 PR 1), and candidates share structure (a program is a

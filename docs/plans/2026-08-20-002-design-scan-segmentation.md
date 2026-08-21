@@ -803,8 +803,8 @@ here; this amendment supersedes the specific passages it names and nothing
 else. House rules apply throughout: verified facts carry sources, assumptions
 are labelled, every new threshold is caller-declared through
 `_declared_number` with a rationale, and every new token joins a closed set.
-The PR ordering in §6 is subordinated to the canonical cross-lane order in the
-review file §2 (see §A.8).*
+The PR ordering in §6 is subordinated to the canonical cross-lane order —
+now the 2026-08-21 reconciliation review file §3 (see §A.8).*
 
 ### A.1 The split licence, made reason-aware (finding 2 — accepted)
 
@@ -1004,7 +1004,8 @@ source_triangle_id
 `invalidated-by-partition` joins the closed vocabulary. This contract is the
 substrate that makes 003's H rule enforceable (silently-unclaimed = 0, exact,
 by triangle identity — 003 §1.5 amended) and the precondition for 004's PR
-C-4 (canonical order, review file §2, step 7). Missing decision 7 (where
+C-4 (canonical order, 2026-08-21 review file §3, step 6 — `plan-decomposition`
+in the lane sequence). Missing decision 7 (where
 decomposition sits relative to frame/relationships) is decided in design
 -004 §A.2 *on top of* this contract: whatever ran earlier against a replaced
 partition version is invalidated by rule 5, so the ordering question loses
@@ -1042,7 +1043,9 @@ protection each boundary actually had:
   when the containing cell's joint fit rejects, the proxy-distance refinement
   splitter (§4.3) **must** run there. This moves the proxy refinement for
   mixed lateral cells from PR 5's conditional census gate into the
-  correctness path: it ships in the PR 3/4 cycle (canonical order step 5).
+  correctness path: it ships in the PR 3/4 cycle (canonical order: the
+  cross-cut + correlation-model entry of the 2026-08-21 review file §3
+  step 6 lane sequence).
   PR 5's remaining scope (HFP merge, gate (b); standalone grower, gate (c))
   keeps its census gates.
 - A child boundary with neither an observed crease nor a statistically

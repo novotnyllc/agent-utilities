@@ -763,6 +763,22 @@ and never 0 (nothing was wrong) — and aggregates skip such parts with the
 skipped count reported beside the aggregate; a zero-denominator recall
 (empty evident table) already reads `unmeasured` under the §1.2 rule.
 
+A lane whose *every* evaluated part reads `unmeasured-no-emissions`
+therefore has no numeric precision coordinate at all, and §1.6's Pareto
+layering needs a defined answer rather than an implementation-dependent
+one. The rule is closed: **fronts are formed over the lanes carrying a
+numeric (precision, recall) pair only**; every lane without a numeric
+precision coordinate is placed together in one trailing front whose index
+is (last measured front + 1), recorded `v-rank-basis: no-emissions` — tied
+with the other silent lanes, ranked behind every measured lane, and never
+assigned a fabricated precision of 1 or 0. Rationale: against any
+non-empty evident table a zero-emission lane's recall is a measured 0 —
+it recognized nothing — so no measured lane may be dominated by it; but
+its silence is a fact about emission volume, not correctness, so it takes
+a deterministic trailing rank instead of a synthesized coordinate. Where
+the evident table itself is empty the whole cell is already `unmeasured`
+(§1.2) and no front is formed.
+
 Recall alone is gameable by over-emission: a system that finds the five
 real holes and hallucinates six more keeps perfect recall. V is the pair,
 reported as a pair. "Correct" is judged against ground truth where it
