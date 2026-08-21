@@ -17,26 +17,39 @@ function run(stdin) {
 const write = (file_path) => ({ tool_name: "Write", tool_input: { file_path } });
 
 test("nudges on ordinary-modeling artifact smells outside the skill tree", () => {
-  for (const p of [
-    "/Users/someone/dev/LEDs/power-pod/fusion-project.json",
-    "/Users/someone/dev/LEDs/DESIGN-STATE.md",
-    "/Users/someone/dev/LEDs/transactions/09_lid.py",
-    "/tmp/build/fusion-design-report-verification-abc123-1.json",
-    "/tmp/verify-report.json",
+  for (const input of [
+    write("/Users/someone/dev/LEDs/power-pod/fusion-project.json"),
+    write("/Users/someone/dev/LEDs/power-pod-fusion/DESIGN-STATE.md"),
+    write("/Users/someone/dev/LEDs/power-pod-fusion/transactions/09_lid.py"),
+    write("/tmp/build/fusion-design-report-verification-abc123-1.json"),
+    // Content signal: a generic path whose written content smells of Fusion.
+    {
+      tool_name: "Write",
+      tool_input: {
+        file_path: "/tmp/build/verify-report.json",
+        content: '{"kind": "verification", "fusion_document": "Pod"}',
+      },
+    },
   ]) {
-    const result = run(write(p));
+    const result = run(input);
+    const p = input.tool_input.file_path;
     assert.equal(result.status, 0, p);
     assert.match(result.stderr, /no persistent artifacts anywhere/, p);
     assert.match(result.stderr, /automation\/release lane/, p);
   }
 });
 
-test("stays silent inside the skill's own tree and on unrelated files", () => {
+test("stays silent inside the skill tree, on unrelated files, and on common names without a Fusion signal", () => {
   for (const p of [
     "/repo/plugins/agent-utilities/skills/fusion-parametric-design/examples/electronics-enclosure/fusion-project.json",
     "/repo/plugins/agent-utilities/skills/fusion-parametric-design/templates/DESIGN-STATE.md",
     "/Users/someone/dev/app/src/main.py",
     "/Users/someone/dev/app/README.md",
+    // Other projects legitimately keep these names; without a Fusion signal
+    // in the path or content, the nudge stays out of the way.
+    "/Users/someone/dev/webapp/DESIGN-STATE.md",
+    "/Users/someone/dev/bank/transactions/2026-08.csv",
+    "/Users/someone/dev/ci/verify-report.json",
   ]) {
     const result = run(write(p));
     assert.equal(result.status, 0, p);

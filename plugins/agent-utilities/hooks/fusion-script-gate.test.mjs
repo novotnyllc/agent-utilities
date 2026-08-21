@@ -19,12 +19,11 @@ const execute = (payload) => ({
   tool_input: { featureType: "script", object: payload },
 });
 
-test("blocks every process-spawning construct, marker or not", () => {
+test("blocks every process-invoking construct, marker or not", () => {
   for (const fragment of [
     "import subprocess",
     "os.system('open -a Fusion')",
     "os.execv(path, args)",
-    "import ensurepip",
     "from multiprocessing import Pool",
     "Popen(['ls'])",
   ]) {
@@ -33,6 +32,17 @@ test("blocks every process-spawning construct, marker or not", () => {
     assert.equal(result.status, 2, fragment);
     assert.match(result.stderr, /second Fusion instance/);
   }
+});
+
+test("ensurepip is blocked ad hoc but allowed in shipped lane transactions", () => {
+  // The shipped capability probe imports ensurepip by name purely to report
+  // whether the module exists; its emitted script carries the lane marker.
+  const adhoc = run(execute({ script: "import ensurepip" }));
+  assert.equal(adhoc.status, 2);
+  const probe = run(
+    execute({ script: 'REPORT_BEGIN = "FUSION_DESIGN_REPORT_BEGIN"\nimport ensurepip\n' }),
+  );
+  assert.equal(probe.status, 0);
 });
 
 test("blocks an oversized ad hoc script with an actionable message", () => {

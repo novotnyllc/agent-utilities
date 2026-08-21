@@ -10,13 +10,23 @@
 // (SKILL.md §1) is the cross-harness authority; this hook is a Claude-side
 // mechanical nudge.
 
-const SMELLS = [
+// Unambiguously this skill's artifacts, wherever they land.
+const FUSION_SMELLS = [
   /(^|[\\/])fusion-project\.json$/i,
+  /(^|[\\/])fusion-design-report-[^\\/]*\.json$/i,
+];
+
+// Common names that only smell of Fusion work in a Fusion context: other
+// projects legitimately have DESIGN-STATE files, transactions/ dirs, and
+// verify reports, so these fire only when the path or the written content
+// carries a Fusion signal. Scopes the nudge to active Fusion work instead of
+// nagging every repo the plugin is enabled in.
+const CONTEXT_SMELLS = [
   /(^|[\\/])DESIGN-STATE\.md$/i,
   /(^|[\\/])transactions[\\/]/i,
-  /(^|[\\/])fusion-design-report-[^\\/]*\.json$/i,
   /(^|[\\/])verif(y|ication)-report[^\\/]*\.json$/i,
 ];
+const FUSION_CONTEXT = /fusion|FUSION_DESIGN_REPORT|fusion_document|adsk\./i;
 
 const SKILL_TREE = /skills[\\/]fusion-parametric-design[\\/]/;
 
@@ -30,7 +40,13 @@ function main(raw) {
         ? input.tool_input.file_path
         : "";
     if (!filePath || SKILL_TREE.test(filePath)) process.exit(0);
-    if (SMELLS.some((pattern) => pattern.test(filePath))) {
+    const content =
+      typeof input.tool_input.content === "string" ? input.tool_input.content : "";
+    const smells =
+      FUSION_SMELLS.some((pattern) => pattern.test(filePath)) ||
+      (CONTEXT_SMELLS.some((pattern) => pattern.test(filePath)) &&
+        (FUSION_CONTEXT.test(filePath) || FUSION_CONTEXT.test(content)));
+    if (smells) {
       process.stderr.write(
         `[fusion-artifact-nudge] ${filePath}: ordinary Fusion modeling writes ` +
           "no persistent artifacts anywhere — confirm an automation/release " +

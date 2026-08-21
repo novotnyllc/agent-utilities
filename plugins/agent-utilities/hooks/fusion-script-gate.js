@@ -26,14 +26,20 @@
 const MAX_ADHOC_LINES = 120;
 const MAX_ADHOC_BYTES = 8192;
 
+// Always blocked, marker or not: these invoke a process when reached.
 const SPAWN_PATTERNS = [
   [/\bsubprocess\b/, "subprocess"],
   [/\bos\.system\b/, "os.system"],
   [/\bos\.exec\w*\b/, "os.exec*"],
-  [/\bensurepip\b/, "ensurepip"],
   [/\bmultiprocessing\b/, "multiprocessing"],
   [/\bPopen\b/, "Popen"],
 ];
+
+// Blocked in ad hoc scripts only: the shipped capability probe imports
+// `ensurepip` by name purely to report whether the module exists — an
+// inspection, not an invocation — and that emitted script carries the lane
+// marker. Ad hoc code has no reason to touch it.
+const ADHOC_SPAWN_PATTERNS = [[/\bensurepip\b/, "ensurepip"]];
 
 const LANE_MARKERS = [
   "FUSION_DESIGN_REPORT_BEGIN", // every generated transaction's report protocol
@@ -76,7 +82,11 @@ function gate(raw) {
     const script = extractScript(input);
     if (typeof script !== "string" || !script) process.exit(0);
 
-    for (const [pattern, name] of SPAWN_PATTERNS) {
+    const laneMarked = LANE_MARKERS.some((marker) => script.includes(marker));
+    const spawnPatterns = laneMarked
+      ? SPAWN_PATTERNS
+      : SPAWN_PATTERNS.concat(ADHOC_SPAWN_PATTERNS);
+    for (const [pattern, name] of spawnPatterns) {
       if (pattern.test(script)) {
         block(
           `the script contains ${name}. Inside Fusion, sys.executable is the ` +
@@ -91,8 +101,7 @@ function gate(raw) {
     const bytes = Buffer.byteLength(script, "utf8");
     const lines = script.split("\n").length;
     if (bytes > MAX_ADHOC_BYTES || lines > MAX_ADHOC_LINES) {
-      const exempt = LANE_MARKERS.some((marker) => script.includes(marker));
-      if (!exempt) {
+      if (!laneMarked) {
         block(
           `ad hoc script is ${lines} lines / ${bytes} bytes, over the thin-` +
             `transport bound (${MAX_ADHOC_LINES} lines / ${MAX_ADHOC_BYTES} ` +
