@@ -64,11 +64,14 @@ operations and seed the shim's tool cache once with Fusion's MCP enabled.
 Do not encode current MCP tool names in the skill. Autodesk documents dynamic
 tooling, so the agent discovers the current schemas at connection time.
 
-Two Claude Code plugin hooks ship with the plugin as mechanical nudges — a
-gate on the Fusion execute tool (process-spawning constructs refused;
-oversized ad hoc scripts refused unless they carry the shipped lane tooling's
-report signature) and a warn-only reminder on ordinary-modeling artifact
-writes. They fail open; the doctrine is the cross-harness authority.
+Two plugin hooks ship as mechanical nudges, registered by the plugin in both
+harnesses — Claude Code and Codex share the hook contract, and both manifests
+reference the same `hooks/hooks.json`: a gate on the Fusion execute tool
+(process-spawning constructs refused; oversized ad hoc scripts refused unless
+they carry the shipped lane tooling's report signature) and a warn-only
+reminder on ordinary-modeling artifact writes, riding the Write/Edit tools
+where the harness exposes them. They fail open; the doctrine is the
+cross-harness authority.
 
 ## The conditional lanes: automation, release, reconstruction
 
@@ -176,7 +179,7 @@ Fusion work, exactly as in the default lane.
 
 The suite runs offline against a stubbed API and covers the manifest
 contract, transaction emitters, reconstruction pipeline, and the plugin's
-Claude-side hooks; it works from a fresh checkout before any install. The
+plugin hooks; it works from a fresh checkout before any install. The
 generated scripts are syntax-checked offline, so run the included example in a
 saved, disposable Fusion document before treating a connected Fusion release
 as validated — `docs/live-fusion-acceptance.md` has the exact positive and

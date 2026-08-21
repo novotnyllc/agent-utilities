@@ -19,7 +19,11 @@ an MCP-driven envelope leans on extents, measurement, and ordinary sketching.
 In the rare case a mesh-section trace is genuinely needed, drive that one UI
 command through the session's computer-use capability and verify the result
 through the API; ask the user to run it only when the session has no
-computer-use capability. The pipeline below is invoked only
+computer-use capability. The same boundary covers mesh
+check-and-repair: "check this file" / "repair this STL" is ordinary-lane work
+— import, report `isClosed`/`isOriented` and the counts, repair with the
+native Mesh Repair tools through the standard capability ladder, re-validate,
+and state before/after honestly. The pipeline below is invoked only
 when the user actually wants the scanned object rebuilt as editable CAD.
 
 ## What conversion does and does not recover

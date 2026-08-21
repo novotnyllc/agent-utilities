@@ -137,6 +137,48 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("editable CAD model of the scanned object itself", text)
         self.assertIn("an envelope, not a reconstruction job", doctrine)
 
+    def test_closure_is_confirmed_not_assumed(self) -> None:
+        # Watertightness: one native property read per claim, lane-
+        # proportionate — isSolid in the inspection loop, isClosed at mesh
+        # import, closed solids in the release contract.
+        text = SKILL.read_text(encoding="utf-8")
+        contract = (SKILL_DIR / "references" / "verification-contract.md").read_text(
+            encoding="utf-8"
+        )
+        for requirement in (
+            "Closure is confirmed, not assumed",
+            "`BRepBody.isSolid`",
+            "`MeshBody.isClosed`",
+            "measured for volume is closed first or the gap is named",
+            "Mesh check-and-repair is its own quick task",
+            "`MeshBody.isOriented`",
+        ):
+            self.assertIn(requirement, text, requirement)
+        self.assertIn("BRepBody.isSolid", contract)
+
+    def test_plugin_hooks_are_wired_in_both_harnesses(self) -> None:
+        # Dual-harness parity: one shared hooks file, referenced by both
+        # plugin manifests; the fusion matcher tolerates each harness's MCP
+        # tool naming.
+        import json
+
+        plugin_root = SKILL_DIR.parents[1]
+        hooks_path = plugin_root / "hooks" / "hooks.json"
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        matchers = [
+            entry["matcher"]
+            for entry in hooks["hooks"]["PreToolUse"]
+            if "matcher" in entry
+        ]
+        self.assertIn(".*[Ff]usion.*", matchers)
+        for manifest_name in (".claude-plugin", ".codex-plugin"):
+            manifest = json.loads(
+                (plugin_root / manifest_name / "plugin.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("./hooks/hooks.json", manifest.get("hooks"), manifest_name)
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("both harnesses load them", text)
+
     def test_free_add_ins_are_first_class_with_the_ui_capability_ladder(self) -> None:
         # Installed add-ins are discovered live and preferred when one owns the
         # job; free recommendations are unhesitant (unlike paid extensions);

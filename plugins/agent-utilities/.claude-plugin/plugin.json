@@ -36,5 +36,5 @@
     "./skills/unifi-network-api",
     "./skills/fusion-parametric-design"
   ],
-  "hooks": "./hooks/claude-hooks.json"
+  "hooks": "./hooks/hooks.json"
 }
