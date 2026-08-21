@@ -8,7 +8,7 @@ The central architectural rule:
 
 > **The Fusion document—not generated Python—is the editable CAD source of truth.**
 
-The host tooling below serves the skill's automation and release lanes — manifest-backed evidence, verification-bound exports, variant matrices, PrusaSlicer handoff, and mesh reconstruction. Python emitted by this package is limited to small, idempotent transactions that inventory the document, synchronize user parameters, ensure the component scaffold, or run verification. Product geometry lives as ordinary Fusion sketches, constraints, features, components, joints, and configurations.
+The host tooling below serves the skill's automation and release lanes — manifest-backed evidence, verification-bound exports, variant matrices, PrusaSlicer handoff, and mesh reconstruction. Python emitted by this package is limited to narrow, single-purpose transactions — inventory, parameter synchronization, component scaffolding, document save/reconnect, verification, mesh capture and reconstruction stages, export, and variant-plan steps — each bounded, report-emitting, and designed to refuse rather than improvise. Product geometry lives as ordinary Fusion sketches, constraints, features, components, joints, and configurations.
 
 Project-specific geometry transactions are intentionally created against the connected Fusion release and its current API documentation; the host CLI does not ship a generic sketch/extrude generator that would become a second CAD source of truth.
 

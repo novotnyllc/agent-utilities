@@ -112,7 +112,9 @@ real terminations at the ends.
 
 **Wire runs are native geometry.** The expert technique is a 3D sketch path —
 fit-point splines routed through the enclosure — swept with Pipe or Sweep at
-the wire's outside diameter for its gauge, with appearances matching the real
+the run's overall outside diameter (insulation, conductor count, and jacket
+included, taken from the actual wire or its datasheet, never inferred from
+bare-conductor gauge), with appearances matching the real
 wire colors and bend radii the actual wire tolerates. Wire channels, strain
 relief, and grommet features in the enclosure are ordinary native modeling,
 and wire clearance is checked with native Measure and Interference like

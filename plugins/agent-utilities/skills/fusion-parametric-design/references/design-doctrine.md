@@ -21,7 +21,10 @@ small direct operations, each the equivalent of one skilled user action.
   direction. Repeated feature failures never justify diagnostic
   infrastructure.
 - On a capability the MCP does not expose, stop and report the gap. Host-side
-  geometry arithmetic is never the substitute.
+  geometry arithmetic is never an improvised substitute; the reconstruction
+  lane's tested, fail-closed host-side fitting
+  (`references/mesh-reconstruction.md`) is that lane's own contract, not a
+  license for ad-hoc geometry math anywhere else.
 
 ## Evidence hierarchy
 
