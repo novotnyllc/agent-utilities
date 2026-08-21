@@ -284,7 +284,7 @@ The local Fusion MCP has access to the live design session. Ask for the minimum 
 When an ordinary-lane API call fails:
 
 1. read the returned exception and traceback;
-2. read the one current official API entry for that call;
+2. read the one current official API entry for that call (the Autodesk product-help MCP's `search_help_content` when that capability is connected);
 3. verify the active document, Design, target component, and required object type with a read-only probe;
 4. correct the call once against the actual target.
 

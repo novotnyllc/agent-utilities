@@ -342,6 +342,16 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Standalone degradation", routing)
         self.assertIn("never a prerequisite", routing)
 
+    def test_product_help_capability_is_pinned(self) -> None:
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertIn("search_help_content", text)
+        self.assertIn("product-help MCP", text)
+        self.assertIn("FSN", text)
+        adapter = (SKILL_DIR / "references" / "mcp-adapter.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("search_help_content", adapter)
+
     def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
         # The adversarial-review hardening: the locked lane, the
         # artifact-anywhere rule, cumulative thin scripting, bounded native
