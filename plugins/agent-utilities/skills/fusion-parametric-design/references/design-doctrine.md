@@ -88,7 +88,7 @@ establishing the document, not an afterthought:
   stamp (`fusion_parametric_design`) written at save gives a later session
   exact reacquisition, and resume finds the document by name and recency —
   open documents first. Manifest-managed lanes record the dataFile id plus
-  project and folder ids in `DESIGN-STATE.md` and reconnect by the recorded
+  project and folder ids in the design's state ledger (`*.design-state.md`) and reconnect by the recorded
   id, never the name, reporting a findability failure rather than adopting a
   namesake;
 - an unresolvable save or reconnect — offline data API, no active project,

@@ -24,6 +24,7 @@ const FUSION_SMELLS = [
 // carries a Fusion signal. Scopes the nudge to active Fusion work instead of
 // nagging every repo the plugin is enabled in.
 const CONTEXT_SMELLS = [
+  /(^|[\\/])([^\\/]+\.)?design-state\.md$/i,
   /(^|[\\/])DESIGN-STATE\.md$/i,
   /(^|[\\/])transactions[\\/]/i,
   /(^|[\\/])verif(y|ication)-report[^\\/]*\.json$/i,
