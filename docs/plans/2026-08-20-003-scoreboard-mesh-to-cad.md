@@ -42,8 +42,9 @@ number below and are stated once here:
 
 ## 1. The scoreboard, defined
 
-Five cells per part, all computable from pipeline artifacts alone (fit record,
-program, emission report, rebuild report, editability report, coverage
+Six cells per part — RC, V, E, P (added 2026-08-21, §7.1), C, H — all
+computable from pipeline artifacts alone (fit record, program, selection
+record, emission report, rebuild report, editability report, coverage
 account). The vector is reported whole; no scalar is invented (§1.6).
 
 ### 1.1 Recognition coverage (RC) — the headline
@@ -314,10 +315,13 @@ regression. The scoreboard is the vector. For ranking work, cells are ordered:
 editable features), then **V** (the "as many recognized things" clause — RC can
 rise while everything is one extrude; V, a precision/recall pair per §7.2, is
 what says the *things* were recognized and not hallucinated; within V the
-comparison is **Pareto**: a lane wins V only when at least as good on both
-precision and recall and strictly better on one — a precision/recall trade
-is an explicit tie at V, recorded, passing rank to the next cell rather
-than being resolved by an implementer's arbitrary weighting), then **E**
+comparison is **set-level Pareto layering** — the compared lanes are
+partitioned into Pareto fronts on (precision, recall), and a lane's V rank
+is its front index (front 1 = non-dominated), which is transitive by
+construction; lanes in one front are tied at V, the trade recorded, rank
+passing to the next cell rather than being resolved by an implementer's
+arbitrary weighting (pairwise incomparability treated as an ordinary tie
+would make the composed ordering cyclic), then **E**
 (editable is the adjective; an inert parameter fails the sentence — the
 causal standard of §7.3), then **P** (program quality, §7.1 — RC, V, and E
 can all hold while the timeline is slab/primitive confetti; P is what says
@@ -720,7 +724,13 @@ another:
    within-budget factored alternative costs nothing, and on a program with
    no selection record the item reads `unmeasured` (ahead of feature count
    so a slab encoding never wins on timeline length against the
-   factorization it stands in for);
+   factorization it stands in for). **Cross-lane comparisons evaluate
+   necessity against the union of the compared lanes' recorded candidate
+   sets** — selection records are committed artifacts, so a slab-join is
+   unnecessary if *any* compared lane's record factors its support within
+   budget; otherwise a lane that fails to generate semantic alternatives
+   records zero unnecessary fallbacks and beats the lane that found the
+   factorization, ranking the weaker hypothesis generator first;
 4. feature count;
 5. sketch count;
 6. redundant construction planes/geometry;
