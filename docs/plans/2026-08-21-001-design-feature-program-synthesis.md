@@ -246,12 +246,20 @@ consulted; ties within a gate's declared tolerance proceed together:
    calibration runs **on the non-reserved subset only**, so the frozen
    record, the fit covariances, and every licence derived through them
    contain no reserved-triangle information; (2) all FHG evidence
-   extraction, under the same restriction. The reservation is **buffered,
-   not merely blocked**: adjacent blocks touch, so block size alone is
-   not separation — around every reserved block a buffer margin of one
-   block width is excluded from *both* construction and validation
-   support (it is dispositioned `holdout-buffer`, counted in neither
-   side's evidence, and still owned in the H accounting). The measured
+   extraction, under the same restriction. The reservation is **sparse and
+   buffered, not a parity checkerboard**: under 007 §10.3's checkerboard
+   every construction cell touches a reserved cell, so buffering it would
+   consume the entire opposite parity and leave nothing to construct
+   from. Instead, validation cells are a **sparse non-adjacent set** —
+   octree cells selected deterministically (content-addressed order) such
+   that no two chosen cells are within one cell of each other, totalling
+   the declared `program_validation_fraction` of area — and around each a
+   one-cell buffer shell is excluded from *both* construction and
+   validation support (dispositioned `holdout-buffer`, counted in neither
+   side's evidence, still owned in the H accounting). Validation plus
+   buffer area is bounded by construction (sparse selection caps the
+   buffer at the shell of each isolated cell) and both fractions are
+   recorded on the reservation. The measured
    range then *audits* the reservation instead of sizing it: if the
    frozen record's range exceeds the buffer width, construction
    triangles can sit within one correlation length of reserved ones and
