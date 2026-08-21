@@ -152,6 +152,9 @@ class SkillContractTests(unittest.TestCase):
             "measured for volume is closed first or the gap is named",
             "Mesh check-and-repair is its own quick task",
             "`MeshBody.isOriented`",
+            "The triangle count is judged against fitness for purpose, at intake",
+            "order-of-magnitude guidance, not gates",
+            "never blindly maximum, and state the resulting count",
         ):
             self.assertIn(requirement, text, requirement)
         self.assertIn("BRepBody.isSolid", contract)
