@@ -709,9 +709,14 @@ another:
    whose regularity class licenses one shared parameter);
 2. repeated geometry represented independently rather than by
    equality/pattern where the pattern licence held;
-3. fallback-operation count (`slab-join` operations — ahead of feature
-   count so a slab encoding never wins on having fewer timeline items than
-   the semantic factorization it stands in for);
+3. unnecessary-fallback count — the same bounded, tied-candidate
+   definition as G5: `slab-join` operations whose support the selection
+   record shows some G1–G4-tied candidate factoring within the declared
+   `semantic_factorization_max_expansion` budget; a fallback with no
+   within-budget factored alternative costs nothing, and on a program with
+   no selection record the item reads `unmeasured` (ahead of feature count
+   so a slab encoding never wins on timeline length against the
+   factorization it stands in for);
 4. feature count;
 5. sketch count;
 6. redundant construction planes/geometry;

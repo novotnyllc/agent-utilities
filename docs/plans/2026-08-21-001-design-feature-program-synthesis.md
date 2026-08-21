@@ -308,13 +308,20 @@ consulted; ties within a gate's declared tolerance proceed together:
    `reservation-gap` — no reserved-triangle geometry is consulted to place
    it — recorded per loop, and excluded from entity fitting and material
    consensus (the 001 §A.4 closure-segment mechanics, reused). **The mask
-   governs evidence, never topology**: global topology checks — manifold,
-   winding consistency, signed volume, and 001 §A.4's open-capture
-   precedence rule — evaluate the **full anchor mesh**, because closure is
-   a mesh property that feeds no fitted parameter (the same topology/loss
-   distinction throughout this contract), so boundary edges that exist
-   only because of the reservation mask are not capture boundaries and
-   never fire `capture-boundary-unclosed`; a genuinely open capture is
+   governs evidence, never mesh validity**: the full-anchor-mesh exception
+   is limited to **candidate-independent global validity facts** — the
+   per-edge manifold check, the winding-consistency licence, the
+   signed-volume sign, boundary-edge classification (capture vs
+   reservation-mask), and 001 §A.4's open-capture precedence rule. Each is
+   one global binary/sign fact, identical for every candidate, evaluated
+   once before any candidate exists — it cannot differentially inform one
+   candidate over another, which is the only influence a holdout guards
+   against. Per-triangle orientation *evidence* (outward normals,
+   material-side votes, polarity) still comes from construction triangles
+   only, exactly as stated above; validation triangles never contribute a
+   vote, a normal, or a side verdict to any hypothesis. Boundary edges
+   that exist only because of the reservation mask are not capture
+   boundaries and never fire `capture-boundary-unclosed`; a genuinely open capture is
    judged on the unmasked mesh exactly as 001 specifies, and the
    licence-floor `slab-join` program stays constructible on ordinary
    held-out runs. When the
