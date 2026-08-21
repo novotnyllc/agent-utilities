@@ -271,6 +271,8 @@ class SkillContractTests(unittest.TestCase):
         # front, effort escalated in the worker, never a swarm.
         self.assertIn("token and cost efficiency through tier-matching", routing)
         self.assertIn("Effort escalates in the worker", routing)
+        self.assertIn("Whatever is making decisions runs high, xhigh, or max", routing)
+        self.assertIn("executor does not re-litigate", routing)
 
     def test_lane_lock_bounds_and_execution_rules_are_pinned(self) -> None:
         # The adversarial-review hardening: the locked lane, the

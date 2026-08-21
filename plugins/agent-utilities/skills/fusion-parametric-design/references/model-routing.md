@@ -24,6 +24,10 @@ Host-only work that never touches Fusion — documentation reads, offline comput
 
 The skill's CLI and generated transactions validate fail-closed: a malformed manifest is refused, a missing preset is refused before PrusaSlicer runs, a drifted export binding fails the transaction, a deviation run that cannot establish containment reports `not-established`. A weak model driving these paths can therefore produce refusals — never silent wrongness. That property is the entire justification for routing mechanical work to a cheap model; where it does not hold (open-ended design judgment the contract cannot check), the frontier tier holds the pen.
 
+## The tier principle
+
+**Whatever is making decisions runs high, xhigh, or max — likely xhigh or max; whatever is executing decisions runs lower, on instructions the decider wrote.** Design choices, join selection, geometry strategy, research synthesis, and failure triage are decision work and get the top tiers. Driving Fusion through an already-decided feature sequence, captures, exports, and lookups are execution work and run lower, briefed precisely by the decider. The decider writes the executor's instructions; the executor does not re-litigate them, and anything that turns out to need a decision escalates back up — the escalate-on-non-mechanical-refusal rule below is this principle applied to refusals. A decider is always a **worker** doing architectural or design reasoning, never the dispatcher: routing, talking, and classifying are not decision work in this sense, so the shape is three-tiered — dispatcher at its modest default, decision workers at high/xhigh/max, execution workers lower and precisely briefed. The work-shape table that follows is the elaboration of this one rule.
+
 ## Frontier — deep design reasoning
 
 Work where the verification contract can only check the *result*, not the *intent* — a passing report does not prove the design is the right design.
