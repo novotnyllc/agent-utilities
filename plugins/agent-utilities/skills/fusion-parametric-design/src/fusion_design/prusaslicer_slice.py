@@ -667,7 +667,7 @@ def slice_project(
         }
     try:
         evidence = _read_gcode_evidence(gcode_path)
-    except (OSError, ValueError) as error:
+    except Exception as error:
         gcode_path.unlink(missing_ok=True)
         return {
             **base,
@@ -698,7 +698,7 @@ def slice_project(
     try:
         audit = audit_gcode(gcode_path)
         audit_sha256 = sha256_file(gcode_path)
-    except (OSError, ValueError) as error:
+    except Exception as error:
         gcode_path.unlink(missing_ok=True)
         return {
             **base,
