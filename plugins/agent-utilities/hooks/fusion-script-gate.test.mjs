@@ -9,9 +9,13 @@ const script = path.join(
   "fusion-script-gate.js",
 );
 
-function run(stdin) {
+function run(stdin, env = {}) {
   const input = typeof stdin === "string" ? stdin : JSON.stringify(stdin);
-  return spawnSync(process.execPath, [script], { input, encoding: "utf8" });
+  return spawnSync(process.execPath, [script], {
+    input,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
 }
 
 const execute = (payload) => ({
@@ -56,6 +60,31 @@ test("ensurepip is blocked ad hoc but allowed in shipped lane transactions", () 
     execute({ script: 'REPORT_BEGIN = "FUSION_DESIGN_REPORT_BEGIN"\nimport ensurepip\n' }),
   );
   assert.equal(probe.status, 0);
+});
+
+test("process names in strings, comments, and docstrings are data, not spawns", () => {
+  for (const script of [
+    "PROJECT_NAME = 'subprocess fixture'\nprint(PROJECT_NAME)",
+    "# subprocess would be blocked in code position\nx = 1",
+    `"""Docs mention os.system('echo') here."""\nx = 1`,
+    "label = \"uses multiprocessing\"  # and Popen in a comment",
+  ]) {
+    const result = run(execute({ script }));
+    assert.equal(result.status, 0, script.slice(0, 40));
+    assert.equal(result.stderr, "", script.slice(0, 40));
+  }
+  // The same token in code position still blocks.
+  const real = run(execute({ script: "name = 'harmless'\nimport subprocess" }));
+  assert.equal(real.status, 2);
+});
+
+test("with stripping disabled the gate degrades to a conservative raw scan", () => {
+  const result = run(
+    execute({ script: "PROJECT_NAME = 'subprocess fixture'" }),
+    { FUSION_GATE_NO_STRIP: "1" },
+  );
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /DEGRADED: comment\/string stripping unavailable/);
 });
 
 test("blocks an oversized ad hoc script with an actionable message", () => {
