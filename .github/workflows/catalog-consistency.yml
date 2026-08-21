@@ -1,0 +1,22 @@
+name: Catalog consistency
+
+# The three catalog files must agree on every plugin's sha and version.
+# scripts/repin check fails on any drift - the failure mode this morning was a
+# hand-edited manifest that updated one file and left the other two stale,
+# which then blocked every later automated repin. Hand edits are fine only when
+# they leave the catalog consistent; this makes that check unskippable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: scripts/repin check
