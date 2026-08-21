@@ -91,7 +91,9 @@ validated against `schema/fusion-project.schema.json` and recording what
 geometry alone cannot
 explain — sources, provisional dimensions, clearances, forbidden
 interferences, the material decision, per-part manufacturing intent — and a
-`DESIGN-STATE.md` (from `templates/DESIGN-STATE.md`) as the handoff ledger.
+state ledger (from `templates/DESIGN-STATE.md`) as the handoff record — any
+`*.design-state.md`, one per design, bare `DESIGN-STATE.md` the natural name
+in a single-design directory.
 The manifest permits work; it does not create geometry, and the Fusion
 document stays editable without it.
 

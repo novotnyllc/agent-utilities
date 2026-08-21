@@ -5,7 +5,7 @@
 The system has three stores, each with a distinct responsibility:
 
 1. **Fusion document:** authoritative editable CAD, assembly, and parameter state.
-2. **`*.fusion-project.json`** (one manifest per design; bare `fusion-project.json` in a single-design directory)**:** authoritative evidence and verification contract.
+2. **`*.fusion-project.json`** (one manifest per design; bare `fusion-project.json` in a single-design directory): authoritative evidence and verification contract.
 3. **Generated reports:** immutable observations used for audit and diff.
 
 Host-side Python is not a fourth CAD store. It generates narrow scripts that operate on Fusion's existing parametric model.
