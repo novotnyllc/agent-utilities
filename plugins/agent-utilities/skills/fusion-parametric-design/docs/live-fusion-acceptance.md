@@ -826,6 +826,193 @@ inventory again.
 **Pass:** the disposable document is closed, the prior document is active, and
 its saved/modified state is unchanged from the initial checkpoint.
 
+## 15. Enclosure feature toolkit live acceptance
+
+**These runs REQUIRE a live Fusion host with the bundled `AgentUtilitiesEnclosure`
+add-in installed, and have NOT been executed by this implementation pass.** The
+fixtures, record schema, and matrix below are the templates for the next live
+session; recording a pass without a live run would be fabrication. Use a fresh
+disposable parametric document per fixture group, exactly as in the earlier
+sections.
+
+### License/entitlement probe fixtures
+
+Run one identical disposable fixture on a base account (no Design Extension)
+and, when available, on the same Fusion build with extension trial/entitlement:
+
+```python
+# Pseudocode: identical disposable geometry and script on both accounts.
+features = root.features
+
+record("fusion_version", app.version)
+record("design_extension_ui", probe_own_command_visibility_without_executing_hidden_ids())
+
+record("boss_member", hasattr(features, "bossFeatures"))
+if hasattr(features, "bossFeatures"):
+    boss_input = features.bossFeatures.createInput()
+    # Populate the smallest documented, known-good boss fixture.
+    try:
+        result = features.bossFeatures.add(boss_input)
+        record("boss_result_types", [x.objectType for x in result])
+        record("boss_native_health", ...)
+    except Exception as exc:
+        record("exception_type", type(exc).__name__)
+        record("exception_message", str(exc))
+
+for candidate in ("snapFitFeatures", "lipFeatures", "restFeatures"):
+    record(candidate, hasattr(features, candidate))
+
+record("design_plastic_rules", hasattr(design, "designPlasticRules"))
+```
+
+| Probe state | Purpose |
+|---|---|
+| Base Fusion, no Design Extension | establishes true base behavior |
+| Same Fusion build, extension trial/entitlement | differentiates entitlement from API misuse |
+| Public API only | no command-ID invocation |
+| Any relevant preview API enabled/disabled | documents preview exposure but does not make it a core dependency |
+| Save/reopen/edit | proves persistence and native feature editability |
+
+An entitlement conclusion is allowed **only** when the same known-good
+transaction succeeds with entitlement and fails without it, with identical
+geometry/build/API signature. A transaction that fails both ways is an
+API/geometry problem, not license evidence. No hidden command IDs,
+`executeTextCommand` tricks, private modules, or undocumented entitlement paths
+belong in this probe.
+
+### Fixed live-record schema fields
+
+Every case records this fixed schema (no field omitted, no invented fields):
+
+```text
+Fusion build
+account/extension state
+document/version
+fixture ID
+operation request JSON
+pre-operation body count
+expected native feature sequence
+managed parameters
+managed feature ID
+timeline group(s)
+post-operation body count
+BRepBody.isSolid for claimed solid bodies
+created-feature health
+Compute All result
+one named Measure/Interference observation if the fixture calls for it
+parameter edit performed
+post-edit health
+save/close/reopen result
+manual editability observation
+Undo result
+Redo result where relevant
+final screenshot
+raw Fusion exception on failure
+```
+
+### Representative live matrix
+
+All rows below are required observations for their family; `unchanged` body
+counts mean relative to that fixture's own pre-operation state. Expected native
+sequences name the ordinary public features the recipe must create.
+
+| Fixture | Operation / expected native sequence | Expected bodies | Required edit/failure observation |
+|---|---|---:|---|
+| flat enclosure | support boss → sketch/extrude/combine | 1 base | OD edit |
+| rounded enclosure | same near filleted wall | 1 | wall radius change must recompute or fail visibly |
+| lofted enclosure | landing pad to selected inner surface | 1 | loft change; no closest-face guess |
+| variable-height enclosure | support `to_entity` | 1 | roof height edit follows native target |
+| M3 heat-insert boss | boss + sourced insert bore | 1 | bore coupon status remains provisional |
+| angled countersunk M3 boss | axis plane + boss + countersink/seat | 1 | exterior angle change |
+| coordinated base/lid pair | shared axis + two sides | 1 each | mating-height edit updates both |
+| captive hex nut | boss + hex pocket | 1 | AF clearance edit |
+| captive square nut | boss + square pocket | 1 | insertion slot edit |
+| thread-forming boss | boss + manufacturer pilot | 1 | absent pilot source refuses |
+| native tapped boss | boss + Hole/Thread | 1 | thread spec edit |
+| PCB standoff | boss to PCB plane | 1 | PCB plane height edit |
+| open boss | outer + through bore | 1 | boss height edit |
+| wall-connected/ribbed boss | boss + reinforcement | 1 | wall shift |
+| simple lip/groove | planar offsets + join/cut | 1 each | clearance edit |
+| tongue/groove | same family | 1 each | engagement edit |
+| skirt/channel | skirt join + channel cut | 1 each | depth edit |
+| bump-snap skirt | skirt/channel + discrete retention | 1 each | bump engagement edit |
+| labyrinth | multiple planar wall/channel passes | 1 each | seam width edit |
+| splash overlap | overlapping seam geometry | 1 each | warning: no ingress claim |
+| nonplanar tangent seam | sweep join/cut | 1 each | path edit |
+| sharp nonplanar seam | explicit segments | 1 each | unsupported unsegmented corner refuses |
+| port-interrupted seam | port → exclusion datums → split seam | 1 each | move/resize port |
+| hinge/latch interruption | explicit delimiters | 1 each | delimiter movement |
+| registration key | key + receiver cut | 1 each | offset edit |
+| anti-shear stop | stop + receiver | 1 each | stop-height edit |
+| flat gasket | channel cut + land | 1 | groove width edit |
+| O-ring channel | sourced cross-section cut | 1 | missing seal source/provisional evidence observed |
+| cantilever snap | beam + hook + receiver | 1 each | thickness/engagement edit |
+| hidden snap | beam/hook internal receiver | 1 each | missing release access warning/refusal |
+| annular snap | revolve rings | 1 each | engagement edit |
+| slotted annular | ring + slots/pattern | 1 each | slot count edit |
+| fingered lock ring | ring + finger slots/pattern | 1 each | count edit |
+| keyed ring | annular + key/notch | 1 each | rotation-key edit |
+| press ring | concentric fit pair | 1 each | coupon required |
+| interference ring | same, signed interference | 1 each | interference value edit |
+| dovetail | male rail + female cut | 1 each | sliding-clearance edit |
+| sliding key | rail/key + stop | 1 each | stop edit |
+| bayonet | lugs/pattern + swept L-slots | 1 each | rotation/slot clearance edit |
+| PCB edge rest | support tool + explicit join | 1 | PCB elevation edit |
+| PCB corner rest | same | 1 | board-outline edit |
+| local curved landing | flat pad to curved shell | 1 | shell curvature edit |
+| converter shelf | shelf + gusset | 1 | component height edit |
+| cylindrical cradle | saddle profile + join | 1 | cylinder diameter edit |
+| keepout-trimmed support | support + explicit cut(s) | 1 | keepout movement |
+| rectangular port | sketch + cut | 1 | width/height edit |
+| rounded port | sketch arcs + cut | 1 | corner-radius edit |
+| circular port | circle + cut | 1 | diameter edit |
+| angled-wall port | axis-normal cut | 1 | wall-angle edit |
+| curved-wall axis cut | planar cutter intersects curved shell | 1 | curvature edit |
+| arbitrary conformal curved cut | refusal/ordinary modeling | unchanged | `unsupported-conformal-cutout` |
+| connector recess | cut + shallow recess + holes | 1 | flange depth edit |
+| strain-relief saddle | saddle + optional hardware | 1 | cable OD edit |
+| zip-tie anchor | slots + bridge | 1 | slot dimensions edit |
+| bend-radius guide | guide path + wall | 1 | radius edit |
+| flex fingers | cantilever primitive | 1 | physical proof remains outstanding |
+| rib/gusset | new tool + join + root fillet | 1 | thickness edit |
+| boss-wall rib | reinforcement dependency | 1 | boss movement |
+| slot vent array | seed cut + native pattern | 1 | count/pitch edit |
+| circular vent array | seed + pattern | 1 | pitch edit |
+| hex vent region | staggered native patterns | 1 | aperture edit |
+| bounded clipped vent | tool pattern + mask + cut | 1 | region resize |
+| arbitrary whole-cell vent | explicit suppression or refusal | 1 | no containment engine |
+| fit coupon | labeled stations + common coupon body | 1 coupon | explicit candidate list edit |
+| coupon result update | attributes/parameter comment only | unchanged | acceptance requires user-observed result |
+| rectangular pattern | managed source + PatternFeature | unchanged target count | count edit |
+| circular boss pattern | source + CircularPattern | unchanged | count edit |
+| path pattern | source + PathPattern | unchanged | path edit |
+| mirror | source + MirrorFeature | unchanged | mirror-plane edit |
+| mirrored handed retention | mirror or refusal based on recipe | unchanged | verify handed behavior |
+| configuration size change | activate row + reacquire | unchanged | resize enclosure |
+| configuration topology loss | activate row causing source disappearance | unchanged | must refuse, never guess |
+| save/reopen | all representative families | unchanged | feature discovery by attrs |
+| manual native edit | alter managed feature manually | unchanged | inspect reports divergence |
+| safe recipe upgrade | parameter-only migration | unchanged | recipe version updates |
+| unsafe upgrade | remove/alter managed entity | unchanged | `manual-edit-prevents-update` |
+| upstream feature deletion | delete managed port used by seam | unchanged | deletion must refuse while dependent exists |
+| direct design | attempt managed create | unchanged | `invalid-design-type` |
+| ambiguous occurrence | repeated component without context | unchanged | `assembly-context-required` |
+| base no extension | every base recipe | normal | succeeds without plastic extension |
+| native Boss API base probe | Autodesk BossFeature | probe-specific | entitlement result recorded |
+| native Boss API entitled | same fixture | probe-specific | comparison control |
+
+### Positive-case acceptance criteria
+
+For every positive recipe case, `Compute All` must finish with no new warning
+or error inside the managed group, every claimed output body must satisfy
+`BRepBody.isSolid`, unrelated bodies must remain untouched, save/reopen must
+retain the managed relationships (rediscovery by attributes, not timeline
+index), and a representative master-parameter edit must change the intended
+feature and recompute cleanly. These checks align with the repository's
+existing native-verification doctrine and are necessary but not sufficient:
+release claims still route through the full verification contract and physical
+evidence gates.
+
 ## Acceptance boundary
 
 Passing this procedure validates the package against one recorded Fusion/MCP release. It does not prove FDM printability, electrical/thermal safety, physical fit, structural load capacity, comfort, ingress protection, or future Fusion-release compatibility. Those remain separate evidence gates.

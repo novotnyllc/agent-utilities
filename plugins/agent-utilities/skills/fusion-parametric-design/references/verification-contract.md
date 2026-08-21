@@ -51,6 +51,26 @@ A missing link fails closed at the hop that needed it: an index without `verific
 
 ## Fit and packing
 
+### Enclosure feature results are not release verification
+
+When the enclosure feature toolkit creates or edits a managed feature group,
+the `FeatureResult` it returns — created-feature health, `BRepBody.isSolid` on
+claimed outputs, expected local body count — is a **create-time result check**,
+not release verification. It answers "did this operation build what it just
+declared", not "is the document ready to hand off". Release still requires
+this contract's own gates: Compute All with no unhealthy timeline, the
+verification transaction, export binding, and every applicable physical item.
+Managed coupons remain **physical evidence** under this contract: a coupon's
+`generated` status is a print-job declaration, its `accepted` status exists
+only after a user records a measured result, and no geometry result ever
+converts a `not run` physical item to `pass`.
+
+Ingress claims (water/dust) never upgrade from geometry alone. A seal channel,
+splash-overlap seam, or labyrinth the toolkit builds is light-path or drainage
+geometry; the `water/dust ingress` physical item stays `not run` until a real
+ingress test is performed and recorded — exactly as this contract already
+requires for every other physical claim.
+
 - Packing occurrences use recorded transforms.
 - Every manufactured item has an authoring and packing representation.
 - Every applicable connector/cable/tool/service/thermal/RF/motion keep-out exists.

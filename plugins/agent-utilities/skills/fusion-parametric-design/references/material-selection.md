@@ -111,3 +111,13 @@ Per-part `material.assumption` values must name the decided family or formulatio
 ## When the material changes
 
 A material change is a design change. Re-open, at minimum: every printed fit and clearance, snap and clip geometry, hinge thickness and orientation, boss and insert dimensions, wall thickness against the new stiffness, build orientation against the new anisotropy, support strategy against the new removal behavior, and any coupon result that was measured in the old material. Do not carry a coupon-verified clearance across a material change; it is evidence about a material the design does not use.
+
+When the enclosure feature toolkit manages those features, this rule is
+mechanical as well as doctrinal: every managed rule and coupon carries declared
+invalidation flags (`references/enclosure-feature-rules.md`), and a material
+or formulation change marks dependent coupon results `stale` — the geometry
+stays in the document, but its evidence stops being current until a new coupon
+on the new material says otherwise. Managed parameters sourced from material
+datasheets (snap strain, insert bores sized against a formulation) re-open with
+the same list above; nothing about a material change silently survives inside
+a managed feature.

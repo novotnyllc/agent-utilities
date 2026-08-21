@@ -183,6 +183,50 @@ machine-readable success.
 
 ## Read → decide → write → inspect loop
 
+## Add-in dispatcher / command mailbox contract
+
+When the bundled `AgentUtilitiesEnclosure` add-in is installed, agent
+invocations of its commands use a staged request mailbox, not an inline
+geometry script:
+
+```text
+MCP thin snippet
+    -> enclosure.dispatch.stage(request) -> nonce
+    -> commandDefinition.execute()
+    -> command handler consumes the nonce exactly once
+    -> result stored against the nonce
+    -> dispatcher returns result
+```
+
+Contract terms:
+
+- The mailbox is **ephemeral process-local memory** keyed by a random nonce.
+  One request, one consumption, bounded lifetime, no filesystem backing. It is
+  tooling state, never design state.
+- Prefer the public `CommandDefinition.execute()` path so the operation shares
+  Fusion's command transaction boundary with human command use. Because that
+  API takes no payload parameter, the nonce is how the snippet hands the
+  handler its one request.
+- The MCP side stays tiny: resolve the target, serialize one request, stage it,
+  execute the command definition, read the result. Well under the ordinary
+  script-gate limits; no generated-lane marker is involved or permitted.
+- If the staged-execute path fails its probe, stop — do not fall back to a
+  giant inline script and do not enable destructive operations on an unproven
+  transport.
+
+**Command-transaction live probe (required before destructive ops).** Before
+any destructive lifecycle operation (edit-with-rebuild, delete, upgrade) is
+enabled through this transport, a live session must prove the full cycle in a
+disposable document: stage a representative request →
+`commandDefinition.execute()` → read the result → issue Fusion **Undo** →
+verify the managed feature group and its parameters are gone and the document
+matches the pre-operation state → record Redo where relevant. If execute's
+synchronization semantics or Undo coverage cannot be established live, the
+transport stays limited to non-destructive operations and direct add-in service
+invocation may be enabled only after passing its own Undo/rollback acceptance.
+The fixture and record fields are specified in
+`docs/live-fusion-acceptance.md`.
+
 1. **Read:** active document state, current visual state, and the exact documentation needed for the next action.
 2. **Decide:** identify one visible edit.
 3. **Write:** perform the smallest direct native operation.
