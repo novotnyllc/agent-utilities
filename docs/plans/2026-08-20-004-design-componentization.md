@@ -1248,17 +1248,32 @@ is reaffirmed as blocking.*
 
 §0's "independent channel" prose becomes a **closed predicate set**, each a
 record-backed check the C cell's `physical-thing-evidenced` numerator must
-cite by name (field: `physical_evidence[]`, one or more entries, each
-`{predicate, record-ref}`; the validator rejects an evidenced claim with an
-empty list):
+cite by name (field: `physical_evidence[]`; the validator rejects an
+evidenced claim with an empty list). The set is **two-tiered**, because
+several observations are consistent with one part observing itself: a
+hollow molding's inner shell is dual-graph-disconnected from its exterior,
+an integral boss self-occludes its base, and a second view of an interface
+region says nothing about whether it is a joint. Only tier-S predicates
+license the claim; tier-C entries corroborate and are recorded but **never
+sufficient, alone or in combination with each other**:
+
+**Tier S — standalone-sufficient** (each entry
+`{predicate, record-ref}`; at least one required):
 
 | Predicate | Machine check |
 | --- | --- |
-| `disconnected-source-topology` | the thing's support is a connected component of the source mesh sharing no edge with any other owner's support (dual-graph check over the immutable triangle IDs) |
-| `observed-gap-or-seam` | a measured **gap or seam** bounding the full contact perimeter — an actual capture separation (boundary-edge band with measured gap width above the declared floor) or a reentrant seam groove whose measured depth/width exceeds what a fillet/blend explains — coverage fraction recorded against declared floors. **A plain dihedral crease never qualifies**: the §0 molded-boss counterexample carries a crease around its full contact perimeter while being one physical part, so crease-only matches stay `componentized-geometric` |
-| `mutual-occlusion-boundary` | an occlusion contour record: capture boundary edges where one surface's support ends *because* another's begins, with the shadowing geometry identified |
-| `second-view-interface` | a registered second capture (its own hash-bound dump) observing part of the interface, with the registration transform and its uncertainty on record |
+| `disconnected-source-topology` | the thing's support is a connected component of the source mesh sharing no edge with any other owner's support (dual-graph check over the immutable triangle IDs) — **and not nested**: a component whose support lies entirely inside another component's closed volume (ray-parity containment, closed-mesh licence) is that part's interior shell, not a separate thing, and stays `componentized-geometric` |
+| `observed-gap-or-seam` | a measured **gap or seam** bounding the full contact perimeter — an actual capture separation (boundary-edge band with measured gap width above the declared floor) or a reentrant seam groove whose measured depth/width exceeds what a fillet/blend explains — coverage fraction recorded against declared floors. **A plain dihedral crease never qualifies**: the §0 molded-boss counterexample carries a crease around its full contact perimeter while being one physical part, so crease-only matches stay `componentized-geometric`. A second registered capture (hash-bound dump, registration transform + uncertainty on record) whose geometry shows this same gap/seam standard at the interface satisfies this predicate from that capture — that is what a second view must *show*, not merely look at |
 | `caller-declaration` | an explicit declaration in the spec, quoted, with the declaring key — never inferred |
+
+**Tier C — corroborating-only** (recorded in `physical_evidence[]` with
+`tier: corroborating`; strengthens a tier-S claim, licenses nothing by
+itself):
+
+| Predicate | Machine check |
+| --- | --- |
+| `mutual-occlusion-boundary` | an occlusion contour record: capture boundary edges where one surface's support ends *because* another's begins, shadowing geometry identified. Corroborating-only because self-occlusion defeats it — an integral boss shadows its own base |
+| `second-view-interface` | a registered second capture observing the interface region without meeting the gap/seam standard — evidence the interface was *looked at*, not that separation was *seen* |
 
 Each predicate's thresholds (gap-width floor, seam-depth floor,
 gap-coverage fraction, registration tolerance) are declared through
