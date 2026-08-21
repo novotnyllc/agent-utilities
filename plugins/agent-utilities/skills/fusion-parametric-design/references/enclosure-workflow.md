@@ -103,8 +103,14 @@ Decide the lid/base join — and any print-driven part split — and model it by
 default, stating the one-line reason in the visual loop: snap fit, screws with
 captive nuts, press fit, heat-set inserts, or keys/dovetails per the
 materials, loads, and open/close cycle, fasteners as cataloged components
-positioned with joints so Interference and Measure validate engagement. Prior
-designs in the user's hub with an established joining style are pattern
+positioned with joints so Interference and Measure validate engagement. Every
+joint is modeled complete — head seats (counterbore/countersink, spot-faced
+normal to the screw axis on angled surfaces), recesses, engagement, tolerance
+— and validated assembled: interference across the assembly, Measure at each
+mating interface, section through the joint. Spanning structure is dimensioned
+from the mating geometry's real position (a raised boss's actual top face),
+exists only for a stated load or function, and survives support removal.
+Prior designs in the user's hub with an established joining style are pattern
 sources — read and reuse them before inventing.
 
 For variable-height electronics, use local roof height where it materially reduces bulk, but preserve manufacturable transitions and lid structure.

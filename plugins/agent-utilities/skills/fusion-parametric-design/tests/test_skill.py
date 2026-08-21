@@ -188,6 +188,30 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("model it by default", workflow)
         self.assertIn("pattern sources", workflow)
 
+    def test_joint_execution_quality_is_normative(self) -> None:
+        # Complete joints: seats with the fastener, engineered snaps, chosen
+        # thread side with purchasable specifics, structure that earns its
+        # existence, mating dimensions from assembled reality, and
+        # assembled-fit validation as part of done.
+        text = SKILL.read_text(encoding="utf-8")
+        for requirement in (
+            "A joint is complete only when every element of it",
+            "Fastener seats are part of the fastener",
+            "never thread diameter straight through",
+            "seat normal to the screw axis",
+            "The thread side is a design choice too, and heat-set inserts are first-class",
+            "manufacturer-recommended bore and depth",
+            "always ready and specific",
+            "Snap fits are engineered, not gestured at",
+            "lead-in chamfers",
+            "Structure must earn its existence",
+            "print-survivability sanity check",
+            "Mating dimensions come from assembled reality, not assumptions",
+            "Assembled-fit validation is part of done",
+            "Measure at every mating interface",
+        ):
+            self.assertIn(requirement, text, requirement)
+
     def test_wiring_doctrine_is_native_and_advisory_only(self) -> None:
         # Wire runs are sweep/pipe modeling with recorded metadata;
         # electrical checking never becomes a host-side engine, and no native
