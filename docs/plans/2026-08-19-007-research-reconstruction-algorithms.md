@@ -1267,6 +1267,12 @@ Refusal is reserved for the genuine cliff: σ̂ within a declared factor of
 they need), and the `noise-model-inconsistent` flag combined with failed
 gates — replacing plan 005's blanket `segmentation-noise-limited` refusal,
 which fired on the estimator, not on the information content.
+**[Conditioned 2026-08-21, Amendment §2: this refusal rule inherits the
+same regime conditioning as the reporting language — where a measured
+regime-specific detector-power record exists, the refusal fires from that
+record, not from the iid 10σ̂ arithmetic, which remains only the no-record
+fallback. A feature the measured power supports is never refused by the
+fallback formula.]**
 
 ### 12.2 Genuinely out of reach in pure Python, with reasons
 

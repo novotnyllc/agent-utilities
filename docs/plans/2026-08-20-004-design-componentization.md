@@ -1255,13 +1255,14 @@ empty list):
 | Predicate | Machine check |
 | --- | --- |
 | `disconnected-source-topology` | the thing's support is a connected component of the source mesh sharing no edge with any other owner's support (dual-graph check over the immutable triangle IDs) |
-| `observed-gap-or-seam` | a measured gap/crease bounding the full contact perimeter: boundary-edge band or dihedral crease along the entire contact curve, width/angle and coverage fraction recorded against declared floors |
+| `observed-gap-or-seam` | a measured **gap or seam** bounding the full contact perimeter — an actual capture separation (boundary-edge band with measured gap width above the declared floor) or a reentrant seam groove whose measured depth/width exceeds what a fillet/blend explains — coverage fraction recorded against declared floors. **A plain dihedral crease never qualifies**: the §0 molded-boss counterexample carries a crease around its full contact perimeter while being one physical part, so crease-only matches stay `componentized-geometric` |
 | `mutual-occlusion-boundary` | an occlusion contour record: capture boundary edges where one surface's support ends *because* another's begins, with the shadowing geometry identified |
 | `second-view-interface` | a registered second capture (its own hash-bound dump) observing part of the interface, with the registration transform and its uncertainty on record |
 | `caller-declaration` | an explicit declaration in the spec, quoted, with the declaring key — never inferred |
 
-Each predicate's thresholds (gap-coverage fraction, crease-angle floor,
-registration tolerance) are declared through `_declared_number`, labelled
+Each predicate's thresholds (gap-width floor, seam-depth floor,
+gap-coverage fraction, registration tolerance) are declared through
+`_declared_number`, labelled
 `experimental-default` under 002 §B.2's sweep rule. Anything not on this
 list is not physical-thing evidence — in particular "base and subobject
 both reconstruct" (§0 rule 1, unchanged) and R3's held-out preference
