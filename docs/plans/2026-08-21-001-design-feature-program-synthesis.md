@@ -178,7 +178,7 @@ implicit rule" to "a named admission condition the record cites":
 | `revolve` | router revolution verdict; axis licensed by the datum or a coaxial class; **polarity declared and evidenced per §5** — a subtractive revolve additionally requires material-outside / occupancy-removal evidence, the same polarity bar as `cut-extrude` |
 | `sweep` / `loft` | 009's rung licences, unchanged |
 | `equal` | the regularity class certificate alone (complete linkage or joint fit — 002 §A.6 semantics; union-find banned): an adopted equality class licenses one shared parameter across its members, which is how equal-radius bores reach their compact representation without any lattice requirement |
-| `pattern` | an `equal`-licensed class **plus** a lattice/circle fit passing its declared gate (004 consensus item 6); a class whose members are equal but not lattice-arranged stays at `equal`, and members of no adopted class stay independent — the compactness census then simply pays for it |
+| `pattern` | a **full parametric-instance class** per 004 §4.7's tier table — same operation topology, same polarity, and a licensed shared parameter *vector* covering every patterned parameter (one equal-radius class does not pattern holes of differing depth or countersink; each shared dimension needs its own licensed equality, unshared dimensions refuse the pattern) — **plus** a lattice/circle fit passing its declared gate (004 consensus item 6). Members equal in some parameters but not instance-congruent stay at `equal` on the licensed parameters only; members of no adopted class stay independent — the compactness census then simply pays for it |
 | `component` | 004 §0/§4.1's licences at the claimed level, unchanged — the FHG never upgrades a claim level |
 | `slab-join` | the slab's own 001 licences (loop ladder, track edges). Always admissible where those hold — which is what makes it the honest floor every factored program must beat |
 
@@ -377,11 +377,19 @@ against the other.
 
 # 7. Bounded search, determinism, and cost
 
-- **Shape:** best-first beam over program prefixes ordered by the causal
-  scaffold (primary body → additive bosses/ribs → subtractive
-  holes/pockets/slots → shell → secondary sweeps/lofts → dressings →
-  patterns/equalities → components), which is a proposal order, not a truth
-  claim about history. Beam width `program_beam_width` (declared; default
+- **Shape:** best-first beam over program prefixes. Proposal order is
+  **dependency-derived, not a fixed global sequence**: each operation's
+  licence names what it depends on (a cut needs its licensed pre-cut base;
+  a hole through a shell wall depends on the shell — 001 §D's
+  connector-port order `base → shell → hole` is admissible by
+  construction), and prefixes respect those dependencies while both
+  relative orders of independent operations remain proposable —
+  non-commuting pairs (shell vs cut) are ordered by their evidence, never
+  by a scaffold. The causal scaffold (primary body → additive → subtractive
+  → shell → secondary → dressings → patterns → components) survives only as
+  the tie-break *heuristic* for expansion priority among
+  dependency-equivalent prefixes — a proposal order, not a truth claim
+  about history and never a constraint on which programs exist. Beam width `program_beam_width` (declared; default
   rationale: the licence table already prunes the space to near-linear on
   mechanical parts — the beam exists to cap the adversarial case, not to do
   the selection's job). Candidate count and expansion count are recorded.
