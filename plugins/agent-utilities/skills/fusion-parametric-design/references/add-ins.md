@@ -44,13 +44,15 @@ expected. Both stay secondary to getting the task done.
    catalog is
    <https://marketplace.autodesk.com/search?productIds=FSN&pricingModel=FREE&targetPlatform=mac>.
 
-## Current roster (examples, not a contract)
+## Known-useful free add-ins (standing knowledge, not a contract)
 
-A live-probed inventory of one user's installed free add-ins, kept as standing
-knowledge of what exists and what each is for. The probe above, not this
-table, decides what is present in any given session. Store column: exact
-Autodesk App Store listing name to search (linked where a listing URL is
-stable).
+Standing knowledge of free App Store add-ins worth knowing, verified against
+their store listings, published sources, and a live command-registry probe.
+Nothing here asserts what any session has: the probe above, not this table,
+decides what is installed and running, and the table exists so the agent can
+recognize an installed tool and recommend a missing one by name. Store column:
+exact Autodesk App Store listing name to search (linked where a listing URL is
+stable). Command ids are as the add-ins register them.
 
 | Add-in | Reaches for it to… | Invocability | Store listing |
 |---|---|---|---|
