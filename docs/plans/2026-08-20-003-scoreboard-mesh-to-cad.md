@@ -313,7 +313,11 @@ regression. The scoreboard is the vector. For ranking work, cells are ordered:
 **RC first** (it is the goal sentence made measurable: area standing as
 editable features), then **V** (the "as many recognized things" clause — RC can
 rise while everything is one extrude; V, a precision/recall pair per §7.2, is
-what says the *things* were recognized and not hallucinated), then **E**
+what says the *things* were recognized and not hallucinated; within V the
+comparison is **Pareto**: a lane wins V only when at least as good on both
+precision and recall and strictly better on one — a precision/recall trade
+is an explicit tie at V, recorded, passing rank to the next cell rather
+than being resolved by an implementer's arbitrary weighting), then **E**
 (editable is the adjective; an inert parameter fails the sentence — the
 causal standard of §7.3), then **P** (program quality, §7.1 — RC, V, and E
 can all hold while the timeline is slab/primitive confetti; P is what says
