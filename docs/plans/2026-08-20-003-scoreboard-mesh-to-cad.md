@@ -312,13 +312,18 @@ regression. The scoreboard is the vector. For ranking work, cells are ordered:
 
 **RC first** (it is the goal sentence made measurable: area standing as
 editable features), then **V** (the "as many recognized things" clause — RC can
-rise while everything is one extrude; V is what says the *things* were
-recognized), then **E** (editable is the adjective; an inert parameter fails
-the sentence), then **C** (componentized is the other adjective; the single-object
-cell is already covered by the raw scripted count, so what ranks here is
-assembly decomposition, uniformly zero until a lane can move it), with **H** as
-a guardrail rather than a rank: any change that grows silent area is rejected
-regardless of its other deltas.
+rise while everything is one extrude; V, a precision/recall pair per §7.2, is
+what says the *things* were recognized and not hallucinated), then **E**
+(editable is the adjective; an inert parameter fails the sentence — the
+causal standard of §7.3), then **P** (program quality, §7.1 — RC, V, and E
+can all hold while the timeline is slab/primitive confetti; P is what says
+the program is one a competent user would keep, compared by G5's
+lexicographic census), then **C** (componentized is the other adjective; the
+single-object cell is already covered by the raw scripted count, so what
+ranks here is assembly decomposition, uniformly zero until a lane can move
+it), with **H** as a guardrail rather than a rank: any change that grows
+silent area is rejected regardless of its other deltas. *(Paragraph revised
+2026-08-21 with Amendment §7 — the marker above records the change.)*
 
 ---
 
@@ -704,10 +709,13 @@ another:
    whose regularity class licenses one shared parameter);
 2. repeated geometry represented independently rather than by
    equality/pattern where the pattern licence held;
-3. feature count;
-4. sketch count;
-5. redundant construction planes/geometry;
-6. unconstrained sketch degrees of freedom.
+3. fallback-operation count (`slab-join` operations — ahead of feature
+   count so a slab encoding never wins on having fewer timeline items than
+   the semantic factorization it stands in for);
+4. feature count;
+5. sketch count;
+6. redundant construction planes/geometry;
+7. unconstrained sketch degrees of freedom.
 
 **Diagnostics** — reported under P, explicitly *outside* the P≡G5 identity
 (G5 cannot optimize them — either ground-truth-only or reporting-only):

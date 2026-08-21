@@ -340,9 +340,15 @@ consulted; ties within a gate's declared tolerance proceed together:
    gate. Compared lexicographically within itself in declared order:
    unlicensed-duplicate parameter values (two independently fitted values a
    regularity class says should be one); repeated geometry not expressed as
-   a pattern/equality where its licence holds; feature count; sketch count;
-   redundant construction planes/geometry; unconstrained sketch degrees of
-   freedom.
+   a pattern/equality where its licence holds; **fallback-operation count**
+   (`slab-join` operations in the program — ranked ahead of raw feature
+   count precisely so a two-slab encoding can never beat `base-extrude +
+   two cuts` on having fewer timeline items: a licensed semantic
+   factorization that tied G1–G4 always beats the slab encoding it
+   replaces, which is the review's adopted competition rule and the
+   difference between compact and merely short); feature count; sketch
+   count; redundant construction planes/geometry; unconstrained sketch
+   degrees of freedom.
    This is the gate at which a base+pocket+pattern program beats the
    equivalent slab stack — *only* having tied or won G1–G4 first, which is
    the review's rule adopted verbatim: the compact program wins whenever it
