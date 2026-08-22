@@ -86,7 +86,11 @@ function planarSeam(
   const params: Record<string, any> = request.parameters ?? {};
   const lipWidth = String(params.lip_width ?? "1.0 mm");
   const engagement = String(params.engagement_depth ?? "0.8 mm");
-  const clearance = String(params.radial_clearance ?? "0.15 mm");
+  const clearance = String(params.radial_clearance ?? "");
+  if (!clearance) {
+    return { created, warnings,
+      refusal: ["coupon-required", "Lip/groove clearance is not sourced.", "assign an FDM rule clearance, supply radial_clearance, or record a coupon"] };
+  }
   const extrudes = component.features.extrudeFeatures;
 
   // Lip profile (offset outward) and join to side A.
@@ -172,7 +176,11 @@ function tangentSeam(
     warnings.push("engagement_depth not parseable; used 2.0 mm default");
     engagementHt = 2.0;
   }
-  const clearance = String(params.radial_clearance ?? "0.15 mm");
+  const clearance = String(params.radial_clearance ?? "");
+  if (!clearance) {
+    return { created, warnings,
+      refusal: ["coupon-required", "Lip/groove clearance is not sourced.", "assign an FDM rule clearance, supply radial_clearance, or record a coupon"] };
+  }
 
   const lipCs = makePlanarProfile(component, `seam_${ns}_lip_cs`, crossSectionPlane,
     "rectangle", { width: lipW, height: engagementHt });

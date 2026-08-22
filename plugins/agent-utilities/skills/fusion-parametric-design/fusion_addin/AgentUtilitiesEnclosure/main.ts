@@ -10,6 +10,8 @@ import { adsk } from "@adsk/fas";
 
 import { registerCommands, unregisterCommands } from "./commands.ts";
 
+export { runRequest } from "./commands.ts";
+
 export function run(_context?: unknown): void {
   /** Register commands on Fusion startup. Must not crash if pieces are absent. */
   try {

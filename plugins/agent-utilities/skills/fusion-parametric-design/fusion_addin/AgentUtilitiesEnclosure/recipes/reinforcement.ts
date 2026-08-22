@@ -69,7 +69,11 @@ export function executeReinforcementRecipe(
   created.push(sketch);
 
   const params: Record<string, Any> = request.parameters ?? {};
-  const heightExpr = String(params.height ?? "3 mm");
+  const heightExpr = String(params.height ?? params.thickness ?? "");
+  if (!heightExpr) {
+    return { created, warnings,
+      refusal: ["invalid-parameter-expression", "Rib/web thickness is missing.", "assign an FDM rule or supply height"] };
+  }
   const draftAngleExpr = String(params.draft_angle ?? "0 deg");
   const bodies = makeReinforcementBody(component, sketch.sketchProfiles.item(0), [targetBody], heightExpr, draftAngleExpr);
   if (bodies.length === 0) {

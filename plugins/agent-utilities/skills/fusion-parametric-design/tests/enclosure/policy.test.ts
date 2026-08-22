@@ -220,3 +220,136 @@ test("editFeature classifies inspection state before applying parameter updates"
   // The post-compute result carries the re-inspected state on the instance.
   assert.match(body, /inspection_state:/);
 });
+
+test("polygon profiles convert across-flats through mmToCm", () => {
+  const sketches = fs.readFileSync(path.join(addinRoot, "native/sketches.ts"), {encoding: "utf8"});
+  const start = sketches.indexOf("export function makePolygonProfile");
+  assert.ok(start > -1, "makePolygonProfile missing");
+  const nextExport = sketches.indexOf("export function", start + 1);
+  const body = sketches.slice(start, nextExport > -1 ? nextExport : undefined);
+  assert.match(body, /mmToCm\s*\(/, "makePolygonProfile must convert mm to Fusion cm");
+});
+
+test("hardware aliases set the discriminator boss actually reads", () => {
+  const service = readService();
+  assert.match(service, /HARDWARE_TO_BOSS/);
+  assert.match(service, /hex_nut: "captive_hex_nut"/);
+  assert.match(service, /square_nut: "captive_square_nut"/);
+  const subtypeBlockStart = service.indexOf("HARDWARE_TO_BOSS");
+  assert.ok(subtypeBlockStart > -1, "hardware alias map missing");
+  const subtypeBlock = service.slice(subtypeBlockStart, subtypeBlockStart + 900);
+  assert.match(
+    subtypeBlock,
+    /"variant"/,
+    "hardware family must derive request.variant",
+  );
+  const boss = fs.readFileSync(path.join(addinRoot, "recipes/boss.ts"), {encoding: "utf8"});
+  assert.match(boss, /request\.variant/);
+  assert.doesNotMatch(
+    boss,
+    /across_flats \?\? 5\.5/,
+    "captive nut AF must not silently default to 5.5",
+  );
+});
+
+test("boss.compression is published and coordinated_pair refuses missing geometry", () => {
+  const registry = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/recipe-registry.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(registry, /\"compression\"/);
+  const boss = fs.readFileSync(path.join(addinRoot, "recipes/boss.ts"), {encoding: "utf8"});
+  const pair = boss.indexOf('variant === "coordinated_pair"');
+  assert.ok(pair > -1);
+  const pairBody = boss.slice(pair);
+  assert.match(pairBody, /refusal:/);
+  assert.doesNotMatch(pairBody, /create the lid pocket manually/);
+  assert.doesNotMatch(pairBody, /bore_diameter \?\? \"3\.2 mm\"/);
+});
+
+test("unpublished snap no-ops refuse and support.rest is published", () => {
+  const retention = fs.readFileSync(path.join(addinRoot, "recipes/retention.ts"), {encoding: "utf8"});
+  const skirt = retention.slice(retention.indexOf("function skirtBump"));
+  assert.match(skirt, /refusal:/);
+  assert.doesNotMatch(skirt.slice(0, 400), /return \{ created, warnings, refusal: null \};/);
+  const bayonet = retention.slice(retention.indexOf("function bayonet"));
+  assert.match(bayonet, /refusal:/);
+  const registry = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/recipe-registry.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(registry, /"rest"/);
+  const support = fs.readFileSync(path.join(addinRoot, "recipes/support.ts"), {encoding: "utf8"});
+  assert.match(support, /\"rest\"/);
+});
+
+test("human commands use Fusion inputs instead of JSON textboxes", () => {
+  const commands = fs.readFileSync(path.join(addinRoot, "commands.ts"), {encoding: "utf8"});
+  assert.doesNotMatch(commands, /request_json/);
+  assert.doesNotMatch(commands, /Paste enclosure feature request JSON/);
+  assert.match(commands, /addSelectionInput/);
+  assert.match(commands, /addValueInput/);
+});
+
+
+test("FDM rule analogue never calls Autodesk designPlasticRules", () => {
+  const sources = tsSources();
+  for (const source of sources) {
+    assert.doesNotMatch(source, /design\.designPlasticRules\s*\(/);
+    assert.doesNotMatch(source, /\bdesignPlasticRules\s*\(/);
+  }
+  const service = readService();
+  assert.match(service, /inheritIntoParameters/);
+  assert.match(service, /assign_fdm_rule/);
+  assert.match(service, /RULE_PARAM/);
+});
+
+test("coupon identity reconstruction does not allocate a new UUID", () => {
+  const service = readService();
+  const start = service.indexOf("function identityFromEntity");
+  assert.ok(start > -1, "identityFromEntity missing");
+  const next = service.indexOf("function readAttr", start);
+  const body = service.slice(start, next > -1 ? next : start + 800);
+  assert.doesNotMatch(body, /allocateIdentity\(/);
+  assert.match(body, /enclosure_parameter_namespace/);
+});
+
+test("installer treats copy as distinct from load and hashes bytes", () => {
+  const installer = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/installer.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(installer, /sha256/);
+  assert.match(installer, /probeAddInReadiness/);
+  assert.match(installer, /recipe-version-mismatch/);
+  assert.match(installer, /File copy is not load/);
+});
+
+
+test("per-command Fusion inputs and agent mailbox skip messageBox", () => {
+  const commands = fs.readFileSync(path.join(addinRoot, "commands.ts"), {encoding: "utf8"});
+  const dispatch = fs.readFileSync(path.join(addinRoot, "dispatch.ts"), {encoding: "utf8"});
+  assert.match(commands, /AssignFdmRule/);
+  assert.match(commands, /addDropDownCommandInput/);
+  assert.match(commands, /consumePending/);
+  assert.match(commands, /staged !== null/);
+  assert.match(dispatch, /export function consumePending/);
+  assert.doesNotMatch(commands, /Paste enclosure feature request JSON/);
+  const created = commands.indexOf("function onCommandCreated");
+  const boss = commands.indexOf("AddEnclosureBoss", created);
+  const seam = commands.indexOf("AddSeam", created);
+  const assign = commands.indexOf("AssignFdmRule", created);
+  assert.ok(boss > -1 && seam > -1 && assign > -1, "expected per-command dialog branches");
+  assert.ok(seam !== boss);
+});
+
+test("captive-nut coupons sketch polygons offset from origin", () => {
+  const coupon = fs.readFileSync(path.join(addinRoot, "recipes/coupon.ts"), {encoding: "utf8"});
+  const sketches = fs.readFileSync(path.join(addinRoot, "native/sketches.ts"), {encoding: "utf8"});
+  assert.match(coupon, /makePolygonProfile/);
+  assert.match(coupon, /coupon_type \?\? request\.type/);
+  assert.match(coupon, /offsetX/);
+  assert.match(sketches, /opts\.offsetX/);
+  const slot = sketches.slice(sketches.indexOf("function slot"));
+  assert.match(slot, /mmToCm/);
+});

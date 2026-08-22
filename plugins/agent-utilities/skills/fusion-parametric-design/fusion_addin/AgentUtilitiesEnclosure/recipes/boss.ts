@@ -25,6 +25,12 @@ export type BossRecipeResult = {
   refusal: Refusal | null;
 };
 
+function mmNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  const parsed = parseFloat(String(value).replace(/mm/gi, "").trim());
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
 function getDesign(): any {
   try {
     return (adsk.core.Application.get() as any).activeDocument?.design ?? null;
@@ -182,10 +188,34 @@ export function executeBossRecipe(
     created.push(...makeInsertBore(component, targetBody, boreCenter, boreDir, hardware.insert_spec));
   } else if (variant === "captive_square_nut" || variant === "captive_hex_nut") {
     const sides = variant === "captive_square_nut" ? 4 : 6;
-    const af = Number(hardware.across_flats ?? 5.5);
-    const depth = hardware.depth ?? "2.5 mm";
+    if (hardware.across_flats === undefined || hardware.across_flats === null || hardware.across_flats === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "captive nut requires sourced hardware.across_flats.",
+          "supply the nut AF from the datasheet; do not guess 5.5 mm"] };
+    }
+    if (hardware.depth === undefined || hardware.depth === null || hardware.depth === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "captive nut requires sourced hardware.depth.",
+          "supply pocket depth from the nut thickness plus print clearance"] };
+    }
+    const af = mmNumber(hardware.across_flats);
+    if (!Number.isFinite(af) || af <= 0) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          `across_flats '${hardware.across_flats}' is not a positive number.`,
+          "send AF in millimeters"] };
+    }
+    const depth = hardware.depth;
     const slot = hardware.slot_width ?? "";
-    const depthVal = parseFloat(String(depth).replace("mm", "").trim());
+    const depthVal = mmNumber(depth);
+    if (!Number.isFinite(depthVal) || depthVal <= 0) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          `depth '${hardware.depth}' is not a positive number.`,
+          "send pocket depth in millimeters"] };
+    }
     const heightVal = parseFloat(String(height).replace("mm", "").trim());
     if (Number.isFinite(depthVal) && Number.isFinite(heightVal) && depthVal >= heightVal) {
       warnings.push(
@@ -336,11 +366,33 @@ export function executeBossRecipe(
     }
     // Shared-axis pair: base boss on target, receiver pocket in the lid on the
     // same axis. One connection instance, two child roles.
+    if (hardware.bore_diameter === undefined || hardware.bore_diameter === null || hardware.bore_diameter === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.bore_diameter.",
+          "supply the screw clearance from the datasheet"] };
+    }
+    if (hardware.receiver_diameter === undefined || hardware.receiver_diameter === null) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.receiver_diameter.",
+          "supply the lid pocket diameter"] };
+    }
+    const receiverDia = Number(hardware.receiver_diameter);
+    const receiverDepth = hardware.receiver_depth;
+    if (!receiverDepth) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.receiver_depth.",
+          "supply the lid pocket depth"] };
+    }
     const baseBore = makeHole(component, targetBody, centerPt, direction,
-      hardware.bore_diameter ?? "3.2 mm", "", "simple");
-    if (baseBore) created.push(baseBore);
-    const receiverDia = Number(hardware.receiver_diameter ?? 6.5);
-    const receiverDepth = hardware.receiver_depth ?? "4 mm";
+      hardware.bore_diameter, "", "simple");
+    if (!baseBore) {
+      return { created, warnings,
+        refusal: ["feature-create-failed", "Coordinated pair base bore failed.", "check axis and sourced bore diameter"] };
+    }
+    created.push(baseBore);
     const rxSketch = makePlanarProfile(matingBody.component ?? component,
       `boss_${ns}_receiver`, request.mating_plane ?? plane, "circle", { diameter: receiverDia });
     if (rxSketch !== null && rxSketch.sketchProfiles.count > 0) {
@@ -356,7 +408,10 @@ export function executeBossRecipe(
         warnings.push("Coordinated pair: verify receiver engagement depth against the lid wall at assembly.");
       }
     } else {
-      warnings.push("Receiver profile failed on mating body; create the lid pocket manually.");
+      return { created, warnings,
+        refusal: ["feature-create-failed",
+          "Receiver profile failed on mating body.",
+          "check mating_plane and receiver diameter"] };
     }
   }
 

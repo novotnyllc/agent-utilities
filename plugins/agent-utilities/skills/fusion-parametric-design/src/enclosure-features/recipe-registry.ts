@@ -39,6 +39,7 @@ function requestType(prefix: string): string {
     vent: "VentRequest",
     coupon: "FitCouponRequest",
     operation: "OperationRequest",
+    solid: "OperationRequest",
   };
   return mapping[prefix] ?? "EnclosureFeatureRequest";
 }
@@ -46,7 +47,7 @@ function requestType(prefix: string): string {
 const BOSS_VARIANTS = [
   "support", "screw", "heat_set_insert", "captive_square_nut",
   "captive_hex_nut", "thread_forming", "tapped", "pcb_standoff",
-  "coordinated_pair",
+  "coordinated_pair", "compression",
 ] as const;
 
 const HARDWARE_SUBTYPES = [
@@ -74,6 +75,7 @@ const RETENTION_TYPES = [
 const SUPPORT_TYPES = [
   "pcb_edge", "pcb_corner", "support_point", "shelf", "landing_pad",
   "saddle", "cylindrical_cradle", "profile_ledge",
+  "rest",
 ] as const;
 
 const REINFORCEMENT_TYPES = [
@@ -100,6 +102,7 @@ const COUPON_TYPES = [
 const OPERATIONS = [
   "pattern_rectangular", "pattern_circular", "pattern_path", "mirror",
   "edit_feature", "delete_feature", "inspect_feature", "record_coupon_result",
+  "assign_fdm_rule", "extrude", "shell", "thicken", "draft",
 ] as const;
 
 // Entries whose design-matrix classification differs from supported-recipe.

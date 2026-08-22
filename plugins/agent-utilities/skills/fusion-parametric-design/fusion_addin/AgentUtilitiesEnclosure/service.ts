@@ -18,6 +18,16 @@ import { adsk } from "@adsk/fas";
 import { resolveDesignContext, validateParametricDesign } from "./context.ts";
 import { allocateIdentity, findManagedEntities, probeIdentity, stampAttributes, ATTRIBUTE_GROUP, PARAM_PREFIXES, type ManagedIdentity } from "./identity.ts";
 import { classifyInspection, inspectDirectResult } from "./inspect.ts";
+import { makeParameter } from "./native/parameters.ts";
+import {
+  RULE_ATTR,
+  RULE_PARAM,
+  emptyAssignedRule,
+  fitSensitiveClearanceRefusal,
+  inheritIntoParameters,
+  normalizePolymer,
+  type AssignedFdmRule,
+} from "./fdm-rule.ts";
 
 type Any = any;
 
@@ -36,6 +46,8 @@ export const RECIPE_REGISTRY: Readonly<Record<string, string>> = Object.freeze({
   // hardware bores reuse the boss recipe hardware path.
   coupon: "executeCouponRecipe",
   hardware: "executeBossRecipe",
+  solid: "executeSolidRecipe",
+  operation: "executeSolidRecipe",
 });
 
 const REFUSAL_TOKENS: ReadonlySet<string> = new Set([
@@ -174,7 +186,9 @@ type RecipeFn = (root: any, identity: ManagedIdentity, enriched: Record<string, 
 async function loadRecipe(family: string): Promise<RecipeFn> {
   const {RECIPES} = await import("./recipes/index.ts");
   const wireFamily = family === "fit_coupon" ? "coupon"
-    : family === "hardware" ? "boss" : family;
+    : family === "hardware" ? "boss"
+    : family === "operation" ? "solid"
+    : family;
   const fn: unknown = (RECIPES as Record<string, unknown>)[wireFamily];
   if (typeof fn !== "function") {
     throw new Error(`Recipe function not found for family: ${family}`);
@@ -273,11 +287,91 @@ function identityFromEntity(entity: Any): ManagedIdentity {
       return a ? String(a.value) : "";
     } catch { return ""; }
   };
-  return allocateIdentity(
-    read("enclosure_feature_id"),
-    read("enclosure_recipe_version") || "0",
-    String(read("enclosure_upstream_ids") || "").split(",").filter(Boolean),
-  );
+  const fid = read("enclosure_feature_id");
+  const ns = read("enclosure_parameter_namespace") || fid.replace(/-/g, "").slice(0, 6);
+  return {
+    featureId: fid,
+    displaySuffix: ns,
+    recipeId: read("enclosure_recipe_id"),
+    recipeVersion: read("enclosure_recipe_version") || "0",
+    parameterNamespace: ns,
+    upstreamIds: String(read("enclosure_upstream_ids") || "").split(",").filter(Boolean),
+  };
+}
+
+function readAttr(entity: Any, key: string): string {
+  try {
+    const attr = entity?.attributes?.itemByName(ATTRIBUTE_GROUP, key);
+    return attr ? String(attr.value ?? "") : "";
+  } catch {
+    return "";
+  }
+}
+
+function writeAttr(entity: Any, key: string, value: string): void {
+  const attrs = entity?.attributes;
+  if (!attrs) return;
+  const existing = attrs.itemByName(ATTRIBUTE_GROUP, key);
+  if (existing) existing.value = value;
+  else attrs.add(ATTRIBUTE_GROUP, key, value);
+}
+
+function paramExpression(design: Any, name: string): string | null {
+  try {
+    const param = design?.userParameters?.itemByName(name);
+    return param ? String(param.expression ?? name) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readAssignedRule(design: Any, component: Any): AssignedFdmRule {
+  const rule = emptyAssignedRule();
+  if (!component) return rule;
+  rule.assigned = readAttr(component, RULE_ATTR.assigned) === "true";
+  rule.polymer = readAttr(component, RULE_ATTR.polymer) || null;
+  rule.fit_generation = readAttr(component, RULE_ATTR.fit_generation) || null;
+  rule.fit_stale = readAttr(component, RULE_ATTR.fit_stale) === "true";
+  if (!design) return rule;
+  rule.wall_thickness = paramExpression(design, RULE_PARAM.wall_thickness);
+  rule.draft_angle = paramExpression(design, RULE_PARAM.draft_angle);
+  rule.nominal_radius = paramExpression(design, RULE_PARAM.nominal_radius);
+  rule.clearance = paramExpression(design, RULE_PARAM.clearance);
+  rule.nozzle_diameter = paramExpression(design, RULE_PARAM.nozzle_diameter);
+  return rule;
+}
+
+function assignFdmRule(design: Any, component: Any, params: Record<string, any>, context: Record<string, any>): AssignedFdmRule {
+  const thickness = String(params.wall_thickness ?? params.thickness ?? "");
+  const draft = String(params.draft_angle ?? "");
+  const radius = String(params.nominal_radius ?? params.root_fillet ?? "");
+  const clearance = String(params.clearance ?? params.radial_clearance ?? "");
+  const nozzleObj = context?.fabrication?.nozzle_diameter;
+  const nozzle = String(params.nozzle_diameter ?? (nozzleObj && nozzleObj.expression) ?? nozzleObj ?? "");
+  const polymer = normalizePolymer(params.polymer ?? context?.material?.family ?? "");
+  if (!thickness || thickness === "undefined") {
+    throw new Error("assign_fdm_rule requires wall_thickness");
+  }
+  makeParameter(design, RULE_PARAM.wall_thickness, thickness, "mm", "Assigned FDM wall thickness");
+  if (draft && draft !== "undefined") makeParameter(design, RULE_PARAM.draft_angle, draft, "deg", "Assigned FDM draft angle");
+  if (radius && radius !== "undefined") makeParameter(design, RULE_PARAM.nominal_radius, radius, "mm", "Assigned FDM nominal radius");
+  if (clearance && clearance !== "undefined") makeParameter(design, RULE_PARAM.clearance, clearance, "mm", "Assigned FDM clearance (user-owned or couponed)");
+  if (nozzle && nozzle !== "undefined") {
+    const nozzleExpr = String(nozzle).includes("mm") ? String(nozzle) : String(nozzle) + " mm";
+    makeParameter(design, RULE_PARAM.nozzle_diameter, nozzleExpr, "mm", "Assigned FDM nozzle diameter");
+  }
+  const priorPolymer = readAttr(component, RULE_ATTR.polymer);
+  const priorNozzle = paramExpression(design, RULE_PARAM.nozzle_diameter);
+  const alreadyStale = readAttr(component, RULE_ATTR.fit_stale) === "true";
+  const generation = String(Date.now());
+  const polymerChanged = Boolean(priorPolymer && polymer && priorPolymer !== polymer);
+  const nozzleChanged = Boolean(priorNozzle && nozzle && nozzle !== "undefined" && priorNozzle !== nozzle && priorNozzle !== RULE_PARAM.nozzle_diameter);
+  const stale = alreadyStale || polymerChanged || nozzleChanged;
+  writeAttr(component, RULE_ATTR.assigned, "true");
+  if (polymer) writeAttr(component, RULE_ATTR.polymer, polymer);
+  writeAttr(component, RULE_ATTR.fit_generation, generation);
+  writeAttr(component, RULE_ATTR.fit_stale, stale ? "true" : "false");
+  return readAssignedRule(design, component);
 }
 
 /** Human-readable family names required by the timeline-group naming spec. */
@@ -370,12 +464,33 @@ export class EnclosureFeatureService {
         : subtypeFamily === "vent" ? "pattern"
         : ["seam", "retention"].includes(subtypeFamily) ? "type"
         : subtypeFamily === "cutout" ? "shape" : "type";
-      if (request[disc] === undefined) {
-        request[disc] = subtype;
+      const HARDWARE_TO_BOSS: Record<string, string> = {
+        through_clearance: "screw",
+        counterbore: "screw",
+        countersink: "screw",
+        spot_face: "screw",
+        heat_set_insert: "heat_set_insert",
+        square_nut: "captive_square_nut",
+        hex_nut: "captive_hex_nut",
+        thread_forming_pilot: "thread_forming",
+        tapped: "tapped",
+        modeled_thread: "tapped",
+      };
+      const resolvedDisc = subtypeFamily === "hardware" ? "variant" : disc;
+      if (request[resolvedDisc] === undefined) {
+        request[resolvedDisc] = subtypeFamily === "hardware"
+          ? (HARDWARE_TO_BOSS[subtype] ?? subtype)
+          : subtype;
       }
     }
-    const recipeFamily = String(request.recipe_family ?? "");
-    if (!(recipeFamily in RECIPE_REGISTRY)) {
+    let recipeFamily = String(request.recipe_family ?? "");
+    const SOLID_OPS = new Set(["extrude", "shell", "thicken", "draft"]);
+    if (recipeFamily === "operation" && SOLID_OPS.has(subtype)) {
+      recipeFamily = "solid";
+      request.recipe_family = "solid";
+      request.type = subtype;
+    }
+    if (!(recipeFamily === "operation" && subtype === "assign_fdm_rule") && !(recipeFamily in RECIPE_REGISTRY)) {
       result.refusal = makeRefusal("feature-create-failed", `Unknown family: ${recipeFamily}`);
       result.operation = "create";
       return result.toDict();
@@ -400,6 +515,42 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("invalid-design-type", "No root component.");
       result.operation = "create";
       return result.toDict();
+    }
+    const design = ctx.design ?? root.parentDesign ?? null;
+
+    if (recipeFamily === "operation" && subtype === "assign_fdm_rule") {
+      try {
+        const params: Record<string, any> = Array.isArray(request.parameters) ? {} : {...(request.parameters ?? {})};
+        if (Array.isArray(request.parameters)) {
+          for (const entry of request.parameters) {
+            if (entry && entry.key) {
+              const value = entry.value;
+              params[String(entry.key)] = value && typeof value === "object"
+                ? (value.expression ?? value.value)
+                : value;
+            }
+          }
+        }
+        const rule = assignFdmRule(design, root, params, request.context ?? {});
+        result.operation = "create";
+        result.instance = {
+          feature_id: "fdm-rule",
+          recipe_id: "operation.assign_fdm_rule",
+          polymer: rule.polymer,
+          wall_thickness: RULE_PARAM.wall_thickness,
+          draft_angle: RULE_PARAM.draft_angle,
+          nozzle_diameter: RULE_PARAM.nozzle_diameter,
+          fit_stale: rule.fit_stale,
+        };
+        if (rule.fit_stale) {
+          result.warnings.push("Polymer or nozzle changed; fit-sensitive coupons are stale until re-sourced.");
+        }
+        return result.toDict();
+      } catch (exc) {
+        result.refusal = makeRefusal("invalid-parameter-expression", String(exc), null, "supply wall_thickness and optional polymer/nozzle");
+        result.operation = "create";
+        return result.toDict();
+      }
     }
 
     const upstreamIds = Array.isArray(request.upstream_feature_ids)
@@ -457,7 +608,29 @@ export class EnclosureFeatureService {
       }
       paramObj[String(p.key)] = v;
     }
-    const enriched: Record<string, any> = {...request, parameters: paramObj};
+    const assignedRule = readAssignedRule(design, root);
+    inheritIntoParameters(recipeFamily, subtype, paramObj, assignedRule);
+    const sourced = Boolean(
+      request.hardware?.insert_spec
+      || request.hardware?.across_flats
+      || request.evidence?.source_id
+      || request.coupon_id
+      || paramObj.source_id,
+    );
+    const fitRefusal = fitSensitiveClearanceRefusal(
+      recipeFamily,
+      subtype,
+      paramObj,
+      request.hardware ?? {},
+      assignedRule,
+      sourced,
+    );
+    if (fitRefusal) {
+      result.refusal = makeRefusal(fitRefusal[0], fitRefusal[1], null, fitRefusal[2]);
+      result.operation = "create";
+      return result.toDict();
+    }
+    const enriched: Record<string, any> = {...request, parameters: paramObj, assigned_rule: assignedRule};
     Object.assign(enriched, resolved);
     // Recipes read role names directly (mask_body, profile_reference,
     // pattern_axis); mirror each resolved selection onto its role field too.
@@ -597,7 +770,10 @@ export class EnclosureFeatureService {
         side_b_body: "side_b_body",
         receiver_body: "receiver_body",
       };
-      if (role in keymap) {
+      if (role === "faces") {
+        if (!resolved.faces) resolved.faces = [];
+        resolved.faces.push(entity);
+      } else if (role in keymap) {
         resolved[keymap[role]] = entity;
       } else if (role === "plane") {
         if (!resolved.placement_frame) {

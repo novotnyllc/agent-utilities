@@ -3,7 +3,7 @@
  */
 
 import { adsk } from "@adsk/fas";
-import { makePlanarProfile } from "../native/sketches";
+import { makePlanarProfile, makePolygonProfile } from "../native/sketches";
 import { makeParameter, ownedParamName } from "../native/parameters";
 import { stampAttributes, ManagedIdentity } from "../identity";
 import { featureBodies, requireAdsk } from "./shared";
@@ -46,7 +46,7 @@ export function executeCouponRecipe(
   const created: unknown[] = [];
   const ns = identity.parameterNamespace;
 
-  const ctype: string = request.coupon_type ?? "sliding_clearance";
+  const ctype: string = request.coupon_type ?? request.type ?? "sliding_clearance";
   if (!COUPON_TYPES.has(ctype)) {
     return { created, warnings,
       refusal: ["feature-create-failed", `Unknown coupon type: ${ctype}`, "use a documented coupon type"] };
@@ -65,8 +65,18 @@ export function executeCouponRecipe(
 
   const params: Record<string, any> = request.parameters ?? {};
   const stationPitch = Number(params.station_pitch ?? 8.0);
-  const stationSize = Number(params.station_size ?? 5.0);
+  const stationSize = Number(params.station_size ?? params.across_flats ?? 5.0);
   const bodyThickness = String(params.body_thickness ?? "3 mm");
+  const polygonSides = Number(
+    params.sides ?? params.nut_sides ??
+    (String(params.shape ?? params.nut_shape ?? "").toLowerCase() === "square" ? 4 : 6),
+  );
+  if (ctype === "captive_nut" && polygonSides !== 4 && polygonSides !== 6) {
+    return { created, warnings,
+      refusal: ["invalid-parameter-expression",
+        `captive_nut sides must be 4 (square) or 6 (hex), got ${polygonSides}.`,
+        "set parameters.sides to 4 or 6"] };
+  }
   const plane = (request.placement_frame ?? {}).plane;
   const extrudes = component.features.extrudeFeatures;
 
@@ -108,7 +118,10 @@ export function executeCouponRecipe(
           "raise the candidate value or use a larger station_size"] };
     }
     const stName = `coupon_${ns}_station_${i}`;
-    const stSk = makePlanarProfile(component, stName, plane, "circle", { diameter: holeDia });
+    const offsetX = (i - (candidates.length - 1) / 2) * stationPitch;
+    const stSk = ctype === "captive_nut"
+      ? makePolygonProfile(component, stName, plane, polygonSides, holeDia, { offsetX })
+      : makePlanarProfile(component, stName, plane, "circle", { diameter: holeDia }, { offsetX });
     if (stSk !== null && stSk.sketchProfiles.count > 0) {
       created.push(stSk);
       const stExt = extrudes.createInput(stSk.sketchProfiles.item(0),

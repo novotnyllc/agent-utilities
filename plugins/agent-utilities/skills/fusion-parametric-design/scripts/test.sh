@@ -16,6 +16,9 @@ if [ $# -eq 0 ]; then
   if command -v node >/dev/null 2>&1 && [ -d "$hooks_dir" ]; then
     node --test "$hooks_dir"/*.test.mjs
   fi
+  if command -v node >/dev/null 2>&1; then
+    node --experimental-strip-types --test tests/enclosure/*.test.ts
+  fi
 else
   areas=()
   for arg in "$@"; do
