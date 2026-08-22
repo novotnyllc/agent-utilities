@@ -25,6 +25,12 @@ export type BossRecipeResult = {
   refusal: Refusal | null;
 };
 
+function mmNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  const parsed = parseFloat(String(value).replace(/mm/gi, "").trim());
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
 function getDesign(): any {
   try {
     return (adsk.core.Application.get() as any).activeDocument?.design ?? null;
@@ -194,7 +200,7 @@ export function executeBossRecipe(
           "captive nut requires sourced hardware.depth.",
           "supply pocket depth from the nut thickness plus print clearance"] };
     }
-    const af = Number(hardware.across_flats);
+    const af = mmNumber(hardware.across_flats);
     if (!Number.isFinite(af) || af <= 0) {
       return { created, warnings,
         refusal: ["invalid-parameter-expression",
@@ -203,7 +209,7 @@ export function executeBossRecipe(
     }
     const depth = hardware.depth;
     const slot = hardware.slot_width ?? "";
-    const depthVal = parseFloat(String(depth).replace("mm", "").trim());
+    const depthVal = mmNumber(depth);
     if (!Number.isFinite(depthVal) || depthVal <= 0) {
       return { created, warnings,
         refusal: ["invalid-parameter-expression",

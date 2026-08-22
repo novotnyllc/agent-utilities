@@ -361,8 +361,12 @@ function assignFdmRule(design: Any, component: Any, params: Record<string, any>,
     makeParameter(design, RULE_PARAM.nozzle_diameter, nozzleExpr, "mm", "Assigned FDM nozzle diameter");
   }
   const priorPolymer = readAttr(component, RULE_ATTR.polymer);
+  const priorNozzle = paramExpression(design, RULE_PARAM.nozzle_diameter);
+  const alreadyStale = readAttr(component, RULE_ATTR.fit_stale) === "true";
   const generation = String(Date.now());
-  const stale = Boolean(priorPolymer && polymer && priorPolymer !== polymer);
+  const polymerChanged = Boolean(priorPolymer && polymer && priorPolymer !== polymer);
+  const nozzleChanged = Boolean(priorNozzle && nozzle && nozzle !== "undefined" && priorNozzle !== nozzle && priorNozzle !== RULE_PARAM.nozzle_diameter);
+  const stale = alreadyStale || polymerChanged || nozzleChanged;
   writeAttr(component, RULE_ATTR.assigned, "true");
   if (polymer) writeAttr(component, RULE_ATTR.polymer, polymer);
   writeAttr(component, RULE_ATTR.fit_generation, generation);
@@ -766,7 +770,10 @@ export class EnclosureFeatureService {
         side_b_body: "side_b_body",
         receiver_body: "receiver_body",
       };
-      if (role in keymap) {
+      if (role === "faces") {
+        if (!resolved.faces) resolved.faces = [];
+        resolved.faces.push(entity);
+      } else if (role in keymap) {
         resolved[keymap[role]] = entity;
       } else if (role === "plane") {
         if (!resolved.placement_frame) {

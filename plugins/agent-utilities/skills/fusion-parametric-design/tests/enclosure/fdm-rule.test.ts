@@ -87,3 +87,16 @@ test("safe_as_default is not a waiver for captive hardware", () => {
   assert.equal(normalizePolymer("petg"), "PETG");
   assert.equal(normalizePolymer("Nylon 12"), "Nylon 12");
 });
+
+
+test("solid family inherits the same assigned rule parameters as operation", () => {
+  const rule = emptyAssignedRule();
+  rule.wall_thickness = "des_ef_rule_wall_thickness";
+  rule.draft_angle = "des_ef_rule_draft_angle";
+  const shell: Record<string, unknown> = {};
+  inheritIntoParameters("solid", "shell", shell, rule);
+  assert.equal(shell.thickness, "des_ef_rule_wall_thickness");
+  const draft: Record<string, unknown> = {};
+  inheritIntoParameters("solid", "draft", draft, rule);
+  assert.equal(draft.draft_angle, "des_ef_rule_draft_angle");
+});

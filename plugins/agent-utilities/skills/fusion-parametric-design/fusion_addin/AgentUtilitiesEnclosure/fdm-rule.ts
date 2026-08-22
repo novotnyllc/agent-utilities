@@ -83,10 +83,10 @@ export function inheritIntoParameters(
   } else if (family === "support") {
     setIfMissing("thickness", rule.wall_thickness);
     setIfMissing("draft_angle", rule.draft_angle);
-  } else if (family === "operation" && (subtype === "shell" || subtype === "thicken" || subtype === "extrude")) {
+  } else if ((family === "operation" || family === "solid") && (subtype === "shell" || subtype === "thicken" || subtype === "extrude")) {
     setIfMissing("thickness", rule.wall_thickness);
     setIfMissing("distance", rule.wall_thickness);
-  } else if (family === "operation" && subtype === "draft") {
+  } else if ((family === "operation" || family === "solid") && subtype === "draft") {
     setIfMissing("draft_angle", rule.draft_angle);
   }
   if (family === "boss") {
