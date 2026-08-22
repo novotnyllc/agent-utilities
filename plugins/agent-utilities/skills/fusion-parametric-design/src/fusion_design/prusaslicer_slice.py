@@ -44,9 +44,12 @@ window is used only for the slicer version banner. A run whose window yielded no
 statistics at all is a failure, never an ``ok: true`` report with an empty
 statistics block.
 
-``--binary-gcode=0`` is forced: the Original Prusa XL presets default to binary
-G-code, whose statistics are not readable as ``; `` comments. We want the
-numbers, not a print file, so ASCII is requested explicitly.
+Binary G-code (the Original Prusa XL presets' default) is now the default slice
+output: the .bgcode container is decoded in-process (see
+``prusaslicer_bgcode.read_bgcode``) before the statistics are parsed, so the
+numbers come out of the real print file instead of a forced-ASCII workaround.
+``gcode_format="ascii"`` still requests ``--binary-gcode=0`` and reads the
+output as plain text, exactly as before.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from .gcode_audit import audit_gcode
+from .prusaslicer_bgcode import BgcodeError, read_bgcode
 from .prusaslicer_project import ResolvedPresets
 from .prusaslicer_runtime import (
     BUNDLE_EXECUTABLE,
@@ -126,6 +130,11 @@ _RUNTIME_FINGERPRINT_KEYS = (
     "profile_snapshot_sha256",
 )
 
+# The two G-code output formats this module knows how to read. Binary is the
+# default because it is what the presets already produce; ASCII exists for
+# callers that need a plain-text file and keeps the old behavior verbatim.
+GCODE_FORMATS = ("binary", "ascii")
+
 # label -> (gcode comment key, kind). "vector" values are per-extruder.
 _STATISTIC_KEYS = {
     "filament_used_mm": ("filament used [mm]", "vector"),
@@ -181,6 +190,7 @@ def slice_command(
     profiles: dict[str, str],
     gcode_path: Path,
     datadir: str | Path | None,
+    gcode_format: str = "binary",
 ) -> list[str]:
     """The exact argv used. An argument list -- never a shell string."""
     command = [str(executable), "--export-gcode"]
@@ -188,7 +198,9 @@ def slice_command(
         command += ["--datadir", str(datadir)]
     for kind in REQUIRED_PROFILE_KINDS:
         command += [PROFILE_FLAGS[kind], profiles[kind]]
-    command += ["--binary-gcode=0", "--output", str(gcode_path), str(project_path)]
+    if gcode_format == "ascii":
+        command += ["--binary-gcode=0"]
+    command += ["--output", str(gcode_path), str(project_path)]
     return command
 
 
@@ -347,7 +359,14 @@ def _whole_lines(window: bytes, *, drop_leading: bool, drop_trailing: bool) -> b
     return window
 
 
-def _read_gcode_evidence(gcode_path: Path) -> dict[str, Any]:
+def _read_gcode_evidence(gcode_path: Path, gcode_format: str = "binary") -> dict[str, Any]:
+    """Read the evidence out of the produced G-code file.
+
+    Binary output is a .bgcode container: it is decoded to text first so the
+    same summary-block parsing runs on both formats. Everything else about the
+    evidence (hashes, size, window bounds) is taken from the file on disk, so
+    the binding stays to the bytes the slicer actually wrote.
+    """
     digest = hashlib.sha256()
     size = 0
     head = b""
@@ -370,7 +389,23 @@ def _read_gcode_evidence(gcode_path: Path) -> dict[str, Any]:
     head_text = _whole_lines(head, drop_leading=False, drop_trailing=size > _HEAD_BYTES).decode(
         "utf-8", errors="replace"
     )
-    statistics, absent = parse_gcode_statistics(tail_text)
+    # The file's own magic is the container authority, not the requested
+    # format: a gzip stream or a .bgcode container arriving under either flag
+    # is decoded, and plain text passes through as it always has. This keeps a
+    # wrapper script that ignores the flag from silently yielding no numbers.
+    leading = gcode_path.read_bytes()[:4]
+    if leading == b"GCDE":
+        text = read_bgcode(gcode_path)
+    else:
+        # Binary mode produced a non-container file: it is gzip-wrapped plain
+        # text (the common wrapper behavior), so decompress it.
+        import gzip
+
+        try:
+            text = gzip.decompress(gcode_path.read_bytes()).decode("utf-8")
+        except OSError:
+            text = tail_text
+    statistics, absent = parse_gcode_statistics(text)
     version_match = _VERSION_PATTERN.search(head_text) or _VERSION_PATTERN.search(tail_text)
     return {
         "gcode_path": str(gcode_path),
@@ -470,6 +505,7 @@ def slice_project(
     bindings: dict[str, Any],
     executable: str | Path | None = None,
     datadir: str | Path | None = None,
+    gcode_format: str = "binary",
     runtime_evidence: dict[str, Any] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     runner: Callable[..., Any] = subprocess.run,
@@ -494,6 +530,8 @@ def slice_project(
     """
     profiles = require_complete_profile_set(presets)
     checked_runtime = _checked_runtime_evidence(runtime_evidence)
+    if gcode_format not in GCODE_FORMATS:
+        raise ValueError(f"gcode_format must be one of {GCODE_FORMATS}; got {gcode_format!r}.")
 
     project = Path(project_path).expanduser()
     if not project.is_file():
@@ -548,7 +586,7 @@ def slice_project(
     if gcode_path.exists() or gcode_path.is_symlink():
         raise ValueError(f"Refusing to overwrite existing G-code {str(gcode_path)!r}.")
 
-    command = slice_command(binary, project, profiles, gcode_path, datadir)
+    command = slice_command(binary, project, profiles, gcode_path, datadir, gcode_format)
     base = {**base, "attempted": True, "executable": str(binary), "command": command}
 
     runtime_before: dict[str, Any] | None = None
@@ -666,7 +704,16 @@ def slice_project(
             "stderr_tail": _tail(stderr) or _tail(stdout),
         }
     try:
-        evidence = _read_gcode_evidence(gcode_path)
+        evidence = _read_gcode_evidence(gcode_path, gcode_format)
+    except BgcodeError as error:
+        gcode_path.unlink(missing_ok=True)
+        return {
+            **base,
+            "exit_code": exit_code,
+            "warnings": warnings,
+            "failure": f"Binary G-code container is unreadable: {error}",
+            "stderr_tail": _tail(stderr) or _tail(stdout),
+        }
     except Exception as error:
         gcode_path.unlink(missing_ok=True)
         return {

@@ -787,6 +787,13 @@
               ]
             }
           }
+        },
+        "print_intent": {
+          "enum": [
+            "fast-structural",
+            "fine-detail",
+            "enclosure"
+          ]
         }
       },
       "allOf": [

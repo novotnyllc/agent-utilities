@@ -15,6 +15,7 @@ from fusion_design.prusaslicer_project import ResolvedPresets
 from fusion_design.prusaslicer_runtime import profile_snapshot_sha256, sha256_file
 from fusion_design.prusaslicer_slice import (
     IncompleteProfileSetError,
+    GCODE_FORMATS,
     parse_gcode_statistics,
     require_complete_profile_set,
     resolve_executable,
@@ -113,7 +114,13 @@ def _fake_slicer(root: Path, exit_code: int = 0) -> Path:
         f"    print({compatibility_payload!r})\n"
         "    raise SystemExit(1)\n"
         "if '--output' in argv:\n"
-        "    open(argv[argv.index('--output') + 1], 'w').write('''" + GCODE + "''')\n"
+        "    out = argv[argv.index('--output') + 1]\n"
+        "    if '--binary-gcode=0' in argv:\n"
+        "        open(out, 'w').write('''" + GCODE + "''')\n"
+        "    else:\n"
+        "        import gzip\n"
+        "        with gzip.open(out, 'wb') as handle:\n"
+        "            handle.write(('''" + GCODE + "''').encode())\n"
         f"sys.exit({exit_code})\n",
         encoding="utf-8",
     )
@@ -269,10 +276,43 @@ class SliceInvocationTests(unittest.TestCase):
         ):
             self.assertIn(flag, command)
             self.assertEqual(value, command[command.index(flag) + 1])
+        # Binary G-code is the default; no forced-ASCII flag may reappear.
+        self.assertNotIn("--binary-gcode=0", command)
         # Presets were resolved against this root, so slicing uses the same one.
         self.assertEqual(PRESETS.config_root, command[command.index("--datadir") + 1])
-        self.assertIn("--binary-gcode=0", command)
         self.assertTrue(all(isinstance(argument, str) for argument in command))
+
+    def test_ascii_format_requests_plain_text_output(self) -> None:
+        runner = _Runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            project = _project(Path(temporary))
+            binary = Path(temporary) / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+            slice_project(
+                project,
+                PRESETS,
+                bindings=_bindings(project),
+                executable=binary,
+                gcode_format="ascii",
+                runner=runner,
+            )
+        self.assertIn("--binary-gcode=0", runner.calls[0])
+
+    def test_unknown_gcode_format_fails_before_anything_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = _project(Path(temporary))
+            runner = _Runner()
+            with self.assertRaisesRegex(ValueError, "gcode_format"):
+                slice_project(
+                    project,
+                    PRESETS,
+                    bindings=_bindings(project),
+                    executable=project,
+                    datadir=Path(temporary),
+                    gcode_format="parquet",
+                    runner=runner,
+                )
+        self.assertEqual([], runner.calls)
 
     def test_success_binds_statistics_to_project_and_gcode_evidence(self) -> None:
         runner = _Runner(stdout="Slicing result exported to project.gcode\n")
@@ -281,7 +321,9 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
+            result = slice_project(
+                project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner, gcode_format="ascii"
+            )
 
             self.assertTrue(result["ok"])
             self.assertEqual(0, result["exit_code"])
@@ -305,7 +347,9 @@ class SliceInvocationTests(unittest.TestCase):
             project = _project(root)
             binary = root / "PrusaSlicer"
             binary.write_text("", encoding="utf-8")
-            result = slice_project(project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner)
+            result = slice_project(
+                project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner, gcode_format="ascii"
+            )
             self.assertFalse((root / "project.gcode").exists())
 
         self.assertFalse(result["ok"])
@@ -386,6 +430,68 @@ class SliceInvocationTests(unittest.TestCase):
 
 class WindowTrimmingTests(unittest.TestCase):
     """Direct cover for the two helpers the parsing correctness rests on."""
+
+    def _bgcode(self, text: str) -> bytes:
+        """A real .bgcode built by pybgcode itself from ascii G-code."""
+        import importlib.util as _importlib
+
+        assert _importlib.find_spec("pybgcode") is not None, "pybgcode required for this test"
+        import pybgcode
+
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            ascii_path = scratch_path / "source.gcode"
+            binary_path = scratch_path / "print.bgcode"
+            # The converter requires the slicer-config section, as real files carry.
+            full = text + "; prusaslicer_config = begin\nlayer_height = 0.2\n; prusaslicer_config = end\n"
+            ascii_path.write_text(full, encoding="utf-8")
+            source = pybgcode.open(str(ascii_path), "r")
+            target = pybgcode.open(str(binary_path), "w")
+            try:
+                result = pybgcode.from_ascii_to_binary(source, target)
+            finally:
+                pybgcode.close(source)
+                pybgcode.close(target)
+            assert result == pybgcode.EResult.Success, result
+            return binary_path.read_bytes()
+
+    def test_binary_default_output_is_decoded_through_the_bgcode_reader(self) -> None:
+        # The slicer's native binary output is a container whose decoded text
+        # feeds the same summary parsing; this is the U1 wiring pin.
+        runner = _Runner(gcode=None)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+
+            def write_binary(command, **kwargs):
+                result = runner(command, **kwargs)
+                Path(command[command.index("--output") + 1]).write_bytes(self._bgcode(GCODE))
+                return result
+
+            result = slice_project(
+                project, PRESETS, bindings=_bindings(project), executable=binary, runner=write_binary
+            )
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("--binary-gcode=0", result["command"])
+        self.assertEqual(3.93, result["statistics"]["total_filament_used_g"])
+        self.assertEqual("18m 4s", result["statistics"]["estimated_printing_time_normal"])
+
+    def test_corrupt_binary_output_is_a_structured_failure(self) -> None:
+        runner = _Runner(gcode="GCDE\x01 not really a container")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = _project(root)
+            binary = root / "PrusaSlicer"
+            binary.write_text("", encoding="utf-8")
+            result = slice_project(
+                project, PRESETS, bindings=_bindings(project), executable=binary, runner=runner
+            )
+            self.assertFalse((root / "project.gcode").exists())
+        self.assertFalse(result["ok"])
+        self.assertIn("Binary G-code container is unreadable", result["failure"])
+        self.assertNotIn("statistics", result)
 
     def test_partial_lines_at_a_window_boundary_are_discarded(self) -> None:
         window = b"used [g] = 41.9\n; next = 1\n; trailing partial = 4"
@@ -485,6 +591,10 @@ class SliceBindingTests(unittest.TestCase):
 class GcodeWindowTests(unittest.TestCase):
     """A number recovered from a truncated read is inferred, not measured."""
 
+    # These tests pin the ASCII path: the file is plain text, read through the
+    # same head/tail windows and summary parsing as before binary existed.
+    GCODE_FORMAT_KWARGS = {"gcode_format": "ascii"}
+
     FOOTER = (
         "; filament used [mm] = 1284.99\n"
         "; filament used [cm3] = 3.09\n"
@@ -504,6 +614,7 @@ class GcodeWindowTests(unittest.TestCase):
             bindings=_bindings(project),
             executable=binary,
             runner=_Runner(gcode=gcode),
+            **self.GCODE_FORMAT_KWARGS,
         )
 
     def test_a_statistic_straddling_the_head_boundary_is_never_half_read(self) -> None:
@@ -593,12 +704,17 @@ class GcodeWindowTests(unittest.TestCase):
 class RealSubprocessTests(unittest.TestCase):
     """Exercises the actual subprocess path against a stand-in, never real PrusaSlicer."""
 
+    # Same ASCII pin as GcodeWindowTests: the real-subprocess path must keep
+    # reading plain-text output exactly as it did before binary was added.
+    GCODE_FORMAT_KWARGS = {"gcode_format": "ascii"}
+
     def test_real_run_parses_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             project = _project(root)
             result = slice_project(
                 project, PRESETS, bindings=_bindings(project), executable=_fake_slicer(root), datadir=root
+                , **RealSubprocessTests.GCODE_FORMAT_KWARGS
             )
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(3.93, result["statistics"]["total_filament_used_g"])
@@ -633,7 +749,7 @@ class RealSubprocessTests(unittest.TestCase):
             )
             script.chmod(0o755)
             result = slice_project(
-                project, PRESETS, bindings=_bindings(project), executable=script, datadir=root
+                project, PRESETS, bindings=_bindings(project), executable=script, datadir=root, gcode_format="ascii"
             )
         self.assertTrue(result["ok"], result)
         self.assertLessEqual(len(result["stderr_tail"]), 4000)
@@ -698,6 +814,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
                 datadir=datadir,
                 runtime_evidence=evidence,
                 runner=recording_runner,
+                gcode_format="ascii",
             )
 
         self.assertTrue(result["ok"], result)
@@ -801,6 +918,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
                     executable=binary,
                     datadir=root,
                     runner=_Runner(),
+                    gcode_format="ascii",
                 )
         self.assertFalse(result["ok"])
         self.assertIn("Unable to audit G-code evidence", result["failure"])
@@ -811,7 +929,15 @@ class ExecutionIsConfinedTests(unittest.TestCase):
     """Only the runtime-query and slicing boundaries may start processes."""
 
     def test_only_prusaslicer_runtime_modules_can_start_a_process(self) -> None:
-        from test_prusaslicer_project import process_execution_offenses
+        # The sibling test module lives next to this file; import it by path
+        # rather than assuming the runner put the tests directory on sys.path.
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location(
+            "test_prusaslicer_project", Path(__file__).parent / "test_prusaslicer_project.py"
+        )
+        module = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        process_execution_offenses = module.process_execution_offenses
 
         package = Path(prusaslicer_slice.__file__).parent
         offenders = {
@@ -819,7 +945,10 @@ class ExecutionIsConfinedTests(unittest.TestCase):
             for module in sorted(package.glob("*.py"))
             if process_execution_offenses(module.read_text(encoding="utf-8"))
         }
-        self.assertEqual({"prusaslicer_runtime.py", "prusaslicer_slice.py"}, offenders)
+        self.assertEqual(
+            {"prusaslicer_runtime.py", "prusaslicer_slice.py", "prusaslicer_bgcode.py"},
+            offenders,
+        )
 
     def test_the_command_is_an_argument_list_and_never_a_shell_string(self) -> None:
         source = Path(prusaslicer_slice.__file__).read_text(encoding="utf-8")
