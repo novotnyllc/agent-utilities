@@ -31,6 +31,14 @@ const MAX_ADHOC_LINES = 120;
 const MAX_ADHOC_BYTES = 8192;
 
 // Always blocked, marker or not: these invoke a process when reached.
+// UI-blocking calls deadlock the MCP main thread: ui.messageBox opens a modal
+// that waits for user dismissal while the MCP server is blocked waiting for the
+// script to return. No timeout exists. Always refuse, marker or not.
+const UI_BLOCKING_PATTERNS = [
+  [/\bmessageBox\s*\(/, "messageBox (blocks main thread indefinitely)"],
+  [/\binputBox\s*\(/, "inputBox (blocks main thread indefinitely)"],
+];
+
 const SPAWN_PATTERNS = [
   [/\bsubprocess\b/, "subprocess"],
   [/\bmultiprocessing\b/, "multiprocessing"],
@@ -208,6 +216,18 @@ function gate(raw) {
         }); scanning raw text.\n`,
       );
       scanText = script;
+    }
+    for (const [pattern, name] of UI_BLOCKING_PATTERNS) {
+      if (pattern.test(scanText)) {
+        block(
+          "the script contains " + name +
+          ". ui.messageBox and ui.inputBox open modal dialogs on the shared" +
+          " main thread; the MCP server executes scripts there too, so the" +
+          " call never returns and every subsequent call queues behind it." +
+          " Use print() for output. If stdout returns empty, report it -" +
+          " never use UI calls."
+        );
+      }
     }
     for (const [pattern, name] of spawnPatterns) {
       if (pattern.test(scanText)) {

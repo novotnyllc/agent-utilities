@@ -39,6 +39,8 @@ Parametric modeling, reusable components, configurations, repeated manual edits,
 
 **MCP is transport.** Use it to operate the active Fusion design directly. Python must not become a CAD application, a geometry-generation framework, a persistent transaction system, a validation framework, a reporting framework, or a replacement for the Fusion browser and timeline.
 
+**Never call `ui.messageBox`, `ui.inputBox`, or any other UI-blocking call through MCP.** These open modal dialogs on Fusion's main thread and block until a human dismisses them. The MCP server executes scripts on that same thread, so one messageBox wedges every subsequent call - the session deadlocks until someone clicks OK on screen. There is no timeout. If you need script output, use `print()`; if stdout returns empty, report it as a transport issue and stop - do not escalate to UI tricks.
+
 **Direct native operations are the default.** Perform small, bounded native feature operations and inspect their native results. Do not generate monolithic modeling scripts for ordinary design work. Do not create persistent Fusion Python scripts unless the user explicitly requests reusable automation, batch generation, or a repeatable product generator — a one-off modeling or appearance change is performed directly in Fusion.
 
 **Thin means one visible edit, not one product goal.** An ordinary-lane snippet targets one active document, one target component, and one user-visible edit. It may create the construction entities required by one native feature — profiles followed by one loft, a sketch and its dimensions followed by one extrude — or one equivalently small dependency chain that ends in one visible feature: edit one feature parameter, apply one fillet, insert one linked component, call Fusion Interference, call Fusion Measure, capture one screenshot, read one feature error. A thin snippet contains no reusable helper functions or classes, file or network I/O, persistent state, report schema, geometry-derived decision tree, retry loop, alternative generation, rollback logic, or pass/fail aggregation; a bounded loop may only populate one native Fusion collection from entities already identified for the operation.
@@ -77,6 +79,13 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 **Load references on demand** — the smallest relevant section for the current lane and operation, never automation references as preparation for ordinary modeling:
 
 - `references/design-doctrine.md` for any modeling work, with the relevant capability entry in `references/mcp-adapter.md`
+- `references/native-feature-selection.md` before choosing Shell, surface closure, Thicken, or direct-model repair
+- `references/brep-and-offset-mental-model.md` before debugging Shell, offset, fillet, or loft topology
+- `references/kernel-failure-playbook.md` when a native feature returns a kernel or feature-health error
+- `references/sketch-constraint-discipline.md` before creating or editing sketch-driven features
+- `references/component-body-architecture.md` before creating multi-part assemblies or choosing body vs component
+- `references/native-inspection-fluency.md` when verifying fit, clearance, or feature health
+- `references/failure-recovery-judgment.md` when a feature fails or the design needs correction
 - `references/data-and-catalog.md` before creating or importing any component
 - `references/add-ins.md` when reaching for an add-in or recommending one
 - `references/material-selection.md` when the geometry is about to depend on material

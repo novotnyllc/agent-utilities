@@ -29,6 +29,24 @@ At session start, discover and record the current tool/resource schemas. Bind to
 
 Do not bind a tool by name alone. Read its current schema, side effects, permissions, and result format.
 
+### apiDocumentation query discovery
+
+Probe the live `READ_DOCUMENTATION` schema at session start; the
+discovered schema governs the query shape for that session. A successful
+response with empty content is not proof that an API member is absent.
+In one local Fusion MCP session in August 2026, a bare `searchPattern`
+returned success with no content, while the qualified query shape below
+produced the useful result. When the discovered schema supports these
+fields, identify the owning class, put its fully qualified namespace in
+`filter`, and request the relevant `apiCategory` instead of retrying an
+unqualified synonym ladder. Historical example:
+
+> {"queryType":"apiDocumentation","apiCategory":"member","searchPattern":"setOneSideExtent","filter":"adsk.fusion.ExtrudeFeatureInput"}
+
+This example was observed live in August 2026 against the local Fusion
+MCP. It is historical, not an Autodesk specification, and does not
+override the schema discovered in the current session.
+
 ## Ordinary-lane execution
 
 Ordinary modeling does not use generated transaction contracts.
@@ -284,7 +302,7 @@ The local Fusion MCP has access to the live design session. Ask for the minimum 
 When an ordinary-lane API call fails:
 
 1. read the returned exception and traceback;
-2. read the one current official API entry for that call (the Autodesk product-help MCP's `search_help_content` when that capability is connected);
+2. read the one current official API entry through the bound `READ_DOCUMENTATION` capability when it is connected (for example, a discovered `search_help_content` tool);
 3. verify the active document, Design, target component, and required object type with a read-only probe;
 4. correct the call once against the actual target.
 
