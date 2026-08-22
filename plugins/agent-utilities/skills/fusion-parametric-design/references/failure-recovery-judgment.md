@@ -11,8 +11,8 @@ disconnect, and unrecoverable design history are different problems.
 | One responsible feature has wrong inputs or references | Edit Feature or Edit Sketch; delete only after checking downstream dependents |
 | The failure begins somewhere upstream | Roll the timeline marker back temporarily to isolate the first bad feature, then restore it to the intended end |
 | A suspect feature may be poisoning downstream geometry | Suppress it, observe the upstream model, then unsuppress or edit it |
-| Fusion crashes or MCP disconnects | Reconnect, reopen the saved document, inspect current reality, and resume |
-| History is unrecoverable or governing assumptions changed | Restore a known document version, state what later work is being abandoned, and continue there |
+ | Fusion crashes or MCP disconnects | Reconnect and inspect the live document first; only reopen saved state if Fusion actually lost the in-memory document. A transport disconnect alone does not mean edits are gone |
+ | History is unrecoverable or governing assumptions changed | Stop, describe the target version and what newer work would be abandoned, and obtain explicit user approval before restoring |
 
 ## Undo immediate mistakes
 
@@ -63,6 +63,8 @@ work before committing to it.
 
 Do not restore a version for an isolated bad feature, a temporary rollback, or
 a reconnect. Those have smaller native recoveries.
+Version restore abandons all work after the target point; never perform it
+without explicit user confirmation of the target version and the lost scope.
 
 ## Sources
 

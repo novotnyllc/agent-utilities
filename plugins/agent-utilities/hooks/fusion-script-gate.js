@@ -35,8 +35,8 @@ const MAX_ADHOC_BYTES = 8192;
 // that waits for user dismissal while the MCP server is blocked waiting for the
 // script to return. No timeout exists. Always refuse, marker or not.
 const UI_BLOCKING_PATTERNS = [
-  [/\bui\s*\.\s*messageBox\b/, "ui.messageBox (blocks main thread indefinitely)"],
-  [/\bui\s*\.\s*inputBox\b/, "ui.inputBox (blocks main thread indefinitely)"],
+  [/\bmessageBox\s*\(/, "messageBox (blocks main thread indefinitely)"],
+  [/\binputBox\s*\(/, "inputBox (blocks main thread indefinitely)"],
 ];
 
 const SPAWN_PATTERNS = [

@@ -73,4 +73,4 @@ repeated unguided reduction is diagnosis by exhaustion, not a repair.
 ## Sources
 
 - [Understanding Geometry and B-Rep (Autodesk University, 2018)](https://www.autodesk.com/autodesk-university/class/Understanding-Geometry-and-B-Rep-Inventor-and-Fusion-360-2018)
-- [Fusion solids and surfaces](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/FusionSolidsAndSurfaces_UM.htm)
+- [Fusion Models (B-Rep and Geometry)](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/BRepGeometry_UM.htm)
