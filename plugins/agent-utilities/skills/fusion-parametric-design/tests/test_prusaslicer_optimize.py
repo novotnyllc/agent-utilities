@@ -85,6 +85,70 @@ class OptimizerTests(unittest.TestCase):
             self.assertFalse(entry["ok"])
             self.assertIn("failure", entry)
 
+    def test_six_faces_times_variants_is_bounded_to_the_cap(self) -> None:
+        # F2: no declared alternatives means six faces x four variants = 24,
+        # above the cap. The matrix is bounded BEFORE expansion: every face
+        # keeps its baseline row, later variants are dropped deterministically,
+        # and every drop is recorded in the report.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")  # default intent: no alternatives
+            report = prusaslicer_optimize.optimize(
+                fixture.manifest(), fixture.write_index(), _presets(_config_root(root)),
+                runner=FakeRunner([]), executable="/usr/bin/false", gcode_format="ascii",
+            )
+            self.assertEqual(prusaslicer_optimize.MAX_CANDIDATES, report["candidate_count"])
+            kept = {entry["candidate_id"] for entry in report["ranking"]}
+            # Six faces, each keeping its baseline variant.
+            baselines = [cid for cid in kept if cid.endswith(":baseline")]
+            self.assertEqual(6, len(baselines))
+            dropped = report["dropped_candidates"]
+            self.assertEqual(24 - prusaslicer_optimize.MAX_CANDIDATES, len(dropped))
+            self.assertEqual(sorted(dropped), sorted(set(dropped)), "dropped ids must be unique")
+            for face in ("+X", "+Y", "+Z", "-X", "-Y", "-Z"):
+                self.assertIn(f"Widget/Bracket:{face}:baseline", kept)
+
+    def test_fine_detail_ranks_finer_layers_above_coarser_at_equal_time(self) -> None:
+        # F4: layer term must prefer SMALLER heights under ascending sort.
+        statistics = {"estimated_printing_time_normal": "10m", "total_filament_used_g": 3.9}
+        fine = prusaslicer_optimize.score_candidate("fine-detail", statistics, 0.12)
+        coarse = prusaslicer_optimize.score_candidate("fine-detail", statistics, 0.28)
+        self.assertLess(fine, coarse)
+        # Baselines without an override get the neutral mid-value so they do
+        # not beat explicit detail variants for free.
+        baseline = prusaslicer_optimize.score_candidate("fine-detail", statistics, None)
+        self.assertLess(fine, baseline)
+        self.assertLess(baseline, coarse)
+
+    def test_proxy_penalty_orders_equal_cost_candidates_by_overhang(self) -> None:
+        # F5: proxies feed the score -- equal time/mass, different overhang,
+        # rank in proxy order.
+        statistics = {"estimated_printing_time_normal": "10m", "total_filament_used_g": 3.9}
+        low = prusaslicer_optimize.proxy_penalty(
+            "fast-structural",
+            {"overhang_area_fraction": 0.05, "max_unsupported_span_mm": 2.0, "vertical_wall_fraction": 0.5},
+        )
+        high = prusaslicer_optimize.proxy_penalty(
+            "fast-structural",
+            {"overhang_area_fraction": 0.40, "max_unsupported_span_mm": 20.0, "vertical_wall_fraction": 0.5},
+        )
+        self.assertLess(
+            prusaslicer_optimize.score_candidate("fast-structural", statistics, None, low),
+            prusaslicer_optimize.score_candidate("fast-structural", statistics, None, high),
+        )
+        # Vertical-wall fraction only penalizes fine-detail intents.
+        structural = prusaslicer_optimize.proxy_penalty(
+            "fast-structural",
+            {"overhang_area_fraction": 0.0, "max_unsupported_span_mm": 0.0, "vertical_wall_fraction": 0.9},
+        )
+        detail = prusaslicer_optimize.proxy_penalty(
+            "fine-detail",
+            {"overhang_area_fraction": 0.0, "max_unsupported_span_mm": 0.0, "vertical_wall_fraction": 0.9},
+        )
+        self.assertEqual(0.0, structural)
+        self.assertGreater(detail, 0.0)
+
     def test_drift_guard_aborts_naming_the_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

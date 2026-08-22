@@ -432,13 +432,28 @@ class WindowTrimmingTests(unittest.TestCase):
     """Direct cover for the two helpers the parsing correctness rests on."""
 
     def _bgcode(self, text: str) -> bytes:
-        """A minimal gzip-compressed .bgcode container holding the text."""
-        import gzip as _gzip
-        import struct as _struct
+        """A real .bgcode built by pybgcode itself from ascii G-code."""
+        import importlib.util as _importlib
 
-        payload = _gzip.compress(text.encode("utf-8"))
-        header = _struct.pack("<IIH", len(payload), len(text), 1 << 5)
-        return b"GCDE\x01" + header + payload
+        assert _importlib.find_spec("pybgcode") is not None, "pybgcode required for this test"
+        import pybgcode
+
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            ascii_path = scratch_path / "source.gcode"
+            binary_path = scratch_path / "print.bgcode"
+            # The converter requires the slicer-config section, as real files carry.
+            full = text + "; prusaslicer_config = begin\nlayer_height = 0.2\n; prusaslicer_config = end\n"
+            ascii_path.write_text(full, encoding="utf-8")
+            source = pybgcode.open(str(ascii_path), "r")
+            target = pybgcode.open(str(binary_path), "w")
+            try:
+                result = pybgcode.from_ascii_to_binary(source, target)
+            finally:
+                pybgcode.close(source)
+                pybgcode.close(target)
+            assert result == pybgcode.EResult.Success, result
+            return binary_path.read_bytes()
 
     def test_binary_default_output_is_decoded_through_the_bgcode_reader(self) -> None:
         # The slicer's native binary output is a container whose decoded text
@@ -930,7 +945,10 @@ class ExecutionIsConfinedTests(unittest.TestCase):
             for module in sorted(package.glob("*.py"))
             if process_execution_offenses(module.read_text(encoding="utf-8"))
         }
-        self.assertEqual({"prusaslicer_runtime.py", "prusaslicer_slice.py"}, offenders)
+        self.assertEqual(
+            {"prusaslicer_runtime.py", "prusaslicer_slice.py", "prusaslicer_bgcode.py"},
+            offenders,
+        )
 
     def test_the_command_is_an_argument_list_and_never_a_shell_string(self) -> None:
         source = Path(prusaslicer_slice.__file__).read_text(encoding="utf-8")

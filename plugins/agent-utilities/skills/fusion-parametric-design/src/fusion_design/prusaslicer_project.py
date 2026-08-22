@@ -1110,7 +1110,7 @@ def _model_xml(parts: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _model_config_xml(parts: list[dict[str, Any]], *, multi_tool_extruders: bool = False) -> str:
+def _model_config_xml(parts: list[dict[str, Any]], *, multi_tool_extruders: bool = False, model_extruders: dict[str, int] | None = None) -> str:
     lines = ['<?xml version="1.0" encoding="UTF-8"?>', "<config>"]
     for part in parts:
         lines.append(f' <object id="{part["object_id"]}" instances_count="{part["quantity"]}">')
@@ -1122,12 +1122,15 @@ def _model_config_xml(parts: list[dict[str, Any]], *, multi_tool_extruders: bool
         lines.append(f'  <volume firstid="0" lastid="{len(part["triangles"]) - 1}">')
         lines.append(f'   <metadata type="volume" key="name" value="{_attribute(part["part_path"])}"/>')
         lines.append('   <metadata type="volume" key="volume_type" value="ModelPart"/>')
-        if multi_tool_extruders:
+        model_extruder = (model_extruders or {}).get(part["part_path"])
+        if model_extruder is not None:
             # PrusaSlicer stamps each volume with its extruder in multi-tool
-            # projects (verified against 2.9.6 output); single-tool output stays
-            # byte-identical without the element.
+            # projects (verified against 2.9.6 output), but only when the caller
+            # explicitly assigns the MODEL to a tool. A support-material
+            # extruder is config-level state; it must never move the model's
+            # own volume to another tool.
             lines.append(
-                f'   <metadata type="volume" key="extruder" value="{_attribute(part.get("extruder", 1))}"/>'
+                f'   <metadata type="volume" key="extruder" value="{_attribute(model_extruder)}"/>'
             )
         # Identity: build orientation and placement live in the build-item
         # transform, so the volume carries no extra frame of its own.
@@ -1152,31 +1155,40 @@ def _config_text(presets: ResolvedPresets) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _preset_file(kind: str, name: str, config_root: str | Path) -> Path:
-    """The user .ini backing a resolved preset, or a named miss.
+def _preset_file(kind: str, name: str, config_root: str | Path) -> Path | None:
+    """The file backing a resolved preset, or None for a name-only selection.
 
-    A system preset selected in PrusaSlicer.ini has no file under its kind
-    directory; the vendor-bundle ini that defines it (printers only) is the
-    drift-relevant file, so it is returned instead of pretending the preset has
-    no bytes to hash.
+    A system preset selected in PrusaSlicer.ini has no user .ini under its kind
+    directory; the vendor-bundle ini that defines it is the drift-relevant
+    file, so it is returned instead. Bundle sections are prefixed by kind --
+    ``[printer:<name>]``, ``[filament:<name>]``, ``[print:<name>]`` -- and any
+    line inside a section of the right kind counts, since even a bare section
+    header is real profile bytes. When no file anywhere defines the name -- it
+    exists only as the selected line in PrusaSlicer.ini -- None is returned so
+    the caller can hash a deterministic placeholder binding instead of
+    crashing.
     """
     root = Path(config_root).expanduser()
     candidate = root / kind / f"{name}.ini"
     if candidate.is_file():
         return candidate
-    if kind == "printer":
-        for vendor in sorted(_enabled_vendor_models(root)):
-            bundle = root / "vendor" / f"{vendor}.ini"
-            try:
-                sections = _vendor_bundle_printer_sections(bundle)
-            except (OSError, ValueError):
+    for vendor in sorted(_enabled_vendor_models(root)):
+        bundle = root / "vendor" / f"{vendor}.ini"
+        try:
+            lines = bundle.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        current = None
+        for raw_line in lines:
+            line = raw_line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                prefix = kind + ":"
+                current = section[len(prefix):].strip() if section.startswith(prefix) else None
                 continue
-            if name in sections:
+            if current == name:
                 return bundle
-    raise ValueError(
-        f"Resolved {kind} preset {name!r} has no readable .ini under {str(root)!r}; "
-        "its state cannot be hashed for the drift guard."
-    )
+    return None
 
 
 def preset_hashes(presets: ResolvedPresets) -> dict[str, str]:
@@ -1185,6 +1197,11 @@ def preset_hashes(presets: ResolvedPresets) -> dict[str, str]:
     This is the KTD7 evidence anchor: the optimizer hashes at build time and
     re-verifies immediately before every slice invocation. Hashes are of file
     bytes only; a renamed but byte-identical profile reads as identical state.
+    A preset that exists only as a selected name in PrusaSlicer.ini -- no user
+    .ini, no vendor-bundle section anywhere -- hashes a deterministic
+    name-only placeholder binding (kind + name + the PrusaSlicer.ini hash),
+    labeled in the result, so a valid selection can never crash the drift
+    guard; any change to that selection line changes the hash.
     """
     mapping = {
         "printer": presets.printer,
@@ -1192,13 +1209,26 @@ def preset_hashes(presets: ResolvedPresets) -> dict[str, str]:
         "print": presets.print_settings,
     }
     files = {}
+    name_only = []
     for kind, name in mapping.items():
-        files[kind] = _preset_file(kind, name, presets.config_root)
+        backing = _preset_file(kind, name, presets.config_root)
+        if backing is None:
+            name_only.append(kind)
+        else:
+            files[kind] = backing
     # Deduplicated read: printer + filament + print may share one vendor bundle.
     digests = {}
     for path in sorted(set(files.values()), key=str):
         digests[path] = sha256_file(path)
-    return {kind: digests[path] for kind, path in files.items()}
+    ini_path = Path(presets.config_root).expanduser() / "PrusaSlicer.ini"
+    ini_hash = sha256_file(ini_path) if ini_path.is_file() else ""
+    hashes = {kind: digests[path] for kind, path in files.items()}
+    for kind in name_only:
+        binding = f"name-only:{kind}:{mapping[kind]}:{ini_hash}"
+        hashes[kind] = hashlib.sha256(binding.encode("utf-8")).hexdigest()
+    if name_only:
+        hashes["name_only_presets"] = ",".join(sorted(name_only))
+    return hashes
 
 
 def _deterministic_zip(entries: list[tuple[str, str]]) -> bytes:
@@ -1356,6 +1386,7 @@ def build_project(
     orientation_overrides: dict[str, str] | None = None,
     candidate_overrides: dict[str, dict[str, str]] | None = None,
     extruder_assignments: dict[str, int] | None = None,
+    model_extruders: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Write a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
@@ -1416,7 +1447,6 @@ def build_project(
                     + repr(presets.printer) + "."
                 )
             overrides["support_material_extruder"] = str(assignment)
-            part["extruder"] = assignment
         part["overrides"] = validate_overrides(overrides, part["part_path"])
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
@@ -1428,13 +1458,17 @@ def build_project(
     plates = _layout(parts, geometry)
 
     multi_tool = any("support_material_extruder" in part["overrides"] for part in parts)
+    explicit_model_extruders = {
+        path: count for path, count in (model_extruders or {}).items()
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 1
+    }
     payload = _deterministic_zip(
         [
             ("[Content_Types].xml", _CONTENT_TYPES_XML),
             ("_rels/.rels", _RELS_XML),
             (MODEL_ENTRY, _model_xml(parts)),
             (CONFIG_ENTRY, _config_text(presets)),
-            (MODEL_CONFIG_ENTRY, _model_config_xml(parts, multi_tool_extruders=multi_tool)),
+            (MODEL_CONFIG_ENTRY, _model_config_xml(parts, multi_tool_extruders=multi_tool, model_extruders=explicit_model_extruders)),
         ]
     )
     try:

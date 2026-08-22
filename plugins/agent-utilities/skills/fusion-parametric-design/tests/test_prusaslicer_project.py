@@ -1127,12 +1127,81 @@ class PresetHashTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config = _config_root(Path(temporary))
             (config / "filament" / "Overture PETG @XL HF0.4 - Black.ini").unlink()
-            with self.assertRaisesRegex(ValueError, "no readable .ini"):
-                prusaslicer_project.preset_hashes(_presets(config))
+            # F3: an unresolvable preset no longer crashes the drift guard;
+            # it hashes as name-only (see the dedicated tests below).
+            hashes = prusaslicer_project.preset_hashes(_presets(config))
+            self.assertIn("filament", hashes["name_only_presets"].split(","))
+
+    def test_system_print_and_filament_presets_resolve_through_vendor_bundles(self) -> None:
+        # F3: system print/filament presets have no user .ini; when a vendor
+        # bundle defines their section, that bundle is the drift-relevant file.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(
+                Path(temporary),
+                user_presets={},
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "System PETG",
+                    "print": "System 0.20",
+                },
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+            bundle = config / "vendor" / "PrusaResearch.ini"
+            bundle.write_text(
+                VENDOR_BUNDLE
+                + "\n[print:System 0.20]\nlayer_height = 0.20\n"
+                + "\n[filament:System PETG]\nfilament_type = PETG\n"
+                + "\n[printer:System Printer]\nbed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 150\nextruders_cnt = 1\n"
+                + "\n[vendor:OtherVendor]\nmodel:X = Y\n"
+                + "\n[print:OtherVendor profile]\ntemperature = 210\n",
+                encoding="utf-8",
+            )
+            # Enable the second vendor too so both bundles are scanned.
+            ini = config / "PrusaSlicer.ini"
+            ini.write_text(ini.read_text(encoding="utf-8") + "[vendor:OtherVendor]\nmodel:X = Y\n", encoding="utf-8")
+            # Selected via PrusaSlicer.ini -- the exact layout F3 describes:
+            # a system preset with no user .ini of its own. resolve_presets
+            # accepts selected names; preset_hashes must then find their bytes.
+            presets = resolve_presets({}, config)
+            hashes = prusaslicer_project.preset_hashes(presets)
+            self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), hashes["print"])
+            self.assertEqual(hashes["print"], hashes["filament"])
+            self.assertNotIn("name_only_presets", hashes)
+
+    def test_name_only_selected_presets_hash_a_deterministic_placeholder(self) -> None:
+        # F3: a preset that exists only as a selected name in PrusaSlicer.ini
+        # gets a stable binding of kind + name + the ini's own hash -- labeled,
+        # never a crash, and sensitive to selection changes.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            selected = {
+                "printer": "Ghost Printer XL",
+                "filament": "Overture PETG @XL HF0.4 - Black",
+                "print": "0.40 SPEED @XLIS HF0.6 mixed",
+            }
+            config = _config_root(root, selected=selected, user_presets={
+                "filament": [selected["filament"]],
+                "print": [selected["print"]],
+            })
+            presets = _presets(config)
+            first = prusaslicer_project.preset_hashes(presets)
+            self.assertIn("printer", first["name_only_presets"].split(","))
+            import hashlib as _hashlib
+
+            expected = _hashlib.sha256(
+                f"name-only:printer:{selected['printer']}:{_hashlib.sha256((config / 'PrusaSlicer.ini').read_bytes()).hexdigest()}".encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(expected, first["printer"])
+            # Changing the PrusaSlicer.ini bytes changes the placeholder hash.
+            ini = config / "PrusaSlicer.ini"
+            ini.write_text(ini.read_text(encoding="utf-8") + "# touched\n", encoding="utf-8")
+            second = prusaslicer_project.preset_hashes(presets)
+            self.assertNotEqual(first["printer"], second["printer"])
 
 
 class MultiMaterialTests(unittest.TestCase):
-    def test_extruder_assignment_writes_volume_metadata_and_validates_count(self) -> None:
+    def test_support_extruder_assignment_stays_out_of_volume_metadata(self) -> None:
         # The default fixture printer declares one extruder; the vendor-bundle
         # printer declares five, so a valid assignment needs it.
         def xl_config(root: Path) -> Path:
@@ -1159,7 +1228,10 @@ class MultiMaterialTests(unittest.TestCase):
             )
             with zipfile.ZipFile(output) as archive:
                 config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
-            self.assertIn('<metadata type="volume" key="extruder" value="2"/>', config)
+            # F6: a support-material assignment is config-level state; it must
+            # never move the model's own volume to another tool.
+            self.assertNotIn('key="extruder"', config)
+            self.assertIn('<metadata type="object" key="support_material_extruder" value="2"/>', config)
             self.assertEqual("2", result["objects"][0]["overrides"]["support_material_extruder"])
 
             fixture_bad = _Fixture(root / "case-bad")
@@ -1194,6 +1266,32 @@ class MultiMaterialTests(unittest.TestCase):
             with zipfile.ZipFile(output) as archive:
                 config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
             self.assertNotIn('key="extruder"', config)
+
+    def test_explicit_model_extruder_writes_volume_metadata(self) -> None:
+        # F6 counterpart: the model's own tool assignment, passed explicitly,
+        # is the only thing that stamps the volume-level extruder key.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            output = root / "p.3mf"
+            config = _config_root(
+                root / "cfg",
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "Overture PETG @XL HF0.4 - Black",
+                    "print": "0.40 SPEED @XLIS HF0.6 mixed",
+                },
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+            build_project(
+                fixture.manifest(), fixture.write_index(), output, _presets(config),
+                model_extruders={"Widget/Bracket": 2},
+            )
+            with zipfile.ZipFile(output) as archive:
+                config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
+            self.assertIn('<metadata type="volume" key="extruder" value="2"/>', config)
 
     def test_extended_override_values_are_validated(self) -> None:
         cases = [

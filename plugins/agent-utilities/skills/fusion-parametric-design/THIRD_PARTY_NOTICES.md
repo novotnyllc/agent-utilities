@@ -14,3 +14,18 @@ No Nurb Python source code is included in this package. The skill and tooling he
 ## Autodesk
 
 Autodesk, Autodesk Fusion, and Fusion 360 are trademarks of Autodesk, Inc. This project is not an Autodesk product and is not endorsed by Autodesk. It uses publicly documented Autodesk Fusion MCP and Fusion API interfaces.
+
+## pybgcode / libbgcode
+
+Binary G-code (.bgcode) decoding uses Prusa's official **pybgcode** Python
+bindings for libbgcode.
+
+- Source: https://github.com/prusa3d/libbgcode
+- Package: `pybgcode` (currently distributed as wheels from the libbgcode
+  repository release/CI artifacts, not yet on PyPI)
+- License identified in the repository: GNU Affero General Public License
+  v3.0 or later (AGPL-3.0-or-later)
+- License text: https://github.com/prusa3d/libbgcode/blob/main/LICENSE
+
+- The binding is an optional runtime dependency, used only when a GCDE-magic
+  binary G-code file is actually decoded; it is not bundled or modified here.

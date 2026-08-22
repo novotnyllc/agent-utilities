@@ -16,12 +16,16 @@ would produce numbers no report can attribute.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import math
+import json
 from pathlib import Path
 import tempfile
 from typing import Any, Callable
 
 from .manifest import Manifest
+from .mesh_strength_proxies import compute_strength_proxies
+from .scripts import manifest_sha256
 from .prusaslicer_project import CANDIDATE_VARIANTS
 from .prusaslicer_project import (
     ResolvedPresets,
@@ -43,6 +47,12 @@ INTENT_WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 MAX_CANDIDATES = 12
+
+# Neutral fine-detail term for a baseline candidate whose print preset cannot
+# be resolved to a layer height. Mid-range of the variant bounds, so an explicit
+# 0.12 mm detail variant always outranks it at equal time and the coarse
+# 0.28 mm one always loses to it.
+DEFAULT_LAYER_HEIGHT_MM = 0.2
 
 
 def _parse_time_seconds(raw: Any) -> float:
@@ -87,8 +97,108 @@ def score_candidate(
     """Fixed-weight per-intent objective over measured quantities (KTD4)."""
     weights = INTENT_WEIGHTS[intent]
     time_s, mass_g = _measured_numbers(statistics)
-    layer_term = 1.0 / layer_height_mm if layer_height_mm else 0.0
-    return weights["time"] * time_s + weights["mass"] * mass_g + weights["layer_height"] * layer_term + proxy_penalty
+    # Ascending sort: smaller is better everywhere. Layer height therefore
+    # enters positively -- a finer (smaller) layer adds less penalty than a
+    # coarse one. The previous 1/height form inverted that ranking.
+    resolved_layer = layer_height_mm if layer_height_mm else DEFAULT_LAYER_HEIGHT_MM
+    layer_term = resolved_layer if weights["layer_height"] else 0.0
+    return (
+        weights["time"] * time_s
+        + weights["mass"] * mass_g
+        + weights["layer_height"] * layer_term
+        + proxy_penalty
+    )
+
+
+# Advisory structural-proxy penalties (U4 doctrine): overhang fraction and
+# unsupported span always penalize; vertical-wall fraction only penalizes for
+# fine-detail, where visible stair-stepping on curved walls is the point.
+_PROXY_OVERHANG_WEIGHT = 10.0
+_PROXY_SPAN_WEIGHT_PER_MM = 0.5
+_PROXY_VERTICAL_WALL_WEIGHT_FINE_DETAIL = 1.0
+
+
+def proxy_penalty(intent: str, proxies: dict[str, Any]) -> float:
+    """Advisory score penalty from computed mesh strength proxies."""
+    return (
+        _PROXY_OVERHANG_WEIGHT * float(proxies["overhang_area_fraction"])
+        + _PROXY_SPAN_WEIGHT_PER_MM * float(proxies["max_unsupported_span_mm"])
+        + (_PROXY_VERTICAL_WALL_WEIGHT_FINE_DETAIL * float(proxies["vertical_wall_fraction"])
+           if intent == "fine-detail" else 0.0)
+    )
+
+
+def _candidate_matrix(manifest: Manifest) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The deterministic (face x variant) matrix, bounded before expansion.
+
+    Priority order: every enumerated face's baseline variant first (so no
+    face is untested), then the remaining variants face by face in
+    declaration/canonical order until the cap is hit. The kept-vs-dropped
+    split is returned so the report can name every dropped candidate instead
+    of truncating silently. Only a cross product that genuinely exceeds the
+    cap produces drops; declared-alternatives runs under it keep everything.
+    """
+    all_entries: list[dict[str, Any]] = []
+    for part in manifest.printable_parts or []:
+        path = str(part.get("path", ""))
+        for face_record in orientation_candidates(part.get("orientation"), path):
+            face = face_record["contact_face"]
+            for variant_index, variant in enumerate(CANDIDATE_VARIANTS):
+                all_entries.append({
+                    "candidate_id": f"{path}:{face}:{variant['label']}",
+                    "part_path": path,
+                    "contact_face": face,
+                    "variant": variant,
+                    "_variant_index": variant_index,
+                })
+    if len(all_entries) <= MAX_CANDIDATES:
+        for entry in all_entries:
+            entry.pop("_variant_index", None)
+        return all_entries, []
+    baselines = [e for e in all_entries if e["_variant_index"] == 0]
+    extras = [e for e in all_entries if e["_variant_index"] > 0]
+    kept = baselines[:MAX_CANDIDATES]
+    dropped_ids = {e["candidate_id"] for e in baselines[MAX_CANDIDATES:]}
+    for entry in extras:
+        if len(kept) < MAX_CANDIDATES:
+            kept.append(entry)
+        else:
+            dropped_ids.add(entry["candidate_id"])
+    kept.sort(key=lambda e: (e["part_path"], e["contact_face"], e["_variant_index"]))
+    dropped = [e["candidate_id"] for e in all_entries if e["candidate_id"] in dropped_ids]
+    for entry in kept:
+        entry.pop("_variant_index", None)
+    return kept, dropped
+
+
+def _mesh_payload_for_part(index_path: str | Path, part_path: str, manifest_digest: str) -> bytes:
+    """The verified 3MF artifact for one part, read out of the export index.
+
+    The same index file build_project validated is re-read here; its
+    manifest binding and artifact hash are checked again so the proxy mesh is
+    provably the geometry the project was built from.
+    """
+    index = json.loads(Path(index_path).read_text(encoding="utf-8"))
+    if index.get("manifest_sha256") != manifest_digest:
+        raise ValueError(
+            f"Export index {str(index_path)!r} no longer matches the manifest; "
+            "refusing to compute mesh proxies for a foreign design."
+        )
+    artifact = next(
+        (a for a in index.get("artifacts", []) if a.get("part_path") == part_path and a.get("format") == "3mf"),
+        None,
+    )
+    if artifact is None:
+        raise ValueError(f"Export index names no 3MF artifact for part {part_path!r}.")
+    filename = artifact["filename"]
+    if Path(filename).name != filename:
+        raise ValueError(f"Export index artifact filename {filename!r} must be a bare filename.")
+    artifact_path = Path(index_path).parent / str(filename)
+    payload = artifact_path.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != artifact.get("sha256"):
+        raise ValueError(f"3MF artifact for {part_path!r} does not match its export-index hash.")
+    return payload
 
 
 def optimize(
@@ -106,23 +216,9 @@ def optimize(
     if intent not in INTENT_WEIGHTS:
         raise ValueError(f"Unknown intent {intent!r}; expected one of {', '.join(sorted(INTENT_WEIGHTS))}.")
     # U3 candidate set: per-part orientation faces (declared alternatives or
-    # all six), combined with the fixed setting variants; hard-capped (KTD3).
-    candidates: list[dict[str, Any]] = []
-    for part in manifest.printable_parts or []:
-        path = str(part.get("path", ""))
-        for face_record in orientation_candidates(part.get("orientation"), path):
-            for variant in CANDIDATE_VARIANTS:
-                candidates.append({
-                    "candidate_id": f"{path}:{face_record['contact_face']}:{variant['label']}",
-                    "part_path": path,
-                    "contact_face": face_record["contact_face"],
-                    "variant": variant,
-                })
-    if len(candidates) > MAX_CANDIDATES:
-        raise ValueError(
-            f"Optimization run yields {len(candidates)} candidates, above the hard cap of "
-            f"{MAX_CANDIDATES}; refusing to truncate silently."
-        )
+    # all six), combined with the fixed setting variants; bounded to the cap
+    # before any slice is attempted (KTD3), with drops recorded, not hidden.
+    candidates, dropped_candidates = _candidate_matrix(manifest)
     hashes_before = preset_hashes(presets)
     results: list[dict[str, Any]] = []
     kwargs: dict[str, Any] = {}
@@ -185,18 +281,36 @@ def optimize(
                         layer_height = float(raw_layer)
                     except ValueError:
                         layer_height = None
-                results.append({
+                proxies: dict[str, Any] | None = None
+                penalty = 0.0
+                proxy_failure = None
+                try:
+                    # The export index is hash-verified by build_project, so the
+                    # mesh bytes parsed here are the ones the project was built
+                    # from -- the proxies describe the geometry actually sliced.
+                    mesh_payload = _mesh_payload_for_part(index_path, candidate["part_path"], manifest_sha256(manifest))
+                    proxies = compute_strength_proxies(mesh_payload, candidate["part_path"])
+                    penalty = proxy_penalty(intent, proxies)
+                except (OSError, ValueError) as error:
+                    proxy_failure = str(error)
+                entry = {
                     "candidate_id": candidate["candidate_id"],
                     "contact_face": candidate["contact_face"],
                     "variant_label": candidate["variant"]["label"],
                     "overrides": overrides,
                     "ok": True,
-                    "score": score_candidate(intent, statistics, layer_height),
+                    "score": score_candidate(intent, statistics, layer_height, penalty),
                     "time_s": time_s if math.isfinite(time_s) else None,
                     "mass_g": mass_g if math.isfinite(mass_g) else None,
                     "gcode_sha256": slice_result.get("gcode_sha256"),
                     "project_sha256": built["project_sha256"],
-                })
+                }
+                if proxies is not None:
+                    entry["strength_proxies"] = proxies
+                    entry["proxy_penalty"] = penalty
+                if proxy_failure is not None:
+                    entry["proxy_failure"] = proxy_failure
+                results.append(entry)
             else:
                 results.append({"candidate_id": candidate["candidate_id"], "ok": False, "failure": slice_result.get("failure", "slice failed")})
     ranked = sorted(results, key=lambda r: (r.get("score", math.inf), r["time_s"] if r.get("time_s") is not None else math.inf, r["candidate_id"]))
@@ -208,6 +322,7 @@ def optimize(
         "objective_weights": INTENT_WEIGHTS[intent],
         "preset_hashes_at_build": hashes_before,
         "candidate_count": len(candidates),
+        "dropped_candidates": dropped_candidates,
         "ranking": ranked,
         "best": sliced[0] if sliced else None,
     }
