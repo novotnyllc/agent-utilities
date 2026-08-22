@@ -3,7 +3,7 @@
   "name": "Agent Utilities Enclosure Feature Toolkit",
   "description": "Parametric enclosure feature recipes for base-Fusion using ordinary native features only.",
   "author": "Novotny LLC",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "runOnStartup": false,
   "versionCompatibleWith": "2024.1",
   "allowedTargets": [

@@ -47,11 +47,15 @@ export function makePlanarProfile(
     roundedRect(sketch, mmToCm(dims.width), mmToCm(dims.height), mmToCm(dims.corner_radius), rox, roy);
   } else if (shape === "circle" && "diameter" in dims) {
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
-      adsk.core.Point3D.create(0, 0, 0),
+      adsk.core.Point3D.create(
+        mmToCm(opts.offsetX ?? 0),
+        mmToCm(opts.offsetY ?? 0),
+        0,
+      ),
       mmToCm(dims.diameter / 2),
     );
   } else if (shape === "slot" && "length" in dims && "width" in dims) {
-    slot(sketch, dims.length, dims.width);
+    slot(sketch, dims.length, dims.width, opts.offsetX ?? 0, opts.offsetY ?? 0);
   } else {
     return null;
   }
@@ -97,25 +101,27 @@ function roundedRect(sketch: Any, w: number, h: number, r: number, ox = 0, oy = 
   }
 }
 
-function slot(sketch: Any, length: number, width: number): void {
-  const r = width / 2;
-  const half = (length - width) / 2;
+function slot(sketch: Any, length: number, width: number, offsetX = 0, offsetY = 0): void {
+  const r = mmToCm(width / 2);
+  const half = mmToCm((length - width) / 2);
+  const ox = mmToCm(offsetX);
+  const oy = mmToCm(offsetY);
   sketch.sketchCurves.sketchLines.addByTwoPoints(
-    adsk.core.Point3D.create(-half, r, 0),
-    adsk.core.Point3D.create(half, r, 0),
+    adsk.core.Point3D.create(ox - half, oy + r, 0),
+    adsk.core.Point3D.create(ox + half, oy + r, 0),
   );
   sketch.sketchCurves.sketchLines.addByTwoPoints(
-    adsk.core.Point3D.create(half, -r, 0),
-    adsk.core.Point3D.create(-half, -r, 0),
+    adsk.core.Point3D.create(ox + half, oy - r, 0),
+    adsk.core.Point3D.create(ox - half, oy - r, 0),
   );
   sketch.sketchCurves.sketchArcs.addByCenterStartSweep(
-    adsk.core.Point3D.create(half, 0, 0),
-    adsk.core.Point3D.create(half, r, 0),
+    adsk.core.Point3D.create(ox + half, oy, 0),
+    adsk.core.Point3D.create(ox + half, oy + r, 0),
     Math.PI,
   );
   sketch.sketchCurves.sketchArcs.addByCenterStartSweep(
-    adsk.core.Point3D.create(-half, 0, 0),
-    adsk.core.Point3D.create(-half, -r, 0),
+    adsk.core.Point3D.create(ox - half, oy, 0),
+    adsk.core.Point3D.create(ox - half, oy - r, 0),
     Math.PI,
   );
 }
@@ -126,6 +132,7 @@ export function makePolygonProfile(
   plane: Any,
   sides: number,
   acrossFlats: number,
+  opts: { offsetX?: number; offsetY?: number } = {},
 ): Any | null {
   let circumradius: number;
   if (sides === 4) {
@@ -141,11 +148,13 @@ export function makePolygonProfile(
   sketch.name = name;
   const lines = sketch.sketchCurves.sketchLines;
   const pts: Any[] = [];
+  const ox = opts.offsetX ?? 0;
+  const oy = opts.offsetY ?? 0;
   for (let i = 0; i < sides; i++) {
     const angle = (2 * Math.PI * i) / sides + Math.PI / sides;
     pts.push(adsk.core.Point3D.create(
-      mmToCm(circumradius * Math.cos(angle)),
-      mmToCm(circumradius * Math.sin(angle)),
+      mmToCm(ox + circumradius * Math.cos(angle)),
+      mmToCm(oy + circumradius * Math.sin(angle)),
       0,
     ));
   }

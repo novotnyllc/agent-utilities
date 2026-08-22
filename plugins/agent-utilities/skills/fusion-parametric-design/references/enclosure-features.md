@@ -38,8 +38,7 @@ After the add-in is installed (or refreshed), open
 **Utilities > Add-Ins > Scripts and Add-Ins > Add-Ins**, select
 AgentUtilitiesEnclosure, and click **Run** once per session (or enable
 **Run on startup**). Its commands then register as AgentUtilitiesEnclosure_*
-definitions - e.g. Add Enclosure Boss, Add Seam, Add Cutout - usable from
-the UI or a script through the request JSON described below.
+definitions - e.g. Add Enclosure Boss, Add Seam, Add Cutout - usable from ordinary Fusion command dialogs. Agents call the same service through the staged mailbox; they never paste JSON into a textbox.
 
 ## Command families
 
@@ -62,9 +61,7 @@ service; there is one geometry implementation per family.
 
 Every operation returns a typed result carrying the managed instance identity,
 what it created or changed, direct native observations, warnings, and — on
-failure — a structured refusal. There is no silent partial success: either the
-result describes a healthy managed feature or the refusal names what went wrong
-and what residue, if any, remains.
+failure — a structured refusal. Create either returns a managed feature or a structured refusal. Fit-sensitive values without a source or coupon refuse. Some older warning-only paths remain defects until they refuse or build the joint.
 
 ## Request surface summary
 
@@ -76,7 +73,7 @@ carries exactly what one coherent feature group needs:
   plane, path, managed feature) with acquisition tokens and expected types;
 - `parameters[]`: each a quantity (expression string or value plus explicit
   unit — never both, never bare), an ownership class
-  (`source`/`clr`/`fab`/`des`/`pack`/`calc` prefix convention), an evidence
+  (`source`/`clr`/`fab`/`des`/`pak`/`calc` prefix convention (`pak_ef_`)), an evidence
   reference, and export-confirm/test-required flags;
 - material and fabrication context (family/formulation identifiers, nozzle,
   layer height, orientation intent) — identifiers only, never copied profiles;
@@ -91,69 +88,22 @@ compare token strings across sessions.
 
 ## How an agent invocation reaches the add-in
 
-Agent invocation follows the same command transaction boundary as a human
-clicking the add-in's command. The MCP snippet stays tiny because the geometry
-lives in the installed add-in:
+Humans use ordinary Fusion CommandInputs. Agents stage one JSON request in the
+add-in mailbox and execute the matching command definition. The handler consumes
+the staged request, calls EnclosureFeatureService, stores the structured result,
+and does not open messageBox or inputBox.
 
-```text
-MCP thin snippet
-    -> AgentUtilitiesEnclosure.dispatch.stage(request) -> nonce
-    -> commandDefinition.execute()
-    -> command handler consumes nonce exactly once
-    -> result stored against nonce
-    -> dispatcher returns result
-```
+Copying the add-in tree is not enough. First agent use should:
 
-The mailbox is ephemeral process-local memory keyed by a random nonce: one
-request, one consumption, bounded lifetime, no filesystem backing. It is
-tooling state, not design state. Prefer the public `CommandDefinition.execute()`
-path so the operation runs inside the same transaction boundary human use gets;
-live acceptance must prove staged-request → execute → result → Undo behavior
-before destructive lifecycle operations are enabled
-(`references/mcp-adapter.md`).
+1. run `npx tsx src/enclosure-features/cli.ts status` so missing/drifted files are installed;
+2. load AgentUtilitiesEnclosure in Fusion (Run, or Run on startup);
+3. confirm command definitions exist before creating geometry.
 
-A realistic thin snippet is well under the script gate's ordinary-lane limits
-(120 lines / 8 KB) and needs no generated-lane marker:
+If the loaded add-in bytes/version do not match the bundle, the installer reports
+`recipe-version-mismatch` and refreshes files. Do not run the stale copy.
 
-```python
-import json, uuid
-import adsk.core, adsk.fusion
-
-app = adsk.core.Application.get()
-design = adsk.fusion.Design.cast(app.activeProduct)
-assert design and design.designType == adsk.fusion.DesignTypes.ParametricDesignType
-
-request = {
-    "request_id": str(uuid.uuid4()),
-    "recipe": {"recipe_id": "boss.support", "version": "1.0.0"},
-    "context": {"document_id": design.document.name, "component_path": "Base"},
-    "selections": [
-        {"role": "target_body", "kind": "body",
-         "component_path": "Base", "name": "Base"},
-        {"role": "placement_origin", "kind": "point",
-         "component_path": "Base", "name": "Boss Placement"},
-        {"role": "z_axis", "kind": "axis", "component_path": "Base",
-         "name": "Boss Axis"},
-    ],
-    "parameters": [
-        {"key": "outer_diameter", "value": {"expression": "des_boss_od"},
-         "ownership": "design"},
-        {"key": "height", "value": {"value": 8.0, "unit": "mm"},
-         "ownership": "source"},
-    ],
-}
-nonce = _au_enclosure_dispatch_stage(request)          # add-in API, injected
-cmd = app.commandDefinitions.itemById("AgentUtilitiesEnclosure_AddEnclosureBoss")
-cmd.execute()                                           # consumes nonce once
-result = _au_enclosure_dispatch_result(nonce)           # raises on refusal
-print(json.dumps({"feature_id": result["instance"]["feature_id"],
-                  "healthy": result["native_observations"][0]["is_healthy"]}))
-```
-
-If the staged execute probe fails, stop; do not fall back to a giant MCP
-script. Whole-enclosure generation is not an ordinary-lane operation under any
-circumstances — the shipped-command exception covers exactly one coherent
-managed feature group per invocation, nothing more.
+Roundhouse MCP is optional convenience. The add-in and skill installer work
+without it.
 
 ## Managed feature identity and attributes
 

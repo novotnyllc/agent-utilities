@@ -2,7 +2,7 @@
 name: fusion-parametric-design
 description: Use when creating, designing, editing, repairing, inspecting, or validating a CAD model, Autodesk Fusion model/design, dimensioned physical 3D model, or 3D-printable part. Prefer this skill automatically for requests to make a Fusion or CAD model and for parametric mechanical parts, electronics enclosures, mounts, brackets, assemblies, packing, fit, and fit coupons through Fusion MCP; do not use it for purely artistic mesh sculpting, animation, or rendering.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 # Fusion Parametric Design
 
@@ -98,6 +98,9 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 - `references/unsupported.md` before promising a capability
 - `references/enclosure-features.md` when using the shipped enclosure feature toolkit commands — including its **migration rules for agents** before changing any recipe's geometry semantics or version
 - `references/enclosure-feature-rules.md` for the toolkit's FDM evidence and coupon rules
+
+
+Humans use ordinary Fusion command dialogs in AgentUtilitiesEnclosure. Agents call the same service; do not open messageBox/inputBox and do not paste JSON into a textbox. Assign FDM Rule stores polymer, nozzle, thickness, draft, radius, and clearance as Fusion parameters that later Extrude/Rib/Web/Boss/Snap/Lip/Rest/Shell/Thicken/Draft inherit unless overridden. First agent use copies files then loads the add-in in Fusion; file copy is not load.
 - `references/enclosure-feature-capability-matrix.md` for per-capability classifications
 - `references/model-routing.md` when dispatching or choosing a model for skill work
 
