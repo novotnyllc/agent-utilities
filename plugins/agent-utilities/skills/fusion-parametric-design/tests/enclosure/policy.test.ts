@@ -284,3 +284,11 @@ test("unpublished snap no-ops refuse and support.rest is published", () => {
   const support = fs.readFileSync(path.join(addinRoot, "recipes/support.ts"), {encoding: "utf8"});
   assert.match(support, /\"rest\"/);
 });
+
+test("human commands use Fusion inputs instead of JSON textboxes", () => {
+  const commands = fs.readFileSync(path.join(addinRoot, "commands.ts"), {encoding: "utf8"});
+  assert.doesNotMatch(commands, /request_json/);
+  assert.doesNotMatch(commands, /Paste enclosure feature request JSON/);
+  assert.match(commands, /addSelectionInput/);
+  assert.match(commands, /addValueInput/);
+});

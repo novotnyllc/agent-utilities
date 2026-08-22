@@ -1,8 +1,8 @@
 /**
  * Human-facing Fusion command definitions for the enclosure feature toolkit.
  *
- * Each command consumes a staged nonce (or opens a minimal textbox for pasted
- * request JSON), calls service.executeOnce, and reports success/refusal text.
+ * Humans get Fusion CommandInputs. The handler builds the service request
+ * internally. Agents still send structured JSON to the same service.
  * Uses the top-level `import { adsk } from "@adsk/fas"`.
  */
 
@@ -31,9 +31,7 @@ export const COMMAND_SPECS: ReadonlyArray<readonly [string, string, string]> = O
 
 const _registeredDefinitions: any[] = [];
 
-/** Minimal valid request skeletons, pre-filled into each create command's
- * request_json textbox. Selection tokens are realistic dummies; replace them
- * (or delete the selections array) with tokens for the active document. */
+/** Agent request skeletons used as defaults when native inputs are incomplete. */
 export const COMMAND_EXAMPLES: Readonly<Record<string, string>> = Object.freeze({
   AddEnclosureBoss: JSON.stringify({
     request_id: "boss-example",
@@ -106,7 +104,51 @@ function prop(obj: any, name: string): any {
   return obj != null ? obj[name] : undefined;
 }
 
-/** Shared handler: consume staged nonce or prompt for pasted request JSON. */
+function inputById(inputs: any, id: string): any {
+  try { return inputs.itemById(id); } catch { return null; }
+}
+
+function selectionToken(inputs: any, id: string): string | null {
+  const inp = inputById(inputs, id);
+  const sel = inp?.selection?.(0) ?? inp?.selection0 ?? null;
+  const entity = sel?.entity ?? sel;
+  return entity?.entityToken ?? entity?.persistentId ?? null;
+}
+
+function valueMm(inputs: any, id: string, fallback: string): string {
+  const inp = inputById(inputs, id);
+  const raw = inp?.expression ?? inp?.value;
+  if (raw == null || raw === "") return fallback;
+  return typeof raw === "number" ? `${raw} mm` : String(raw);
+}
+
+function requestJsonFromNativeInputs(cmdId: string, inputs: any): string | null {
+  const suffix = cmdId.replace("AgentUtilitiesEnclosure_", "");
+  const target = selectionToken(inputs, "target_body");
+  const plane = selectionToken(inputs, "plane");
+  const selections = [];
+  if (target) selections.push({role: "target_body", entity_token: target});
+  if (plane) selections.push({role: "plane", entity_token: plane});
+  if (suffix === "AddEnclosureBoss") {
+    return JSON.stringify({
+      recipe_family: "boss",
+      recipe_id: "boss.support",
+      variant: "support",
+      parameters: {
+        outer_diameter: valueMm(inputs, "outer_diameter", "6 mm"),
+        height: valueMm(inputs, "height", "5 mm"),
+      },
+      selections,
+    });
+  }
+  if (selections.length === 0) return null;
+  return JSON.stringify({
+    recipe_family: suffix.replace(/^Add/, "").toLowerCase(),
+    selections,
+  });
+}
+
+/** Shared handler: build a service request from native Fusion command inputs. */
 async function executeHandler(eventArgs: any): Promise<void> {
   try {
     const app = adsk.core.Application.get();
@@ -119,23 +161,9 @@ async function executeHandler(eventArgs: any): Promise<void> {
 
     const inputs = cmdDef && typeof cmdDef.commandInputs !== "undefined"
       ? cmdDef.commandInputs : null;
-    if (inputs) {
-      for (let i = 0; i < inputs.count; i++) {
-        const inp = inputs.item(i);
-        if (inp.id === "request_json") {
-          requestJson = typeof inp.expression === "string" ? inp.expression : String(inp.value);
-        }
-      }
-    }
-    if (!requestJson) {
-      // Minimal textbox input for pasted request JSON.
-      const result = ui.inputBox(
-        "Paste enclosure feature request JSON:", "Agent Utilities Enclosure", "");
-      if (Array.isArray(result)) {
-        requestJson = result[0];
-      } else if (result) {
-        requestJson = String(result);
-      }
+    const commandInputs = eventArgs.command?.commandInputs ?? cmdDef?.commandInputs ?? null;
+    if (!requestJson && commandInputs) {
+      requestJson = requestJsonFromNativeInputs(String(cmdDef?.id ?? ""), commandInputs);
     }
     if (!requestJson) {
       return;
@@ -198,14 +226,15 @@ function onCommandCreated(cmdIdSuffix: string) {
     try {
       const command = args.command;
       const inputs = command.commandInputs;
-      const example = COMMAND_EXAMPLES[cmdIdSuffix] ?? "";
-      inputs.addTextBoxCommandInput(
-        "request_json",
-        "Request JSON:",
-        example,
-        example ? Math.max(5, example.split("\n").length + 1) : 5,
-        false,
-      );
+      const bodies = adsk.fusion.BRepBody.classType?.() ?? "BRepBody";
+      const planes = "ConstructionPlane,BRepFace";
+      inputs.addSelectionInput("target_body", "Target body", "Select the enclosure body");
+      const planeIn = inputs.addSelectionInput("plane", "Placement plane", "Select a face or construction plane");
+      try { inputs.itemById("target_body").addSelectionFilter(bodies); } catch { /* filter optional */ }
+      try { planeIn.addSelectionFilter(planes); } catch { /* filter optional */ }
+      const mm = adsk.core.ValueInput.createByString("6 mm");
+      inputs.addValueInput("outer_diameter", "Outer diameter", "mm", mm);
+      inputs.addValueInput("height", "Height", "mm", adsk.core.ValueInput.createByString("5 mm"));
       command.execute.add((execArgs: any) => {
         void executeHandler(execArgs);
       });
@@ -233,9 +262,7 @@ export function registerCommands(_context?: any): void {
       continue; // already registered (e.g. re-run without stop)
     }
     let tooltip = description + DOCS_TOOLTIP_SUFFIX;
-    if (COMMAND_EXAMPLES[cmdIdSuffix]) {
-      tooltip += "\n\nThe request box is pre-filled with an example; edit the TOKEN_* placeholders to match your document.";
-    }
+    tooltip += "\nSelect bodies and planes in the dialog; agents call the same service without this UI.";
     // Fusion API: addButtonDefinition(id, name, tooltip, resourceFolder).
     // No icon resources ship; omitting resourceFolder uses the default.
     const cmdDef = cmdMgr.addButtonDefinition(
@@ -246,7 +273,7 @@ export function registerCommands(_context?: any): void {
     if (cmdDef == null) {
       continue;
     }
-    // Add a textbox input for pasting JSON requests.
+    // Native Fusion selection and value inputs; JSON is built internally.
     cmdDef.commandCreated.add(onCommandCreated(cmdIdSuffix));
     _registeredDefinitions.push(cmdDef);
   }
