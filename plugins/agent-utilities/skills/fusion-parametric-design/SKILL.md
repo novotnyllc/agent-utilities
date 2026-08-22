@@ -82,6 +82,10 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 - `references/native-feature-selection.md` before choosing Shell, surface closure, Thicken, or direct-model repair
 - `references/brep-and-offset-mental-model.md` before debugging Shell, offset, fillet, or loft topology
 - `references/kernel-failure-playbook.md` when a native feature returns a kernel or feature-health error
+- `references/sketch-constraint-discipline.md` before creating or editing sketch-driven features
+- `references/component-body-architecture.md` before creating multi-part assemblies or choosing body vs component
+- `references/native-inspection-fluency.md` when verifying fit, clearance, or feature health
+- `references/failure-recovery-judgment.md` when a feature fails or the design needs correction
 - `references/data-and-catalog.md` before creating or importing any component
 - `references/add-ins.md` when reaching for an add-in or recommending one
 - `references/material-selection.md` when the geometry is about to depend on material
