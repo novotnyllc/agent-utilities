@@ -189,3 +189,20 @@ test("reads a top-level tool_input.script too", () => {
   });
   assert.equal(result.status, 2);
 });
+
+test("ui.messageBox in execute script is always blocked", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'ui.messageBox("hi")' } },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /messageBox/);
+});
+
+test("clean print script passes the UI gate", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'def run(ctx): print(42)' } },
+  });
+  assert.equal(result.status, 0);
+});
