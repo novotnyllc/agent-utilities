@@ -19,6 +19,8 @@ const _MAX_LIFETIME_SECONDS = 300.0;
 
 const _mailbox = new Map<string, MailboxEntry>();
 
+let _lastConsumedNonce: string | null = null;
+
 let _lastMonotonic = performance.now();
 
 /** Monotonic clock: never goes backwards within this process. */
@@ -70,7 +72,25 @@ export function consume(nonce: string): string | null {
     return null;
   }
   entry.consumed = true;
+  _lastConsumedNonce = nonce;
   return entry.request_json;
+}
+
+/** Consume the first staged request, or the supplied nonce when a command
+ * definition carries the hidden dispatch_nonce input. */
+export function consumePending(nonce?: string): string | null {
+  prune();
+  if (nonce) return consume(nonce);
+  for (const [candidate, entry] of _mailbox) {
+    if (!entry.consumed) return consume(candidate);
+  }
+  _lastConsumedNonce = null;
+  return null;
+}
+
+/** Nonce associated with the most recent consume/consumePending call. */
+export function lastConsumedNonce(): string | null {
+  return _lastConsumedNonce;
 }
 
 export function storeResult(nonce: string, result: unknown): void {
@@ -119,4 +139,12 @@ export function entryStatus(nonce: string): "staged" | "consumed" | "completed" 
 /** Explicit cleanup for dead requests (agent crash recovery). */
 export function discard(nonce: string): boolean {
   return _mailbox.delete(nonce);
+}
+
+export function pendingNonce(): string | null {
+  prune();
+  for (const [nonce, entry] of _mailbox) {
+    if (!entry.consumed) return nonce;
+  }
+  return null;
 }

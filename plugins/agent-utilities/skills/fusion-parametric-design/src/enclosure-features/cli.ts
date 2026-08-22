@@ -3,7 +3,7 @@
 
 import process from "node:process";
 
-import {ensureAddinInstalled, installAddin, InstallerError, probeInstallStatus} from "./installer.ts";
+import {ensureAddinReady, installAddin, InstallerError, probeInstallStatus} from "./installer.ts";
 
 function usage(program: string): never {
   console.error(`Usage: ${program} <status [--target DIR] | install --target DIR [--force]>`);
@@ -31,7 +31,7 @@ function main(argv: readonly string[]): void {
   try {
     if (command === "status") {
       // Auto-install/update before every probe: first use installs, drift refreshes.
-      const ensured = ensureAddinInstalled();
+      const ensured = ensureAddinReady();
       console.log(JSON.stringify({ensured, ...probeInstallStatus(target)}, null, 2));
     } else if (command === "install") {
       if (!target) {

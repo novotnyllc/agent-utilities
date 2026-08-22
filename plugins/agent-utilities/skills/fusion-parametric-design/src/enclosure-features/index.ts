@@ -6,13 +6,16 @@ export {DispatchMailbox, DispatchStateError} from "./dispatch-state.ts";
 export {EVIDENCE_CLASSES, INVALIDATION_FLAGS} from "./evidence.ts";
 export {
   ensureAddinInstalled,
+  ensureAddinReady,
   installAddin,
   InstallerError,
   probeInstallStatus,
+  probeAddInReadiness,
   ADDIN_NAME,
   ENV_OVERRIDE,
   type InstallStatus,
   type InstalledAddIn,
+  type AddInReadiness,
 } from "./installer.ts";
 export {
   REGISTRY,

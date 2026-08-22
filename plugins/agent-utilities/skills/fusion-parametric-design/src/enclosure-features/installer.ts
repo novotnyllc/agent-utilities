@@ -7,6 +7,7 @@
  * overrides the search for users who keep their scripts elsewhere.
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -146,6 +147,79 @@ export function installAddin(targetDir: string, {force = false}: {force?: boolea
  * installed copy. Users never run a manual install step; the CLI commands
  * remain available only for diagnostics and force-repair.
  */
+
+function hashTree(root: string): string {
+  const hash = crypto.createHash("sha256");
+  const walk = (dir: string): void => {
+    const entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        hash.update(path.relative(root, full));
+        hash.update(fs.readFileSync(full));
+      }
+    }
+  };
+  walk(root);
+  return hash.digest("hex");
+}
+
+export interface AddInReadiness {
+  readonly installed: boolean;
+  readonly installed_path: string | null;
+  readonly bundled_source: string;
+  readonly bundled_version: string;
+  readonly installed_version: string | null;
+  readonly bundled_sha256: string;
+  readonly installed_sha256: string | null;
+  readonly bytes_match: boolean;
+  readonly version_match: boolean;
+  readonly mismatch_token: "enclosure-addin-not-installed" | "recipe-version-mismatch" | null;
+  readonly loaded: boolean | null;
+  readonly action: "installed" | "updated" | "current" | "missing";
+}
+
+function readVersion(manifestPath: string): string {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {version?: string};
+    return parsed.version ?? "0";
+  } catch {
+    return "0";
+  }
+}
+
+/** Copy is not load. Callers must still Run the add-in in Fusion (or runOnStartup). */
+export function probeAddInReadiness(targetDir?: string): AddInReadiness {
+  const status = probeInstallStatus(targetDir);
+  const bundled = bundledAddinRoot();
+  const bundledVersion = readVersion(path.join(bundled, ADDIN_NAME + ".manifest"));
+  const bundledSha = hashTree(bundled);
+  const installedVersion = status.installed_path
+    ? readVersion(path.join(status.installed_path, ADDIN_NAME + ".manifest"))
+    : null;
+  const installedSha = status.installed_path ? hashTree(status.installed_path) : null;
+  const versionMatch = installedVersion === bundledVersion;
+  const bytesMatch = installedSha === bundledSha;
+  let mismatch: AddInReadiness["mismatch_token"] = null;
+  if (!status.installed) mismatch = "enclosure-addin-not-installed";
+  else if (!versionMatch || !bytesMatch) mismatch = "recipe-version-mismatch";
+  return {
+    installed: status.installed,
+    installed_path: status.installed_path,
+    bundled_source: bundled,
+    bundled_version: bundledVersion,
+    installed_version: installedVersion,
+    bundled_sha256: bundledSha,
+    installed_sha256: installedSha,
+    bytes_match: bytesMatch,
+    version_match: versionMatch,
+    mismatch_token: mismatch,
+    loaded: null,
+    action: status.installed ? (mismatch ? "current" : "current") : "missing",
+  };
+}
+
 export function ensureAddinInstalled(): { installed: boolean; updated: boolean; path: string; action: "installed" | "updated" | "current" } {
   const status = probeInstallStatus();
   const bundledManifest = path.join(bundledAddinRoot(), ADDIN_NAME + ".manifest");
@@ -164,19 +238,21 @@ export function ensureAddinInstalled(): { installed: boolean; updated: boolean; 
     const result = installAddin(targetDir, {force: false});
     return {installed: true, updated: true, path: result.installed_to, action: "installed"};
   }
-  // Installed: refresh when the bundled version differs (newer or drifted).
-  const installedManifest = path.join(status.installed_path, ADDIN_NAME + ".manifest");
-  let installedVersion = "0";
-  try {
-    const parsed = JSON.parse(fs.readFileSync(installedManifest, "utf8")) as {version?: string};
-    installedVersion = parsed.version ?? "0";
-  } catch {
-    // Corrupt installed manifest: refresh it.
-  }
-  if (installedVersion !== bundledVersion) {
+  const readiness = probeAddInReadiness();
+  if (readiness.mismatch_token === "recipe-version-mismatch") {
     const targetDir = path.dirname(status.installed_path);
     const result = installAddin(targetDir, {force: true});
     return {installed: true, updated: true, path: result.installed_to, action: "updated"};
   }
   return {installed: true, updated: false, path: status.installed_path, action: "current"};
+}
+
+/**
+ * First agent use: install if missing, refresh drifted bytes/version, then
+ * report that Fusion still has to load the add-in. File copy is not load.
+ */
+export function ensureAddinReady(): AddInReadiness {
+  const ensured = ensureAddinInstalled();
+  const readiness = probeAddInReadiness();
+  return {...readiness, action: ensured.action, loaded: null};
 }
