@@ -58,12 +58,16 @@ Never leave unexplained blue geometry in a sketch that drives production
 features. If the free motion cannot be stated in one sentence, constrain it
 before continuing.
 
-## Recompute before dependency
+## Read the sketch result before depending on it
 
-Finish the sketch, run Compute All, and read the result before adding the next
-feature. A clean viewport is not a clean recompute. Resolve sketch warnings,
-lost projections, over-constraints, and solver errors at the sketch that owns
-them; do not bury them under downstream features.
+Finish the sketch and read its own native state -- solver status, warnings,
+lost projections -- before adding the feature that consumes it. A clean
+viewport is not a clean recompute. Resolve sketch warnings, lost projections,
+over-constraints, and solver errors at the sketch that owns them; do not bury
+them under downstream features. Timeline-wide `Compute All` stays at the
+boundaries `mcp-adapter.md` defines (coherent feature groups, checkpoints,
+pre-fit, pre-release), not after every individual feature: it is blocking
+main-thread work.
 
 ## Source
 

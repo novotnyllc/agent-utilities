@@ -272,6 +272,40 @@ A tee that cannot be written is never fatal — the report carries
 `report_tee_error` and stdout is unchanged. Losing the tee must not lose the
 transaction.
 
+### Timeout classes: match the transport budget to the transaction
+
+**Measured:** the transport ceiling (the shim `--timeout`, 180 s by default)
+discarded a *successful* 330 s face-group report; a shorter default would do
+the same to more calls. One number cannot fit every transaction, and guessing
+short loses finished work, not just patience. Choose the budget per lane from
+that evidence:
+
+- **Light transactions** — inventory, parameter sync, scaffold, save,
+  verification, export: seconds-class. The default registration budget covers them.
+- **Heavy transactions** — mesh face groups, extraction, rebuild, deviation:
+  minutes-class on real captures (measured 330 s for accurate grouping on a
+  524k-triangle scan). Before running one, register or re-register the shim with
+  an explicit higher `--timeout` (600 s) through the roundhouse skill. The value is
+  baked into the registration argv, so this is a plan-time decision, not a per-call knob.
+
+**Progress heartbeats:** every generated transaction writes a small
+`fusion-design-progress-<manifest12>-<run-id>.json` beside its inputs at each
+phase boundary (each `_pump_events()`), carrying phase name, sequence, and
+elapsed seconds, atomically like the report tee. After a timeout this file says
+how far the run reached before dying — and whether it was still advancing. The
+honest limit: heartbeats fire between phases only. Inside one blocking call
+(`MeshGenerateFaceGroups.add()`, `computeAll()`) no script code runs, so no
+heartbeat appears until that call returns; a stale heartbeat inside a
+known-heavy operation is expected, not proof of a wedge. What the heartbeat
+proves is which phase was running when the ceiling hit.
+
+**On any timeout:** never re-run first — the transaction may have mutated the
+document already. Read the newest progress file, then the newest matching
+report tee, in that order. Advancing phases plus a present report means the
+work finished anyway and recovery proceeds as below. A frozen heartbeat inside
+a light transaction, or no heartbeat and no report at all, is a wedged run to
+report and diagnose — not to retry blindly.
+
 ### Reports are per-stdout, so validate every block you parse
 
 **Measured hazard:** two agents driving one Fusion session **interleave report
@@ -303,9 +337,10 @@ When an ordinary-lane API call fails:
 
 1. read the returned exception and traceback;
 2. read the one current official API entry through the bound `READ_DOCUMENTATION` capability when it is connected (for example, a discovered `search_help_content` tool);
-3. verify the active document, Design, target component, and required object type with a read-only probe;
-4. correct the call once against the actual target.
+3. when that capability is unavailable, fall back to the current official Autodesk web documentation for the same one entry;
+4. verify the active document, Design, target component, and required object type with a read-only probe;
+5. correct the call once against the actual target.
 
-Do not create test geometry, a probe harness, a diagnostic component, or a reproduction project. Do not search forums or unrelated API areas. If the corrected call fails or requires broader investigation, show the failure and stop. Do not guess at an obsolete API signature.
+Do not create test geometry, a probe harness, a diagnostic component, or a reproduction project. Do not search forums or unrelated API areas. If neither lookup path is available, stop before correcting the failed call and say so rather than guessing at an obsolete API signature. If the corrected call fails or requires broader investigation, show the failure and stop.
 
 Generated lanes follow only their documented refusal and retry contract.

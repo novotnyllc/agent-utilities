@@ -28,14 +28,19 @@ feature health natively; do not infer solidity from a screenshot.
 If the intended result is naturally a closed volume - an enclosure lid,
 a cap, a shell - prefer solid-first when it avoids a separate closure
 operation. Surface Loft or Sweep plus Thicken remains a valid native
-strategy. Both Thicken and Shell can fail when the requested offset is
-geometrically infeasible.
+strategy. Solid-first avoids the unfinished-sheet failure class, but it
+does not exempt Shell itself: tight curvature, small faces, or
+intersecting offsets can still make any offset infeasible. Read the
+native health result either way.
 
 ## Use surface workflows deliberately
 
 Surface workflows can leave open or stitched surface bodies until a
-closed volume is formed. An open sheet is a surface body, not a solid
-body. Never treat a surface that looks closed on screen as solid.
+closed volume is formed. Fusion represents sheet/surface topology as a
+`BRepBody` with `isSolid` false, so an open sheet is still a body --
+collect it and read `isSolid` exactly as for any other body. Never
+treat a surface that looks closed on screen as solid; the native flag,
+not the viewport, decides.
 
 ## Refuse invalid normal offsets
 
