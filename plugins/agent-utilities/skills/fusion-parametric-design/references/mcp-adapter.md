@@ -300,11 +300,15 @@ known-heavy operation is expected, not proof of a wedge. What the heartbeat
 proves is which phase was running when the ceiling hit.
 
 **On any timeout:** never re-run first — the transaction may have mutated the
-document already. Read the newest progress file, then the newest matching
-report tee, in that order. Advancing phases plus a present report means the
-work finished anyway and recovery proceeds as below. A frozen heartbeat inside
-a light transaction, or no heartbeat and no report at all, is a wedged run to
-report and diagnose — not to retry blindly.
+document already. Read only the progress and report tee files from this run's
+own isolated `report_dir`; the filenames are ambiguous across concurrent runs,
+and recency is not ownership. Advancing phases plus a present report means the
+work finished anyway and recovery proceeds as below. If multiple candidates
+match and cannot be told apart, re-establish state from the document rather
+than selecting one. A frozen heartbeat inside a light transaction is a wedged
+run to report and diagnose; missing evidence (no heartbeat and no report) is
+indeterminate — a crash before the first heartbeat looks identical to an
+unavailable tee — and is reported, never retried blindly.
 
 ### Reports are per-stdout, so validate every block you parse
 

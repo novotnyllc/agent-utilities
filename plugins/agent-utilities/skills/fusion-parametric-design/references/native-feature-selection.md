@@ -36,11 +36,11 @@ native health result either way.
 ## Use surface workflows deliberately
 
 Surface workflows can leave open or stitched surface bodies until a
-closed volume is formed. Fusion represents sheet/surface topology as a
-`BRepBody` with `isSolid` false, so an open sheet is still a body --
-collect it and read `isSolid` exactly as for any other body. Never
-treat a surface that looks closed on screen as solid; the native flag,
-not the viewport, decides.
+closed volume is formed. Fusion represents an open, non-enclosed sheet
+as a `BRepBody` with `isSolid` false -- still a body, so collect it and
+read `isSolid` exactly as for any other body; a fully enclosed stitched
+set reads solid. Never treat a surface that looks closed on screen as
+solid; the native flag, not the viewport, decides.
 
 ## Refuse invalid normal offsets
 

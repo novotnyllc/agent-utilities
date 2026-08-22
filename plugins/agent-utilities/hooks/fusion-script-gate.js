@@ -31,17 +31,16 @@ const MAX_ADHOC_LINES = 120;
 const MAX_ADHOC_BYTES = 8192;
 
 // Always blocked, marker or not: these invoke a process when reached.
-// UI-blocking calls deadlock the MCP main thread: ui.messageBox opens a modal
-// that waits for user dismissal while the MCP server is blocked waiting for the
-// script to return. No timeout exists. Always refuse, marker or not.
-// selectEntity pauses for interactive selection; createFileDialog opens a native
-// open/save sheet -- both hold Fusion's main thread exactly like a modal dialog,
-// so they join messageBox/inputBox on the always-refused list.
+// Modal UI calls (messageBox, inputBox, FileDialog.showOpen/showSave) block the
+// MCP main thread until a human answers; selectEntity pauses for interactive
+// selection on that same thread. None has a timeout, so all are refused.
 const UI_BLOCKING_PATTERNS = [
   [/\bmessageBox\s*\(/, "messageBox (blocks main thread indefinitely)"],
   [/\binputBox\s*\(/, "inputBox (blocks main thread indefinitely)"],
-  [/\bselectEntity\s*\(/, "selectEntity (waits for interactive selection on the main thread)"],
-  [/\bcreateFileDialog\s*\(/, "createFileDialog (opens a modal file dialog on the main thread)"],
+  [/\bselectEntity\s*\(/, "selectEntity (pauses the script for interactive selection on the main thread)"],
+  [/\bcreateFileDialog\s*\(/, "createFileDialog (creates a FileDialog whose showOpen/showSave are modal)"],
+  [/\bshowOpen\s*\(/, "FileDialog.showOpen (modal file dialog on the main thread)"],
+  [/\bshowSave\s*\(/, "FileDialog.showSave (modal file dialog on the main thread)"],
 ];
 
 const SPAWN_PATTERNS = [
@@ -226,11 +225,10 @@ function gate(raw) {
       if (pattern.test(scanText)) {
         block(
           "the script contains " + name +
-          ". ui.messageBox and ui.inputBox open modal dialogs on the shared" +
-          " main thread; the MCP server executes scripts there too, so the" +
-          " call never returns and every subsequent call queues behind it." +
-          " Use print() for output. If stdout returns empty, report it -" +
-          " never use UI calls."
+          ". Modal and interactive Fusion UI calls hold the shared main" +
+          " thread the MCP server also executes on, so the call stalls the" +
+          " session until a human answers. Use print() for output. If" +
+          " stdout returns empty, report it - never use UI calls."
         );
       }
     }

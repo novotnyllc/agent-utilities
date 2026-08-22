@@ -217,6 +217,24 @@ test("createFileDialog in execute script is always blocked", () => {
   assert.match(result.stderr, /createFileDialog/);
 });
 
+test("FileDialog.showSave in execute script is always blocked", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'fileDialog.showSave()' } },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /showSave/);
+});
+
+test("receiver-independent messageBox is always blocked", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'app.userInterface.messageBox("hi")' } },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /messageBox/);
+});
+
 test("clean print script passes the UI gate", () => {
   const result = run({
     tool_name: "mcp__fusion__fusion_mcp_execute",
