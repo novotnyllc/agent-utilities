@@ -232,17 +232,15 @@ export function registerCommands(_context?: any): void {
     if (existing != null) {
       continue; // already registered (e.g. re-run without stop)
     }
-    const resourceCollection = typeof (adsk.core as any).ResourceCollection !== "undefined"
-      ? (adsk.core as any).ResourceCollection.create() : null;
     let tooltip = description + DOCS_TOOLTIP_SUFFIX;
     if (COMMAND_EXAMPLES[cmdIdSuffix]) {
       tooltip += "\n\nThe request box is pre-filled with an example; edit the TOKEN_* placeholders to match your document.";
     }
-    const cmdDef = cmdMgr.addButton(
+    // Fusion API: addButtonDefinition(id, name, tooltip, resourceFolder).
+    // No icon resources ship; omitting resourceFolder uses the default.
+    const cmdDef = cmdMgr.addButtonDefinition(
       fullId,
-      resourceCollection,
       displayName,
-      description,
       tooltip,
     );
     if (cmdDef == null) {

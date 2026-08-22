@@ -137,3 +137,46 @@ export function installAddin(targetDir: string, {force = false}: {force?: boolea
     forced: force,
   };
 }
+
+/**
+ * Ensure the bundled add-in is installed and current, automatically.
+ *
+ * The toolkit depends on the add-in, so the first invocation installs it and
+ * later invocations refresh it whenever the bundled version is newer than the
+ * installed copy. Users never run a manual install step; the CLI commands
+ * remain available only for diagnostics and force-repair.
+ */
+export function ensureAddinInstalled(): { installed: boolean; updated: boolean; path: string; action: "installed" | "updated" | "current" } {
+  const status = probeInstallStatus();
+  const bundledManifest = path.join(bundledAddinRoot(), ADDIN_NAME + ".manifest");
+  let bundledVersion = "0";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(bundledManifest, "utf8")) as {version?: string};
+    bundledVersion = parsed.version ?? "0";
+  } catch {
+    // Bundled manifest unreadable: fall through to install attempt anyway.
+  }
+  if (!status.installed || status.installed_path === null) {
+    const targetDir = defaultSearchLocations()[0];
+    if (!targetDir) {
+      throw new InstallerError("no known Fusion add-in directory on this platform; set FUSION_ADDIN_DIR");
+    }
+    const result = installAddin(targetDir, {force: false});
+    return {installed: true, updated: true, path: result.installed_to, action: "installed"};
+  }
+  // Installed: refresh when the bundled version differs (newer or drifted).
+  const installedManifest = path.join(status.installed_path, ADDIN_NAME + ".manifest");
+  let installedVersion = "0";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(installedManifest, "utf8")) as {version?: string};
+    installedVersion = parsed.version ?? "0";
+  } catch {
+    // Corrupt installed manifest: refresh it.
+  }
+  if (installedVersion !== bundledVersion) {
+    const targetDir = path.dirname(status.installed_path);
+    const result = installAddin(targetDir, {force: true});
+    return {installed: true, updated: true, path: result.installed_to, action: "updated"};
+  }
+  return {installed: true, updated: false, path: status.installed_path, action: "current"};
+}

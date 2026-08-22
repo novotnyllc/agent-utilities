@@ -32,6 +32,10 @@ export const RECIPE_REGISTRY: Readonly<Record<string, string>> = Object.freeze({
   seal: "executeSealRecipe",
   vent: "executeVentRecipe",
   fit_coupon: "executeCouponRecipe",
+  // Wire aliases: coupon.* publishes under the coupon family; standalone
+  // hardware bores reuse the boss recipe hardware path.
+  coupon: "executeCouponRecipe",
+  hardware: "executeBossRecipe",
 });
 
 const REFUSAL_TOKENS: ReadonlySet<string> = new Set([
@@ -169,7 +173,8 @@ type RecipeFn = (root: any, identity: ManagedIdentity, enriched: Record<string, 
  */
 async function loadRecipe(family: string): Promise<RecipeFn> {
   const {RECIPES} = await import("./recipes/index.ts");
-  const wireFamily = family === "fit_coupon" ? "coupon" : family;
+  const wireFamily = family === "fit_coupon" ? "coupon"
+    : family === "hardware" ? "boss" : family;
   const fn: unknown = (RECIPES as Record<string, unknown>)[wireFamily];
   if (typeof fn !== "function") {
     throw new Error(`Recipe function not found for family: ${family}`);
@@ -354,6 +359,21 @@ export class EnclosureFeatureService {
         recipe_id: rid || undefined,
         recipe_version: String(request.recipe.version ?? "0.1.0")};
     }
+    // Derive the subtype discriminator (variant/type/pattern/shape) from the
+    // dotted recipe id when the caller did not send it explicitly.
+    const ridForSubtype = String(request.recipe_id ?? "");
+    const subtype = ridForSubtype.includes(".")
+      ? ridForSubtype.split(".").slice(1).join(".") : "";
+    if (subtype) {
+      const subtypeFamily = String(request.recipe_family ?? "");
+      const disc = subtypeFamily === "boss" ? "variant"
+        : subtypeFamily === "vent" ? "pattern"
+        : ["seam", "retention"].includes(subtypeFamily) ? "type"
+        : subtypeFamily === "cutout" ? "shape" : "type";
+      if (request[disc] === undefined) {
+        request[disc] = subtype;
+      }
+    }
     const recipeFamily = String(request.recipe_family ?? "");
     if (!(recipeFamily in RECIPE_REGISTRY)) {
       result.refusal = makeRefusal("feature-create-failed", `Unknown family: ${recipeFamily}`);
@@ -384,6 +404,26 @@ export class EnclosureFeatureService {
 
     const upstreamIds = Array.isArray(request.upstream_feature_ids)
       ? request.upstream_feature_ids.map(String) : [];
+    // Reject unresolvable upstream references BEFORE any mutation or cycle
+    // probe so a typo cannot leave partial residue behind.
+    try {
+      for (const up of upstreamIds) {
+        if (findManagedEntities(root, probeIdentity(up)).length === 0) {
+          result.refusal = makeRefusal(
+            "upstream-feature-missing",
+            `Upstream feature ${up} does not match any managed entity.`,
+            null,
+            "create the upstream feature first or correct its feature_id");
+          result.operation = "create";
+          return result.toDict();
+        }
+      }
+    } catch (exc) {
+      result.refusal = makeRefusal(
+        "timeline-unhealthy", String(exc), null, "inspect the document and retry");
+      result.operation = "create";
+      return result.toDict();
+    }
     const identity = allocateIdentity(
       String(request.recipe_id ?? recipeFamily),
       String(request.recipe_version ?? "0.1.0"),
@@ -397,8 +437,33 @@ export class EnclosureFeatureService {
       return result.toDict();
     }
 
-    const enriched: Record<string, any> = {...request};
+    // Convert the wire parameters array ({key,value:{expression|value,unit}})
+    // into a keyed object recipes can read as params.outer_diameter etc.,
+    // while keeping a legacy flat parameters object working unchanged.
+    const wireParams: any[] = Array.isArray(request.parameters)
+      ? request.parameters : [];
+    const paramObj: Record<string, any> = {
+      ...(request.parameters && !Array.isArray(request.parameters)
+        ? request.parameters : {}),
+    };
+    for (const p of wireParams) {
+      if (!p || typeof p !== "object" || !p.key) continue;
+      let v = p.value;
+      if (v && typeof v === "object") {
+        // {expression} wins; otherwise numeric value + unit.
+        v = v.expression !== undefined
+          ? String(v.expression)
+          : (typeof v.value === "number" ? `${v.value} ${v.unit ?? "mm"}`.trim() : v.value);
+      }
+      paramObj[String(p.key)] = v;
+    }
+    const enriched: Record<string, any> = {...request, parameters: paramObj};
     Object.assign(enriched, resolved);
+    // Recipes read role names directly (mask_body, profile_reference,
+    // pattern_axis); mirror each resolved selection onto its role field too.
+    for (const [role, entity] of Object.entries(resolved.resolved_entities ?? {})) {
+      enriched[role] = entity;
+    }
     try {
       if (this.managedGraphHasCycle(root, identity.featureId, upstreamIds)) {
         result.refusal = makeRefusal(
@@ -762,6 +827,95 @@ export class EnclosureFeatureService {
       const tb = Number(b?.timelineObject?.index ?? 0);
       return tb - ta;
     });
+    /** Delete entities for one feature id in reverse timeline order.
+      * Returns per-entity failure messages. */
+    const deleteEntitiesFor = (entities: any[]): string[] => {
+      const errs: string[] = [];
+      const orderedDeps = [...entities].sort((a2, b2) => {
+        const ta = Number(a2?.timelineObject?.index ?? 0);
+        const tb = Number(b2?.timelineObject?.index ?? 0);
+        return tb - ta;
+      });
+      for (const entity of orderedDeps) {
+        try {
+          entity.deleteMe();
+        } catch (exc) {
+          errs.push(String(exc).slice(0, 120));
+        }
+      }
+      return errs;
+    };
+    /** Clean one feature namespace from user parameters; best-effort. */
+    const cleanupParamsFor = (nsAttrEntity: Any, targetFid: string): void => {
+      try {
+        const design = adsk.core.Application.get()?.activeDocument?.design ?? null;
+        const pmgr = design?.userParameters ?? null;
+        if (!pmgr) return;
+        const prefixes = Object.values(PARAM_PREFIXES) as string[];
+        const attrs = nsAttrEntity?.attributes ?? null;
+        const nsAttr = attrs ? attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_parameter_namespace") : null;
+        let namespace = nsAttr ? String(nsAttr.value ?? "") : "";
+        if (!namespace) {
+          namespace = String(targetFid).slice(0, 6);
+          result.warnings.push(
+            `No stamped parameter namespace found for ${targetFid}; falling back to feature id prefix for cleanup.`);
+        }
+        for (let i = pmgr.count - 1; i >= 0; i--) {
+          const p = pmgr.item(i);
+          const name = String(p?.name ?? "");
+          for (const prefix of prefixes) {
+            const owned = prefix + namespace + "_";
+            if (name.startsWith(owned)) {
+              try { p.deleteMe(); } catch { /* best-effort */ }
+              break;
+            }
+          }
+        }
+      } catch { /* parameter cleanup is best-effort */ }
+    };
+    /** Discover managed dependents of fid from stamped upstream graph. */
+    const discoverDependents = (ofFid: string): string[] => {
+      const found: string[] = [];
+      try {
+        for (const collName of ["bRepBodies", "sketches", "features"]) {
+          const coll = root[collName];
+          if (!coll) continue;
+          for (let i = 0; i < coll.count; i++) {
+            const obj = coll.item(i);
+            const attrs = obj?.attributes ?? null;
+            if (!attrs) continue;
+            const fidA = attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_feature_id");
+            const upA = attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_upstream_ids");
+            if (!fidA || String(fidA.value) === ofFid) continue;
+            const ups = String(upA?.value ?? "").split(",").filter(Boolean);
+            if (ups.includes(ofFid)) found.push(String(fidA.value));
+          }
+        }
+      } catch { /* discovery is best-effort */ }
+      return [...new Set(found)];
+    };
+    /** Recursively resolve + delete dependent features (depth-bounded). */
+    const cascadeDependents = (depIds: string[], depth: number): void => {
+      if (depth > 5 || depIds.length === 0) return;
+      for (const depId of depIds) {
+        let depMatches: any[] = [];
+        try {
+          depMatches = findManagedEntities(root, probeIdentity(depId));
+        } catch { /* probe failure leaves matches empty */ }
+        if (depMatches.length === 0) continue;
+        // Discover grandchildren BEFORE deleting so the cascade is complete.
+        const grandDeps = discoverDependents(depId);
+        cascadeDependents(grandDeps, depth + 1);
+        const depErrs = deleteEntitiesFor(depMatches);
+        for (const e of depErrs) {
+          result.warnings.push(`Cascade delete ${depId}: ${e}`);
+        }
+        cleanupParamsFor(depMatches[0], depId);
+      }
+    };
+    if (cascade && deps.length > 0) {
+      cascadeDependents(deps, 1);
+    }
     const failed: string[] = [];
     for (const entity of ordered) {
       try {

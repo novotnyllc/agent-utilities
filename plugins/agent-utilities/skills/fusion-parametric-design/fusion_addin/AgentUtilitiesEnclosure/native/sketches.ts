@@ -9,6 +9,14 @@ import { adsk } from "@adsk/fas";
 type Any = any;
 
 
+
+/** Fusion sketch geometry consumes database centimetres; recipe dimensions are
+ * millimetres. Convert at the sketch boundary so a "20 mm" cutout is not a
+ * 20 cm one. */
+function mmToCm(v: number): number {
+  return v / 10;
+}
+
 export function makePlanarProfile(
   component: Any,
   name: string,
@@ -27,18 +35,20 @@ export function makePlanarProfile(
     const ox = opts.offsetX ?? 0;
     const oy = opts.offsetY ?? 0;
     sketch.sketchCurves.sketchLines.addTwoPointRectangle(
-      adsk.core.Point3D.create(ox - w / 2, oy - h / 2, 0),
-      adsk.core.Point3D.create(ox + w / 2, oy + h / 2, 0),
+      adsk.core.Point3D.create(mmToCm(ox - w / 2), mmToCm(oy - h / 2), 0),
+      adsk.core.Point3D.create(mmToCm(ox + w / 2), mmToCm(oy + h / 2), 0),
     );
   } else if (
     shape === "rounded_rectangle" &&
     "width" in dims && "height" in dims && "corner_radius" in dims
   ) {
-    roundedRect(sketch, dims.width, dims.height, dims.corner_radius);
+    const rox = mmToCm(opts.offsetX ?? 0);
+    const roy = mmToCm(opts.offsetY ?? 0);
+    roundedRect(sketch, mmToCm(dims.width), mmToCm(dims.height), mmToCm(dims.corner_radius), rox, roy);
   } else if (shape === "circle" && "diameter" in dims) {
     sketch.sketchCurves.sketchCircles.addByCenterRadius(
       adsk.core.Point3D.create(0, 0, 0),
-      dims.diameter / 2,
+      mmToCm(dims.diameter / 2),
     );
   } else if (shape === "slot" && "length" in dims && "width" in dims) {
     slot(sketch, dims.length, dims.width);
@@ -48,31 +58,42 @@ export function makePlanarProfile(
   return sketch;
 }
 
-function roundedRect(sketch: Any, w: number, h: number, r: number): void {
+function roundedRect(sketch: Any, w: number, h: number, r: number, ox = 0, oy = 0): void {
   const lines = sketch.sketchCurves.sketchLines;
   const arcs = sketch.sketchCurves.sketchArcs;
+  if (2 * r >= Math.min(w, h)) {
+    return;
+  }
   const hw = w / 2 - r;
   const hh = h / 2 - r;
+  // Tangent-point geometry: edges run between arc ENDPOINTS on the true
+  // bounding box (x=±(hw+r)=±w/2, y=±(hh+r)=±h/2), so every line end
+  // coincides exactly with an arc start/end and sketch.profiles.count === 1.
   const lineSegs: Array<[[number, number], [number, number]]> = [
-    [[-hw, hh], [hw, hh]],
-    [[hw, hh], [hw, -hh]],
-    [[hw, -hh], [-hw, -hh]],
-    [[-hw, -hh], [-hw, hh]],
+    [[-hw + ox, oy + hh + r], [hw + ox, oy + hh + r]],       // top: y = +h/2
+    [[ox + hw + r, oy - hh], [ox + hw + r, oy + hh]],         // right: x = +w/2
+    [[hw + ox, oy - (hh + r)], [-hw + ox, oy - (hh + r)]],    // bottom: y = -h/2
+    [[ox - (hw + r), oy - hh], [ox - (hw + r), oy + hh]],     // left: x = -w/2
   ];
   for (const [[x1, y1], [x2, y2]] of lineSegs) {
     lines.addByTwoPoints(adsk.core.Point3D.create(x1, y1, 0), adsk.core.Point3D.create(x2, y2, 0));
   }
   const pi = Math.PI;
-  const arcSpecs: Array<[[number, number], number, number]> = [
-    [[hw, hh], 0, pi / 2],
-    [[-hw, hh], pi / 2, pi],
-    [[-hw, -hh], pi, (3 * pi) / 2],
-    [[hw, -hh], (3 * pi) / 2, 2 * pi],
+  // Each arc starts where a line ends and sweeps -90 deg (clockwise) to the
+  // next line's start, closing the loop TR -> BR -> BL -> TL.
+  // Explicit start points per corner (center cx,cy then start sx,sy):
+  const specs: Array<[number, number, number, number]> = [
+    [ox + hw, oy + hh, ox + hw, oy + (hh + r)],               // TR: top-edge end -> right-edge start
+    [ox + hw, oy - hh, ox + (hw + r), oy - hh],               // BR: right-edge end -> bottom-edge start
+    [ox - hw, oy - hh, ox - hw, oy - (hh + r)],               // BL: bottom-edge end -> left-edge start
+    [ox - hw, oy + hh, ox - (hw + r), oy + hh],               // TL: left-edge end -> top-edge start
   ];
-  for (const [[cx, cy], a1, a2] of arcSpecs) {
-    const p1 = adsk.core.Point3D.create(cx + r * Math.cos(a1), cy + r * Math.sin(a1), 0);
-    const p2 = adsk.core.Point3D.create(cx + r * Math.cos(a2), cy + r * Math.sin(a2), 0);
-    arcs.addByCenterStartSweep(adsk.core.Point3D.create(cx, cy, 0), p1, a2 - a1);
+  for (const [cx, cy, sx, sy] of specs) {
+    arcs.addByCenterStartSweep(
+      adsk.core.Point3D.create(cx, cy, 0),
+      adsk.core.Point3D.create(sx, sy, 0),
+      -pi / 2,
+    );
   }
 }
 
@@ -148,10 +169,11 @@ export function makeOffsetProfile(
   for (let i = 0; i < sourceSketch.sketchCurves.count; i++) {
     curves.add(sourceSketch.sketchCurves.item(i));
   }
+  // Sketch.offset signature: offset(curves, directionPoint, offsetValue)
   const result = target.offset(
     curves,
+    adsk.core.Point3D.create(1, 0, 0),
     adsk.core.ValueInput.createByString(offsetExpr),
-    adsk.core.Point3D.create(0, 0, 0),
   );
   return result !== null && result !== undefined ? target : null;
 }

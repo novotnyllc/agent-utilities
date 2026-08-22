@@ -17,6 +17,30 @@ extension-owned plastic features (Boss, Snap Fit, Lip, Rest, Plastic Rules) are
 never a dependency; see `references/unsupported.md` and
 `docs/research-basis.md` for the entitlement boundary.
 
+## Installing the add-in
+
+The toolkit depends on the bundled Fusion add-in, so installation is
+**automatic**: the first time the toolkit is used (any CLI invocation or agent
+request), it checks Fusion's standard add-in folders and installs
+AgentUtilitiesEnclosure if missing. On later uses it compares versions and
+refreshes the installed copy whenever the bundled add-in has been updated, so
+toolkit updates carry the add-in along with them. No manual step is required.
+
+Diagnostics and force-repair remain available:
+
+```sh
+# From this skill directory. FUSION_ADDIN_DIR overrides the search location.
+npx tsx src/enclosure-features/cli.ts status
+npx tsx src/enclosure-features/cli.ts install --target DIR [--force]
+```
+
+After the add-in is installed (or refreshed), open
+**Utilities > Add-Ins > Scripts and Add-Ins > Add-Ins**, select
+AgentUtilitiesEnclosure, and click **Run** once per session (or enable
+**Run on startup**). Its commands then register as AgentUtilitiesEnclosure_*
+definitions - e.g. Add Enclosure Boss, Add Seam, Add Cutout - usable from
+the UI or a script through the request JSON described below.
+
 ## Command families
 
 Human-facing Fusion commands and agent requests use the same internal recipe

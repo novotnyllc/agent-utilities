@@ -8,7 +8,7 @@ import { joinExact } from "../native/booleans";
 import { makeHole, makeInsertBore, makePolygonPocket } from "../native/holes_threads";
 import { makeReinforcementBody } from "../native/reinforcement";
 import { makeParameter, ownedParamName } from "../native/parameters";
-import { stampAttributes, ManagedIdentity } from "../identity";
+import { stampAttributes, identityRole, ManagedIdentity } from "../identity";
 import { featureBodies, requireAdsk } from "./shared";
 
 export const BOSS_VARIANTS = new Set([
@@ -216,8 +216,59 @@ export function executeBossRecipe(
     if (boreFeat) created.push(boreFeat);
     // Relief slots from the bore outward create the compressible fingers.
     const slotDepth = Number(hardware.slot_depth ?? Math.round((outerD - boreD) / 2 + 1));
+    // Finger relief slots: rectangles sketched on the placement plane, one
+    // edge on the bore wall (radius = parsed bore radius), extending radially
+    // outward to slotDepth at each finger's angle. Coordinates are database cm;
+    // parse mm inputs and divide by 10.
+    const slotWVal = parseFloat(slotWidth) || 1.0; // ponytail: unit-suffix widths fall back to 1 mm; tighten if recipes send strings
+    const boreRcm = boreD / 2 / 10;
+    const slotWcm = slotWVal / 10;
+    const depthCm = slotDepth / 10;
+    const extrudesFinger = component.features.extrudeFeatures;
     for (let s = 0; s < fingerCount; s++) {
       const angleDeg = (360 / fingerCount) * s;
+      const ang = (angleDeg * Math.PI) / 180;
+      const cosA = Math.cos(ang);
+      const sinA = Math.sin(ang);
+      const fingerSk = component.sketches.add(plane);
+      fingerSk.name = `boss_${ns}_finger_${s}`;
+      const flines = fingerSk.sketchCurves.sketchLines;
+      // Radial frame: u along the finger axis, v across it. Inner edge sits ON
+      // the bore wall so every finger is attached until its slot is cut.
+      const innerU = boreRcm - 0.05 / 10;
+      const outerU = boreRcm + depthCm;
+      const corners: Array<[number, number]> = [
+        [innerU, -slotWcm / 2], [outerU, -slotWcm / 2],
+        [outerU, slotWcm / 2], [innerU, slotWcm / 2],
+      ];
+      const world = corners.map(([u, v]) => {
+        const baseX = centerPt ? centerPt.x : 0;
+        const baseY = centerPt ? centerPt.y : 0;
+        return adsk.core.Point3D.create(
+          baseX + u * cosA - v * sinA,
+          baseY + u * sinA + v * cosA,
+          0,
+        );
+      });
+      for (let ci = 0; ci < 4; ci++) {
+        flines.addByTwoPoints(world[ci], world[(ci + 1) % 4]);
+      }
+      created.push(fingerSk);
+      if (fingerSk.sketchProfiles.count > 0 && slotDepth > 0) {
+        const finExtIn = extrudesFinger.createInput(
+          fingerSk.sketchProfiles.item(0),
+          adsk.fusion.FeatureOperations.CutFeatureOperation);
+        finExtIn.setDistanceExtent(false, adsk.core.ValueInput.createByReal(depthCm));
+        finExtIn.participantBodies = [targetBody];
+        const fingerFeat = extrudesFinger.add(finExtIn);
+        if (fingerFeat) {
+          created.push(fingerFeat);
+        } else {
+          warnings.push(`Compression finger ${s + 1} cut failed; verify manually.`);
+        }
+      } else {
+        warnings.push(`Compression finger ${s + 1} profile failed; create the relief slot manually.`);
+      }
       warnings.push(`Compression finger ${s + 1}/${fingerCount} at ${angleDeg} deg: relief slot width ${slotWidth}, depth ${slotDepth} mm — verify finger flexibility after print.`);
     }
     warnings.push("Compression bosses are coupon-sensitive: print a fit coupon for the mating part before production.");
@@ -322,8 +373,28 @@ export function executeBossRecipe(
     warnings.push("Base blend radius requires explicit edge selection after boss creation.");
   }
 
+  // Role stamping: exactly ONE canonical entity carries the bare feature id
+  // (the combine/join feature when present, else the extrude). Dependents get
+  // suffixed ids + explicit roles so probeIdentity(fid)/findManagedEntities
+  // resolve unambiguously; deleteFeature finds dependents via the fid prefix.
+  const canonical = joinFeat ?? bossExt;
+  const fid = identity.featureId;
   for (const feat of created) {
-    stampAttributes(feat, identity);
+    if (!feat) continue;
+    if (feat === canonical) {
+      stampAttributes(feat, identity);
+    } else if (feat === bossSketch) {
+      stampAttributes(feat, { ...identity, featureId: fid + "_profile_sketch" }, "boss_profile_sketch");
+    } else if (feat === bossExt) {
+      stampAttributes(feat, { ...identity, featureId: fid + "_extrude" }, "boss_extrude");
+    } else if (feat === joinFeat) {
+      stampAttributes(feat, { ...identity, featureId: fid + "_join" }, "boss_join");
+    } else {
+      // Bore/pocket/rib children keep the family prefix but distinct ids so
+      // they never multi-match a bare probe.
+      stampAttributes(feat, { ...identity,
+        featureId: fid + "_" + identityRole(identity) + "_child" });
+    }
   }
   return { created, warnings, refusal: null };
 }

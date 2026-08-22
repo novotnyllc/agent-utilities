@@ -88,7 +88,7 @@ export function executeSupportRecipe(
       trimIn.setOneSideToEntityExtent(extentRef, false);
       const trimFeat = extrudes.add(trimIn);
       if (trimFeat) created.push(trimFeat);
-    } catch (exc: Any) {
+    } catch (exc) {
       return { created, warnings,
         refusal: ["feature-create-failed", `Support trim to extent failed: ${exc}`, "verify the extent reference exists and is valid"] };
     }
