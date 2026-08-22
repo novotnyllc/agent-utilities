@@ -74,6 +74,7 @@ const RETENTION_TYPES = [
 const SUPPORT_TYPES = [
   "pcb_edge", "pcb_corner", "support_point", "shelf", "landing_pad",
   "saddle", "cylindrical_cradle", "profile_ledge",
+  "rest",
 ] as const;
 
 const REINFORCEMENT_TYPES = [

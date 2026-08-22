@@ -299,11 +299,10 @@ function skirtBump(
   created: unknown[],
   warnings: string[],
 ): RetentionRecipeResult {
-  warnings.push("Skirt-bump snap composes a seam variant with a separate retention instance.");
-  for (const feat of created) {
-    stampAttributes(feat, identity);
-  }
-  return { created, warnings, refusal: null };
+  return { created, warnings,
+    refusal: ["feature-create-failed",
+      "Skirt-bump is not a standalone retention cut; compose seam.skirt_channel with discrete bumps.",
+      "use seam.skirt_channel plus an implemented bump recipe, or ordinary native modeling"] };
 }
 
 function dovetail(
@@ -402,9 +401,8 @@ function bayonet(
   created: unknown[],
   warnings: string[],
 ): RetentionRecipeResult {
-  warnings.push("Bayonet construction requires circular pattern of lugs and swept L-slot cuts; verify live Fusion acceptance.");
-  for (const feat of created) {
-    stampAttributes(feat, identity);
-  }
-  return { created, warnings, refusal: null };
+  return { created, warnings,
+    refusal: ["feature-create-failed",
+      "Bayonet geometry is not implemented as a complete joint yet.",
+      "use ordinary native lug/slot modeling until the recipe ships"] };
 }

@@ -16,6 +16,7 @@ type Any = any;
 export const SUPPORT_TYPES = new Set([
   "pcb_edge", "pcb_corner", "support_point", "shelf", "landing_pad",
   "saddle", "cylindrical_cradle", "profile_ledge",
+  "rest",
 ]);
 
 type Refusal = [string, string, string];

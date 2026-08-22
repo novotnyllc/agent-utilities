@@ -268,3 +268,19 @@ test("boss.compression is published and coordinated_pair refuses missing geometr
   assert.doesNotMatch(pairBody, /create the lid pocket manually/);
   assert.doesNotMatch(pairBody, /bore_diameter \?\? \"3\.2 mm\"/);
 });
+
+test("unpublished snap no-ops refuse and support.rest is published", () => {
+  const retention = fs.readFileSync(path.join(addinRoot, "recipes/retention.ts"), {encoding: "utf8"});
+  const skirt = retention.slice(retention.indexOf("function skirtBump"));
+  assert.match(skirt, /refusal:/);
+  assert.doesNotMatch(skirt.slice(0, 400), /return \{ created, warnings, refusal: null \};/);
+  const bayonet = retention.slice(retention.indexOf("function bayonet"));
+  assert.match(bayonet, /refusal:/);
+  const registry = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/recipe-registry.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(registry, /"rest"/);
+  const support = fs.readFileSync(path.join(addinRoot, "recipes/support.ts"), {encoding: "utf8"});
+  assert.match(support, /\"rest\"/);
+});
