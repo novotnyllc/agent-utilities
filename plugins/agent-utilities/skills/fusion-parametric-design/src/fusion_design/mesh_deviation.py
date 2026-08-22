@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .manifest import Manifest
 
 
-DEVIATION_SPEC_FIELDS = {"source", "reconstruction", "thresholds_mm", "rationale"}
+DEVIATION_SPEC_FIELDS = {"source", "reconstruction", "thresholds_mm", "rationale", "report_dir"}
 
 DEVIATION_THRESHOLD_FIELDS = {"invented_material", "omitted_detail", "percentile_sample_limit"}
 
@@ -133,6 +133,7 @@ def emit_mesh_deviation_script(
     if issues:
         raise ManifestValidationError(issues)
 
+    report_dir = str(spec.get("report_dir") or "").strip()
     specs = {
         "classification": classification.to_dict(),
         "mesh_source": _source_evidence(source_record),
@@ -1959,6 +1960,6 @@ def run(context):
             })
         raise
 '''
-    return _script_prelude(manifest) + transaction.replace(
+    return _script_prelude(manifest, report_dir=report_dir or None) + transaction.replace(
         "__DEVIATION_SPECS__", _json_literal(specs)
     )
