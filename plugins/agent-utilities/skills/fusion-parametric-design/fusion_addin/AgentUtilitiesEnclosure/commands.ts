@@ -116,8 +116,14 @@ function valueRaw(inputs: any, id: string, fallback: string): string {
 }
 
 function valueMm(inputs: any, id: string, fallback: string): string {
-  const raw = valueRaw(inputs, id, fallback);
-  return /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*$/u.test(raw) ? `${raw} mm` : raw;
+  const input = inputById(inputs, id);
+  const expr = input?.expression;
+  if (typeof expr === "string" && expr.trim()) return expr;
+  const raw = input?.value;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return (raw * 10) + " mm";
+  }
+  return valueRaw(inputs, id, fallback);
 }
 
 function valueNumber(inputs: any, id: string, fallback: number): number {
@@ -145,7 +151,7 @@ function candidateValues(raw: string): number[] {
     .filter((item) => Number.isFinite(item));
 }
 
-function requestJsonFromNativeInputs(cmdId: string, inputs: any): string {
+export function requestJsonFromNativeInputs(cmdId: string, inputs: any): string {
   const suffix = cmdId.replace("AgentUtilitiesEnclosure_", "");
   const selections: any[] = [];
   const addTarget = (): void => addSelectionEntry(selections, inputs, "target_body", "target_body");
@@ -326,19 +332,20 @@ function humanMessage(result: Record<string, any>): string {
 async function executeHandler(eventArgs: any): Promise<void> {
   const app = adsk.core.Application.get();
   const ui = app.userInterface;
-  const cmdDef = prop(prop(eventArgs, "firingEvent"), "sender");
+  const cmdDef = eventArgs.command?.parentCommandDefinition ?? prop(prop(eventArgs, "firingEvent"), "sender");
   const commandName = String(cmdDef?.id ?? "").replace("AgentUtilitiesEnclosure_", "");
   const commandInputs = eventArgs.command?.commandInputs ?? cmdDef?.commandInputs ?? null;
   const nonceInput = commandInputs ? inputById(commandInputs, "dispatch_nonce") : null;
   const nonceHint = nonceInput ? stringValue(commandInputs, "dispatch_nonce") : "";
   let staged: string | null = null;
   try {
-    staged = consumePending(nonceHint || undefined);
+    staged = nonceHint ? consumePending(nonceHint) : consumePending();
   } catch (exc) {
     try { ui.messageBox(`Dispatch error: ${exc}`); } catch { /* no UI */ }
     return;
   }
-  if (staged !== null) {
+  const agentLane = staged !== null;
+  if (agentLane) {
     const nonce = lastConsumedNonce();
     try {
       const result = await runCommandRequest(staged, commandName);

@@ -460,10 +460,23 @@ export class EnclosureFeatureService {
         : subtypeFamily === "vent" ? "pattern"
         : ["seam", "retention"].includes(subtypeFamily) ? "type"
         : subtypeFamily === "cutout" ? "shape" : "type";
-      // hardware.* reuses the boss recipe, which reads variant.
+      const HARDWARE_TO_BOSS: Record<string, string> = {
+        through_clearance: "screw",
+        counterbore: "screw",
+        countersink: "screw",
+        spot_face: "screw",
+        heat_set_insert: "heat_set_insert",
+        square_nut: "captive_square_nut",
+        hex_nut: "captive_hex_nut",
+        thread_forming_pilot: "thread_forming",
+        tapped: "tapped",
+        modeled_thread: "tapped",
+      };
       const resolvedDisc = subtypeFamily === "hardware" ? "variant" : disc;
       if (request[resolvedDisc] === undefined) {
-        request[resolvedDisc] = subtype;
+        request[resolvedDisc] = subtypeFamily === "hardware"
+          ? (HARDWARE_TO_BOSS[subtype] ?? subtype)
+          : subtype;
       }
     }
     let recipeFamily = String(request.recipe_family ?? "");

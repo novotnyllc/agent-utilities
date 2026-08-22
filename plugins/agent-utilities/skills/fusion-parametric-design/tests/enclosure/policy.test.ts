@@ -232,14 +232,12 @@ test("polygon profiles convert across-flats through mmToCm", () => {
 
 test("hardware aliases set the discriminator boss actually reads", () => {
   const service = readService();
-  const subtypeBlockStart = service.indexOf("const disc =");
-  assert.ok(subtypeBlockStart > -1, "subtype discriminator missing");
-  const subtypeBlock = service.slice(subtypeBlockStart, subtypeBlockStart + 600);
-  assert.match(
-    subtypeBlock,
-    /hardware/,
-    "hardware family must appear in subtype discriminator derivation",
-  );
+  assert.match(service, /HARDWARE_TO_BOSS/);
+  assert.match(service, /hex_nut: "captive_hex_nut"/);
+  assert.match(service, /square_nut: "captive_square_nut"/);
+  const subtypeBlockStart = service.indexOf("HARDWARE_TO_BOSS");
+  assert.ok(subtypeBlockStart > -1, "hardware alias map missing");
+  const subtypeBlock = service.slice(subtypeBlockStart, subtypeBlockStart + 900);
   assert.match(
     subtypeBlock,
     /"variant"/,
