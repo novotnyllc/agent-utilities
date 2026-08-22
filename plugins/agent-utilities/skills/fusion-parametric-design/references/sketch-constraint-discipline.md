@@ -12,7 +12,7 @@ consumes a sketch:
 2. Replace governing literals with named user parameters.
 3. Remove redundant or conflicting dimensions and constraints.
 4. Confirm every remaining degree of freedom is intentional.
-5. Run Compute All and read the sketch and timeline health.
+5. Run Compute All and read the sketch and timeline health after a coherent feature group, not after every individual sketch.
 
 Do not build downstream features on a sketch that is accidentally free to
 translate, rotate, flip, or change topology. Fusion considers a sketch fully

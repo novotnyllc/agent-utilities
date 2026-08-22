@@ -18,7 +18,7 @@ specifications, and no public documentation defines the ASM tokens.
 
 | Error string or signature | Evidence | Diagnostic next action |
 |---|---|---|
-| ASM_BL_UNFIN_SHEET | observed-live | The result is an unfinished/open sheet. Close gaps with Patch/Stitch, use Boundary Fill where cells define the volume, or rebuild solid-first before hollowing. |
+| ASM_BL_UNFIN_SHEET | observed-live | Suspect an unfinished/open sheet result. Inspect body solidity first to confirm; then close gaps with Patch/Stitch, use Boundary Fill where cells define the volume, or rebuild solid-first before hollowing. |
 | ASM_LOP_OFF_NO_SURF | observed-live | Stop radius/offset laddering. First suppress suspected downstream blends or cuts as a discriminating test. Reorder only after dependency and result-equivalence checks. If the offset still fails, inspect signed direction, curvature, and tiny faces; simplify or replace the topology, or choose a different construction. |
 | ASM_LOFT_SURFACE_SELF_INTERSECTS | observed-live | Inspect section order and seam alignment, rail intersections, and section compatibility. Enable cyclic closure only when the section sequence wraps back to the first. Simplify or split the loft when interpolation crosses itself. |
 | Offset Faces fails at a high-curvature transition | forum-case | Use one requirements-valid reduction as a local correction when inspection identifies the feasible limit; otherwise repair the collapsing region or change construction when displaced faces collide. |

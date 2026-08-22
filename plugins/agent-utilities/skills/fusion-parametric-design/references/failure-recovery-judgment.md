@@ -48,10 +48,7 @@ design silently disabled.
 
 ## Resume after interruption
 
-After a crash or lost connection, reopen the latest saved document and inspect the timeline tail, active component, browser state, and viewport. State what,
-if anything, was lost since the last save, then continue from the surviving
-model. Never restart from scratch while the saved document may already contain
-the work.
+After an application crash, reopen the latest saved document and inspect the timeline tail, active component, browser state, and viewport. State what, if anything, was lost since the last save, then continue from the surviving model. After a transport-only disconnect (MCP shim lost but Fusion still running), reconnect and inspect the live active document first; do not reopen from disk because that may discard unsaved edits still in memory.
 
 ## Restore versions only for real resets
 
