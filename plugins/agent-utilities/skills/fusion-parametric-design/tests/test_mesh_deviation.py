@@ -1148,6 +1148,17 @@ class DeviationVerdictTests(unittest.TestCase):
             ),
         )
 
+    def test_a_declared_report_dir_reaches_the_prelude_and_an_undeclared_one_does_not(self) -> None:
+        isolated = dict(DEVIATION_SPEC, report_dir="/tmp/deviation-runs/run-7")
+        with_dir = emit_mesh_deviation_script(
+            self.manifest, self.record, self.source, isolated
+        )
+        self.assertIn("REPORT_TEE_DIR = '/tmp/deviation-runs/run-7'", with_dir)
+        without = emit_mesh_deviation_script(
+            self.manifest, self.record, self.source, DEVIATION_SPEC
+        )
+        self.assertIn("REPORT_TEE_DIR = None", without)
+
     def test_thresholds_are_declared_per_reconstruction_never_defaulted(self) -> None:
         codes_for = lambda spec: {issue.code for issue in validate_deviation_spec(spec)}
         missing = copy.deepcopy(DEVIATION_SPEC)
