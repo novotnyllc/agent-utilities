@@ -51,6 +51,18 @@ The ownership boundary and pinned source areas are in
 deferred native metadata boundary are in
 `references/prusaslicer-3mf-contract.md`.
 
+## Enclosure feature toolkit
+
+The shipped enclosure feature toolkit (bosses/hardware, seams, retention,
+supports, reinforcement, cutouts, strain relief, seals, vents, fit coupons,
+patterns/mirrors) runs through the bundled Fusion add-in on ordinary public
+Fusion features — never Autodesk extension-owned plastic features. Per-row
+capability classifications, including what is deliberately rejected by
+architecture and which native-extension paths remain unresolved entitlement
+probes, are maintained in
+`references/enclosure-feature-capability-matrix.md`; command/dispatch/lifecycle
+behavior is in `references/enclosure-features.md`.
+
 ## Reconstruction lane
 
 | Operation | Status |

@@ -183,6 +183,50 @@ machine-readable success.
 
 ## Read → decide → write → inspect loop
 
+## Add-in dispatcher / command mailbox contract
+
+When the bundled `AgentUtilitiesEnclosure` add-in is installed, agent
+invocations of its commands use a staged request mailbox, not an inline
+geometry script:
+
+```text
+MCP thin snippet
+    -> enclosure.dispatch.stage(request) -> nonce
+    -> commandDefinition.execute()
+    -> command handler consumes the nonce exactly once
+    -> result stored against the nonce
+    -> dispatcher returns result
+```
+
+Contract terms:
+
+- The mailbox is **ephemeral process-local memory** keyed by a random nonce.
+  One request, one consumption, bounded lifetime, no filesystem backing. It is
+  tooling state, never design state.
+- Prefer the public `CommandDefinition.execute()` path so the operation shares
+  Fusion's command transaction boundary with human command use. Because that
+  API takes no payload parameter, the nonce is how the snippet hands the
+  handler its one request.
+- The MCP side stays tiny: resolve the target, serialize one request, stage it,
+  execute the command definition, read the result. Well under the ordinary
+  script-gate limits; no generated-lane marker is involved or permitted.
+- If the staged-execute path fails its probe, stop — do not fall back to a
+  giant inline script and do not enable destructive operations on an unproven
+  transport.
+
+**Command-transaction live probe (required before destructive ops).** Before
+any destructive lifecycle operation (edit-with-rebuild, delete, upgrade) is
+enabled through this transport, a live session must prove the full cycle in a
+disposable document: stage a representative request →
+`commandDefinition.execute()` → read the result → issue Fusion **Undo** →
+verify the managed feature group and its parameters are gone and the document
+matches the pre-operation state → record Redo where relevant. If execute's
+synchronization semantics or Undo coverage cannot be established live, the
+transport stays limited to non-destructive operations and direct add-in service
+invocation may be enabled only after passing its own Undo/rollback acceptance.
+The fixture and record fields are specified in
+`docs/live-fusion-acceptance.md`.
+
 1. **Read:** active document state, current visual state, and the exact documentation needed for the next action.
 2. **Decide:** identify one visible edit.
 3. **Write:** perform the smallest direct native operation.
@@ -348,3 +392,30 @@ When an ordinary-lane API call fails:
 Do not create test geometry, a probe harness, a diagnostic component, or a reproduction project. Do not search forums or unrelated API areas. If neither lookup path is available, stop before correcting the failed call and say so rather than guessing at an obsolete API signature. If the corrected call fails or requires broader investigation, show the failure and stop.
 
 Generated lanes follow only their documented refusal and retry contract.
+## Loading the enclosure add-in at runtime (Fusion already running)
+
+The toolkit's auto-installer copies the add-in into Fusion's add-in folder, but
+a running Fusion session loads an add-in only at startup or on demand. The
+supported programmatic load is the Scripts API (October 2023+):
+
+```python
+# Inside a bounded MCP snippet - load, never re-register commands manually.
+app = adsk.core.Application.get()
+matches = app.scripts.itemsByName("AgentUtilitiesEnclosure")
+if not matches:
+    # Fusion has not indexed it yet: register from its installed folder.
+    import os
+    app.scripts.addExisting(os.path.expanduser(
+        "~/Library/Application Support/Autodesk/Autodesk Fusion/API/AddIns/AgentUtilitiesEnclosure"))
+    matches = app.scripts.itemsByName("AgentUtilitiesEnclosure")
+addin = matches[0]
+assert addin.isAddIn
+if not addin.isRunning:
+    addin.run(False)   # waitForFinish=False: add-ins stay resident
+```
+
+After this, the AgentUtilitiesEnclosure_* command definitions are registered
+and the staged-nonce dispatch path works. Setting Script.isRunOnStartup = True
+once makes every future session load it automatically. On Fusion builds older
+than October 2023 the Scripts API does not exist; the fallback is the manual
+Utilities > Add-Ins dialog.

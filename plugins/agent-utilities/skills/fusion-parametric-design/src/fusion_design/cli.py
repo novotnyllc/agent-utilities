@@ -1070,6 +1070,24 @@ def _cmd_emit_module_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_enclosure_cli(arguments: list[str]) -> int:
+    """Setup-only shim into the TypeScript enclosure toolkit (no Python logic here)."""
+    import subprocess
+    toolkit = Path(__file__).resolve().parents[1] / "enclosure-features"
+    result = subprocess.run(["npx", "tsx", str(toolkit / "cli.ts"), *arguments], check=False)
+    return result.returncode
+
+
+def _cmd_enclosure_addin_status(args: argparse.Namespace) -> int:
+    return _run_enclosure_cli(["status"])
+
+
+def _cmd_enclosure_addin_install(args: argparse.Namespace) -> int:
+    arguments = ["install", "--target", args.target]
+    if args.force:
+        arguments.append("--force")
+    return _run_enclosure_cli(arguments)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fusion-design",
@@ -1644,6 +1662,19 @@ def build_parser() -> argparse.ArgumentParser:
     fit.add_argument("-o", "--output")
     fit.set_defaults(handler=_cmd_fit_regions)
 
+    enclosure_status = subparsers.add_parser(
+        "enclosure-addin-status",
+        help="Probe whether the bundled AgentUtilitiesEnclosure Fusion add-in is installed (TypeScript toolkit; setup only).",
+    )
+    enclosure_status.set_defaults(handler=_cmd_enclosure_addin_status)
+
+    enclosure_install = subparsers.add_parser(
+        "install-enclosure-addin",
+        help="Install the bundled AgentUtilitiesEnclosure add-in to an explicit target dir (TypeScript toolkit; setup only, never implicit).",
+    )
+    enclosure_install.add_argument("--target", required=True, help="Absolute add-in directory to install into.")
+    enclosure_install.add_argument("--force", action="store_true", help="Allow overwriting an existing installation.")
+    enclosure_install.set_defaults(handler=_cmd_enclosure_addin_install)
     emit_bootstrap = subparsers.add_parser(
         "emit-module-bootstrap",
         help="Verify a cached module bundle and emit its Fusion bootstrap.",

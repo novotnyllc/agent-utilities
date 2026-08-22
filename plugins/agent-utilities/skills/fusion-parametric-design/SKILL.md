@@ -96,6 +96,9 @@ Autodesk Fusion MCP uses dynamic tooling. Discover the server's current tools, r
 - `references/prusaslicer-3mf-contract.md` before generating or reviewing a PrusaSlicer project or its native metadata boundary
 - `references/capability-status.md` when checking whether an operation is supported, partial, or external
 - `references/unsupported.md` before promising a capability
+- `references/enclosure-features.md` when using the shipped enclosure feature toolkit commands — including its **migration rules for agents** before changing any recipe's geometry semantics or version
+- `references/enclosure-feature-rules.md` for the toolkit's FDM evidence and coupon rules
+- `references/enclosure-feature-capability-matrix.md` for per-capability classifications
 - `references/model-routing.md` when dispatching or choosing a model for skill work
 
 For commands below, resolve `SKILL_DIR` to the directory containing this

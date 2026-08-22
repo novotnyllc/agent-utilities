@@ -398,6 +398,71 @@ Fusion supports components, joints, transforms, measurements, and interference, 
 
 After two or more parts reveal genuinely shared logic, refactor into shared user parameters, a derived/reference component, configuration, or reusable feature strategy. Do not prebuild a generic system before the design demonstrates the commonality.
 
+## Arbitrary conformal double-curved cutout
+
+**Status:** Ordinary native modeling preferred; not a toolkit recipe.
+
+Fusion provides `Sketch.projectToSurface`, so a person can project a loop onto
+a curved wall and build a conformal opening through surface and trim features.
+What the toolkit deliberately does not do is turn an arbitrary projected loop
+on an arbitrary double-curved wall into a bounded, reliable recipe: profile
+orientation, offset behavior, and trim topology vary too much per wall to give
+the abstraction recurring enclosure value. Axis-projected cuts through curved
+walls remain supported recipes (`references/enclosure-features.md`); a truly
+conformal opening is modeled natively with projection + surface workflow.
+
+## Arbitrary freeform dovetail / bayonet
+
+**Status:** Scoped recipes only; arbitrary freeform spatial joinery is
+ordinary native modeling.
+
+Dovetail and sliding-key recipes require a linear or tangent-continuous rail
+path. Bayonet recipes require a common cylindrical axis with explicit lug
+count, insertion distance, locking rotation, lug geometry, and slot clearance.
+An arbitrary three-dimensional dovetail or bayonet track — freeform rails,
+non-cylindrical bayonet surfaces, discontinuous frames — would need a general
+swept-joinery engine with robust corner handling to be safe; that is rejected
+by architecture rather than deferred. Model those natively where a design needs
+them.
+
+## Automatic arbitrary whole-cell vent clipping
+
+**Status:** Rejected by architecture.
+
+For `whole_cells` boundary policy over an arbitrary freeform region,
+automatically deciding which patterned cells fall inside the region is a
+general polygon-containment/filtering engine — exactly the parallel geometry
+analyzer this package refuses to become. Rectangular/circular bounded regions
+may use their parametric limits; clipped regions use an explicit mask body;
+freeform regions accept explicit suppressed indices from the user or refuse.
+
+## Specialized extension-feature entitlement boundaries (Snap/Lip/Rest)
+
+**Status:** No established public creation APIs; extension UI only;
+base recipes are the supported path.
+
+Autodesk documents Snap Fit, Lip, and Rest as Design Extension UI commands.
+The public API documentation searched during the design pass established no
+specialized creation collections analogous to `BossFeatures` for any of them
+(and Boss itself remains an unresolved *entitlement* probe even though its API
+exists). The toolkit therefore never depends on these objects: base recipes
+reproduce the geometry with ordinary features. If a current build exposes a
+specialized collection, it may be probed live as an optional, separately
+identified adapter path — never silently substituted for the base recipe.
+Plastic Rules are intentionally not depended upon in any form; the toolkit's
+own FDM evidence model replaces them (`references/enclosure-feature-rules.md`).
+
+## Louver arrays
+
+**Status:** Ordinary native modeling preferred; not a toolkit recipe.
+
+A louver combines opening geometry, directional hood geometry, airflow intent,
+print orientation, and support concerns. A reusable recipe would offer little
+beyond the actual native sketch/extrude/pattern workflow while adding real
+design-policy ambiguity (airflow direction, hood angle, support strategy).
+Model louvers natively; vent arrays over bounded planar regions remain
+supported toolkit recipes.
+
 ## Long-running autonomous workflow inside the MCP server
 
 **Status:** Unsupported by design.

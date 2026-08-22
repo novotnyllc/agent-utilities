@@ -165,6 +165,59 @@ test("allows a small clean snippet silently", () => {
   assert.equal(result.stderr, "");
 });
 
+test("a realistic tiny enclosure-dispatcher snippet passes the ordinary lane", () => {
+  // The shipped add-in owns the geometry; the MCP side stages one request,
+  // executes one command definition, and reads one result. No marker needed.
+  const snippet = [
+    "import json, uuid",
+    "import adsk.core, adsk.fusion",
+    "",
+    "app = adsk.core.Application.get()",
+    "design = adsk.fusion.Design.cast(app.activeProduct)",
+    "request = {",
+    "    'request_id': str(uuid.uuid4()),",
+    "    'recipe': {'recipe_id': 'boss.support', 'version': '1.0.0'},",
+    "    'context': {'document_id': design.document.name, 'component_path': 'Base'},",
+    "    'selections': [",
+    "        {'role': 'target_body', 'kind': 'body', 'component_path': 'Base'},",
+    "        {'role': 'placement_origin', 'kind': 'point',",
+    "         'component_path': 'Base', 'name': 'Boss Placement'},",
+    "        {'role': 'z_axis', 'kind': 'axis', 'component_path': 'Base'},",
+    "    ],",
+    "    'parameters': [",
+    "        {'key': 'outer_diameter',",
+    "         'value': {'expression': 'des_boss_od'}, 'ownership': 'design'},",
+    "        {'key': 'height', 'value': {'value': 8.0, 'unit': 'mm'},",
+    "         'ownership': 'source'},",
+    "    ],",
+    "}",
+    "nonce = _au_enclosure_dispatch_stage(request)",
+    "cmd = app.commandDefinitions.itemById('AgentUtilitiesEnclosureAddBoss')",
+    "cmd.execute()",
+    "result = _au_enclosure_dispatch_result(nonce)",
+    "print(json.dumps({'feature_id': result['instance']['feature_id']}))",
+  ].join("\n");
+  const result = run(execute({ script: snippet }));
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+});
+
+test("an oversized whole-enclosure generator attempt stays blocked without a marker", () => {
+  const lines = [
+    "# whole-enclosure generator: base, lid, seams, bosses, vents, coupons",
+    "import adsk.core, adsk.fusion",
+    "app = adsk.core.Application.get()",
+  ];
+  // Push past both the 120-line and 8192-byte ad hoc limits.
+  for (let i = 0; i < 300; i += 1) {
+    lines.push(`boss_${i} = sketch_circles.addByCenterRadius(plane, ${i})`);
+  }
+  const result = run(execute({ script: lines.join("\n") }));
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /thin-transport bound/);
+  assert.match(result.stderr, /one visible edit per snippet/);
+});
+
 test("ignores non-fusion and non-execute tools and script-free calls", () => {
   for (const input of [
     { tool_name: "Bash", tool_input: { command: "subprocess" } },
