@@ -220,3 +220,36 @@ test("editFeature classifies inspection state before applying parameter updates"
   // The post-compute result carries the re-inspected state on the instance.
   assert.match(body, /inspection_state:/);
 });
+
+test("polygon profiles convert across-flats through mmToCm", () => {
+  const sketches = fs.readFileSync(path.join(addinRoot, "native/sketches.ts"), {encoding: "utf8"});
+  const start = sketches.indexOf("export function makePolygonProfile");
+  assert.ok(start > -1, "makePolygonProfile missing");
+  const nextExport = sketches.indexOf("export function", start + 1);
+  const body = sketches.slice(start, nextExport > -1 ? nextExport : undefined);
+  assert.match(body, /mmToCm\s*\(/, "makePolygonProfile must convert mm to Fusion cm");
+});
+
+test("hardware aliases set the discriminator boss actually reads", () => {
+  const service = readService();
+  const subtypeBlockStart = service.indexOf("const disc =");
+  assert.ok(subtypeBlockStart > -1, "subtype discriminator missing");
+  const subtypeBlock = service.slice(subtypeBlockStart, subtypeBlockStart + 600);
+  assert.match(
+    subtypeBlock,
+    /hardware/,
+    "hardware family must appear in subtype discriminator derivation",
+  );
+  assert.match(
+    subtypeBlock,
+    /"variant"/,
+    "hardware family must derive request.variant",
+  );
+  const boss = fs.readFileSync(path.join(addinRoot, "recipes/boss.ts"), {encoding: "utf8"});
+  assert.match(boss, /request\.variant/);
+  assert.doesNotMatch(
+    boss,
+    /across_flats \?\? 5\.5/,
+    "captive nut AF must not silently default to 5.5",
+  );
+});

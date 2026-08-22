@@ -182,8 +182,26 @@ export function executeBossRecipe(
     created.push(...makeInsertBore(component, targetBody, boreCenter, boreDir, hardware.insert_spec));
   } else if (variant === "captive_square_nut" || variant === "captive_hex_nut") {
     const sides = variant === "captive_square_nut" ? 4 : 6;
-    const af = Number(hardware.across_flats ?? 5.5);
-    const depth = hardware.depth ?? "2.5 mm";
+    if (hardware.across_flats === undefined || hardware.across_flats === null || hardware.across_flats === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "captive nut requires sourced hardware.across_flats.",
+          "supply the nut AF from the datasheet; do not guess 5.5 mm"] };
+    }
+    if (hardware.depth === undefined || hardware.depth === null || hardware.depth === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "captive nut requires sourced hardware.depth.",
+          "supply pocket depth from the nut thickness plus print clearance"] };
+    }
+    const af = Number(hardware.across_flats);
+    if (!Number.isFinite(af) || af <= 0) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          `across_flats '${hardware.across_flats}' is not a positive number.`,
+          "send AF in millimeters"] };
+    }
+    const depth = hardware.depth;
     const slot = hardware.slot_width ?? "";
     const depthVal = parseFloat(String(depth).replace("mm", "").trim());
     const heightVal = parseFloat(String(height).replace("mm", "").trim());

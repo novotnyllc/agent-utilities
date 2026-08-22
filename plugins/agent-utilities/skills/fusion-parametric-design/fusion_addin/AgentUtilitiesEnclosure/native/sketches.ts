@@ -144,8 +144,8 @@ export function makePolygonProfile(
   for (let i = 0; i < sides; i++) {
     const angle = (2 * Math.PI * i) / sides + Math.PI / sides;
     pts.push(adsk.core.Point3D.create(
-      circumradius * Math.cos(angle),
-      circumradius * Math.sin(angle),
+      mmToCm(circumradius * Math.cos(angle)),
+      mmToCm(circumradius * Math.sin(angle)),
       0,
     ));
   }

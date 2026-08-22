@@ -370,8 +370,10 @@ export class EnclosureFeatureService {
         : subtypeFamily === "vent" ? "pattern"
         : ["seam", "retention"].includes(subtypeFamily) ? "type"
         : subtypeFamily === "cutout" ? "shape" : "type";
-      if (request[disc] === undefined) {
-        request[disc] = subtype;
+      // hardware.* reuses the boss recipe, which reads variant.
+      const resolvedDisc = subtypeFamily === "hardware" ? "variant" : disc;
+      if (request[resolvedDisc] === undefined) {
+        request[resolvedDisc] = subtype;
       }
     }
     const recipeFamily = String(request.recipe_family ?? "");
