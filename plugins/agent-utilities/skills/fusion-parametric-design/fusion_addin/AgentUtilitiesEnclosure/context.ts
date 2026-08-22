@@ -38,8 +38,17 @@ export function resolveDesignContext(design?: any): DesignContext {
     throw new AddInNotRunningError("Fusion API (adsk) not available.");
   }
   if (design == null) {
-    const doc = app.activeDocument;
-    design = doc ? doc.design : null;
+    // activeProduct is the Design in normal sessions; activeDocument.design
+    // is null there. Fall back to the document path only if the cast fails.
+    try {
+      design = adsk.fusion.Design.cast(app.activeProduct);
+    } catch {
+      design = null;
+    }
+    if (design == null) {
+      const doc = app.activeDocument;
+      design = doc ? doc.design : null;
+    }
   }
   if (design == null) {
     throw new Error("No active Fusion design document.");

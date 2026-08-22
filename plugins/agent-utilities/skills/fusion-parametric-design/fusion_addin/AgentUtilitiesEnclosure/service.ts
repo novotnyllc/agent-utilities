@@ -512,7 +512,20 @@ export class EnclosureFeatureService {
 
     this.timelineGroup(recipeFamily, identity, timelineBefore, this.currentTimelineIndex());
     this.computeAll();
-    const tb = enriched.target_body ?? null;
+    // Target-free recipes (coupons, seams) create their own bodies; a null
+    // target passed to inspection auto-fails zero-thickness-result, so fall
+    // back to the first created body. created[] is still inspected whole;
+    // the solidity check then runs against real created geometry.
+    let tb = enriched.target_body ?? null;
+    if (tb == null) {
+      for (const c of created) {
+        const body = collectFeatureBodies(c)[0] ?? null;
+        if (body != null) {
+          tb = body;
+          break;
+        }
+      }
+    }
     const ecRaw = request.expected_body_count;
     const ec = ecRaw != null ? Number(ecRaw) : null;
     const insp = this.inspect(created, tb, Number.isFinite(ec as number) ? ec : null);
@@ -850,6 +863,27 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
       return result.toDict();
     }
+    // Boss children are stamped fid + "_profile_sketch", fid + "_extrude", etc.;
+    // the exact probe misses them, so also collect every entity whose feature id
+    // starts with fid + "_". Child ids never equal fid, so sets stay disjoint.
+    const childPrefix = fid + "_";
+    for (const collName of [
+      "bRepBodies", "sketches", "constructionPlanes",
+      "constructionAxes", "constructionPoints", "features",
+    ]) {
+      const coll = root[collName];
+      if (!coll) continue;
+      for (let i = 0; i < coll.count; i++) {
+        const obj = coll.item(i);
+        const attrs = obj?.attributes ?? null;
+        if (!attrs) continue;
+        const fidA = attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_feature_id");
+        const idVal = fidA ? String(fidA.value ?? "") : "";
+        if (idVal.startsWith(childPrefix)) {
+          managed.push(obj);
+        }
+      }
+    }
     const ordered = [...managed].sort((a, b) => {
       const ta = Number(a?.timelineObject?.index ?? 0);
       const tb = Number(b?.timelineObject?.index ?? 0);
@@ -922,18 +956,28 @@ export class EnclosureFeatureService {
       } catch { /* discovery is best-effort */ }
       return [...new Set(found)];
     };
-    /** Recursively resolve + delete dependent features (depth-bounded). */
-    const cascadeDependents = (depIds: string[], depth: number): void => {
-      if (depth > 5 || depIds.length === 0) return;
-      for (const depId of depIds) {
+    /** Resolve + delete dependent features until none remain; the visited set
+      * is the cycle guard, so traversal is bounded by graph size, not depth. */
+    const cascadeDependents = (depIds: string[]): void => {
+      const visited = new Set<string>();
+      const queue = [...depIds];
+      while (queue.length > 0) {
+        const depId = queue.shift()!;
+        if (visited.has(depId)) continue;
+        visited.add(depId);
         let depMatches: any[] = [];
         try {
           depMatches = findManagedEntities(root, probeIdentity(depId));
         } catch { /* probe failure leaves matches empty */ }
         if (depMatches.length === 0) continue;
         // Discover grandchildren BEFORE deleting so the cascade is complete.
-        const grandDeps = discoverDependents(depId);
-        cascadeDependents(grandDeps, depth + 1);
+        for (const g of discoverDependents(depId)) {
+          if (visited.has(g)) {
+            result.warnings.push(`Cascade dependency cycle cut at ${g}.`);
+          } else {
+            queue.push(g);
+          }
+        }
         const depErrs = deleteEntitiesFor(depMatches);
         for (const e of depErrs) {
           result.warnings.push(`Cascade delete ${depId}: ${e}`);
@@ -942,7 +986,7 @@ export class EnclosureFeatureService {
       }
     };
     if (cascadeFlag && deps.length > 0) {
-      cascadeDependents(deps, 1);
+      cascadeDependents(deps);
     }
     const failed: string[] = [];
     for (const entity of ordered) {
@@ -1212,6 +1256,25 @@ export class EnclosureFeatureService {
       const kwargs: Record<string, Any> = {};
       for (const k of ["spacing", "angle", "axis", "path"]) {
         if (request[k] !== undefined) kwargs[k] = request[k];
+      }
+      // axis/path arrive as serialized selection tokens; resolve them before
+      // the native call so makePattern receives entities, not strings.
+      const design = prop(root, "parentDesign");
+      for (const k of ["axis", "path"] as const) {
+        if (typeof kwargs[k] !== "string") continue;
+        let entity: Any = null;
+        try {
+          entity = design ? design.findEntityByToken(kwargs[k]) : null;
+        } catch {
+          entity = null;
+        }
+        if (entity == null) {
+          result.refusal = makeRefusal(
+            "target-not-found",
+            "Pattern " + k + " token did not resolve to an entity.");
+          return result.toDict();
+        }
+        kwargs[k] = entity;
       }
       const [feat, warn] = makePattern(root, sources, ptype, qty, kwargs);
       if (warn) result.warnings.push(warn);

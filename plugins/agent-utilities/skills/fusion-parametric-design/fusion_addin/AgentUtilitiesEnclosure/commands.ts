@@ -204,7 +204,7 @@ function onCommandCreated(cmdIdSuffix: string) {
         "Request JSON:",
         example,
         example ? Math.max(5, example.split("\n").length + 1) : 5,
-        true,
+        false,
       );
       command.execute.add((execArgs: any) => {
         void executeHandler(execArgs);
