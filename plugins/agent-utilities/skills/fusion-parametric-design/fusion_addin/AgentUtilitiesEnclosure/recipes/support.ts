@@ -95,8 +95,11 @@ export function executeSupportRecipe(
   }
   const keepouts: Any[] = request.keepout_bodies ?? [];
   if (keepouts.length > 0) {
-    const keepoutCut = cutExact(component, toolBodies[0], keepouts);
-    if (keepoutCut) created.push(keepoutCut);
+    // Trim EVERY tool body against the keep-outs, not just the first one.
+    for (const tb of toolBodies) {
+      const trimmed = cutExact(component, tb as Any, keepouts);
+      if (trimmed) created.push(trimmed);
+    }
   }
   const retentionLip = request.retention_lip;
   if (retentionLip) {

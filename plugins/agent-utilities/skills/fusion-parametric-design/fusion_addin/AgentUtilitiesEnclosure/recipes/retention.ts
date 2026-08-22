@@ -23,6 +23,38 @@ export const FREEFORM_TYPES = new Set(["bayonet"]);
 
 type Refusal = [string, string, string];
 
+function makeTrapezoidProfile(
+  component: Any,
+  name: string,
+  plane: Any,
+  dims: { bottom_width: number; top_width: number; height: number },
+): Any | null {
+  /** Closed four-line trapezoid centered on the sketch origin; null on failure. */
+  try {
+    if (!(dims.top_width > 0) || !(dims.bottom_width > 0) || !(dims.height > 0)) return null;
+    const sketches = component.sketches;
+    const sketch = sketches.add(plane);
+    sketch.name = name;
+    const lines = sketch.sketchCurves.sketchLines;
+    const hwB = dims.bottom_width / 2;
+    const hwT = dims.top_width / 2;
+    const pts: Array<[number, number]> = [
+      [-hwB, -dims.height / 2],
+      [hwB, -dims.height / 2],
+      [hwT, dims.height / 2],
+      [-hwT, dims.height / 2],
+    ];
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[(i + 1) % pts.length];
+      lines.addByTwoPoints(adsk.core.Point3D.create(x1, y1, 0), adsk.core.Point3D.create(x2, y2, 0));
+    }
+    return sketch.sketchProfiles.count > 0 ? sketch : null;
+  } catch {
+    return null;
+  }
+}
+
 export type RetentionRecipeResult = {
   created: unknown[];
   warnings: string[];
@@ -122,8 +154,10 @@ function cantilever(
   const beamBodies = featureBodies(beamExt);
 
   // Hook profile -> JOIN into the beam body first.
+  // Hook belongs at the beam tip, not the beam center.
+  const hookX = beamLen / 2 - 1.0 / 2;
   const hookSk = makePlanarProfile(component, `snap_${ns}_hook`, plane, "rectangle",
-    { width: 1.0, height: hookH });
+    { width: 1.0, height: hookH }, { offsetX: hookX });
   if (hookSk !== null && hookSk.sketchProfiles.count > 0) {
     created.push(hookSk);
     const hookExt = extrudes.createInput(hookSk.sketchProfiles.item(0),
@@ -291,11 +325,15 @@ function dovetail(
   const clearance = String(params.clearance ?? "0.15 mm");
   const extrudes = component.features.extrudeFeatures;
 
-  // Male trapezoidal profile -> NEW BODY.
-  // Parity note: Python passes rounded_rectangle without corner_radius too, so
-  // both implementations surface the same sketch-profile failure here.
-  const maleSk = makePlanarProfile(component, `dovetail_${ns}_male`, plane,
-    "rounded_rectangle", { width: maleWidth, height: maleDepth });
+  // Male trapezoidal profile -> NEW BODY (explicit cross-section).
+  let angleRad = Math.PI / 6; // default 30 deg included angle
+  if (params.angle != null) {
+    const rawAngle = parseFloat(String(params.angle));
+    if (!Number.isNaN(rawAngle)) angleRad = rawAngle * Math.PI / 180;
+  }
+  const topWidth = maleWidth - 2 * maleDepth * Math.tan(angleRad);
+  const maleSk = makeTrapezoidProfile(component, `dovetail_${ns}_male`, plane,
+    { bottom_width: maleWidth, top_width: topWidth, height: maleDepth });
   if (maleSk === null || maleSk.sketchProfiles.count === 0) {
     return { created, warnings,
       refusal: ["feature-create-failed", "Dovetail male profile sketch failed.", "check dimensions"] };
@@ -323,8 +361,9 @@ function dovetail(
     const clearVal = Number.isNaN(femClearRaw) ? 0.15 : femClearRaw;
     const femaleW = maleWidth + 2 * clearVal;
     const femaleD = maleDepth + clearVal;
-    const femSk = makePlanarProfile(component, `dovetail_${ns}_female`, plane,
-      "rounded_rectangle", { width: femaleW, height: femaleD });
+    const femTopWidth = femaleW - 2 * femaleD * Math.tan(angleRad);
+    const femSk = makeTrapezoidProfile(component, `dovetail_${ns}_female`, plane,
+      { bottom_width: femaleW, top_width: femTopWidth, height: femaleD });
     if (femSk !== null && femSk.sketchProfiles.count > 0) {
       created.push(femSk);
       const femExt = extrudes.createInput(femSk.sketchProfiles.item(0),

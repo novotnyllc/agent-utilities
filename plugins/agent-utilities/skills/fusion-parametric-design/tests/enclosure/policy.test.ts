@@ -208,7 +208,7 @@ test("editFeature classifies inspection state before applying parameter updates"
   const body = service.slice(edit, nextMethod);
   const classify = body.indexOf("classifyInspection(");
   const refusal = body.indexOf('"manual-edit-prevents-update"');
-  const apply = body.indexOf("this.updateParameters(updates)");
+  const apply = body.indexOf("this.updateParameters(scoped)");
   assert.ok(classify > -1, "editFeature missing classifyInspection");
   assert.ok(refusal > -1, "editFeature missing manual-edit-prevents-update");
   assert.ok(apply > -1, "editFeature missing updateParameters");

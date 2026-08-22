@@ -15,6 +15,7 @@ export function makePlanarProfile(
   plane: Any,
   shape: string,
   dims: Record<string, Any> = {},
+  opts: { offsetX?: number; offsetY?: number } = {},
 ): Any | null {
   const sketches = component.sketches;
   const sketch = sketches.add(plane);
@@ -23,9 +24,11 @@ export function makePlanarProfile(
   if (shape === "rectangle" && "width" in dims && "height" in dims) {
     const w = dims.width;
     const h = dims.height;
+    const ox = opts.offsetX ?? 0;
+    const oy = opts.offsetY ?? 0;
     sketch.sketchCurves.sketchLines.addTwoPointRectangle(
-      adsk.core.Point3D.create(-w / 2, -h / 2, 0),
-      adsk.core.Point3D.create(w / 2, h / 2, 0),
+      adsk.core.Point3D.create(ox - w / 2, oy - h / 2, 0),
+      adsk.core.Point3D.create(ox + w / 2, oy + h / 2, 0),
     );
   } else if (
     shape === "rounded_rectangle" &&

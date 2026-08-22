@@ -40,13 +40,18 @@ export function makeParameter(
     return existing;
   }
 
-  const units = design.unitsManager;
-  const unitEnum = resolveUnitEnum(units, unitType);
+  // Fusion's UserParameters.add expects a UNIT STRING ("mm", "deg"), not a
+  // display-format object. Validate against a small allowlist.
+  const allowed = new Set(["mm", "cm", "m", "in", "deg", "rad", ""]);
+  const unit = allowed.has(unitType) ? (unitType || "mm") : null;
+  if (unit === null) {
+    throw new Error(`Unsupported parameter unit type: ${unitType}`);
+  }
   const valueInput = adsk.core.ValueInput.createByString(expression);
-  return params.add(name, valueInput, unitEnum, comment);
+  return params.add(name, valueInput, unit, comment);
 }
 
-function resolveUnitEnum(unitsMgr: Any, unitType: string): Any {
+function unusedResolveUnitEnum(unitsMgr: Any, unitType: string): Any {
   /**
    * Map a unit string to the Fusion UnitTypes enum value.
    *

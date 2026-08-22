@@ -58,7 +58,24 @@ export function executeCutoutRecipe(
   // Python keeps only numeric dimension values.
   const dims: Record<string, number> = {};
   for (const [k, v] of Object.entries(request.dimensions ?? {})) {
-    if (typeof v === "number") dims[k] = v;
+    if (typeof v === "number") {
+      dims[k] = v;
+    } else if (typeof v === "string") {
+      const parsed = parseFloat(v);
+      if (!Number.isNaN(parsed)) {
+        dims[k] = parsed;
+      } else {
+        return { created, warnings,
+          refusal: ["invalid-parameter-expression",
+            `dimension '${k}' value '${v}' is not a number or unit expression.`,
+            "send a number (mm) or a '<value> <unit>' expression"] };
+      }
+    } else {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          `dimension '${k}' is not a number or unit expression.`,
+          "send a number (mm) or a '<value> <unit>' expression"] };
+    }
   }
   const sketch = makePlanarProfile(component, `cutout_${ns}_profile`, plane, shape, dims);
   if (sketch === null || sketch.sketchProfiles.count === 0) {
@@ -91,9 +108,13 @@ export function executeCutoutRecipe(
   // Optional recess.
   const recess = request.recess;
   if (recess && "width" in recess && "height" in recess && "depth" in recess) {
-    const rw = typeof recess.width === "number" ? recess.width + 2.0 : 20.0;
-    const rh = typeof recess.height === "number" ? recess.height + 2.0 : 15.0;
+    const clearance = Number(recess.clearance ?? 2.0);
+    const rw = (typeof recess.width === "number" ? recess.width : 18.0) + 2 * clearance;
+    const rh = (typeof recess.height === "number" ? recess.height : 13.0) + 2 * clearance;
     const rd = String(recess.depth ?? "1 mm");
+    if (clearance !== 0) {
+      warnings.push(`Recess applies ${clearance} mm per-side clearance around the nominal size.`);
+    }
     const recSk = makePlanarProfile(component, `cutout_${ns}_recess`, plane,
       "rectangle", { width: rw, height: rh });
     if (recSk !== null && recSk.sketchProfiles.count > 0) {

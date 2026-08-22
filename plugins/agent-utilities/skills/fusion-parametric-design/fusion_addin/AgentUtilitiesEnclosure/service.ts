@@ -16,7 +16,7 @@
 import { adsk } from "@adsk/fas";
 
 import { resolveDesignContext, validateParametricDesign } from "./context.ts";
-import { allocateIdentity, findManagedEntities, stampAttributes, ATTRIBUTE_GROUP, PARAM_PREFIXES, type ManagedIdentity } from "./identity.ts";
+import { allocateIdentity, findManagedEntities, probeIdentity, stampAttributes, ATTRIBUTE_GROUP, PARAM_PREFIXES, type ManagedIdentity } from "./identity.ts";
 import { classifyInspection, inspectDirectResult } from "./inspect.ts";
 
 type Any = any;
@@ -229,7 +229,7 @@ async function resolveManagedEntity(
   if (root == null) {
     return [null, ["target-not-found", "No active design to search."]];
   }
-  const matches = findManagedEntities(root, allocateIdentity(fid, "", []));
+  const matches = findManagedEntities(root, probeIdentity(fid));
   if (matches.length === 0) {
     return [null, ["target-not-found", `No managed feature ${fid}.`]];
   }
@@ -257,6 +257,22 @@ function parseRequest(requestJson: string): Record<string, any> | null {
   } catch {
     return null;
   }
+}
+
+/** Reconstruct a ManagedIdentity from an entity's stamped attributes. */
+function identityFromEntity(entity: Any): ManagedIdentity {
+  const attrs = entity?.attributes ?? null;
+  const read = (key: string): string => {
+    try {
+      const a = attrs ? attrs.itemByName(ATTRIBUTE_GROUP, key) : null;
+      return a ? String(a.value) : "";
+    } catch { return ""; }
+  };
+  return allocateIdentity(
+    read("enclosure_feature_id"),
+    read("enclosure_recipe_version") || "0",
+    String(read("enclosure_upstream_ids") || "").split(",").filter(Boolean),
+  );
 }
 
 /** Human-readable family names required by the timeline-group naming spec. */
@@ -328,6 +344,15 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON: request must be an object");
       result.operation = "create";
       return result.toDict();
+    }
+    // Accept the published codec envelope {recipe:{recipe_id,version,...}} and
+    // the legacy flat shape; derive recipe_family from recipe_id's first segment.
+    if (!request.recipe_family && request.recipe && typeof request.recipe === "object") {
+      const rid = String(request.recipe.recipe_id ?? "");
+      request = {...request,
+        recipe_family: rid.split(".")[0],
+        recipe_id: rid || undefined,
+        recipe_version: String(request.recipe.version ?? "0.1.0")};
     }
     const recipeFamily = String(request.recipe_family ?? "");
     if (!(recipeFamily in RECIPE_REGISTRY)) {
@@ -615,7 +640,43 @@ export class EnclosureFeatureService {
     }
     const updates: Record<string, any> = request.parameter_updates ?? {};
     if (Object.keys(updates).length > 0) {
-      this.updateParameters(updates);
+      // Scope edits to this feature's stamped namespace: a crafted or mistaken
+      // update must not mutate an unrelated feature or ordinary user parameter.
+      let ownedNs = "";
+      try {
+        const ctxE = resolveDesignContext();
+        const rootE = ctxE.root_component;
+        if (rootE != null) {
+          const matchesE = findManagedEntities(rootE, probeIdentity(fid));
+          if (matchesE.length === 1) {
+            const attrsE = matchesE[0].attributes;
+            const nsAttr = attrsE?.itemByName(ATTRIBUTE_GROUP, "enclosure_parameter_namespace");
+            ownedNs = nsAttr ? String(nsAttr.value) : "";
+          }
+        }
+      } catch { /* offline: no scoping available */ }
+      const scoped: Record<string, any> = {};
+      let skipped = 0;
+      const prefixes = Object.values(PARAM_PREFIXES) as string[];
+      for (const [name, expr] of Object.entries(updates)) {
+        const owned = ownedNs !== "" && prefixes.some((p) => name.startsWith(p + ownedNs + "_"));
+        if (owned) scoped[name] = expr; else skipped += 1;
+      }
+      if (skipped > 0) {
+        result.warnings.push(`Skipped ${skipped} parameter(s) not owned by feature ${fid}.`);
+      }
+      if (Object.keys(scoped).length === 0) {
+        if (skipped > 0) {
+          result.refusal = makeRefusal(
+            "invalid-parameter-expression",
+            "No parameter_updates owned by this feature's namespace.");
+          return result.toDict();
+        }
+        result.refusal = makeRefusal(
+          "manual-edit-prevents-update", "Non-parameter edits require manual review.");
+        return result.toDict();
+      }
+      this.updateParameters(scoped);
       this.computeAll();
       result.warnings.push("Parameter-only edit applied.");
       stampManagedFlag(entity, EDIT_FLAG_KEYS[0], "true");
@@ -649,7 +710,30 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("target-not-found", "Delete requires feature_id.");
       return result.toDict();
     }
-    const deps: any[] = request.managed_dependents ?? [];
+    // Discover dependents from the stamped upstream graph; never trust the
+    // caller alone (spec: deletion refuses while a managed dependent exists).
+    const discovered: string[] = [];
+    try {
+      const ctxD = resolveDesignContext();
+      const rootD = ctxD.root_component;
+      if (rootD != null) {
+        for (const collName of ["bRepBodies", "sketches", "features"]) {
+          const coll = rootD[collName];
+          if (!coll) continue;
+          for (let i = 0; i < coll.count; i++) {
+            const obj = coll.item(i);
+            const attrs = obj?.attributes ?? null;
+            if (!attrs) continue;
+            const fidA = attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_feature_id");
+            const upA = attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_upstream_ids");
+            if (!fidA || String(fidA.value) === fid) continue;
+            const ups = String(upA?.value ?? "").split(",").filter(Boolean);
+            if (ups.includes(fid)) discovered.push(String(fidA.value));
+          }
+        }
+      }
+    } catch { /* offline: fall back to caller-supplied list only */ }
+    const deps: any[] = [...new Set([...(request.managed_dependents ?? []), ...discovered])];
     if (deps.length > 0 && !cascade) {
       result.refusal = makeRefusal(
         "managed-dependent-exists",
@@ -668,7 +752,7 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("target-not-found", "No active design to search.");
       return result.toDict();
     }
-    const managed = findManagedEntities(root, allocateIdentity(fid, "", []));
+    const managed = findManagedEntities(root, probeIdentity(fid));
     if (managed.length === 0) {
       result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
       return result.toDict();
@@ -718,7 +802,7 @@ export class EnclosureFeatureService {
       }
     } catch { /* parameter cleanup is best-effort */ }
     try {
-      const remaining = findManagedEntities(root, allocateIdentity(fid, "", []));
+      const remaining = findManagedEntities(root, probeIdentity(fid));
       if (remaining.length > 0) {
         result.warnings.push(
           `${remaining.length} entity/entities still carry feature id ${fid}; manual cleanup may be required.`);
@@ -736,16 +820,59 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
       return result.toDict();
     }
-    const state = classifyInspection(
-      Boolean(request.param_edited),
-      Boolean(request.native_edited),
-      Boolean(request.definition_diverged),
-      Boolean(request.objects_missing),
-    );
+    const fidI = String(request.feature_id ?? "");
+    if (!fidI) {
+      result.refusal = makeRefusal("target-not-found", "Inspect requires feature_id.");
+      return result.toDict();
+    }
+    // Derive state from Fusion first; request booleans are fallback-only so a
+    // client cannot dictate an inspection verdict for a real instance.
+    let objectsMissing = false;
+    let definitionDiverged = false;
+    let paramEdited = false;
+    let nativeEdited = false;
+    let derivedFrom = "request";
+    try {
+      const ctxI = resolveDesignContext();
+      const rootI = ctxI.root_component;
+      if (rootI != null) {
+        const matchesI = findManagedEntities(rootI, probeIdentity(fidI));
+        if (matchesI.length === 0) {
+          objectsMissing = true;
+          derivedFrom = "fusion";
+        } else {
+          derivedFrom = "fusion";
+          for (const ent of matchesI) {
+            const tlObj = ent?.timelineObject ?? null;
+            let healthOk = true;
+            try { healthOk = tlObj == null ? false : Number(tlObj.healthState) === 0 || String(tlObj.healthState) === "OKFeatureHealthState"; } catch { healthOk = false; }
+            if (!healthOk) { definitionDiverged = true; break; }
+          }
+          const readFlag = (ent: Any, key: string): boolean => {
+            try {
+              const a = ent?.attributes?.itemByName(ATTRIBUTE_GROUP, key);
+              return a ? String(a.value) === "true" : false;
+            } catch { return false; }
+          };
+          paramEdited = matchesI.some((e: Any) => readFlag(e, EDIT_FLAG_KEYS[0]));
+          nativeEdited = matchesI.some((e: Any) => readFlag(e, EDIT_FLAG_KEYS[1]));
+        }
+      }
+    } catch { /* offline: keep request fallbacks */ }
+    if (derivedFrom !== "fusion") {
+      paramEdited = paramEdited || Boolean(request.param_edited);
+      nativeEdited = nativeEdited || Boolean(request.native_edited);
+      definitionDiverged = definitionDiverged || Boolean(request.definition_diverged);
+      objectsMissing = objectsMissing || Boolean(request.objects_missing);
+    }
+    const state = classifyInspection(paramEdited, nativeEdited, definitionDiverged, objectsMissing);
     result.instance = {
-      feature_id: String(request.feature_id ?? ""),
+      feature_id: fidI,
       inspection_state: state,
     };
+    if (derivedFrom === "request") {
+      result.warnings.push("Fusion state unavailable; classification used request-supplied flags.");
+    }
     return result.toDict();
   }
 
@@ -770,7 +897,7 @@ export class EnclosureFeatureService {
       const ctx = resolveDesignContext();
       const root = ctx.root_component;
       if (root != null) {
-        const probe = allocateIdentity(fid, "", []);
+        const probe = probeIdentity(fid);
         const matches = findManagedEntities(root, probe);
         if (matches.length === 1) {
           const attrs = matches[0].attributes;
@@ -838,7 +965,7 @@ export class EnclosureFeatureService {
       return result.toDict();
     }
     // Resolve the source feature by managed attribute.
-    const identity = allocateIdentity(fid, "0", []);
+    const identity = probeIdentity(fid);
     const matches = findManagedEntities(root, identity);
     if (matches.length === 0) {
       result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
@@ -846,6 +973,15 @@ export class EnclosureFeatureService {
     }
     if (matches.length > 1) {
       result.refusal = makeRefusal("ambiguous-target", `Multiple managed features match ${fid}.`);
+      return result.toDict();
+    }
+    // Pattern-of-pattern chains multiply instances invisibly to the managed
+    // graph; refuse rather than create an untracked cascade.
+    const srcType = String(matches[0]?.objectType ?? "");
+    if (srcType.includes("Pattern") || srcType.includes("Mirror")) {
+      result.refusal = makeRefusal("pattern-source-incompatible",
+        "Source is itself a pattern/mirror; chain them manually if truly needed.",
+        null, "pattern the original source feature instead");
       return result.toDict();
     }
     const sources = collectFeatureBodies(matches[0]);
@@ -919,9 +1055,24 @@ export class EnclosureFeatureService {
     const chosenValue = request.chosen_value === undefined ? null : Number(request.chosen_value);
     const observation = String(request.user_observation ?? "");
     const {recordCouponResult} = await import("./recipes/coupon.ts");
-    const identity = allocateIdentity(String(request.recipe_id ?? "coupon"), "0", []);
-    const probe = allocateIdentity(fid, "0", []);
-    void probe;
+    // Bind the observation to the REQUESTED coupon's stamped identity — a
+    // fresh random namespace would orphan the result from its instance.
+    const ctx0 = resolveDesignContext();
+    const root0 = ctx0.root_component;
+    if (root0 == null) {
+      result.refusal = makeRefusal("target-not-found", "No active design to search.");
+      return result.toDict();
+    }
+    const matches0 = findManagedEntities(root0, probeIdentity(fid));
+    if (matches0.length === 0) {
+      result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
+      return result.toDict();
+    }
+    if (matches0.length > 1) {
+      result.refusal = makeRefusal("ambiguous-target", `Multiple managed features match ${fid}.`);
+      return result.toDict();
+    }
+    const identity = identityFromEntity(matches0[0]);
     const [ok, message] = recordCouponResult(identity, state, chosenValue, observation);
     if (!ok) {
       result.refusal = makeRefusal("coupon-required", message);

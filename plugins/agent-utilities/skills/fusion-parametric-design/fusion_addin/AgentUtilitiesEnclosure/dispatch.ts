@@ -104,3 +104,19 @@ export function collectResult(nonce: string): unknown {
   }
   return entry.result;
 }
+
+/** Lifecycle state of one nonce so a retrying dispatcher can distinguish
+ * staged / consumed-but-running / completed instead of guessing from null. */
+export function entryStatus(nonce: string): "staged" | "consumed" | "completed" | "unknown" {
+  prune();
+  const entry = _mailbox.get(nonce);
+  if (entry === undefined) return "unknown";
+  if (entry["result_ready"] === true) return "completed";
+  if (entry["consumed"] === true) return "consumed";
+  return "staged";
+}
+
+/** Explicit cleanup for dead requests (agent crash recovery). */
+export function discard(nonce: string): boolean {
+  return _mailbox.delete(nonce);
+}

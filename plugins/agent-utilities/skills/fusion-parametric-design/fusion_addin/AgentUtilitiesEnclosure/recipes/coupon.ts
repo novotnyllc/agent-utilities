@@ -100,7 +100,13 @@ export function executeCouponRecipe(
       makeParameter(design, pname, `${cval} mm`, "mm",
         `Station ${i}: ${cval} mm (${identity.displaySuffix})`);
     }
-    const holeDia = Math.max(0.1, stationSize + cval);
+    const holeDia = stationSize + cval;
+    if (!Number.isFinite(holeDia) || holeDia < 0.5) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          `candidate ${candidates[i]} on ${stationSize} station gives ${holeDia.toFixed(2)} mm hole; minimum testable is 0.5 mm`,
+          "raise the candidate value or use a larger station_size"] };
+    }
     const stName = `coupon_${ns}_station_${i}`;
     const stSk = makePlanarProfile(component, stName, plane, "circle", { diameter: holeDia });
     if (stSk !== null && stSk.sketchProfiles.count > 0) {
@@ -147,11 +153,34 @@ export function recordCouponResult(
   if (!userObservation) {
     return [false, "Requires a user observation string."];
   }
+  // Contradictory transitions: leaving 'accepted' leaves the committed fit
+  // parameter behind. Refuse unless the caller explicitly acknowledges reset.
+  const prior = currentCouponStatus(identity);
+  if (prior === "accepted" && resultState !== "accepted") {
+    return [false,
+      "Coupon was recorded as accepted with a committed fit value; use result_state 'stale' and delete the des_ef parameter explicitly to re-open it."];
+  }
   stampCouponStatus(identity, resultState);
   if (resultState === "accepted" && chosenValue !== null) {
     updateRuleParam(identity, chosenValue);
   }
   return [true, `Recorded as ${resultState} with value ${chosenValue}.`];
+}
+
+
+function currentCouponStatus(identity: ManagedIdentity): string | null {
+  try {
+    requireAdsk();
+  } catch {
+    return null;
+  }
+  const design = (adsk.core.Application.get() as any).activeDocument?.design ?? null;
+  if (!design) return null;
+  const root = design.rootComponent;
+  if (!root) return null;
+  const key = `enclosure_coupon_status_${identity.displaySuffix}`;
+  const existing = root.attributes.itemByName("fusion_parametric_design", key);
+  return existing ? String(existing.value) : null;
 }
 
 function stampCouponStatus(identity: ManagedIdentity, state: string): void {

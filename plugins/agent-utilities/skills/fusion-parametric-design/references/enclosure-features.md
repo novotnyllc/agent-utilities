@@ -119,7 +119,7 @@ request = {
     ],
 }
 nonce = _au_enclosure_dispatch_stage(request)          # add-in API, injected
-cmd = app.commandDefinitions.itemById("AgentUtilitiesEnclosureAddBoss")
+cmd = app.commandDefinitions.itemById("AgentUtilitiesEnclosure_AddEnclosureBoss")
 cmd.execute()                                           # consumes nonce once
 result = _au_enclosure_dispatch_result(nonce)           # raises on refusal
 print(json.dumps({"feature_id": result["instance"]["feature_id"],

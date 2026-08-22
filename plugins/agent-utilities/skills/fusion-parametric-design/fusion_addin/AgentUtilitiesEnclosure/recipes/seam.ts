@@ -164,12 +164,18 @@ function tangentSeam(
 
   const params: Record<string, any> = request.parameters ?? {};
   const lipW = mmToFloat(String(params.lip_width ?? "1.0 mm"));
-  const engagement = String(params.engagement_depth ?? "0.8 mm");
+
+  // Cross-section heights honor the requested engagement depth; the Python
+  // port ignored it and hardcoded 2.0 here.
+  let engagementHt = mmToFloat(String(params.engagement_depth ?? ""));
+  if (!Number.isFinite(engagementHt)) {
+    warnings.push("engagement_depth not parseable; used 2.0 mm default");
+    engagementHt = 2.0;
+  }
   const clearance = String(params.radial_clearance ?? "0.15 mm");
 
-  // Cross-section sketch for the lip. NOTE: Python ignores engagement here and uses a fixed 2.0 height.
   const lipCs = makePlanarProfile(component, `seam_${ns}_lip_cs`, crossSectionPlane,
-    "rectangle", { width: lipW, height: 2.0 });
+    "rectangle", { width: lipW, height: engagementHt });
   if (lipCs !== null && lipCs.sketchProfiles.count > 0) {
     const op = adsk.fusion.FeatureOperations.JoinFeatureOperation;
     const feat = makeSweep(component, lipCs.sketchProfiles.item(0), path, op,
@@ -183,7 +189,7 @@ function tangentSeam(
   // Receiver sweep with clearance.
   const grooveW = lipW + mmToFloat(clearance);
   const grooveCs = makePlanarProfile(component, `seam_${ns}_groove_cs`, crossSectionPlane,
-    "rectangle", { width: grooveW, height: 2.0 });
+    "rectangle", { width: grooveW, height: engagementHt });
   if (grooveCs !== null && grooveCs.sketchProfiles.count > 0) {
     const op = adsk.fusion.FeatureOperations.CutFeatureOperation;
     const feat = makeSweep(component, grooveCs.sketchProfiles.item(0), path, op,

@@ -9,9 +9,15 @@ import { makePlanarProfile, makePolygonProfile } from "../native/sketches";
 import { makePattern } from "../native/patterns";
 import { cutExact, intersectExact } from "../native/booleans";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { requireAdsk } from "./shared";
+import { featureBodies, requireAdsk } from "./shared";
 
 type Any = any;
+
+function toCollection(items: Any[]): Any {
+  const coll = adsk.core.ObjectCollection.create();
+  for (const item of items) coll.add(item);
+  return coll;
+}
 
 export const VENT_PATTERNS = new Set([
   "linear_slots", "rectangular_holes", "circular_holes", "hexagonal",
@@ -121,20 +127,57 @@ export function executeVentRecipe(
 
   // Create native rectangular pattern of the seed extrude feature.
   const spacing = typeof pitch === "number" ? `${pitch} mm` : String(pitch);
-  const [patFeat, patWarn] = makePattern(component, [seedExt], "rectangular",
-    countX * Math.max(1, countY), { spacing });
-  if (patWarn) warnings.push(patWarn);
+  let patFeat: Any | null = null;
+  try {
+    const axes: Any[] = request.pattern_axes ?? [];
+    if (countX > 1 && countY > 1) {
+      // Two-direction native grid: Fusion lays out countX * countY instances;
+      // no manual multiply here.
+      const directionOne = axes[0] ?? component.xConstructionAxis;
+      const directionTwo = axes[1] ?? component.yConstructionAxis;
+      const rp = component.features.rectangularPatternFeatures;
+      const inputObj = rp.createInput(toCollection([seedExt]), directionOne, directionTwo);
+      inputObj.quantityOne = adsk.core.ValueInput.createByString(String(countX));
+      inputObj.distanceOne = adsk.core.ValueInput.createByString(spacing);
+      inputObj.quantityTwo = adsk.core.ValueInput.createByString(String(countY));
+      inputObj.distanceTwo = adsk.core.ValueInput.createByString(
+        params.spacing_y != null ? `${params.spacing_y} mm` : spacing);
+      inputObj.directionTwoEntity = directionTwo;
+      patFeat = rp.add(inputObj);
+    } else {
+      const [feat, warn] = makePattern(component, [seedExt], "rectangular",
+        Math.max(countX, 1), { spacing });
+      if (warn) warnings.push(warn);
+      patFeat = feat;
+    }
+  } catch (exc) {
+    return { created, warnings,
+      refusal: ["feature-create-failed", `Vent pattern failed: ${exc}`, "check pattern axes and counts"] };
+  }
   if (patFeat) created.push(patFeat);
+  // Pattern bodies (seed + copies) are the complete tool set; collect them
+  // AFTER the pattern so the mask clips every aperture, not just the seed.
+  const patternTools: Any[] = patFeat ? featureBodies(patFeat) : seedTools;
 
-  // Clip: intersect pattern tools with an explicit mask before cutting target.
+  // Clip: intersect ALL pattern tools with an explicit mask before cutting target.
   const maskBody = request.mask_body;
-  if (maskBody !== undefined && maskBody !== null && seedTools.length > 0) {
-    const clipped = intersectExact(component, seedTools[0], [maskBody]);
-    if (clipped) created.push(clipped);
+  if (maskBody !== undefined && maskBody !== null && patternTools.length > 0) {
+    const clipped = intersectExact(component, patternTools[0], [maskBody, ...patternTools.slice(1)]);
+    const clippedBodies = clipped ? featureBodies(clipped) : [];
+    if (!clipped || clippedBodies.length === 0) {
+      return { created, warnings,
+        refusal: ["zero-thickness-result",
+          "Vent mask intersection produced no tool bodies.",
+          "check that the mask overlaps the vent region"] };
+    }
+    created.push(clipped);
+    // The clipped result replaces every raw pattern body as the cutting tool.
+    patternTools.length = 0;
+    for (const b of clippedBodies) patternTools.push(b as Any);
   }
 
-  // Final cut into target using all seed tools.
-  const finalCut = cutExact(component, targetBody, seedTools);
+  // Final cut into target using every (possibly clipped) pattern body.
+  const finalCut = cutExact(component, targetBody, patternTools);
   if (finalCut) {
     created.push(finalCut);
   } else {

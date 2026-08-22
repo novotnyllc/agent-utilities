@@ -31,6 +31,68 @@ export const COMMAND_SPECS: ReadonlyArray<readonly [string, string, string]> = O
 
 const _registeredDefinitions: any[] = [];
 
+/** Minimal valid request skeletons, pre-filled into each create command's
+ * request_json textbox. Selection tokens are realistic dummies; replace them
+ * (or delete the selections array) with tokens for the active document. */
+export const COMMAND_EXAMPLES: Readonly<Record<string, string>> = Object.freeze({
+  AddEnclosureBoss: JSON.stringify({
+    request_id: "boss-example",
+    recipe_family: "boss",
+    recipe_id: "boss.support",
+    variant: "support",
+    parameters: {outer_diameter: "6 mm", height: "5 mm"},
+    hardware: {bore_diameter: "3.2 mm"},
+    selections: [
+      {role: "target_body", entity_token: "TOKEN_TARGET_BODY"},
+      {role: "plane", entity_token: "TOKEN_PLACEMENT_PLANE"},
+    ],
+  }, null, 2),
+  AddSeam: JSON.stringify({
+    request_id: "seam-example",
+    recipe_family: "seam",
+    recipe_id: "seam.lip_groove",
+    variant: "lip_groove",
+    parameters: {
+      lip_width: "1.0 mm",
+      engagement_depth: "0.8 mm",
+      radial_clearance: "0.15 mm",
+    },
+    selections: [
+      {role: "side_a_body", entity_token: "TOKEN_SIDE_A_BODY"},
+      {role: "side_b_body", entity_token: "TOKEN_SIDE_B_BODY"},
+      {role: "path", entity_token: "TOKEN_PARTING_PATH_SKETCH"},
+    ],
+  }, null, 2),
+  AddCutout: JSON.stringify({
+    request_id: "cutout-example",
+    recipe_family: "cutout",
+    recipe_id: "cutout.rectangle",
+    shape: "rectangle",
+    dimensions: {width: 20.0, height: 12.0},
+    extent: "through_all",
+    recess: {width: 24.0, height: 16.0, depth: "1 mm", clearance: 1.0},
+    selections: [
+      {role: "target_body", entity_token: "TOKEN_TARGET_BODY"},
+      {role: "plane", entity_token: "TOKEN_WALL_PLANE"},
+    ],
+  }, null, 2),
+  AddVent: JSON.stringify({
+    request_id: "vent-example",
+    recipe_family: "vent",
+    recipe_id: "vent.rectangular",
+    pattern: "rectangular_holes",
+    boundary_policy: "clip",
+    parameters: {aperture: 2.0, pitch: 4.0, count_x: 6, count_y: 3},
+    selections: [
+      {role: "target_body", entity_token: "TOKEN_TARGET_BODY"},
+      {role: "plane", entity_token: "TOKEN_VENT_PLANE"},
+      {role: "mask_body", entity_token: "TOKEN_MASK_BODY"},
+    ],
+  }, null, 2),
+});
+
+const DOCS_TOOLTIP_SUFFIX = "\n\nDocs: references/enclosure-features.md";
+
 let _service: EnclosureFeatureService | null = null;
 
 function getService(): EnclosureFeatureService {
@@ -131,23 +193,26 @@ async function executeHandler(eventArgs: any): Promise<void> {
 }
 
 /** Set up command inputs when a command is created by the user. */
-function onCommandCreated(args: any): void {
-  try {
-    const command = args.command;
-    const inputs = command.commandInputs;
-    inputs.addTextBoxCommandInput(
-      "request_json",
-      "Request JSON:",
-      "",
-      5,
-      true,
-    );
-    command.execute.add((execArgs: any) => {
-      void executeHandler(execArgs);
-    });
-  } catch {
-    // Swallow like the Python bare except.
-  }
+function onCommandCreated(cmdIdSuffix: string) {
+  return (args: any): void => {
+    try {
+      const command = args.command;
+      const inputs = command.commandInputs;
+      const example = COMMAND_EXAMPLES[cmdIdSuffix] ?? "";
+      inputs.addTextBoxCommandInput(
+        "request_json",
+        "Request JSON:",
+        example,
+        example ? Math.max(5, example.split("\n").length + 1) : 5,
+        true,
+      );
+      command.execute.add((execArgs: any) => {
+        void executeHandler(execArgs);
+      });
+    } catch {
+      // Swallow like the Python bare except.
+    }
+  };
 }
 
 /** Register all enclosure commands in Fusion UI. Throws when adsk unavailable. */
@@ -169,18 +234,22 @@ export function registerCommands(_context?: any): void {
     }
     const resourceCollection = typeof (adsk.core as any).ResourceCollection !== "undefined"
       ? (adsk.core as any).ResourceCollection.create() : null;
+    let tooltip = description + DOCS_TOOLTIP_SUFFIX;
+    if (COMMAND_EXAMPLES[cmdIdSuffix]) {
+      tooltip += "\n\nThe request box is pre-filled with an example; edit the TOKEN_* placeholders to match your document.";
+    }
     const cmdDef = cmdMgr.addButton(
       fullId,
       resourceCollection,
       displayName,
       description,
-      description,
+      tooltip,
     );
     if (cmdDef == null) {
       continue;
     }
     // Add a textbox input for pasting JSON requests.
-    cmdDef.commandCreated.add(onCommandCreated);
+    cmdDef.commandCreated.add(onCommandCreated(cmdIdSuffix));
     _registeredDefinitions.push(cmdDef);
   }
 }

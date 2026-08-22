@@ -88,6 +88,18 @@ export function allocateIdentity(
   };
 }
 
+/** Lookup probe: featureId is the SEARCH KEY, not a new UUID. */
+export function probeIdentity(featureId: string): ManagedIdentity {
+  return {
+    featureId,
+    displaySuffix: "",
+    recipeId: "",
+    recipeVersion: "",
+    parameterNamespace: "",
+    upstreamIds: [],
+  };
+}
+
 export function stampAttributes(entity: Any, identity: ManagedIdentity, role: string = ""): void {
   /** Stamp managed attributes onto a Fusion entity. No-op if entity has no attributes. */
   const attrs = entity?.attributes ?? null;
