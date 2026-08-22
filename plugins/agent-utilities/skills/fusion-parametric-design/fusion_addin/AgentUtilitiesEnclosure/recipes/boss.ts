@@ -354,11 +354,29 @@ export function executeBossRecipe(
     }
     // Shared-axis pair: base boss on target, receiver pocket in the lid on the
     // same axis. One connection instance, two child roles.
+    if (hardware.bore_diameter === undefined || hardware.bore_diameter === null || hardware.bore_diameter === "") {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.bore_diameter.",
+          "supply the screw clearance from the datasheet"] };
+    }
     const baseBore = makeHole(component, targetBody, centerPt, direction,
-      hardware.bore_diameter ?? "3.2 mm", "", "simple");
+      hardware.bore_diameter, "", "simple");
     if (baseBore) created.push(baseBore);
-    const receiverDia = Number(hardware.receiver_diameter ?? 6.5);
-    const receiverDepth = hardware.receiver_depth ?? "4 mm";
+    if (hardware.receiver_diameter === undefined || hardware.receiver_diameter === null) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.receiver_diameter.",
+          "supply the lid pocket diameter"] };
+    }
+    const receiverDia = Number(hardware.receiver_diameter);
+    const receiverDepth = hardware.receiver_depth;
+    if (!receiverDepth) {
+      return { created, warnings,
+        refusal: ["invalid-parameter-expression",
+          "coordinated_pair requires sourced hardware.receiver_depth.",
+          "supply the lid pocket depth"] };
+    }
     const rxSketch = makePlanarProfile(matingBody.component ?? component,
       `boss_${ns}_receiver`, request.mating_plane ?? plane, "circle", { diameter: receiverDia });
     if (rxSketch !== null && rxSketch.sketchProfiles.count > 0) {
@@ -374,7 +392,10 @@ export function executeBossRecipe(
         warnings.push("Coordinated pair: verify receiver engagement depth against the lid wall at assembly.");
       }
     } else {
-      warnings.push("Receiver profile failed on mating body; create the lid pocket manually.");
+      return { created, warnings,
+        refusal: ["feature-create-failed",
+          "Receiver profile failed on mating body.",
+          "check mating_plane and receiver diameter"] };
     }
   }
 

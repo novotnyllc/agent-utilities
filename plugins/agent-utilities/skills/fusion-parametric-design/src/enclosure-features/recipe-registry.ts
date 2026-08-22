@@ -46,7 +46,7 @@ function requestType(prefix: string): string {
 const BOSS_VARIANTS = [
   "support", "screw", "heat_set_insert", "captive_square_nut",
   "captive_hex_nut", "thread_forming", "tapped", "pcb_standoff",
-  "coordinated_pair",
+  "coordinated_pair", "compression",
 ] as const;
 
 const HARDWARE_SUBTYPES = [

@@ -253,3 +253,18 @@ test("hardware aliases set the discriminator boss actually reads", () => {
     "captive nut AF must not silently default to 5.5",
   );
 });
+
+test("boss.compression is published and coordinated_pair refuses missing geometry", () => {
+  const registry = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/recipe-registry.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(registry, /\"compression\"/);
+  const boss = fs.readFileSync(path.join(addinRoot, "recipes/boss.ts"), {encoding: "utf8"});
+  const pair = boss.indexOf('variant === "coordinated_pair"');
+  assert.ok(pair > -1);
+  const pairBody = boss.slice(pair);
+  assert.match(pairBody, /refusal:/);
+  assert.doesNotMatch(pairBody, /create the lid pocket manually/);
+  assert.doesNotMatch(pairBody, /bore_diameter \?\? \"3\.2 mm\"/);
+});
