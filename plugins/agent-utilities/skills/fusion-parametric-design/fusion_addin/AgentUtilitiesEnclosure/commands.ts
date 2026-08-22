@@ -79,7 +79,24 @@ async function executeHandler(eventArgs: any): Promise<void> {
       return;
     }
     const svc = getService();
-    const result = await svc.executeOnce(requestJson);
+    // Dispatch to the service method matching this command's operation.
+    // Create-family commands use executeOnce; the rest map 1:1.
+    const cmdId: string = String(cmdDef?.id ?? "");
+    const op = cmdId.replace("AgentUtilitiesEnclosure_", "");
+    let result: Record<string, any>;
+    if (["EditEnclosureFeature"].includes(op)) {
+      result = await svc.editFeature(requestJson);
+    } else if (op === "DeleteEnclosureFeature") {
+      result = await svc.deleteFeature(requestJson);
+    } else if (op === "InspectEnclosureFeature") {
+      result = await svc.inspectFeature(requestJson);
+    } else if (op === "PatternFeature" || op === "MirrorFeature") {
+      result = await svc.patternOrMirrorFeature(requestJson);
+    } else if (op === "RecordCouponResult") {
+      result = await svc.recordCouponFeature(requestJson);
+    } else {
+      result = await svc.executeOnce(requestJson);
+    }
     const refusal = result.refusal;
     if (refusal) {
       const token = refusal.token ?? "unknown";

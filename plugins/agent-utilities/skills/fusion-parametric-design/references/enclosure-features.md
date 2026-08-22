@@ -200,6 +200,33 @@ refuse when expected roles are missing, extra managed objects exist, selection
 context no longer resolves, or manual edits prevent a provably bounded rebuild.
 "Cannot safely upgrade this instance" is a correct outcome.
 
+**Migration rules for agents working in this repo.** When authoring or editing
+recipe code, follow these rules so future upgrades stay safe and mechanical:
+
+1. **Never change a recipe's geometry semantics without bumping its version.**
+   If you alter what `execute<Family>Recipe` produces — shapes, dimensions,
+   feature ordering, refusal conditions — increment `recipe_version` in the
+   request default (and the shipped rules catalog if it pins versions).
+2. **Read the stamped attribute as truth.** The instance's current version
+   lives in the Fusion attribute `enclosure_recipe_version` inside group
+   `fusion_parametric_design`. Never trust a client-supplied current version;
+   `upgradeFeature` already reads the stamp.
+3. **Declare migrations explicitly.** A migration is a function keyed by
+   `(recipe_id, from_version, to_version)` registered in the service's
+   migrator table. Parameter-only migrations (updating user-parameter values)
+   are preferred; topology-changing migrations must verify all expected managed
+   roles exist before mutating and must refuse otherwise.
+4. **Refuse rather than guess.** If no migrator is declared for a transition,
+   return `recipe-version-mismatch`. If manual edits are detected, return
+   `manual-edit-prevents-update`. Both are correct outcomes; silently
+   rebuilding is not.
+5. **Keep identity attributes forward-compatible.** New attribute keys may be
+   added to `ATTRIBUTE_KEYS`; existing keys must never be renamed or removed
+   without a declared migration that rewrites them on upgrade.
+6. **Test both directions.** A recipe-version bump needs at least one test
+   showing the new version creates successfully and one showing an old-version
+   instance refuses upgrade until a migrator exists.
+
 ## Cross-feature dependencies
 
 Fusion-native relationships are authoritative; attributes supply discovery

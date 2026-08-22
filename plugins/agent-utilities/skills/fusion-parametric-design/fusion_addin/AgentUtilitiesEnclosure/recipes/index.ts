@@ -5,6 +5,7 @@
 import { executeBossRecipe } from "./boss";
 import { executeCouponRecipe, recordCouponResult } from "./coupon";
 import { executeCutoutRecipe } from "./cutout";
+import { executeReinforcementRecipe } from "./reinforcement";
 import { executeRetentionRecipe } from "./retention";
 import { executeSeamRecipe } from "./seam";
 import { executeSealRecipe } from "./seal";
@@ -15,6 +16,7 @@ import { executeVentRecipe } from "./vent";
 export { executeBossRecipe } from "./boss";
 export { executeCouponRecipe, recordCouponResult } from "./coupon";
 export { executeCutoutRecipe } from "./cutout";
+export { executeReinforcementRecipe } from "./reinforcement";
 export { executeRetentionRecipe } from "./retention";
 export { executeSeamRecipe } from "./seam";
 export { executeSealRecipe } from "./seal";
@@ -29,14 +31,14 @@ export type RecipeExecute = (
 ) => { created: unknown[]; warnings: string[]; refusal: [string, string, string] | null };
 
 /**
- * All nine recipe families. Python's recipes/__init__.py re-exports the same
- * set: boss, coupon, cutout, retention, seam, seal, strain_relief, support,
- * vent.
+ * All ten recipe families: boss, coupon, cutout, reinforcement, retention,
+ * seam, seal, strain_relief, support, vent.
  */
 export const RECIPES: Record<string, RecipeExecute> = {
   boss: executeBossRecipe,
   coupon: executeCouponRecipe,
   cutout: executeCutoutRecipe,
+  reinforcement: executeReinforcementRecipe,
   retention: executeRetentionRecipe,
   seam: executeSeamRecipe,
   seal: executeSealRecipe,

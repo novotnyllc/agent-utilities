@@ -16,20 +16,22 @@
 import { adsk } from "@adsk/fas";
 
 import { resolveDesignContext, validateParametricDesign } from "./context.ts";
-import { allocateIdentity, type ManagedIdentity } from "./identity.ts";
+import { allocateIdentity, findManagedEntities, stampAttributes, ATTRIBUTE_GROUP, type ManagedIdentity } from "./identity.ts";
 import { classifyInspection, inspectDirectResult } from "./inspect.ts";
 
+type Any = any;
+
 export const RECIPE_REGISTRY: Readonly<Record<string, string>> = Object.freeze({
-  boss: "execute_boss_recipe",
-  seam: "execute_seam_recipe",
-  retention: "execute_retention_recipe",
-  support: "execute_support_recipe",
-  reinforcement: "execute_reinforcement_recipe",
-  cutout: "execute_cutout_recipe",
-  strain_relief: "execute_strain_relief_recipe",
-  seal: "execute_seal_recipe",
-  vent: "execute_vent_recipe",
-  fit_coupon: "execute_coupon_recipe",
+  boss: "executeBossRecipe",
+  seam: "executeSeamRecipe",
+  retention: "executeRetentionRecipe",
+  support: "executeSupportRecipe",
+  reinforcement: "executeReinforcementRecipe",
+  cutout: "executeCutoutRecipe",
+  strain_relief: "executeStrainReliefRecipe",
+  seal: "executeSealRecipe",
+  vent: "executeVentRecipe",
+  fit_coupon: "executeCouponRecipe",
 });
 
 const REFUSAL_TOKENS: ReadonlySet<string> = new Set([
@@ -165,6 +167,22 @@ async function loadRecipe(family: string): Promise<RecipeFn> {
     throw new Error(`Recipe function not found: ${attr}`);
   }
   return fn as RecipeFn;
+}
+
+function collectFeatureBodies(entity: Any): Any[] {
+  /** Collect b-rep bodies from a managed feature or body entity. */
+  if (entity == null) return [];
+  const coll = entity.bodies ?? null;
+  if (coll != null && typeof coll.count === "number") {
+    const out: Any[] = [];
+    for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
+    return out;
+  }
+  // The entity itself may be a body.
+  if (typeof entity.objectType === "string" && entity.objectType.includes("BRepBody")) {
+    return [entity];
+  }
+  return [];
 }
 
 export class EnclosureFeatureService {
@@ -446,11 +464,39 @@ export class EnclosureFeatureService {
     const result = new FeatureResult();
     result.operation = "upgrade";
     const request = JSON.parse(requestJson);
-    const cv = String(request.current_version ?? "");
-    const tv = String(request.target_version ?? "");
-    if (!cv || !tv) {
+    // Read the stamped recipe version from Fusion attributes, never trust
+    // the request's claimed current_version (spec: version is stamped at
+    // creation).
+    const fid = String(request.feature_id ?? "");
+    if (!fid) {
+      result.refusal = makeRefusal("target-not-found", "Upgrade requires feature_id.");
+      return result.toDict();
+    }
+    let cv = "";
+    try {
+      const ctx = resolveDesignContext();
+      const root = ctx.root_component;
+      if (root != null) {
+        const probe = allocateIdentity(fid, "", []);
+        const matches = findManagedEntities(root, probe);
+        if (matches.length === 1) {
+          const attrs = matches[0].attributes;
+          const attr = attrs?.itemByName(ATTRIBUTE_GROUP, "enclosure_recipe_version");
+          cv = attr ? String(attr.value) : "";
+        }
+      }
+    } catch {
+      // Offline/no-Fusion: fall through to refusal below.
+    }
+    if (!cv) {
       result.refusal = makeRefusal(
-        "recipe-version-mismatch", "Upgrade requires current and target versions.");
+        "target-not-found", `Could not resolve stamped version for ${fid}.`);
+      return result.toDict();
+    }
+    const tv = String(request.target_version ?? "");
+    if (!tv) {
+      result.refusal = makeRefusal(
+        "recipe-version-mismatch", "Upgrade requires target_version.");
       return result.toDict();
     }
     if (request.manual_divergence_detected) {
@@ -458,7 +504,129 @@ export class EnclosureFeatureService {
         "manual-edit-prevents-update", "Cannot safely upgrade due to manual edits.");
       return result.toDict();
     }
-    result.warnings.push("No migration path implemented yet.");
+    if (cv === tv) {
+      result.warnings.push("Instance is already at the target version.");
+      return result.toDict();
+    }
+    // Declared migration lookup: parameter-only preferred. No migrators ship
+    // yet; refusing is a correct outcome per spec.
+    result.refusal = makeRefusal(
+      "recipe-version-mismatch",
+      `No declared migration for (${cv} -> ${tv}).`,
+      null,
+      "declare a migrator or recreate the instance");
+    return result.toDict();
+  }
+
+  /** Pattern or mirror an existing managed source feature (native patterns). */
+  async patternOrMirrorFeature(requestJson: string): Promise<Record<string, any>> {
+    const result = new FeatureResult();
+    result.operation = "create";
+    const request = JSON.parse(requestJson);
+    const {makePattern, makeMirror} = await import("./native/patterns.ts");
+    const ctx = resolveDesignContext();
+    const derr = validateParametricDesign(ctx);
+    if (derr) {
+      result.refusal = makeRefusal(derr[0], derr[1]);
+      return result.toDict();
+    }
+    const root = ctx.root_component;
+    if (root == null) {
+      result.refusal = makeRefusal("invalid-design-type", "No root component.");
+      return result.toDict();
+    }
+    const fid = String(request.source_feature_id ?? "");
+    if (!fid) {
+      result.refusal = makeRefusal("target-not-found", "Pattern/mirror requires source_feature_id.");
+      return result.toDict();
+    }
+    // Resolve the source feature by managed attribute.
+    const identity = allocateIdentity(fid, "0", []);
+    const matches = findManagedEntities(root, identity);
+    if (matches.length === 0) {
+      result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
+      return result.toDict();
+    }
+    if (matches.length > 1) {
+      result.refusal = makeRefusal("ambiguous-target", `Multiple managed features match ${fid}.`);
+      return result.toDict();
+    }
+    const sources = collectFeatureBodies(matches[0]);
+    if (sources.length === 0) {
+      result.refusal = makeRefusal("pattern-source-incompatible", "Source has no bodies to pattern.");
+      return result.toDict();
+    }
+    const upstreamIds = Array.isArray(request.upstream_feature_ids)
+      ? request.upstream_feature_ids.map(String) : [];
+    const opIdentity = allocateIdentity(
+      String(request.recipe_id ?? "pattern"),
+      String(request.recipe_version ?? "0.1.0"), upstreamIds);
+
+    let created: Any = null;
+    if (request.operation === "mirror") {
+      const plane = request.mirror_plane ?? null;
+      if (!plane) {
+        result.refusal = makeRefusal("target-not-found", "Mirror requires mirror_plane.");
+        return result.toDict();
+      }
+      const [feat, warn] = makeMirror(root, sources, plane);
+      if (warn) result.warnings.push(warn);
+      created = feat;
+    } else {
+      const ptype = String(request.pattern_type ?? "");
+      if (!["rectangular", "circular", "path"].includes(ptype)) {
+        result.refusal = makeRefusal(
+          "feature-create-failed", `Unknown pattern_type: ${ptype}`, "rectangular|circular|path");
+        return result.toDict();
+      }
+      const qty = Number(request.quantity ?? 2);
+      const kwargs: Record<string, Any> = {};
+      for (const k of ["spacing", "angle", "axis", "path"]) {
+        if (request[k] !== undefined) kwargs[k] = request[k];
+      }
+      const [feat, warn] = makePattern(root, sources, ptype, qty, kwargs);
+      if (warn) result.warnings.push(warn);
+      created = feat;
+    }
+    if (created == null) {
+      result.refusal = makeRefusal("feature-create-failed", "Pattern/mirror creation failed.");
+      return result.toDict();
+    }
+    stampAttributes(created, opIdentity);
+    this.computeAll();
+    result.instance = {
+      feature_id: opIdentity.featureId,
+      display_suffix: opIdentity.displaySuffix,
+      recipe_id: opIdentity.recipeId,
+      recipe_version: opIdentity.recipeVersion,
+    };
+    result.created_or_changed = [created];
+    return result.toDict();
+  }
+
+  /** Record user coupon observation and chosen value; never auto-accepts. */
+  async recordCouponFeature(requestJson: string): Promise<Record<string, any>> {
+    const result = new FeatureResult();
+    result.operation = "edit";
+    const request = JSON.parse(requestJson);
+    const fid = String(request.feature_id ?? "");
+    if (!fid) {
+      result.refusal = makeRefusal("target-not-found", "record_coupon_result requires feature_id.");
+      return result.toDict();
+    }
+    const state = String(request.result_state ?? "");
+    const chosenValue = request.chosen_value === undefined ? null : Number(request.chosen_value);
+    const observation = String(request.user_observation ?? "");
+    const {recordCouponResult} = await import("./recipes/coupon.ts");
+    const identity = allocateIdentity(String(request.recipe_id ?? "coupon"), "0", []);
+    const probe = allocateIdentity(fid, "0", []);
+    void probe;
+    const [ok, message] = recordCouponResult(identity, state, chosenValue, observation);
+    if (!ok) {
+      result.refusal = makeRefusal("coupon-required", message);
+      return result.toDict();
+    }
+    result.warnings.push(message);
     return result.toDict();
   }
 
