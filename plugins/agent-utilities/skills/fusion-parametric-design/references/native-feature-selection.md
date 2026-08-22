@@ -17,37 +17,42 @@ feature health natively; do not infer solidity from a screenshot.
 
 | Starting state | Desired result | Native feature | Change signal |
 |---|---|---|---|
-| Closed solid | Uniform hollowing | Shell, with opening faces removed explicitly | Minimum-radius or passage warnings mean the wall cannot offset - inspect curvature first |
-| Open surface | Closed volume | Patch the gaps, then Stitch | Boundary Fill is the tool when several intersecting surfaces or cells define the intended solid |
+| Closed solid | Uniform hollowing | Shell; select the body for closed hollowing, or select only intended opening faces; set `isTangentChain` deliberately (`false` for an exact face set) | Minimum-radius or passage warnings mean the wall cannot offset - inspect curvature first |
+| Open surface set with gaps | Watertight stitched body | Patch the gaps, then Stitch | Stitch joins adjacent surfaces; a fully enclosed stitched set becomes solid |
+| Planes and open or closed B-Rep tool bodies that define closed cells | Selected cell volume | Boundary Fill | Compute cells from the tools, select the intended cells, then choose Join, Cut, Intersect, New Body, or New Component |
 | Valid surface | Material normal to it | Thicken | Offset failure means the requested thickness does not survive the local curvature - see the B-Rep model |
 | Imported or dirty topology | Usable geometry | Heal, simplify, delete/replace faces, or bounded direct modeling | Do not hang parametric features on unhealthy imported topology |
 
 ## Prefer solid-first construction
 
 If the intended result is naturally a closed volume - an enclosure lid,
-a cap, a shell - construct the outer solid and Shell it. Do not loft or
-sweep an open sheet and then force a thickness onto it; that path ends
-in unfinished-sheet and no-surface offset failures that solid-first
-construction never meets.
+a cap, a shell - prefer solid-first when it avoids a separate closure
+operation. Surface Loft or Sweep plus Thicken remains a valid native
+strategy. Both Thicken and Shell can fail when the requested offset is
+geometrically infeasible.
 
 ## Use surface workflows deliberately
 
-Surfaces are construction geometry until Stitch or Boundary Fill makes
-them a closed volume. An open sheet is not a body. Never treat a
-surface that looks closed on screen as solid.
+Surface workflows can leave open or stitched surface bodies until a
+closed volume is formed. An open sheet is a surface body, not a solid
+body. Never treat a surface that looks closed on screen as solid.
 
 ## Refuse invalid normal offsets
 
-When an offset folds or collides - concave regions collapse, adjacent
-faces intersect - the answer is a different construction, not a smaller
-number: change the topology, the feature order, or the strategy. One
-diagnostic reduction is allowed; a radius ladder is not.
+When an offset folds or collides - the signed offset reaches a local
+curvature limit, or displaced faces intersect - inspect the governing
+limit first. One bounded numeric correction is allowed when inspection
+identifies that limit and the corrected value still satisfies design
+intent. Otherwise change the topology, feature order, or strategy;
+repeated unguided laddering is not a repair.
 
 ## Inspect before continuing
 
-Read body solidity, feature health or error, gap state, and a section
-view before building on any result. An unhealthy body poisons every
-downstream feature and every diagnosis of them.
+Read the native feature health or error first. Then invoke one additional
+named inspection - body solidity, gap state, or a section view - only
+when it answers the immediate uncertainty before building downstream.
+An unhealthy body poisons every downstream feature and every diagnosis
+of them.
 
 ## Sources
 
