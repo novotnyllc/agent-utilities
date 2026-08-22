@@ -242,15 +242,14 @@ export function executeBossRecipe(
         [innerU, -slotWcm / 2], [outerU, -slotWcm / 2],
         [outerU, slotWcm / 2], [innerU, slotWcm / 2],
       ];
-      const world = corners.map(([u, v]) => {
-        const baseX = centerPt ? centerPt.x : 0;
-        const baseY = centerPt ? centerPt.y : 0;
-        return adsk.core.Point3D.create(
-          baseX + u * cosA - v * sinA,
-          baseY + u * sinA + v * cosA,
-          0,
-        );
-      });
+      // Sketch space is local to the sketch plane origin — adding the model-
+      // space centerPt here double-transforms on non-XY planes. Keep corners
+      // in local rotated frame; add a warning for non-planar placements.
+      if (centerPt && typeof centerPt.z === "number" && Math.abs(centerPt.z) > 1e-6) {
+        warnings.push("Compression finger slots assume a planar XY placement; verify slot orientation on angled/curved walls.");
+      }
+      const world = corners.map(([u, v]) =>
+        adsk.core.Point3D.create(u * cosA - v * sinA, u * sinA + v * cosA, 0));
       for (let ci = 0; ci < 4; ci++) {
         flines.addByTwoPoints(world[ci], world[(ci + 1) % 4]);
       }

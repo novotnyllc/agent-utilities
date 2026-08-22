@@ -221,7 +221,14 @@ export function executeStrainReliefRecipe(
     warnings.push("Flexible fingers use cantilever retention primitive; fatigue proof required.");
     const subReq = { ...request };
     subReq.type = "cantilever_parallel";
-    return executeRetentionRecipe(component, identity, subReq);
+    const ret = executeRetentionRecipe(component, identity, subReq);
+    // Merge accumulated warnings (missing CableSpec, fatigue proof) into the
+    // retention result so safety-relevant context survives the delegation.
+    return {
+      created: ret.created,
+      warnings: [...warnings, ...ret.warnings],
+      refusal: ret.refusal,
+    };
   } else if (srType === "retention_bridge" || srType === "service_loop_retainer") {
     const bridgeW = params.bridge_width ?? 2.0;
     const bridgeH = params.bridge_height ?? 4.0;

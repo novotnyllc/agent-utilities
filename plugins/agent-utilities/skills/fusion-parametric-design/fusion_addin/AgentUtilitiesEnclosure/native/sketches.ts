@@ -160,7 +160,11 @@ export function makeOffsetProfile(
   name: string,
   sourceSketch: Any,
   offsetExpr: string,
+  opts: { side?: "outward" | "inward" } = {},
 ): Any | null {
+  // Side is explicit: outward offsets along +X of the sketch plane, inward
+  // negates the expression. Callers state intent instead of relying on an
+  // implicit direction default.
   const sketches = component.sketches;
   const plane = "referencePlane" in sourceSketch ? sourceSketch.referencePlane : sourceSketch;
   const target = sketches.add(plane);
@@ -170,10 +174,11 @@ export function makeOffsetProfile(
     curves.add(sourceSketch.sketchCurves.item(i));
   }
   // Sketch.offset signature: offset(curves, directionPoint, offsetValue)
+  const signedExpr = opts.side === "inward" ? `-${offsetExpr}` : offsetExpr;
   const result = target.offset(
     curves,
     adsk.core.Point3D.create(1, 0, 0),
-    adsk.core.ValueInput.createByString(offsetExpr),
+    adsk.core.ValueInput.createByString(signedExpr),
   );
   return result !== null && result !== undefined ? target : null;
 }
