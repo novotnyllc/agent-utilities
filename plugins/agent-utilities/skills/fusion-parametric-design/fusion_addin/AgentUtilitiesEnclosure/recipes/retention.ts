@@ -8,7 +8,7 @@ import { adsk } from "@adsk/fas";
 import { makePlanarProfile } from "../native/sketches";
 import { joinExact } from "../native/booleans";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { featureBodies, requireAdsk } from "./shared";
 
 type Any = any;
 
@@ -28,20 +28,6 @@ export type RetentionRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
-
-function featureBodies(feature: Any): unknown[] {
-  const coll = feature?.bodies;
-  if (!coll) return [];
-  const out: unknown[] = [];
-  for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
-  return out;
-}
 
 export function executeRetentionRecipe(
   component: Any,
@@ -144,7 +130,11 @@ function cantilever(
       adsk.fusion.FeatureOperations.JoinFeatureOperation);
     hookExt.participantBodies = beamBodies;
     const hookFeat = extrudes.add(hookExt);
-    if (hookFeat) created.push(hookFeat);
+    if (hookFeat === null || hookFeat === undefined) {
+      return { created, warnings,
+        refusal: ["feature-create-failed", "Retention hook extrude failed.", "check thickness and participant bodies"] };
+    }
+    created.push(hookFeat);
   } else {
     return { created, warnings,
       refusal: ["feature-create-failed", "Hook profile sketch failed.", "check dimensions"] };
@@ -165,7 +155,11 @@ function cantilever(
         adsk.fusion.FeatureOperations.CutFeatureOperation);
       recExt.participantBodies = [receiverBody];
       const recFeat = extrudes.add(recExt);
-      if (recFeat) created.push(recFeat);
+      if (recFeat === null || recFeat === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Receiver groove cut failed.", "check dimensions and receiver body"] };
+      }
+      created.push(recFeat);
     }
   }
 
@@ -227,7 +221,11 @@ function ring(
       adsk.fusion.FeatureOperations.CutFeatureOperation);
     boreExt.participantBodies = ringBodies;
     const boreFeat = extrudes.add(boreExt);
-    if (boreFeat) created.push(boreFeat);
+    if (boreFeat === null || boreFeat === undefined) {
+      return { created, warnings,
+        refusal: ["feature-create-failed", "Ring bore cut failed.", "check bore diameter and ring bodies"] };
+    }
+    created.push(boreFeat);
   }
 
   // Slots/fingers/key as needed.
@@ -334,7 +332,11 @@ function dovetail(
       femExt.participantBodies = [receiverBody];
       femExt.setDistanceExtent(false, adsk.core.ValueInput.createByString(railLen));
       const femFeat = extrudes.add(femExt);
-      if (femFeat) created.push(femFeat);
+      if (femFeat === null || femFeat === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Dovetail female cut failed.", "check clearance and rail length"] };
+      }
+      created.push(femFeat);
     }
   }
 

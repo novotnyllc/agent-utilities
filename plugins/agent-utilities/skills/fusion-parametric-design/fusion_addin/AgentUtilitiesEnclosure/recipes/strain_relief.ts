@@ -9,7 +9,7 @@ import { makePlanarProfile } from "../native/sketches";
 import { joinExact } from "../native/booleans";
 import { validateTangentContinuity, makeSweep } from "../native/paths";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { featureBodies, requireAdsk } from "./shared";
 import { executeRetentionRecipe } from "./retention";
 
 type Any = any;
@@ -27,20 +27,6 @@ export type StrainReliefResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
-
-function featureBodies(feature: Any): unknown[] {
-  const coll = feature?.bodies;
-  if (!coll) return [];
-  const out: unknown[] = [];
-  for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
-  return out;
-}
 
 export function executeStrainReliefRecipe(
   component: Any,
@@ -93,7 +79,11 @@ export function executeStrainReliefRecipe(
         extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
         extIn.participantBodies = [targetBody];
         const feat = extrudes.add(extIn);
-        if (feat) created.push(feat);
+        if (feat === null || feat === undefined) {
+          return { created, warnings,
+            refusal: ["feature-create-failed", "Zip-tie slot pair cut failed.", "check slot dimensions and target body"] };
+        }
+        created.push(feat);
       }
     }
     // Bridge.
@@ -103,10 +93,14 @@ export function executeStrainReliefRecipe(
       created.push(bridgeSk);
       const extIn = extrudes.createInput(bridgeSk.sketchProfiles.item(0),
         adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
-      extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
-      const bridgeExt = extrudes.add(extIn);
-      if (bridgeExt) {
-        created.push(bridgeExt);
+        extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
+        const bridgeExt = extrudes.add(extIn);
+        if (bridgeExt === null || bridgeExt === undefined) {
+          return { created, warnings,
+            refusal: ["feature-create-failed", "Zip-tie bridge extrude failed.", "check bridge dimensions"] };
+        }
+        {
+          created.push(bridgeExt);
         const bridgeBodies = featureBodies(bridgeExt);
         if (bridgeBodies.length > 0) {
           const jf = joinExact(component, targetBody, bridgeBodies);
@@ -125,7 +119,11 @@ export function executeStrainReliefRecipe(
         adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
       extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("2 mm"));
       const saddleExt = extrudes.add(extIn);
-      if (saddleExt) {
+      if (saddleExt === null || saddleExt === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Clamp saddle extrude failed.", "check cable diameter and height"] };
+      }
+      {
         created.push(saddleExt);
         const saddleBodies = featureBodies(saddleExt);
         // Cut cable channel.
@@ -138,7 +136,11 @@ export function executeStrainReliefRecipe(
           cableCut.participantBodies = saddleBodies;
           cableCut.setDistanceExtent(false, adsk.core.ValueInput.createByString("2 mm"));
           const cableFeat = extrudes.add(cableCut);
-          if (cableFeat) created.push(cableFeat);
+          if (cableFeat === null || cableFeat === undefined) {
+            return { created, warnings,
+              refusal: ["feature-create-failed", "Clamp saddle cable channel cut failed.", "check cable diameter and saddle body"] };
+          }
+          created.push(cableFeat);
         }
         if (saddleBodies.length > 0) {
           const jf = joinExact(component, targetBody, saddleBodies);
@@ -157,7 +159,11 @@ export function executeStrainReliefRecipe(
       extIn.setAllExtent(adsk.fusion.ExtentDirections.SymmetricExtentDirection);
       extIn.participantBodies = [targetBody];
       const feat = extrudes.add(extIn);
-      if (feat) created.push(feat);
+      if (feat === null || feat === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Cable exit cut failed.", "check exit diameter and target body"] };
+      }
+      created.push(feat);
     }
     warnings.push("Cable exit support provides no pull-force validation.");
   } else if (srType === "bend_radius_guide") {
@@ -172,7 +178,11 @@ export function executeStrainReliefRecipe(
         adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
       extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
       const wallExt = extrudes.add(extIn);
-      if (wallExt) {
+      if (wallExt === null || wallExt === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Bend radius guide wall extrude failed.", "check guide radius and height"] };
+      }
+      {
         created.push(wallExt);
         const wallBodies = featureBodies(wallExt);
         if (wallBodies.length > 0) {
@@ -197,7 +207,11 @@ export function executeStrainReliefRecipe(
         adsk.fusion.FeatureOperations.NewBodyFeatureOperation);
       extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
       const bridgeExt = extrudes.add(extIn);
-      if (bridgeExt) {
+      if (bridgeExt === null || bridgeExt === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Retention bridge extrude failed.", "check bridge dimensions"] };
+      }
+      {
         created.push(bridgeExt);
         const bridgeBodies = featureBodies(bridgeExt);
         if (bridgeBodies.length > 0) {

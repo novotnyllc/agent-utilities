@@ -29,6 +29,10 @@ function tsSources(root: string = addinRoot): string[] {
   return result;
 }
 
+function readService(): string {
+  return fs.readFileSync(path.join(addinRoot, "service.ts"), {encoding: "utf8"});
+}
+
 const FORBIDDEN_STRINGS = [
   // No text-command execution or process spawning.
   "executeTextCommand", "textCommands", "subprocess", "multiprocessing",
@@ -108,4 +112,111 @@ test("service exposes one coherent lifecycle, not a whole-enclosure generator", 
   for (const forbidden of ["generate_all", "generate-enclosure", "whole_enclosure"]) {
     assert.ok(!service.includes(forbidden), "forbidden whole-model generator API: " + forbidden);
   }
+});
+
+test("recipe parameter names are built through ownedParamName", () => {
+  const recipeDir = path.join(addinRoot, "recipes");
+  for (const entry of fs.readdirSync(recipeDir)) {
+    if (!entry.endsWith(".ts")) continue;
+    const source = fs.readFileSync(path.join(recipeDir, entry), {encoding: "utf8"});
+    if (source.includes("makeParameter") || source.includes("ownedParamName")) {
+      assert.match(
+        source,
+        /ownedParamName\(/,
+        entry + " builds parameter names without ownedParamName",
+      );
+    }
+    assert.doesNotMatch(
+      source,
+      /(src|clr|fab|des|pak|calc)_ef_/,
+      entry + " hardcodes an ownership-prefix literal",
+    );
+  }
+});
+
+test("executeOnce rejects dependency cycles before recipe mutation", () => {
+  const service = readService();
+  // The cycle gate must run after context/selection resolution but before the
+  // recipe function call and before timeline index capture.
+  const cycleGate = service.indexOf("managedGraphHasCycle(root");
+  const loadRecipe = service.indexOf("loadRecipe(recipeFamily)");
+  const timelineBefore = service.indexOf("currentTimelineIndex()");
+  assert.ok(cycleGate > -1, "cycle gate missing from executeOnce");
+  assert.ok(loadRecipe > -1, "recipe load missing from executeOnce");
+  assert.ok(timelineBefore > -1, "timeline-before capture missing from executeOnce");
+  assert.ok(
+    cycleGate < loadRecipe && loadRecipe < timelineBefore,
+    "cycle gate must run before recipe load and timeline capture; got " +
+      JSON.stringify({cycleGate, loadRecipe, timelineBefore}),
+  );
+  // The graph is rebuilt from stamped attributes on every request so a stale
+  // in-memory cache cannot miss a cycle created by another session.
+  assert.match(service, /enclosure_upstream_ids/);
+  assert.match(service, /graphHasCycle\(/);
+});
+
+test("timeline group uses transient indexes with human-readable naming", () => {
+  const service = readService();
+  // Before and after indexes bracket the recipe call; no per-feature probing.
+  assert.match(service, /const timelineBefore = this\.currentTimelineIndex\(\)/);
+  assert.match(
+    service,
+    /this\.timelineGroup\(recipeFamily, identity, timelineBefore, this\.currentTimelineIndex\(\)\)/,
+  );
+  // Transient index READS are permitted (deleteFeature's reverse ordering);
+  // WRITES to timelineObject remain forbidden so indexes never become identity.
+  assert.doesNotMatch(
+    service,
+    /timelineObject[^\n]*=[^=]/,
+    "timelineObject must never be written; indexes are transient reads only",
+  );
+  // Spec names: Enclosure · Heat-Set Boss · a4b8f2.
+  assert.match(service, /boss: "Heat-Set Boss"/);
+  assert.match(service, /cutout: "Port Cutout"/);
+  assert.match(service, /familyDisplayName/);
+  assert.match(service, /displaySuffix/);
+  // Separator is the middle dot required by the spec.
+  assert.match(service, /\\u00b7|·/);
+});
+
+test("deleteFeature resolves by attrs, deletes reverse order, params last", () => {
+  const service = readService();
+  const start = service.indexOf("async deleteFeature");
+  const end = service.indexOf("async inspectFeature", start);
+  assert.ok(start > -1 && end > start, "deleteFeature not found in service.ts");
+  const body = service.slice(start, end);
+  // Resolve via findManagedEntities; refuse when nothing matches.
+  assert.match(body, /findManagedEntities\(/);
+  assert.match(body, /target-not-found/);
+  // Reverse timeline order: transient index read only.
+  assert.match(body, /timelineObject\?\.index/);
+  assert.doesNotMatch(body, /timelineObject.*=\s/, "timeline index must never be written");
+  // Entities deleted (deleteMe) BEFORE parameter cleanup.
+  const deleteMe = body.indexOf("deleteMe()");
+  const paramCleanup = body.indexOf("userParameters");
+  assert.ok(deleteMe > -1 && paramCleanup > -1, "missing deleteMe or userParameters cleanup");
+  assert.ok(deleteMe < paramCleanup, "parameters must be deleted after entities");
+  // Post-delete verification warns on leftovers.
+  assert.match(body, /still carry feature id/);
+});
+
+test("editFeature classifies inspection state before applying parameter updates", () => {
+  const service = readService();
+  const edit = service.indexOf("async editFeature");
+  const nextMethod = service.indexOf("async deleteFeature");
+  assert.ok(edit > -1 && nextMethod > edit, "editFeature missing");
+  const body = service.slice(edit, nextMethod);
+  const classify = body.indexOf("classifyInspection(");
+  const refusal = body.indexOf('"manual-edit-prevents-update"');
+  const apply = body.indexOf("this.updateParameters(updates)");
+  assert.ok(classify > -1, "editFeature missing classifyInspection");
+  assert.ok(refusal > -1, "editFeature missing manual-edit-prevents-update");
+  assert.ok(apply > -1, "editFeature missing updateParameters");
+  assert.ok(
+    classify < refusal && refusal < apply,
+    "classification gate must run before updateParameters; got " +
+      JSON.stringify({classify, refusal, apply}),
+  );
+  // The post-compute result carries the re-inspected state on the instance.
+  assert.match(body, /inspection_state:/);
 });

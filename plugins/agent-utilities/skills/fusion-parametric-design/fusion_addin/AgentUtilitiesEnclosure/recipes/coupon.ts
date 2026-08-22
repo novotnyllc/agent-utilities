@@ -4,9 +4,9 @@
 
 import { adsk } from "@adsk/fas";
 import { makePlanarProfile } from "../native/sketches";
-import { makeParameter } from "../native/parameters";
+import { makeParameter, ownedParamName } from "../native/parameters";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { featureBodies, requireAdsk } from "./shared";
 
 export const COUPON_TYPES = new Set([
   "sliding_clearance", "press_fit", "pin_hole", "captive_nut",
@@ -22,12 +22,6 @@ export type CouponRecipeResult = {
   refusal: Refusal | null;
 };
 
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
-
 function getDesign(): any {
   try {
     return (adsk.core.Application.get() as any).activeDocument?.design ?? null;
@@ -40,14 +34,6 @@ function getDesign(): any {
 function toFloat(value: any): number {
   if (typeof value === "number") return value;
   return parseFloat(String(value).replace("mm", "").trim());
-}
-
-function featureBodies(feature: any): unknown[] {
-  const coll = feature?.bodies;
-  if (!coll) return [];
-  const out: unknown[] = [];
-  for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
-  return out;
 }
 
 export function executeCouponRecipe(
@@ -105,10 +91,11 @@ export function executeCouponRecipe(
 
   const couponBodies = featureBodies(couponExt);
   const design = getDesign();
+  let failedStations = 0;
 
   for (let i = 0; i < candidates.length; i++) {
     const cval = toFloat(candidates[i]);
-    const pname = `des_ef_${ns}_coupon_station_${i}`;
+    const pname = ownedParamName(identity, "design", `coupon_station_${i}`);
     if (design !== null) {
       makeParameter(design, pname, `${cval} mm`, "mm",
         `Station ${i}: ${cval} mm (${identity.displaySuffix})`);
@@ -123,8 +110,18 @@ export function executeCouponRecipe(
       stExt.setDistanceExtent(false, adsk.core.ValueInput.createByString(bodyThickness));
       stExt.participantBodies = couponBodies;
       const feat = extrudes.add(stExt);
-      if (feat) created.push(feat);
+      if (feat === null || feat === undefined) failedStations++;
+      else created.push(feat);
+    } else {
+      failedStations++;
     }
+  }
+  if (failedStations > 0 && failedStations < candidates.length) {
+    warnings.push(`${failedStations} of ${candidates.length} coupon station cuts failed.`);
+  }
+  if (failedStations === candidates.length) {
+    return { created, warnings,
+      refusal: ["feature-create-failed", "All coupon station cuts failed.", "check plane, dimensions, and target bodies"] };
   }
 
   for (const body of couponBodies) {
@@ -185,7 +182,7 @@ function updateRuleParam(identity: ManagedIdentity, value: number): void {
   }
   const design = (adsk.core.Application.get() as any).activeDocument?.design ?? null;
   if (!design) return;
-  const name = `des_ef_${identity.parameterNamespace}_accepted_fit_value`;
+  const name = ownedParamName(identity, "design", "accepted_fit_value");
   const pmgr = design.userParameters;
   const existing = pmgr.itemByName(name);
   if (existing) {

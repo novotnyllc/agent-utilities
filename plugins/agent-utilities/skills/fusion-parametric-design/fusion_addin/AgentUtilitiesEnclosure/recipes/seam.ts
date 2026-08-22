@@ -6,7 +6,7 @@ import { adsk } from "@adsk/fas";
 import { makeOffsetProfile, makePlanarProfile } from "../native/sketches";
 import { validateTangentContinuity, makeSweep } from "../native/paths";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { requireAdsk } from "./shared";
 
 export const SEAM_VARIANTS = new Set([
   "lip", "groove", "lip_groove", "tongue_groove", "skirt_channel",
@@ -20,12 +20,6 @@ export type SeamRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
 
 function mmToFloat(expr: string): number {
   return parseFloat(String(expr).replace(" mm", ""));

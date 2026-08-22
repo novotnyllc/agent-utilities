@@ -9,7 +9,7 @@ import { makePlanarProfile, makePolygonProfile } from "../native/sketches";
 import { makePattern } from "../native/patterns";
 import { cutExact, intersectExact } from "../native/booleans";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { requireAdsk } from "./shared";
 
 type Any = any;
 
@@ -24,12 +24,6 @@ export type VentRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
 
 export function executeVentRecipe(
   component: Any,

@@ -12,6 +12,7 @@ import { makeReinforcementBody } from "../native/reinforcement";
 import { makePattern } from "../native/patterns";
 import { makeFillet } from "../native/edge_treatments";
 import { stampAttributes, ManagedIdentity } from "../identity";
+import { requireAdsk } from "./shared";
 
 type Any = any;
 
@@ -33,6 +34,7 @@ export function executeReinforcementRecipe(
   identity: ManagedIdentity,
   request: Record<string, Any>,
 ): ReinforcementRecipeResult {
+  requireAdsk();
   const warnings: string[] = [];
   const created: unknown[] = [];
   const ns = identity.parameterNamespace;
@@ -141,4 +143,3 @@ function collectJoinEdges(body: Any): Any[] {
   }
   return out.slice(0, 8); // bounded
 }
-

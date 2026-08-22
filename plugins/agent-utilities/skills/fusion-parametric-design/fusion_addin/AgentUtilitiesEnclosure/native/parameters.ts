@@ -5,9 +5,21 @@
  */
 
 import { adsk } from "@adsk/fas";
+import { PARAM_PREFIXES, ManagedIdentity } from "../identity";
 
 type Any = any;
 
+export function ownedParamName(
+  identity: Pick<ManagedIdentity, "parameterNamespace">,
+  ownership: keyof typeof PARAM_PREFIXES,
+  name: string,
+): string {
+  const prefix = PARAM_PREFIXES[ownership];
+  if (!prefix) {
+    throw new Error("unknown parameter ownership: " + String(ownership));
+  }
+  return prefix + identity.parameterNamespace + "_" + name;
+}
 
 export function makeParameter(
   design: Any,

@@ -7,7 +7,7 @@ import { makePlanarProfile } from "../native/sketches";
 import { makeHole } from "../native/holes_threads";
 import { makeNamedPlane } from "../native/datums";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { requireAdsk } from "./shared";
 
 export const CUTOUT_SHAPES = new Set(["rectangle", "rounded_rectangle", "circle", "named_profile"]);
 
@@ -18,12 +18,6 @@ export type CutoutRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
 
 export function executeCutoutRecipe(
   component: any,

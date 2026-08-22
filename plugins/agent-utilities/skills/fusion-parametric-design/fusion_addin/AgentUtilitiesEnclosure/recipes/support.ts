@@ -9,7 +9,7 @@ import { adsk } from "@adsk/fas";
 import { makePlanarProfile } from "../native/sketches";
 import { joinExact, cutExact } from "../native/booleans";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { featureBodies, requireAdsk } from "./shared";
 
 type Any = any;
 
@@ -25,20 +25,6 @@ export type SupportRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
-
-function featureBodies(feature: Any): unknown[] {
-  const coll = feature?.bodies;
-  if (!coll) return [];
-  const out: unknown[] = [];
-  for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
-  return out;
-}
 
 export function executeSupportRecipe(
   component: Any,

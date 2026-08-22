@@ -7,9 +7,9 @@ import { makePlanarProfile } from "../native/sketches";
 import { joinExact } from "../native/booleans";
 import { makeHole, makeInsertBore, makePolygonPocket } from "../native/holes_threads";
 import { makeReinforcementBody } from "../native/reinforcement";
-import { makeParameter } from "../native/parameters";
+import { makeParameter, ownedParamName } from "../native/parameters";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { featureBodies, requireAdsk } from "./shared";
 
 export const BOSS_VARIANTS = new Set([
   "support", "screw", "heat_set_insert", "captive_square_nut",
@@ -25,26 +25,12 @@ export type BossRecipeResult = {
   refusal: Refusal | null;
 };
 
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
-
 function getDesign(): any {
   try {
     return (adsk.core.Application.get() as any).activeDocument?.design ?? null;
   } catch {
     return null;
   }
-}
-
-function featureBodies(feature: any): unknown[] {
-  const coll = feature?.bodies;
-  if (!coll) return [];
-  const out: unknown[] = [];
-  for (let i = 0; i < coll.count; i++) out.push(coll.item(i));
-  return out;
 }
 
 export function executeBossRecipe(
@@ -81,9 +67,9 @@ export function executeBossRecipe(
   const height = params.height ?? "5 mm";
   const design = getDesign();
   if (design !== null) {
-    makeParameter(design, `des_ef_${ns}_boss_outer_diameter`, String(outerDia),
+    makeParameter(design, ownedParamName(identity, "design", "boss_outer_diameter"), String(outerDia),
       "mm", `Boss outer diameter (${identity.displaySuffix})`);
-    makeParameter(design, `calc_ef_${ns}_boss_height`, String(height),
+    makeParameter(design, ownedParamName(identity, "derived", "boss_height"), String(height),
       "mm", `Boss height (${identity.displaySuffix})`);
   }
 

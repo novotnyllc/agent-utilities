@@ -7,7 +7,7 @@ import { makeOffsetProfile, makePlanarProfile } from "../native/sketches";
 import { validateTangentContinuity, makeSweep } from "../native/paths";
 import { joinExact } from "../native/booleans";
 import { stampAttributes, ManagedIdentity } from "../identity";
-import { AddInNotRunningError } from "../dispatch";
+import { requireAdsk } from "./shared";
 
 export const SEAL_TYPES = new Set([
   "flat_gasket_channel", "gasket_land", "o_ring_groove",
@@ -21,12 +21,6 @@ export type SealRecipeResult = {
   warnings: string[];
   refusal: Refusal | null;
 };
-
-function requireAdsk(): void {
-  if (!adsk || !adsk.core || !adsk.fusion) {
-    throw new AddInNotRunningError("adsk not available.");
-  }
-}
 
 /** Python: float("1.5 mm".replace(" mm", "")) */
 function mmToFloat(expr: string): number {
@@ -95,7 +89,11 @@ export function executeSealRecipe(
       extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString(depth));
       extIn.participantBodies = [targetBody];
       const feat = extrudes.add(extIn);
-      if (feat) created.push(feat);
+      if (feat === null || feat === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Gasket land creation failed.", "check land height and target body"] };
+      }
+      created.push(feat);
     } else {
       return { created, warnings,
         refusal: ["seam-segment-collapsed",
@@ -121,7 +119,11 @@ export function executeSealRecipe(
     if (csSk !== null && csSk.sketchProfiles.count > 0) {
       const op = adsk.fusion.FeatureOperations.CutFeatureOperation;
       const feat = makeSweep(component, csSk.sketchProfiles.item(0), sweepPath, op, [targetBody], `seal_${ns}`);
-      if (feat) created.push(feat);
+      if (feat === null || feat === undefined) {
+        return { created, warnings,
+          refusal: ["feature-create-failed", "Seal channel sweep failed.", "check cross-section plane and sweep path"] };
+      }
+      created.push(feat);
     }
   } else {
     return { created, warnings,

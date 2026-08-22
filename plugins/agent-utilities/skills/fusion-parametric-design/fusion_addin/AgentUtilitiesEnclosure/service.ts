@@ -16,7 +16,7 @@
 import { adsk } from "@adsk/fas";
 
 import { resolveDesignContext, validateParametricDesign } from "./context.ts";
-import { allocateIdentity, findManagedEntities, stampAttributes, ATTRIBUTE_GROUP, type ManagedIdentity } from "./identity.ts";
+import { allocateIdentity, findManagedEntities, stampAttributes, ATTRIBUTE_GROUP, PARAM_PREFIXES, type ManagedIdentity } from "./identity.ts";
 import { classifyInspection, inspectDirectResult } from "./inspect.ts";
 
 type Any = any;
@@ -152,19 +152,27 @@ function prop(obj: any, name: string): any {
   return obj != null ? obj[name] : undefined;
 }
 
+interface RecipeOutput {
+  created: unknown[];
+  warnings: string[];
+  refusal: [string, string, string] | null;
+}
+
 type RecipeFn = (root: any, identity: ManagedIdentity, enriched: Record<string, any>) =>
-  [any[], any[], [string, string, string] | null];
+  RecipeOutput;
 
 /** Recipe loader: resolves RECIPE_REGISTRY names against ./recipes/index.ts. */
+/**
+ * Recipe loader: resolves wire-family names against recipes/index.ts RECIPES.
+ * RECIPES is the single registry source; RECIPE_REGISTRY remains only as the
+ * public wire-name list used by request validation.
+ */
 async function loadRecipe(family: string): Promise<RecipeFn> {
-  const attr = RECIPE_REGISTRY[family] as string | undefined;
-  if (!attr) {
-    throw new Error(`Recipe function not found: ${attr}`);
-  }
-  const recipes = await import("./recipes/index.ts");
-  const fn = (recipes as Record<string, unknown>)[attr];
+  const {RECIPES} = await import("./recipes/index.ts");
+  const wireFamily = family === "fit_coupon" ? "coupon" : family;
+  const fn: unknown = (RECIPES as Record<string, unknown>)[wireFamily];
   if (typeof fn !== "function") {
-    throw new Error(`Recipe function not found: ${attr}`);
+    throw new Error(`Recipe function not found for family: ${family}`);
   }
   return fn as RecipeFn;
 }
@@ -183,6 +191,126 @@ function collectFeatureBodies(entity: Any): Any[] {
     return [entity];
   }
   return [];
+}
+
+function readManagedFlag(entity: Any, key: string): boolean {
+  /** Read a stamped boolean attribute; absent attribute means false. */
+  const attrs = entity?.attributes ?? null;
+  if (attrs == null) return false;
+  const attr = attrs.itemByName(ATTRIBUTE_GROUP, key);
+  if (!attr) return false;
+  const v = String(attr.value ?? "").toLowerCase();
+  return v === "true" || v === "1";
+}
+
+function stampManagedFlag(entity: Any, key: string, value: string): void {
+  /** Stamp one lifecycle-flag attribute; no-op unless the value changes. */
+  const attrs = entity?.attributes ?? null;
+  if (attrs == null) return;
+  const existing = attrs.itemByName(ATTRIBUTE_GROUP, key);
+  if (!existing || String(existing.value ?? "") !== value) {
+    attrs.add(ATTRIBUTE_GROUP, key, value);
+  }
+}
+
+async function resolveManagedEntity(
+  fid: string,
+): Promise<[Any | null, [string, string] | null]> {
+  /** Resolve the single managed entity for feature_id, or the refusal. */
+  let root: Any = null;
+  try {
+    const ctx = resolveDesignContext();
+    const derr = validateParametricDesign(ctx);
+    if (derr) return [null, derr];
+    root = ctx.root_component;
+  } catch {
+    // Offline/no-Fusion: fall through to target-not-found below.
+  }
+  if (root == null) {
+    return [null, ["target-not-found", "No active design to search."]];
+  }
+  const matches = findManagedEntities(root, allocateIdentity(fid, "", []));
+  if (matches.length === 0) {
+    return [null, ["target-not-found", `No managed feature ${fid}.`]];
+  }
+  if (matches.length > 1) {
+    return [null, ["ambiguous-target", `Multiple managed features match ${fid}.`]];
+  }
+  return [matches[0], null];
+}
+
+const EDIT_FLAG_KEYS = [
+  "enclosure_param_edited",
+  "enclosure_native_edited",
+  "enclosure_definition_diverged",
+  "enclosure_objects_missing",
+] as const;
+
+// Command IDs registered by commands.ts share this wire prefix.
+export const COMMAND_PREFIX = "AgentUtilitiesEnclosure_";
+
+function parseRequest(requestJson: string): Record<string, any> | null {
+  /** Parse a lifecycle request; non-object payloads and malformed JSON refuse. */
+  try {
+    const r = JSON.parse(requestJson);
+    return (typeof r === "object" && r !== null && !Array.isArray(r)) ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Human-readable family names required by the timeline-group naming spec. */
+const FAMILY_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  boss: "Heat-Set Boss",
+  cutout: "Port Cutout",
+  seam: "Seam Interruption",
+  seal: "Seal Path",
+});
+
+function familyDisplayName(family: string): string {
+  const named = FAMILY_DISPLAY_NAMES[family];
+  if (named) {
+    return named;
+  }
+  return family.replace(/_/g, " ")
+    .replace(/\b\w/g, (ch: string) => ch.toUpperCase());
+}
+
+function graphHasCycle(edges: ReadonlyArray<readonly [string, string]>): boolean {
+  /** Kahn peeling: leftover nodes after peeling mean a cycle remains. */
+  const adjacency = new Map<string, Set<string>>();
+  const indegree = new Map<string, number>();
+  for (const [up, down] of edges) {
+    if (up === down) {
+      return true;
+    }
+    if (!adjacency.has(up)) {
+      adjacency.set(up, new Set());
+    }
+    const outs = adjacency.get(up)!;
+    if (!outs.has(down)) {
+      outs.add(down);
+      indegree.set(down, (indegree.get(down) ?? 0) + 1);
+    }
+    if (!indegree.has(up)) {
+      indegree.set(up, indegree.get(up) ?? 0);
+    }
+  }
+  let remaining = indegree.size;
+  const ready = [...indegree.entries()]
+    .filter(([, degree]) => degree === 0).map(([node]) => node);
+  while (ready.length > 0) {
+    const node = ready.pop()!;
+    remaining -= 1;
+    for (const down of adjacency.get(node) ?? []) {
+      const left = (indegree.get(down) ?? 1) - 1;
+      indegree.set(down, left);
+      if (left === 0) {
+        ready.push(down);
+      }
+    }
+  }
+  return remaining > 0;
 }
 
 export class EnclosureFeatureService {
@@ -246,6 +374,22 @@ export class EnclosureFeatureService {
 
     const enriched: Record<string, any> = {...request};
     Object.assign(enriched, resolved);
+    try {
+      if (this.managedGraphHasCycle(root, identity.featureId, upstreamIds)) {
+        result.refusal = makeRefusal(
+          "cross-feature-cycle",
+          `Upstream dependencies for ${identity.featureId} would close a managed cycle.`,
+          null,
+          "remove the upstream reference that closes the cycle");
+        result.operation = "create";
+        return result.toDict();
+      }
+    } catch (exc) {
+      result.refusal = makeRefusal(
+        "timeline-unhealthy", String(exc), null, "inspect the document and retry");
+      result.operation = "create";
+      return result.toDict();
+    }
     let created: any[] = [];
     let fn: RecipeFn;
     try {
@@ -255,13 +399,14 @@ export class EnclosureFeatureService {
       result.operation = "create";
       return result.toDict();
     }
+    const timelineBefore = this.currentTimelineIndex();
     let refusal: [string, string, string] | null = null;
     try {
-      const [c, warnings, recipeRefusal] = fn(root, identity, enriched);
-      created = c;
-      result.warnings = warnings;
+      const output = fn(root, identity, enriched);
+      created = [...output.created];
+      result.warnings = [...output.warnings];
       result.created_or_changed = created.map((item) => safeDict(item));
-      refusal = recipeRefusal ?? null;
+      refusal = output.refusal;
     } catch (exc) {
       result.refusal = makeRefusal(
         "feature-create-failed", String(exc), String(exc), "undo the operation");
@@ -275,7 +420,7 @@ export class EnclosureFeatureService {
       return result.toDict();
     }
 
-    this.timelineGroup(created, identity);
+    this.timelineGroup(recipeFamily, identity, timelineBefore, this.currentTimelineIndex());
     this.computeAll();
     const tb = enriched.target_body ?? null;
     const ecRaw = request.expected_body_count;
@@ -344,38 +489,70 @@ export class EnclosureFeatureService {
     return resolved;
   }
 
-  private timelineGroup(created: any[], identity: ManagedIdentity): void {
+  private timelineGroup(
+    family: string, identity: ManagedIdentity, before: number | null, after: number | null,
+  ): void {
     try {
-      const app = adsk.core.Application.get();
-      const design = app.activeDocument ? app.activeDocument.design : null;
-      const tl = design ? design.timeline : null;
-      if (tl == null || created.length < 2) {
+      const tl = this.timeline();
+      // A transient contiguous span is required; per-feature index probing is
+      // deliberately avoided so indexes never leak into managed identity.
+      if (tl == null || before == null || after == null || after <= before) {
         return;
       }
-      let startIdx: number | null = null;
-      let endIdx: number | null = null;
-      for (const feat of created) {
-        const tlo = prop(feat, "timelineObject");
-        if (tlo != null) {
-          const idx = tlo.index;
-          if (startIdx == null || idx < startIdx) {
-            startIdx = idx;
-          }
-          if (endIdx == null || idx > endIdx) {
-            endIdx = idx;
+      const gname = ["Enclosure", familyDisplayName(family), identity.displaySuffix].join(" \u00b7 ");
+      const groups = tl.timelineGroups;
+      groups.add(before, after);
+      groups.item(groups.count - 1).name = gname;
+    } catch {
+      // Timeline grouping is best-effort, like the bare except in Python.
+    }
+  }
+
+  private currentTimelineIndex(): number | null {
+    try {
+      const tl = this.timeline();
+      return tl ? Number(tl.currentIndex) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private timeline(): Any | null {
+    const app = adsk.core.Application.get();
+    const design = app.activeDocument ? app.activeDocument.design : null;
+    return design ? design.timeline : null;
+  }
+
+  private managedGraphHasCycle(root: Any, featureId: string, upstreamIds: string[]): boolean {
+    /** Build the graph from existing managed entities' stamped upstream IDs.
+     * Mirrors src/enclosure-features/dependencies.ts cycle policy. */
+    try {
+      const edges: Array<[string, string]> = [];
+      const collNames = [
+        "bRepBodies", "sketches", "constructionPlanes",
+        "constructionAxes", "constructionPoints", "features",
+      ];
+      for (const collName of collNames) {
+        const coll = root?.[collName] ?? null;
+        if (!coll) continue;
+        for (let i = 0; i < coll.count; i++) {
+          const attrs = coll.item(i)?.attributes ?? null;
+          const fidAttr = attrs ? attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_feature_id") : null;
+          const upAttr = attrs ? attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_upstream_ids") : null;
+          if (!fidAttr || !fidAttr.value) continue;
+          for (const up of String(upAttr?.value ?? "").split(",").filter(Boolean)) {
+            edges.push([String(fidAttr.value), up]);
           }
         }
       }
-      if (startIdx != null && endIdx != null && endIdx > startIdx) {
-        const display = identity.recipeId.split(".")[0].replace(/_/g, " ")
-          .replace(/\b\w/g, (ch: string) => ch.toUpperCase());
-        const gname = `Enclosure / ${display} / ${identity.displaySuffix}`;
-        const groups = tl.timelineGroups;
-        groups.add(startIdx, endIdx);
-        groups.item(groups.count - 1).name = gname;
+      for (const up of upstreamIds) {
+        edges.push([featureId, up]);
       }
-    } catch {
-      // Timeline grouping is best-effort, like the bare except in Python.
+      return graphHasCycle(edges);
+    } catch (exc) {
+      // Probe failure is not "no cycle": refuse loudly rather than create
+      // through an unverified graph (spec: cycles are rejected before mutation).
+      throw new Error(`dependency graph probe failed: ${exc}`);
     }
   }
 
@@ -404,10 +581,36 @@ export class EnclosureFeatureService {
   async editFeature(requestJson: string): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "edit";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     const fid = String(request.feature_id ?? "");
     if (!fid) {
       result.refusal = makeRefusal("target-not-found", "Edit requires feature_id.");
+      return result.toDict();
+    }
+    const [entity, refusal] = await resolveManagedEntity(fid);
+    if (refusal) {
+      result.refusal = makeRefusal(refusal[0], refusal[1]);
+      return result.toDict();
+    }
+    // Inspect before mutating: manual divergence makes controlled rebuild
+    // unsafe and must refuse before any parameter update is applied.
+    const pre = classifyInspection(
+      readManagedFlag(entity, EDIT_FLAG_KEYS[0]),
+      readManagedFlag(entity, EDIT_FLAG_KEYS[1]),
+      readManagedFlag(entity, EDIT_FLAG_KEYS[2]),
+      readManagedFlag(entity, EDIT_FLAG_KEYS[3]),
+    );
+    if (
+      pre === "managed-definition-diverged" ||
+      pre === "managed-object-missing"
+    ) {
+      result.refusal = makeRefusal(
+        "manual-edit-prevents-update",
+        `Cannot safely edit ${fid}: inspection state is ${pre}.`);
       return result.toDict();
     }
     const updates: Record<string, any> = request.parameter_updates ?? {};
@@ -415,6 +618,17 @@ export class EnclosureFeatureService {
       this.updateParameters(updates);
       this.computeAll();
       result.warnings.push("Parameter-only edit applied.");
+      stampManagedFlag(entity, EDIT_FLAG_KEYS[0], "true");
+      const post = classifyInspection(
+        readManagedFlag(entity, EDIT_FLAG_KEYS[0]),
+        readManagedFlag(entity, EDIT_FLAG_KEYS[1]),
+        readManagedFlag(entity, EDIT_FLAG_KEYS[2]),
+        readManagedFlag(entity, EDIT_FLAG_KEYS[3]),
+      );
+      result.instance = {
+        feature_id: fid,
+        inspection_state: post,
+      };
     } else {
       result.refusal = makeRefusal(
         "manual-edit-prevents-update", "Non-parameter edits require manual review.");
@@ -425,7 +639,11 @@ export class EnclosureFeatureService {
   async deleteFeature(requestJson: string, cascade = false): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "delete";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     const fid = String(request.feature_id ?? "");
     if (!fid) {
       result.refusal = makeRefusal("target-not-found", "Delete requires feature_id.");
@@ -439,6 +657,73 @@ export class EnclosureFeatureService {
         null, "set cascade=true");
       return result.toDict();
     }
+    // Resolve all managed entities by attribute; delete in reverse timeline
+    // order (transient index read, never persisted); parameters LAST per spec.
+    let root: Any = null;
+    try {
+      const ctx = resolveDesignContext();
+      root = ctx.root_component;
+    } catch { /* offline: matches stays empty -> target-not-found */ }
+    if (root == null) {
+      result.refusal = makeRefusal("target-not-found", "No active design to search.");
+      return result.toDict();
+    }
+    const managed = findManagedEntities(root, allocateIdentity(fid, "", []));
+    if (managed.length === 0) {
+      result.refusal = makeRefusal("target-not-found", `No managed feature ${fid}.`);
+      return result.toDict();
+    }
+    const ordered = [...managed].sort((a, b) => {
+      const ta = Number(a?.timelineObject?.index ?? 0);
+      const tb = Number(b?.timelineObject?.index ?? 0);
+      return tb - ta;
+    });
+    const failed: string[] = [];
+    for (const entity of ordered) {
+      try {
+        entity.deleteMe();
+      } catch (exc) {
+        failed.push(String(exc).slice(0, 120));
+      }
+    }
+    if (failed.length > 0) {
+      result.warnings.push(`Failed to delete ${failed.length} entity/entities.`);
+    }
+    try {
+      const design = adsk.core.Application.get()?.activeDocument?.design ?? null;
+      const pmgr = design?.userParameters ?? null;
+      if (pmgr) {
+        const prefixes = Object.values(PARAM_PREFIXES) as string[];
+        // The namespace is the one stamped at create time; fid.slice is only
+        // a fallback for entities created before namespace stamping existed.
+        const attrs = ordered[0]?.attributes ?? null;
+        const nsAttr = attrs ? attrs.itemByName(ATTRIBUTE_GROUP, "enclosure_parameter_namespace") : null;
+        let namespace = nsAttr ? String(nsAttr.value ?? "") : "";
+        if (!namespace) {
+          namespace = fid.slice(0, 6);
+          result.warnings.push(
+            "No stamped parameter namespace found; falling back to feature id prefix for cleanup.");
+        }
+        for (let i = pmgr.count - 1; i >= 0; i--) {
+          const p = pmgr.item(i);
+          const name = String(p?.name ?? "");
+          for (const prefix of prefixes) {
+            const owned = prefix + namespace + "_";
+            if (name.startsWith(owned)) {
+              try { p.deleteMe(); } catch { /* best-effort */ }
+              break;
+            }
+          }
+        }
+      }
+    } catch { /* parameter cleanup is best-effort */ }
+    try {
+      const remaining = findManagedEntities(root, allocateIdentity(fid, "", []));
+      if (remaining.length > 0) {
+        result.warnings.push(
+          `${remaining.length} entity/entities still carry feature id ${fid}; manual cleanup may be required.`);
+      }
+    } catch { /* verification is best-effort */ }
     result.warnings.push("Destructive operations require Undo acceptance before enabling.");
     return result.toDict();
   }
@@ -446,7 +731,11 @@ export class EnclosureFeatureService {
   async inspectFeature(requestJson: string): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "inspect";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     const state = classifyInspection(
       Boolean(request.param_edited),
       Boolean(request.native_edited),
@@ -463,7 +752,11 @@ export class EnclosureFeatureService {
   async upgradeFeature(requestJson: string): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "upgrade";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     // Read the stamped recipe version from Fusion attributes, never trust
     // the request's claimed current_version (spec: version is stamped at
     // creation).
@@ -522,7 +815,11 @@ export class EnclosureFeatureService {
   async patternOrMirrorFeature(requestJson: string): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "create";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     const {makePattern, makeMirror} = await import("./native/patterns.ts");
     const ctx = resolveDesignContext();
     const derr = validateParametricDesign(ctx);
@@ -608,7 +905,11 @@ export class EnclosureFeatureService {
   async recordCouponFeature(requestJson: string): Promise<Record<string, any>> {
     const result = new FeatureResult();
     result.operation = "edit";
-    const request = JSON.parse(requestJson);
+    const request = parseRequest(requestJson);
+    if (!request) {
+      result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
+      return result.toDict();
+    }
     const fid = String(request.feature_id ?? "");
     if (!fid) {
       result.refusal = makeRefusal("target-not-found", "record_coupon_result requires feature_id.");
