@@ -50,6 +50,7 @@ from .export_handoff import manufacturing_intent_by_path
 from .manifest import Manifest
 from .printable_parts import CONTACT_FACES, SUPPORT_POLICIES
 from .scripts import manifest_sha256
+from .prusaslicer_runtime import sha256_file
 
 
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -67,13 +68,43 @@ PRESET_SETTINGS_KEYS = {
     "print": "print_settings_id",
 }
 
-ALLOWED_OVERRIDE_KEYS = (
+BASE_OVERRIDE_KEYS = (
     "fill_density",
     "perimeters",
     "support_material",
     "support_material_buildplate_only",
     "support_material_style",
 )
+
+# U2's extended vocabulary: every key below is justified by a declared field the
+# optimizer (U5) or a manifest intent may supply, and each still passes through
+# validate_overrides so an unknown key fails closed exactly as before.
+SUPPORT_STYLE_VALUES = ("organic", "grid", "snug")
+SEAM_POSITION_VALUES = ("aligned", "nearest", "rear", "random")
+# ponytail: fixed variant bounds; promote to per-preset queries when profiles
+# declare their own safe ranges.
+VARIANT_BOUNDS = {
+    "layer_height": (0.08, 0.36),
+    "perimeters": (1, 8),
+}
+CANDIDATE_VARIANTS = (
+    {"label": "baseline"},
+    {"label": "fine-layer", "layer_height": 0.12},
+    {"label": "thick-layer", "layer_height": 0.28},
+    {"label": "more-walls", "perimeters": 4},
+)
+
+try:  # U2-U4 worker owns these constants; use theirs when the module has landed.
+    from .printable_parts import OPTIMIZER_OVERRIDE_KEYS as _OPTIMIZER_KEYS
+except ImportError:
+    _OPTIMIZER_KEYS = (
+        "layer_height",
+        "support_material_extruder",
+        "brim_width",
+        "seam_position",
+    )
+
+ALLOWED_OVERRIDE_KEYS = (*BASE_OVERRIDE_KEYS, *_OPTIMIZER_KEYS)
 
 # Every override below is traceable to a declared support_policy value; a policy
 # outside this table has no justified translation and is rejected. 'explicit-regions'
@@ -200,7 +231,10 @@ def selected_preset_defaults(config_root: str | Path) -> dict[str, str]:
 
 # Fields resolved from printer preset sections. Only these are retained when
 # parsing, so a vendor bundle's multi-kilobyte gcode blocks never stay in memory.
-_PRINTER_FIELDS = frozenset({"printer_model", "printer_variant", "inherits", "bed_shape", "max_print_height"})
+_PRINTER_FIELDS = frozenset(
+    {"printer_model", "printer_variant", "inherits", "bed_shape", "max_print_height", "extruders_cnt"}
+)
+_EXTRUDER_COUNT_RE = re.compile(r"\A[1-9][0-9]*\Z")
 
 
 def _enabled_vendor_models(config_root: Path) -> dict[str, dict[str, set[str]]]:
@@ -524,6 +558,31 @@ def printer_geometry(printer_name: str, config_root: str | Path) -> dict[str, An
     }
 
 
+def printer_extruder_count(printer_name: str, config_root: str | Path) -> int:
+    '''Resolve the printer preset's extruder count, fail-closed.
+
+    Source of truth is the printer preset ini's ``extruders_cnt`` key (verified in
+    real PrusaSlicer user presets and vendor bundles; the XL 5T declares ``5``).
+    It resolves through the same inherits-aware namespaces as ``printer_geometry``,
+    so an abstract parent carrying the count works exactly like one carrying the bed.
+    '''
+    root = Path(config_root).expanduser()
+    for namespace in _geometry_namespaces(root):
+        raw = _resolve_printer_field(printer_name, namespace, "extruders_cnt")
+        if raw is not None:
+            if not _EXTRUDER_COUNT_RE.fullmatch(raw.strip()):
+                raise ValueError(
+                    f"Printer preset {printer_name!r} declares extruders_cnt {raw!r}; "
+                    "expected a positive integer."
+                )
+            return int(raw)
+    raise ValueError(
+        f"extruders_cnt for printer preset {printer_name!r} could not be resolved from "
+        f"{str(root)!r} (sources checked: user printer .ini files and installed vendor bundles, "
+        "following inherits); refusing to validate multi-material assignment against an assumed count."
+    )
+
+
 # ---------------------------------------------------------------------------
 # intent -> per-object overrides (R6)
 # ---------------------------------------------------------------------------
@@ -591,12 +650,46 @@ def overrides_for_intent(intent: Any, part_path: str) -> dict[str, str]:
 
 
 def validate_overrides(overrides: dict[str, str], part_path: str) -> dict[str, str]:
-    """Reject any override key outside the justified set (R6, fail-closed)."""
+    """Reject any override key outside the justified set (R6, fail-closed).
+
+    The extended keys are value-validated here too: a style/seam name outside its
+    enum or a non-positive brim width is a malformed justification, not a setting.
+    """
     unjustified = sorted(set(overrides) - set(ALLOWED_OVERRIDE_KEYS))
     if unjustified:
         raise ValueError(
             f"Printable part {part_path!r} would carry unjustified per-object overrides: "
             f"{', '.join(unjustified)}; allowed keys are {', '.join(ALLOWED_OVERRIDE_KEYS)}."
+        )
+    style = overrides.get("support_material_style")
+    if style is not None and style not in SUPPORT_STYLE_VALUES:
+        raise ValueError(
+            f"Printable part {part_path!r} declares support_material_style {style!r}; "
+            f"expected one of {', '.join(SUPPORT_STYLE_VALUES)}."
+        )
+    seam = overrides.get("seam_position")
+    if seam is not None and seam not in SEAM_POSITION_VALUES:
+        raise ValueError(
+            f"Printable part {part_path!r} declares seam_position {seam!r}; "
+            f"expected one of {', '.join(SEAM_POSITION_VALUES)}."
+        )
+    for key in ("layer_height", "brim_width"):
+        raw = overrides.get(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            value = math.nan
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(
+                f"Printable part {part_path!r} declares {key} {raw!r}; expected a positive number."
+            )
+    extruder = overrides.get("support_material_extruder")
+    if extruder is not None and (not extruder.isdigit() or int(extruder) < 1):
+        raise ValueError(
+            f"Printable part {part_path!r} declares support_material_extruder {extruder!r}; "
+            "expected a positive integer extruder index (PrusaSlicer is 1-based in this key)."
         )
     return dict(overrides)
 
@@ -1017,7 +1110,7 @@ def _model_xml(parts: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _model_config_xml(parts: list[dict[str, Any]]) -> str:
+def _model_config_xml(parts: list[dict[str, Any]], *, multi_tool_extruders: bool = False, model_extruders: dict[str, int] | None = None) -> str:
     lines = ['<?xml version="1.0" encoding="UTF-8"?>', "<config>"]
     for part in parts:
         lines.append(f' <object id="{part["object_id"]}" instances_count="{part["quantity"]}">')
@@ -1029,6 +1122,16 @@ def _model_config_xml(parts: list[dict[str, Any]]) -> str:
         lines.append(f'  <volume firstid="0" lastid="{len(part["triangles"]) - 1}">')
         lines.append(f'   <metadata type="volume" key="name" value="{_attribute(part["part_path"])}"/>')
         lines.append('   <metadata type="volume" key="volume_type" value="ModelPart"/>')
+        model_extruder = (model_extruders or {}).get(part["part_path"])
+        if model_extruder is not None:
+            # PrusaSlicer stamps each volume with its extruder in multi-tool
+            # projects (verified against 2.9.6 output), but only when the caller
+            # explicitly assigns the MODEL to a tool. A support-material
+            # extruder is config-level state; it must never move the model's
+            # own volume to another tool.
+            lines.append(
+                f'   <metadata type="volume" key="extruder" value="{_attribute(model_extruder)}"/>'
+            )
         # Identity: build orientation and placement live in the build-item
         # transform, so the volume carries no extra frame of its own.
         lines.append('   <metadata type="volume" key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>')
@@ -1045,6 +1148,87 @@ def _config_text(presets: ResolvedPresets) -> str:
         f"; {PRESET_SETTINGS_KEYS['filament']} = \"{presets.filament}\"\n"
         f"; {PRESET_SETTINGS_KEYS['printer']} = {presets.printer}\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# preset-file hashing (KTD7 drift guard)
+# ---------------------------------------------------------------------------
+
+
+def _preset_file(kind: str, name: str, config_root: str | Path) -> Path | None:
+    """The file backing a resolved preset, or None for a name-only selection.
+
+    A system preset selected in PrusaSlicer.ini has no user .ini under its kind
+    directory; the vendor-bundle ini that defines it is the drift-relevant
+    file, so it is returned instead. Bundle sections are prefixed by kind --
+    ``[printer:<name>]``, ``[filament:<name>]``, ``[print:<name>]`` -- and any
+    line inside a section of the right kind counts, since even a bare section
+    header is real profile bytes. When no file anywhere defines the name -- it
+    exists only as the selected line in PrusaSlicer.ini -- None is returned so
+    the caller can hash a deterministic placeholder binding instead of
+    crashing.
+    """
+    root = Path(config_root).expanduser()
+    candidate = root / kind / f"{name}.ini"
+    if candidate.is_file():
+        return candidate
+    for vendor in sorted(_enabled_vendor_models(root)):
+        bundle = root / "vendor" / f"{vendor}.ini"
+        try:
+            lines = bundle.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        current = None
+        for raw_line in lines:
+            line = raw_line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                prefix = kind + ":"
+                current = section[len(prefix):].strip() if section.startswith(prefix) else None
+                continue
+            if current == name:
+                return bundle
+    return None
+
+
+def preset_hashes(presets: ResolvedPresets) -> dict[str, str]:
+    """SHA-256 of each preset ini backing ``presets``, keyed by preset kind.
+
+    This is the KTD7 evidence anchor: the optimizer hashes at build time and
+    re-verifies immediately before every slice invocation. Hashes are of file
+    bytes only; a renamed but byte-identical profile reads as identical state.
+    A preset that exists only as a selected name in PrusaSlicer.ini -- no user
+    .ini, no vendor-bundle section anywhere -- hashes a deterministic
+    name-only placeholder binding (kind + name + the PrusaSlicer.ini hash),
+    labeled in the result, so a valid selection can never crash the drift
+    guard; any change to that selection line changes the hash.
+    """
+    mapping = {
+        "printer": presets.printer,
+        "filament": presets.filament,
+        "print": presets.print_settings,
+    }
+    files = {}
+    name_only = []
+    for kind, name in mapping.items():
+        backing = _preset_file(kind, name, presets.config_root)
+        if backing is None:
+            name_only.append(kind)
+        else:
+            files[kind] = backing
+    # Deduplicated read: printer + filament + print may share one vendor bundle.
+    digests = {}
+    for path in sorted(set(files.values()), key=str):
+        digests[path] = sha256_file(path)
+    ini_path = Path(presets.config_root).expanduser() / "PrusaSlicer.ini"
+    ini_hash = sha256_file(ini_path) if ini_path.is_file() else ""
+    hashes = {kind: digests[path] for kind, path in files.items()}
+    for kind in name_only:
+        binding = f"name-only:{kind}:{mapping[kind]}:{ini_hash}"
+        hashes[kind] = hashlib.sha256(binding.encode("utf-8")).hexdigest()
+    if name_only:
+        hashes["name_only_presets"] = ",".join(sorted(name_only))
+    return hashes
 
 
 def _deterministic_zip(entries: list[tuple[str, str]]) -> bytes:
@@ -1199,6 +1383,10 @@ def build_project(
     output_path: str | Path,
     presets: ResolvedPresets,
     geometry_override: dict[str, Any] | None = None,
+    orientation_overrides: dict[str, str] | None = None,
+    candidate_overrides: dict[str, dict[str, str]] | None = None,
+    extruder_assignments: dict[str, int] | None = None,
+    model_extruders: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Write a PrusaSlicer project ``.3mf`` from a verified export-handoff index.
 
@@ -1232,6 +1420,34 @@ def build_project(
             f"printable: {', '.join(undeclared)}."
         )
     _assert_intent_matches_manifest(manifest, parts)
+    if orientation_overrides:
+        unknown = sorted(set(orientation_overrides) - {part["part_path"] for part in parts})
+        if unknown:
+            raise ValueError(
+                "orientation_overrides name parts the project does not carry: "
+                + ", ".join(unknown) + "."
+            )
+    for part in parts:
+        overrides = dict(part["overrides"])
+        face_override = (orientation_overrides or {}).get(part["part_path"])
+        if face_override is not None:
+            rotation, record = rotation_for_contact_face(face_override)
+            part["rotation"] = rotation
+            part["rotation_record"] = record
+        overrides.update((candidate_overrides or {}).get(part["part_path"], {}))
+        assignment = (extruder_assignments or {}).get(part["part_path"])
+        if assignment is not None:
+            count = printer_extruder_count(presets.printer, presets.config_root)
+            # PrusaSlicer's support_material_extruder is 1-based; extruder 0 means
+            # "no assignment", which a candidate must never silently emit.
+            if isinstance(assignment, bool) or not isinstance(assignment, int) or not 1 <= assignment <= count:
+                raise ValueError(
+                    "Printable part " + repr(part["part_path"]) + " assigns support material to extruder "
+                    + repr(assignment) + ", outside the 1.." + str(count) + " range of printer preset "
+                    + repr(presets.printer) + "."
+                )
+            overrides["support_material_extruder"] = str(assignment)
+        part["overrides"] = validate_overrides(overrides, part["part_path"])
     for object_id, part in enumerate(parts, start=1):
         part["object_id"] = object_id
     geometry = (
@@ -1241,13 +1457,18 @@ def build_project(
     )
     plates = _layout(parts, geometry)
 
+    multi_tool = any("support_material_extruder" in part["overrides"] for part in parts)
+    explicit_model_extruders = {
+        path: count for path, count in (model_extruders or {}).items()
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 1
+    }
     payload = _deterministic_zip(
         [
             ("[Content_Types].xml", _CONTENT_TYPES_XML),
             ("_rels/.rels", _RELS_XML),
             (MODEL_ENTRY, _model_xml(parts)),
             (CONFIG_ENTRY, _config_text(presets)),
-            (MODEL_CONFIG_ENTRY, _model_config_xml(parts)),
+            (MODEL_CONFIG_ENTRY, _model_config_xml(parts, multi_tool_extruders=multi_tool, model_extruders=explicit_model_extruders)),
         ]
     )
     try:

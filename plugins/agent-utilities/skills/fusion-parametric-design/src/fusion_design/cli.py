@@ -47,6 +47,7 @@ from .prusaslicer_project import (
 )
 from .prusaslicer_profiles import normalize_print_filament_profiles, normalize_printer_models
 from .prusaslicer_runtime import PrusaSlicerRuntime, runtime_fingerprint
+from .prusaslicer_optimize import optimize as run_optimize
 from .prusaslicer_slice import slice_project
 from .report_diff import diff_reports
 from .scripts import (
@@ -827,6 +828,32 @@ def _cmd_prusaslicer_profiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prusaslicer_optimize(args: argparse.Namespace) -> int:
+    _validate_named_paths([("manifest", args.manifest), ("export-index", args.export_index)])
+    try:
+        manifest = load_manifest(args.manifest)
+        presets = resolve_presets(
+            {"printer": args.printer, "filament": args.filament, "print": args.print_preset},
+            config_root=args.config_root,
+        )
+        report = run_optimize(
+            manifest,
+            args.export_index,
+            presets,
+            intent=args.intent,
+            executable=args.slicer_executable,
+            datadir=args.datadir if args.datadir else presets.config_root,
+            gcode_format=args.gcode_format,
+        )
+    except (ManifestValidationError, ValueError, OSError) as error:
+        payload = {"kind": "prusaslicer-optimize", "ok": False, "outcome": "refused", "reason": str(error)}
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(payload["reason"], file=sys.stderr)
+        return 2
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report.get("ok") else 2
+
+
 def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
     _validate_named_paths(
         [("manifest", args.manifest), ("export-index", args.export_index), ("output", args.output)]
@@ -902,6 +929,7 @@ def _cmd_prusaslicer_project(args: argparse.Namespace) -> int:
             },
             executable=args.slicer_executable,
             datadir=presets.config_root,
+            gcode_format=args.gcode_format,
             runtime_evidence=runtime_evidence,
         )
     else:
@@ -1520,6 +1548,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the PrusaSlicer binary. Defaults to the installed app bundle, then PATH.",
     )
     prusaslicer.add_argument(
+        "--gcode-format",
+        choices=("binary", "ascii"),
+        default="binary",
+        help="Slice output format. Binary (default) is decoded in-process; ascii forces --binary-gcode=0.",
+    )
+    prusaslicer.add_argument(
         "--offline-profiles",
         action="store_true",
         help=(
@@ -1529,6 +1563,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prusaslicer.set_defaults(handler=_cmd_prusaslicer_project)
 
+    optimize = subparsers.add_parser(
+        "prusaslicer-optimize",
+        help="Slice every orientation/setting candidate and rank them by measured time and mass.",
+    )
+    optimize.add_argument("manifest")
+    optimize.add_argument('--export-index', required=True, help='Path to the export-handoff index JSON bound to this manifest.')
+    optimize.add_argument('--intent', choices=('fast-structural', 'fine-detail', 'enclosure'), default='fast-structural', help='Ranking objective; weights are fixed per intent and recorded in the report.')
+    optimize.add_argument('--printer', help='Installed PrusaSlicer printer preset name.')
+    optimize.add_argument('--filament', help='Installed PrusaSlicer filament preset name.')
+    optimize.add_argument('--print', dest='print_preset', help='Installed PrusaSlicer print preset name.')
+    optimize.add_argument('--slicer-executable', help='Path to the PrusaSlicer binary. Defaults to the installed app bundle, then PATH.')
+    optimize.add_argument('--datadir', help='PrusaSlicer datadir for slicing. Defaults to the resolved configuration root.')
+    optimize.add_argument('--config-root', help='PrusaSlicer configuration directory used to resolve preset names.')
+    optimize.add_argument('--gcode-format', choices=('binary', 'ascii'), default='binary', help='Slice output format; binary is decoded in-process.')
+    optimize.set_defaults(handler=_cmd_prusaslicer_optimize)
     profiles = subparsers.add_parser(
         "prusaslicer-profiles",
         help="Query installed PrusaSlicer printer and compatible print/filament profiles.",

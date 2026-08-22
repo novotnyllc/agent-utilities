@@ -17,7 +17,7 @@ from fusion_design.export_handoff import example_verification_report, manufactur
 from fusion_design.manifest import load_manifest
 from fusion_design.scripts import manifest_sha256
 from fusion_design.variant_matrix import MatrixConfig
-from test_prusaslicer_project import _Fixture, _config_root, process_execution_offenses
+from test_prusaslicer_project import _Fixture, _config_root, _intent, process_execution_offenses
 from test_prusaslicer_slice import PRESETS, _fake_slicer
 from test_variant_matrix import _FakeFusion, seed_reports
 
@@ -1655,5 +1655,64 @@ class MeshCliTests(unittest.TestCase):
         self.assertIn("classification-source-mismatch", errors)
 
 
+class PrusaSlicerOptimizeCliTests(unittest.TestCase):
+    def _run(self, argv):
+        output = io.StringIO()
+        errors = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def _handoff(self, root):
+        fixture = _Fixture(root)
+        fixture.add_part(
+            "Widget/Bracket",
+            intent=_intent(orientation={"contact_face": "-Z", "rationale": "flat", "allowed_alternatives": ["+Z"]}),
+        )
+        index = fixture.write_index()
+        return index, _config_root(root)
+
+    def _argv(self, index, config, *extra):
+        return [
+            "prusaslicer-optimize",
+            str(EXAMPLE),
+            "--export-index", str(index),
+            "--config-root", str(config),
+            *extra,
+        ]
+
+    def test_optimize_exits_zero_with_best_candidate_summary(self) -> None:
+        with mock.patch.object(cli_module, "run_optimize") as run_optimize:
+            run_optimize.return_value = {
+                "kind": "prusaslicer-optimize",
+                "ok": True,
+                "best": {"candidate_id": "Widget/Bracket:+Z"},
+            }
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(root)
+                code, stdout, errors = self._run(self._argv(index, config))
+        self.assertEqual(0, code, errors)
+        payload = json.loads(stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("Widget/Bracket:+Z", payload["best"]["candidate_id"])
+
+    def test_optimize_exits_two_when_nothing_sliced(self) -> None:
+        with mock.patch.object(cli_module, "run_optimize") as run_optimize:
+            run_optimize.return_value = {
+                "kind": "prusaslicer-optimize",
+                "ok": False,
+                "outcome": "all_candidates_failed",
+                "failure": "No candidate produced measurable G-code.",
+                "ranking": [],
+            }
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                index, config = self._handoff(root)
+                code, stdout, errors = self._run(self._argv(index, config))
+        self.assertEqual(2, code)
+        payload = json.loads(stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("No candidate produced measurable G-code.", payload["failure"])
 if __name__ == "__main__":
     unittest.main()

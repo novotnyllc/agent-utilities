@@ -26,6 +26,33 @@ PROTECTED_FEATURE_KINDS = {
 
 MATERIAL_STATUSES = {"provisional", "coupon_verified"}
 
+PRINT_INTENTS = {"fast-structural", "fine-detail", "enclosure"}
+
+# Override keys added by the PrusaSlicer optimization loop. Each entry maps an
+# override key to the declared printable-part field that justifies emitting it;
+# an override whose justifying field is absent or invalid fails closed (see
+# validate_extended_override_value). These constants are the shared vocabulary:
+# prusaslicer_project.ALLOWED_OVERRIDE_KEYS is wired from them so the validator
+# and the emitter cannot drift apart.
+PRINT_INTENT_OVERRIDE_KEYS = {
+    "speed": "print_intent",
+    "layer_height": "print_intent",
+    "seam_position": "print_intent",
+    "brim_width": "print_intent",
+}
+SUPPORT_STYLE_OVERRIDE_KEY = "support_material_style"
+SUPPORT_STYLE_JUSTIFYING_FIELD = "support_policy"
+# Styles only mean something when supports are actually emitted; 'none' and
+# 'explicit-regions' do not justify a style override.
+SUPPORT_STYLE_JUSTIFYING_POLICIES = {"build-plate-only", "everywhere"}
+
+SUPPORT_MATERIAL_STYLES = {"organic", "grid", "snug"}
+# organic/grid/snug are already PrusaSlicer's own support_material_style
+# values; the table exists so a rename on either side is a visible edit.
+SUPPORT_MATERIAL_STYLE_TRANSLATIONS = {style: style for style in sorted(SUPPORT_MATERIAL_STYLES)}
+
+SEAM_POSITION_VALUES = {"aligned", "nearest", "hidden", "rear"}
+
 PRINTABLE_PART_FIELDS = {
     "id",
     "path",
@@ -39,12 +66,18 @@ PRINTABLE_PART_FIELDS = {
     "strength",
     "protected_features",
     "material",
+    "print_intent",
 }
 
 # The optional fields; everything else in PRINTABLE_PART_FIELDS is required and
 # is pinned against the schema's `$defs.printable_part.required` array by
 # test_schema_json_stays_in_lockstep_with_validator_constants.
-PRINTABLE_PART_OPTIONAL_FIELDS = {"body_name", "quantity", "support_regions"}
+PRINTABLE_PART_OPTIONAL_FIELDS = {
+    "body_name",
+    "quantity",
+    "support_regions",
+    "print_intent",
+}
 
 PRINTABLE_PART_REQUIRED_FIELDS = PRINTABLE_PART_FIELDS - PRINTABLE_PART_OPTIONAL_FIELDS
 
@@ -60,6 +93,73 @@ def _in_closed_set(value: Any, allowed: set[str]) -> bool:
         return value in allowed
     except TypeError:
         return False
+
+
+def validate_extended_override_value(
+    key: str, value: Any, part_path: str, intent: dict[str, Any]
+) -> None:
+    """Fail closed when an extended override lacks justification or is malformed.
+
+    Every key in the extended vocabulary traces to one declared printable-part
+    field (the tables above name it). An override whose justifying field is
+    absent, invalid, or unable to express the key raises a named error instead
+    of being silently applied -- the same doctrine as the original five-key
+    path, one level deeper.
+    """
+    prefix = f"Printable part {part_path!r}"
+    justifying_field = PRINT_INTENT_OVERRIDE_KEYS.get(key)
+    if justifying_field is None:
+        if key != SUPPORT_STYLE_OVERRIDE_KEY:
+            raise ValueError(
+                f"{prefix} carries override {key!r}, which is not part of the extended "
+                f"justified vocabulary ({', '.join(sorted(PRINT_INTENT_OVERRIDE_KEYS))}, "
+                f"{SUPPORT_STYLE_OVERRIDE_KEY})."
+            )
+        declared = intent.get(SUPPORT_STYLE_JUSTIFYING_FIELD)
+        if declared not in SUPPORT_STYLE_JUSTIFYING_POLICIES:
+            raise ValueError(
+                f"{prefix} declares override {SUPPORT_STYLE_OVERRIDE_KEY!r}, which requires "
+                f"{SUPPORT_STYLE_JUSTIFYING_FIELD} to be one of "
+                f"{', '.join(sorted(SUPPORT_STYLE_JUSTIFYING_POLICIES))}; declared value is "
+                f"{declared!r}. Refusing an unjustified override."
+            )
+        if not _in_closed_set(value, SUPPORT_MATERIAL_STYLES):
+            raise ValueError(
+                f"{prefix} declares support_material_style {value!r}; expected one of "
+                f"{', '.join(sorted(SUPPORT_MATERIAL_STYLES))}."
+            )
+        return
+
+    declared = intent.get(justifying_field)
+    if not _in_closed_set(declared, PRINT_INTENTS):
+        raise ValueError(
+            f"{prefix} declares override {key!r}, which requires a valid print_intent "
+            f"(one of {', '.join(sorted(PRINT_INTENTS))}); declared value is {declared!r}. "
+            "Refusing an unjustified override."
+        )
+
+    if key == "seam_position":
+        if not _in_closed_set(value, SEAM_POSITION_VALUES):
+            raise ValueError(
+                f"{prefix} declares seam_position {value!r}; expected one of "
+                f"{', '.join(sorted(SEAM_POSITION_VALUES))}."
+            )
+        return
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(number)
+        or (number < 0 if key == "brim_width" else number <= 0)
+    ):
+        qualifier = "a non-negative" if key == "brim_width" else "a positive"
+        raise ValueError(
+            f"{prefix} declares {key} {value!r}; expected {qualifier} finite number."
+        )
 
 
 def _validate_printable_parts(
@@ -355,6 +455,17 @@ def _validate_printable_parts(
                 )
             )
 
+        print_intent = raw_part.get("print_intent")
+        if print_intent is not None:
+            if not _in_closed_set(print_intent, PRINT_INTENTS):
+                issues.append(
+                    ValidationIssue(
+                        "printable-part-invalid-print-intent",
+                        f"{path}.print_intent",
+                        f"print_intent must be one of {', '.join(sorted(PRINT_INTENTS))}.",
+                    )
+                )
+
         strength = raw_part.get("strength")
         if not isinstance(strength, dict):
             issues.append(
@@ -573,4 +684,3 @@ def _validate_printable_parts(
                 + ".",
             )
         )
-

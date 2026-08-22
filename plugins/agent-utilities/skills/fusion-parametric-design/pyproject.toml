@@ -11,6 +11,11 @@ license = {text = "MIT"}
 authors = [{name = "Claire Novotny LLC"}]
 dependencies = []
 
+[project.optional-dependencies]
+# Optional: required only to decode binary G-code (.bgcode) output. Not on
+# PyPI yet -- wheels ship from prusa3d/libbgcode release artifacts.
+bgcode = ["pybgcode"]
+
 [project.scripts]
 fusion-design = "fusion_design.cli:main"
 

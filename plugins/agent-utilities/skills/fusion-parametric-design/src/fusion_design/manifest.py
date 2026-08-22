@@ -23,6 +23,7 @@ from .mesh_source import (  # noqa: F401
 # remain valid import paths for the printable-part closed-world constants.
 from .printable_parts import (  # noqa: F401
     CONTACT_FACES,
+    PRINT_INTENTS,
     MATERIAL_STATUSES,
     PRINT_AS_VALUES,
     PRINTABLE_PART_FIELDS,

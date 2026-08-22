@@ -249,6 +249,25 @@ class ManifestValidationTests(unittest.TestCase):
                     {issue.code for issue in validate_manifest_data(data)},
                 )
 
+    def test_print_intent_is_an_optional_closed_enum(self) -> None:
+        data = copy.deepcopy(self.data)
+        self.assertEqual([], validate_manifest_data(data))
+        for intent in ("fast-structural", "fine-detail", "enclosure"):
+            with self.subTest(intent=intent):
+                mutated = copy.deepcopy(data)
+                mutated["printable_parts"][0]["print_intent"] = intent
+                self.assertEqual([], validate_manifest_data(mutated))
+
+    def test_invalid_print_intent_fails_named(self) -> None:
+        for bad in ("strongest", "", 7):
+            with self.subTest(bad=bad):
+                data = copy.deepcopy(self.data)
+                data["printable_parts"][0]["print_intent"] = bad
+                self.assertIn(
+                    "printable-part-invalid-print-intent",
+                    {issue.code for issue in validate_manifest_data(data)},
+                )
+
     def test_clearance_minimum_must_be_finite(self) -> None:
         for minimum in (float("nan"), 10**400):
             with self.subTest(minimum=minimum):
@@ -1532,6 +1551,7 @@ class ManifestValidationTests(unittest.TestCase):
             PRINTABLE_PART_FIELDS,
             PRINTABLE_PART_REQUIRED_FIELDS,
             PROTECTED_FEATURE_KINDS,
+            PRINT_INTENTS,
             PROVENANCE_REQUIRED_ROLES,
             REFERENCE_REPRESENTATIONS,
             ROLE_PREFIXES,
@@ -1580,6 +1600,7 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual(PRINTABLE_PART_FIELDS, set(part["properties"]))
         self.assertEqual(PRINTABLE_PART_REQUIRED_FIELDS, set(part["required"]))
         self.assertEqual(PRINT_AS_VALUES, set(part["properties"]["print_as"]["enum"]))
+        self.assertEqual(PRINT_INTENTS, set(part["properties"]["print_intent"]["enum"]))
         verification = schema["$defs"]["verification"]
         self.assertIn("allowed_suppressed_paths", verification["properties"])
         self.assertIn("allow_suppressed_timeline_features", verification["properties"])

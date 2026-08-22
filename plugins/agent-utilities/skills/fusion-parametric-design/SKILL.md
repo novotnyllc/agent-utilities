@@ -394,6 +394,23 @@ When the user runs PrusaSlicer, the export index plus its declared `manufacturin
   --print "<installed print preset>"
 ```
 
+To compare candidate orientations and settings instead of slicing one declared
+configuration, run the optimizer. It enumerates the orientation candidates
+(declared alternatives, or all six bed contacts when none are declared), derives
+a bounded settings variant set from the part's `print_intent`, slices every
+candidate headlessly, ranks by the intent's fixed objective over measured time,
+mass, and advisory mesh strength proxies, and reports the ranking with full
+evidence-chain binding:
+
+```bash
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-optimize power-pod.fusion-project.json \
+  --export-index export-index__<run>.json \
+  --config-root /absolute/path/to/PrusaSlicer-config \
+  --printer "<installed printer preset>" \
+  --filament "<installed filament preset>" \
+  --print "<installed print preset>"
+```
+
 Before project construction, query the installed runtime when it is available:
 
 ```bash
@@ -452,6 +469,7 @@ The companion `fusion-design` CLI does not model the product. It validates the e
 "$SKILL_DIR/scripts/fusion-design" emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 "$SKILL_DIR/scripts/fusion-design" plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH] [--offline-profiles]
+"$SKILL_DIR/scripts/fusion-design" prusaslicer-optimize <manifest> --export-index <index.json> [--intent fast-structural|fine-detail|enclosure] [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--datadir DIR] [--slicer-executable PATH] [--gcode-format binary|ascii]
 "$SKILL_DIR/scripts/fusion-design" prusaslicer-profiles --config-root DIR [--printer NAME] [--slicer-executable PATH]
 "$SKILL_DIR/scripts/fusion-design" fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 "$SKILL_DIR/scripts/fusion-design" diff-reports <before.json> <after.json> [--allow-manifest-change]

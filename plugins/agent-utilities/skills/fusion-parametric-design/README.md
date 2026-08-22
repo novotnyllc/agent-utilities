@@ -130,6 +130,7 @@ scripts/fusion-design reconstruction-coverage <program.json> [--fit-record <fit.
 scripts/fusion-design emit-export <manifest> --verification-report <report.json> --verification-nonce <nonce> --export-dir <fusion-host-dir> [--format step|3mf|stl ...] [-o file.py]
 scripts/fusion-design plan-variants <manifest> [--export-dir <fusion-host-dir>] [--format step|3mf|stl ...] [--on-failure stop|continue] [--slow-step-seconds N] [--reports-dir DIR] [-o plan.json]
 scripts/fusion-design prusaslicer-project <manifest> --export-index <index.json> --output <project.3mf> [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--slice] [--slicer-executable PATH] [--offline-profiles]
+scripts/fusion-design prusaslicer-optimize <manifest> --export-index <index.json> [--intent fast-structural|fine-detail|enclosure] [--printer NAME] [--filament NAME] [--print NAME] [--config-root DIR] [--datadir DIR] [--slicer-executable PATH] [--gcode-format binary|ascii]
 scripts/fusion-design prusaslicer-profiles --config-root DIR [--printer NAME] [--slicer-executable PATH]
 scripts/fusion-design fit-regions <dump> --dump-sha256 <hex> --spec <detection.json> [-o fit-record.json]
 scripts/fusion-design diff-reports <before.json> <after.json> [--allow-manifest-change]

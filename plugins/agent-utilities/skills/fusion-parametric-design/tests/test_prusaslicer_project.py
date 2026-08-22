@@ -201,12 +201,12 @@ class _Fixture:
         path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
-    def build(self, index, output, presets, manifest: Manifest | None = None) -> dict:
-        return build_project(manifest if manifest is not None else self.manifest(), index, output, presets)
+    def build(self, index, output, presets, manifest: Manifest | None = None, **kwargs) -> dict:
+        return build_project(manifest if manifest is not None else self.manifest(), index, output, presets, **kwargs)
 
 
 # Synthetic printer profile: a 200 x 180 mm bed, 150 mm tall build volume.
-PRINTER_INI = "bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 150\n"
+PRINTER_INI = "bed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 150\nextruders_cnt = 1\n"
 
 # Synthetic vendor bundle in the real PrusaResearch.ini shape: an abstract
 # *common* parent carrying model/variant/bed fields, concrete presets
@@ -217,6 +217,7 @@ printer_model = COREONE
 printer_variant = HF0.4
 bed_shape = 0x0,250x0,250x220,0x220
 max_print_height = 270
+extruders_cnt = 5
 
 [printer:Prusa CORE One HF0.4 nozzle]
 inherits = *common*
@@ -344,8 +345,10 @@ class OverrideTests(unittest.TestCase):
         self.assertNotIn("explicit-regions", prusaslicer_project.SUPPORT_POLICY_OVERRIDES)
 
     def test_unjustified_override_key_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unjustified per-object overrides: layer_height"):
-            validate_overrides({"layer_height": "0.2"}, "Widget/Part")
+        # layer_height joined the justified vocabulary with the optimization lane;
+        # an unknown key must still fail closed.
+        with self.assertRaisesRegex(ValueError, "unjustified per-object overrides: nozzle_diameter"):
+            validate_overrides({"nozzle_diameter": "0.4"}, "Widget/Part")
 
     def test_missing_declaration_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "support_policy"):
@@ -1088,6 +1091,239 @@ class NoSlicerExecutionTests(unittest.TestCase):
                 self.assertIn(expected, process_execution_offenses(source))
         # os.environ and other harmless os use must not trip the guard.
         self.assertEqual([], process_execution_offenses("import os\nos.environ.get('APPDATA')\n"))
+
+
+class PresetHashTests(unittest.TestCase):
+    def test_hashes_track_the_backing_ini_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = _config_root(root)
+            first = prusaslicer_project.preset_hashes(_presets(config))
+            self.assertEqual({"printer", "filament", "print"}, set(first))
+            printer_ini = next((config / "printer").glob("*.ini"))
+            printer_ini.write_text(printer_ini.read_text() + "\n# touched\n", encoding="utf-8")
+            second = prusaslicer_project.preset_hashes(_presets(config))
+            self.assertNotEqual(first["printer"], second["printer"])
+            self.assertEqual(first["filament"], second["filament"])
+
+    def test_system_printer_selected_via_ini_hashes_the_vendor_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(
+                Path(temporary),
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "Overture PETG @XL HF0.4 - Black",
+                    "print": "0.40 SPEED @XLIS HF0.6 mixed",
+                },
+                user_presets={"filament": ["Overture PETG @XL HF0.4 - Black"], "print": ["0.40 SPEED @XLIS HF0.6 mixed"]},
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+            hashes = prusaslicer_project.preset_hashes(_presets(config))
+            bundle = config / "vendor" / "PrusaResearch.ini"
+            self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), hashes["printer"])
+
+    def test_preset_with_no_readable_file_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(Path(temporary))
+            (config / "filament" / "Overture PETG @XL HF0.4 - Black.ini").unlink()
+            # F3: an unresolvable preset no longer crashes the drift guard;
+            # it hashes as name-only (see the dedicated tests below).
+            hashes = prusaslicer_project.preset_hashes(_presets(config))
+            self.assertIn("filament", hashes["name_only_presets"].split(","))
+
+    def test_system_print_and_filament_presets_resolve_through_vendor_bundles(self) -> None:
+        # F3: system print/filament presets have no user .ini; when a vendor
+        # bundle defines their section, that bundle is the drift-relevant file.
+        with tempfile.TemporaryDirectory() as temporary:
+            config = _config_root(
+                Path(temporary),
+                user_presets={},
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "System PETG",
+                    "print": "System 0.20",
+                },
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+            bundle = config / "vendor" / "PrusaResearch.ini"
+            bundle.write_text(
+                VENDOR_BUNDLE
+                + "\n[print:System 0.20]\nlayer_height = 0.20\n"
+                + "\n[filament:System PETG]\nfilament_type = PETG\n"
+                + "\n[printer:System Printer]\nbed_shape = 0x0,200x0,200x180,0x180\nmax_print_height = 150\nextruders_cnt = 1\n"
+                + "\n[vendor:OtherVendor]\nmodel:X = Y\n"
+                + "\n[print:OtherVendor profile]\ntemperature = 210\n",
+                encoding="utf-8",
+            )
+            # Enable the second vendor too so both bundles are scanned.
+            ini = config / "PrusaSlicer.ini"
+            ini.write_text(ini.read_text(encoding="utf-8") + "[vendor:OtherVendor]\nmodel:X = Y\n", encoding="utf-8")
+            # Selected via PrusaSlicer.ini -- the exact layout F3 describes:
+            # a system preset with no user .ini of its own. resolve_presets
+            # accepts selected names; preset_hashes must then find their bytes.
+            presets = resolve_presets({}, config)
+            hashes = prusaslicer_project.preset_hashes(presets)
+            self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), hashes["print"])
+            self.assertEqual(hashes["print"], hashes["filament"])
+            self.assertNotIn("name_only_presets", hashes)
+
+    def test_name_only_selected_presets_hash_a_deterministic_placeholder(self) -> None:
+        # F3: a preset that exists only as a selected name in PrusaSlicer.ini
+        # gets a stable binding of kind + name + the ini's own hash -- labeled,
+        # never a crash, and sensitive to selection changes.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            selected = {
+                "printer": "Ghost Printer XL",
+                "filament": "Overture PETG @XL HF0.4 - Black",
+                "print": "0.40 SPEED @XLIS HF0.6 mixed",
+            }
+            config = _config_root(root, selected=selected, user_presets={
+                "filament": [selected["filament"]],
+                "print": [selected["print"]],
+            })
+            presets = _presets(config)
+            first = prusaslicer_project.preset_hashes(presets)
+            self.assertIn("printer", first["name_only_presets"].split(","))
+            import hashlib as _hashlib
+
+            expected = _hashlib.sha256(
+                f"name-only:printer:{selected['printer']}:{_hashlib.sha256((config / 'PrusaSlicer.ini').read_bytes()).hexdigest()}".encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(expected, first["printer"])
+            # Changing the PrusaSlicer.ini bytes changes the placeholder hash.
+            ini = config / "PrusaSlicer.ini"
+            ini.write_text(ini.read_text(encoding="utf-8") + "# touched\n", encoding="utf-8")
+            second = prusaslicer_project.preset_hashes(presets)
+            self.assertNotEqual(first["printer"], second["printer"])
+
+
+class MultiMaterialTests(unittest.TestCase):
+    def test_support_extruder_assignment_stays_out_of_volume_metadata(self) -> None:
+        # The default fixture printer declares one extruder; the vendor-bundle
+        # printer declares five, so a valid assignment needs it.
+        def xl_config(root: Path) -> Path:
+            return _config_root(
+                root,
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "Overture PETG @XL HF0.4 - Black",
+                    "print": "0.40 SPEED @XLIS HF0.6 mixed",
+                },
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root / "case-ok")
+            fixture.add_part("Widget/Bracket")
+            output = root / "ok" / "p.3mf"
+            (root / "ok").mkdir()
+            result = fixture.build(
+                fixture.write_index(), output, _presets(xl_config(root)),
+                extruder_assignments={"Widget/Bracket": 2},
+            )
+            with zipfile.ZipFile(output) as archive:
+                config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
+            # F6: a support-material assignment is config-level state; it must
+            # never move the model's own volume to another tool.
+            self.assertNotIn('key="extruder"', config)
+            self.assertIn('<metadata type="object" key="support_material_extruder" value="2"/>', config)
+            self.assertEqual("2", result["objects"][0]["overrides"]["support_material_extruder"])
+
+            fixture_bad = _Fixture(root / "case-bad")
+            fixture_bad.add_part("Widget/Bracket")
+            (root / "bad").mkdir()
+            with self.assertRaisesRegex(ValueError, "outside the 1..5 range"):
+                fixture_bad.build(
+                    fixture_bad.write_index(),
+                    root / "bad" / "p.3mf",
+                    _presets(xl_config(root / "cfg-bad")),
+                    extruder_assignments={"Widget/Bracket": 6},
+                )
+            self.assertFalse((root / "bad" / "p.3mf").exists())
+
+    def test_single_material_output_is_deterministic_and_free_of_extruder_metadata(self) -> None:
+        """Regression pin: no extruder assignment keeps the single-material shape."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            index = fixture.write_index()
+            manifest = fixture.manifest()
+            presets = _presets(_config_root(root))
+            output = root / "p.3mf"
+            result = build_project(manifest, index, output, presets)
+            # The writer is deterministic (ZIP_STORED, fixed timestamps), so two
+            # builds of the same inputs must agree byte-for-byte; and the
+            # multi-tool branch is provably off because no extruder key appears.
+            again = root / "again.3mf"
+            rebuild = build_project(manifest, index, again, presets)
+            self.assertEqual(result["project_sha256"], rebuild["project_sha256"])
+            with zipfile.ZipFile(output) as archive:
+                config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
+            self.assertNotIn('key="extruder"', config)
+
+    def test_explicit_model_extruder_writes_volume_metadata(self) -> None:
+        # F6 counterpart: the model's own tool assignment, passed explicitly,
+        # is the only thing that stamps the volume-level extruder key.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            output = root / "p.3mf"
+            config = _config_root(
+                root / "cfg",
+                selected={
+                    "printer": "Prusa CORE One HF0.4 nozzle",
+                    "filament": "Overture PETG @XL HF0.4 - Black",
+                    "print": "0.40 SPEED @XLIS HF0.6 mixed",
+                },
+                vendor_models="model:COREONE = HF0.4",
+                vendor_bundle=VENDOR_BUNDLE,
+            )
+            build_project(
+                fixture.manifest(), fixture.write_index(), output, _presets(config),
+                model_extruders={"Widget/Bracket": 2},
+            )
+            with zipfile.ZipFile(output) as archive:
+                config = archive.read(prusaslicer_project.MODEL_CONFIG_ENTRY).decode("utf-8")
+            self.assertIn('<metadata type="volume" key="extruder" value="2"/>', config)
+
+    def test_extended_override_values_are_validated(self) -> None:
+        cases = [
+            ({"support_material_style": "fancy"}, "support_material_style"),
+            ({"seam_position": "left"}, "seam_position"),
+            ({"layer_height": "-0.2"}, "layer_height"),
+            ({"brim_width": "wide"}, "brim_width"),
+            ({"support_material_extruder": "0"}, "support_material_extruder"),
+        ]
+        for overrides, message in cases:
+            with self.subTest(override=sorted(overrides)[0]):
+                with self.assertRaisesRegex(ValueError, message):
+                    validate_overrides(overrides, "Widget/Part")
+
+    def test_candidate_knobs_change_the_built_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = _Fixture(root)
+            fixture.add_part("Widget/Bracket")
+            index = fixture.write_index()
+            manifest = fixture.manifest()
+            presets = _presets(_config_root(root))
+            tilted = root / "tilted.3mf"
+            result = build_project(
+                manifest, index, tilted, presets,
+                orientation_overrides={"Widget/Bracket": "+Z"},
+                candidate_overrides={"Widget/Bracket": {"layer_height": "0.12"}},
+            )
+            rotation = result["objects"][0]["applied_rotation"]
+            self.assertEqual("+Z", rotation["contact_face"])
+            self.assertEqual(180, abs(rotation["degrees"]))
+            self.assertEqual("0.12", result["objects"][0]["overrides"]["layer_height"])
 
 
 if __name__ == "__main__":
