@@ -34,9 +34,14 @@ const MAX_ADHOC_BYTES = 8192;
 // UI-blocking calls deadlock the MCP main thread: ui.messageBox opens a modal
 // that waits for user dismissal while the MCP server is blocked waiting for the
 // script to return. No timeout exists. Always refuse, marker or not.
+// selectEntity pauses for interactive selection; createFileDialog opens a native
+// open/save sheet -- both hold Fusion's main thread exactly like a modal dialog,
+// so they join messageBox/inputBox on the always-refused list.
 const UI_BLOCKING_PATTERNS = [
   [/\bmessageBox\s*\(/, "messageBox (blocks main thread indefinitely)"],
   [/\binputBox\s*\(/, "inputBox (blocks main thread indefinitely)"],
+  [/\bselectEntity\s*\(/, "selectEntity (waits for interactive selection on the main thread)"],
+  [/\bcreateFileDialog\s*\(/, "createFileDialog (opens a modal file dialog on the main thread)"],
 ];
 
 const SPAWN_PATTERNS = [

@@ -199,6 +199,24 @@ test("ui.messageBox in execute script is always blocked", () => {
   assert.match(result.stderr, /messageBox/);
 });
 
+test("ui.selectEntity in execute script is always blocked", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'ui.selectEntity("Pick a face", "Faces")' } },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /selectEntity/);
+});
+
+test("createFileDialog in execute script is always blocked", () => {
+  const result = run({
+    tool_name: "mcp__fusion__fusion_mcp_execute",
+    tool_input: { featureType: "script", object: { script: 'ui.createFileDialog()' } },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /createFileDialog/);
+});
+
 test("clean print script passes the UI gate", () => {
   const result = run({
     tool_name: "mcp__fusion__fusion_mcp_execute",
