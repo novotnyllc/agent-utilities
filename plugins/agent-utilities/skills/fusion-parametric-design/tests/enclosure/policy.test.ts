@@ -292,3 +292,66 @@ test("human commands use Fusion inputs instead of JSON textboxes", () => {
   assert.match(commands, /addSelectionInput/);
   assert.match(commands, /addValueInput/);
 });
+
+
+test("FDM rule analogue never calls Autodesk designPlasticRules", () => {
+  const sources = tsSources();
+  for (const source of sources) {
+    assert.doesNotMatch(source, /design\.designPlasticRules\s*\(/);
+    assert.doesNotMatch(source, /\bdesignPlasticRules\s*\(/);
+  }
+  const service = readService();
+  assert.match(service, /inheritIntoParameters/);
+  assert.match(service, /assign_fdm_rule/);
+  assert.match(service, /RULE_PARAM/);
+});
+
+test("coupon identity reconstruction does not allocate a new UUID", () => {
+  const service = readService();
+  const start = service.indexOf("function identityFromEntity");
+  assert.ok(start > -1, "identityFromEntity missing");
+  const next = service.indexOf("function readAttr", start);
+  const body = service.slice(start, next > -1 ? next : start + 800);
+  assert.doesNotMatch(body, /allocateIdentity\(/);
+  assert.match(body, /enclosure_parameter_namespace/);
+});
+
+test("installer treats copy as distinct from load and hashes bytes", () => {
+  const installer = fs.readFileSync(
+    path.resolve(addinRoot, "../../src/enclosure-features/installer.ts"),
+    {encoding: "utf8"},
+  );
+  assert.match(installer, /sha256/);
+  assert.match(installer, /probeAddInReadiness/);
+  assert.match(installer, /recipe-version-mismatch/);
+  assert.match(installer, /File copy is not load/);
+});
+
+
+test("per-command Fusion inputs and agent mailbox skip messageBox", () => {
+  const commands = fs.readFileSync(path.join(addinRoot, "commands.ts"), {encoding: "utf8"});
+  const dispatch = fs.readFileSync(path.join(addinRoot, "dispatch.ts"), {encoding: "utf8"});
+  assert.match(commands, /AssignFdmRule/);
+  assert.match(commands, /addDropDownCommandInput/);
+  assert.match(commands, /consumePending/);
+  assert.match(commands, /staged !== null/);
+  assert.match(dispatch, /export function consumePending/);
+  assert.doesNotMatch(commands, /Paste enclosure feature request JSON/);
+  const created = commands.indexOf("function onCommandCreated");
+  const boss = commands.indexOf("AddEnclosureBoss", created);
+  const seam = commands.indexOf("AddSeam", created);
+  const assign = commands.indexOf("AssignFdmRule", created);
+  assert.ok(boss > -1 && seam > -1 && assign > -1, "expected per-command dialog branches");
+  assert.ok(seam !== boss);
+});
+
+test("captive-nut coupons sketch polygons offset from origin", () => {
+  const coupon = fs.readFileSync(path.join(addinRoot, "recipes/coupon.ts"), {encoding: "utf8"});
+  const sketches = fs.readFileSync(path.join(addinRoot, "native/sketches.ts"), {encoding: "utf8"});
+  assert.match(coupon, /makePolygonProfile/);
+  assert.match(coupon, /coupon_type \?\? request\.type/);
+  assert.match(coupon, /offsetX/);
+  assert.match(sketches, /opts\.offsetX/);
+  const slot = sketches.slice(sketches.indexOf("function slot"));
+  assert.match(slot, /mmToCm/);
+});

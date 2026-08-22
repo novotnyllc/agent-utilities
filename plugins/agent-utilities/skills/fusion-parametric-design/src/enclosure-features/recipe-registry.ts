@@ -39,6 +39,7 @@ function requestType(prefix: string): string {
     vent: "VentRequest",
     coupon: "FitCouponRequest",
     operation: "OperationRequest",
+    solid: "OperationRequest",
   };
   return mapping[prefix] ?? "EnclosureFeatureRequest";
 }
@@ -101,6 +102,7 @@ const COUPON_TYPES = [
 const OPERATIONS = [
   "pattern_rectangular", "pattern_circular", "pattern_path", "mirror",
   "edit_feature", "delete_feature", "inspect_feature", "record_coupon_result",
+  "assign_fdm_rule", "extrude", "shell", "thicken", "draft",
 ] as const;
 
 // Entries whose design-matrix classification differs from supported-recipe.

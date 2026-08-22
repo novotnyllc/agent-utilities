@@ -53,7 +53,11 @@ export function executeSupportRecipe(
       refusal: ["target-not-found", "Support profile plane not resolved.", "provide a sketch plane for the support profile"] };
   }
   const params: Record<string, Any> = request.parameters ?? {};
-  const thickness = String(params.thickness ?? "2 mm");
+  const thickness = String(params.thickness ?? "");
+  if (!thickness) {
+    return { created, warnings,
+      refusal: ["invalid-parameter-expression", "Support/rest thickness is missing.", "assign an FDM rule or supply thickness"] };
+  }
   const shape: string = request.shape ?? "rectangle";
   const dims: Record<string, Any> = {};
   for (const [k, v] of Object.entries(request.dimensions ?? {})) {

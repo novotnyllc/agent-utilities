@@ -12,6 +12,7 @@ import { executeSealRecipe } from "./seal";
 import { executeStrainReliefRecipe } from "./strain_relief";
 import { executeSupportRecipe } from "./support";
 import { executeVentRecipe } from "./vent";
+import { executeSolidRecipe } from "./solid";
 
 export { executeBossRecipe } from "./boss";
 export { executeCouponRecipe, recordCouponResult } from "./coupon";
@@ -23,6 +24,7 @@ export { executeSealRecipe } from "./seal";
 export { executeStrainReliefRecipe } from "./strain_relief";
 export { executeSupportRecipe } from "./support";
 export { executeVentRecipe } from "./vent";
+export { executeSolidRecipe } from "./solid";
 
 export type RecipeExecute = (
   component: any,
@@ -45,4 +47,5 @@ export const RECIPES: Record<string, RecipeExecute> = {
   strain_relief: executeStrainReliefRecipe,
   support: executeSupportRecipe,
   vent: executeVentRecipe,
+  solid: executeSolidRecipe,
 };

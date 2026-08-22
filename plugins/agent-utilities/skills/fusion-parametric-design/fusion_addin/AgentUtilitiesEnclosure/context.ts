@@ -17,6 +17,7 @@ export interface DesignContext {
   design_type: "parametric" | "direct";
   is_direct: boolean;
   root_component: any; // adsk.fusion.Component, typed loosely for API tolerance
+  design: any;
 }
 
 const _contextCache = new Map<string, DesignContext>();
@@ -71,6 +72,7 @@ export function resolveDesignContext(design?: any): DesignContext {
     occurrence_path: null,
     active_configuration: null,
     root_component: root,
+    design,
     design_type: isDirect ? "direct" : "parametric",
     is_direct: isDirect,
   };
