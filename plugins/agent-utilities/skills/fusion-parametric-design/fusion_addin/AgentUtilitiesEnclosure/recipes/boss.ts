@@ -81,6 +81,14 @@ export function executeBossRecipe(
       refusal: ["target-not-found", "Boss placement plane not resolved.", "provide an explicit placement plane"] };
   }
 
+  const hardwareEarly: Record<string, any> = request.hardware ?? {};
+  if (variant === "heat_set_insert" && !hardwareEarly.insert_spec) {
+    return { created, warnings,
+      refusal: ["coupon-required",
+        "heat_set_insert requires hardware.insert_spec (pilot diameter/depth from the insert datasheet).",
+        "supply the manufacturer InsertSpec or run a heat-set fit coupon first"] };
+  }
+
   const outerDia = params.outer_diameter ?? "6 mm";
   const height = params.height ?? "5 mm";
   const design = getDesign();
@@ -158,13 +166,6 @@ export function executeBossRecipe(
   const centerPt = placement.center_point;
   const direction = placement.direction;
 
-  // Heat-set inserts NEVER get default dimensions: sourced spec or coupon.
-  if (variant === "heat_set_insert" && !hardware.insert_spec) {
-    return { created, warnings,
-      refusal: ["coupon-required",
-        "heat_set_insert requires hardware.insert_spec (pilot diameter/depth from the insert datasheet).",
-        "supply the manufacturer InsertSpec or run a heat-set fit coupon first"] };
-  }
   if (variant === "heat_set_insert") {
     let boreCenter = centerPt;
     let boreDir = direction;

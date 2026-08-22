@@ -28,6 +28,36 @@ export type StrainReliefResult = {
   refusal: Refusal | null;
 };
 
+function cutZipTieSlotPair(
+  component: Any,
+  plane: Any,
+  targetBody: Any,
+  identity: ManagedIdentity,
+  slotLen: Any,
+  slotW: Any,
+): {created: unknown[]; refusal: Refusal | null} {
+  const created: unknown[] = [];
+  const extrudes = component.features.extrudeFeatures;
+  for (const dx of [-Number(slotLen), Number(slotLen)]) {
+    const sk = makePlanarProfile(component, `sr_${identity.parameterNamespace}_slot_${created.length}`, plane, "slot",
+      { length: Number(slotLen), width: Number(slotW) }, { offsetX: dx });
+    if (sk !== null && sk.sketchProfiles.count > 0) {
+      created.push(sk);
+      const extIn = extrudes.createInput(sk.sketchProfiles.item(0),
+        adsk.fusion.FeatureOperations.CutFeatureOperation);
+      extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
+      extIn.participantBodies = [targetBody];
+      const feat = extrudes.add(extIn);
+      if (feat === null || feat === undefined) {
+        return {created,
+          refusal: ["feature-create-failed", "Zip-tie slot pair cut failed.", "check slot dimensions and target body"]};
+      }
+      created.push(feat);
+    }
+  }
+  return {created, refusal: null};
+}
+
 export function executeStrainReliefRecipe(
   component: Any,
   identity: ManagedIdentity,
@@ -68,23 +98,10 @@ export function executeStrainReliefRecipe(
     const slotLen = params.slot_length ?? 5.0;
     const bridgeW = params.bridge_width ?? 1.5;
     // Slot pair.
-    for (const dx of [-Number(slotLen), Number(slotLen)]) {
-      void dx; // Python computes but ignores the offset; parity preserved.
-      const sk = makePlanarProfile(component, `sr_${ns}_slot_${created.length}`, plane, "slot",
-        { length: Number(slotLen), width: Number(slotW) });
-      if (sk !== null && sk.sketchProfiles.count > 0) {
-        created.push(sk);
-        const extIn = extrudes.createInput(sk.sketchProfiles.item(0),
-          adsk.fusion.FeatureOperations.CutFeatureOperation);
-        extIn.setDistanceExtent(false, adsk.core.ValueInput.createByString("1.5 mm"));
-        extIn.participantBodies = [targetBody];
-        const feat = extrudes.add(extIn);
-        if (feat === null || feat === undefined) {
-          return { created, warnings,
-            refusal: ["feature-create-failed", "Zip-tie slot pair cut failed.", "check slot dimensions and target body"] };
-        }
-        created.push(feat);
-      }
+    const slots = cutZipTieSlotPair(component, plane, targetBody, identity, slotLen, slotW);
+    created.push(...slots.created);
+    if (slots.refusal) {
+      return {created, warnings, refusal: slots.refusal};
     }
     // Bridge.
     const bridgeSk = makePlanarProfile(component, `sr_${ns}_bridge`, plane, "rectangle",
@@ -109,6 +126,15 @@ export function executeStrainReliefRecipe(
       }
     }
     warnings.push("Zip-tie anchor provides no pull-force validation; physical testing required for load claims.");
+  } else if (srType === "zip_tie_slot_pair") {
+    const slotW = params.slot_width ?? 2.5;
+    const slotLen = params.slot_length ?? 5.0;
+    // Slots only: the caller supplies whatever bridge geometry they need.
+    const slots = cutZipTieSlotPair(component, plane, targetBody, identity, slotLen, slotW);
+    created.push(...slots.created);
+    if (slots.refusal) {
+      return {created, warnings, refusal: slots.refusal};
+    }
   } else if (srType === "clamp_saddle") {
     const saddleW = cableOd + 2.0;
     const sk = makePlanarProfile(component, `sr_${ns}_saddle`, plane, "circle",

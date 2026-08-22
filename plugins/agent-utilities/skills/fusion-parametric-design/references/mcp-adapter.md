@@ -392,3 +392,30 @@ When an ordinary-lane API call fails:
 Do not create test geometry, a probe harness, a diagnostic component, or a reproduction project. Do not search forums or unrelated API areas. If neither lookup path is available, stop before correcting the failed call and say so rather than guessing at an obsolete API signature. If the corrected call fails or requires broader investigation, show the failure and stop.
 
 Generated lanes follow only their documented refusal and retry contract.
+## Loading the enclosure add-in at runtime (Fusion already running)
+
+The toolkit's auto-installer copies the add-in into Fusion's add-in folder, but
+a running Fusion session loads an add-in only at startup or on demand. The
+supported programmatic load is the Scripts API (October 2023+):
+
+```python
+# Inside a bounded MCP snippet - load, never re-register commands manually.
+app = adsk.core.Application.get()
+matches = app.scripts.itemsByName("AgentUtilitiesEnclosure")
+if not matches:
+    # Fusion has not indexed it yet: register from its installed folder.
+    import os
+    app.scripts.addExisting(os.path.expanduser(
+        "~/Library/Application Support/Autodesk/Autodesk Fusion/API/AddIns/AgentUtilitiesEnclosure"))
+    matches = app.scripts.itemsByName("AgentUtilitiesEnclosure")
+addin = matches[0]
+assert addin.isAddIn
+if not addin.isRunning:
+    addin.run(False)   # waitForFinish=False: add-ins stay resident
+```
+
+After this, the AgentUtilitiesEnclosure_* command definitions are registered
+and the staged-nonce dispatch path works. Setting Script.isRunOnStartup = True
+once makes every future session load it automatically. On Fusion builds older
+than October 2023 the Scripts API does not exist; the fallback is the manual
+Utilities > Add-Ins dialog.

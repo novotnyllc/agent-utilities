@@ -517,6 +517,32 @@ export class EnclosureFeatureService {
     const ec = ecRaw != null ? Number(ecRaw) : null;
     const insp = this.inspect(created, tb, Number.isFinite(ec as number) ? ec : null);
     result.native_observations = insp.observations ?? [];
+    if (insp.state !== "managed-intact") {
+      const obs = (insp.observations ?? []).join("; ");
+      if (insp.state === "managed-object-missing") {
+        result.refusal = makeRefusal(
+          "zero-thickness-result",
+          "Compute All removed or emptied the created geometry",
+          null,
+          obs ? `inspection observations: ${obs}` : "undo and check parameters");
+      } else if ((insp.observations ?? []).some((o) => String(o).includes("not solid"))) {
+        result.refusal = makeRefusal(
+          "body-not-solid",
+          "Created result is not a solid body.",
+          null,
+          obs ? `inspection observations: ${obs}` : "undo and check parameters");
+      } else {
+        result.refusal = makeRefusal(
+          "timeline-unhealthy",
+          obs
+            ? `Inspection state is ${insp.state}: ${obs}.`
+            : `Inspection state is ${insp.state}.`,
+          null,
+          "inspect the document timeline before retrying");
+      }
+      result.operation = "create";
+      return result.toDict();
+    }
     result.instance = {
       feature_id: identity.featureId,
       display_suffix: identity.displaySuffix,
@@ -770,6 +796,8 @@ export class EnclosureFeatureService {
       result.refusal = makeRefusal("invalid-parameter-expression", "Invalid JSON");
       return result.toDict();
     }
+    const cascadeFlag = cascade === true || request.cascade === true
+      || String(request.cascade) === "true";
     const fid = String(request.feature_id ?? "");
     if (!fid) {
       result.refusal = makeRefusal("target-not-found", "Delete requires feature_id.");
@@ -799,7 +827,7 @@ export class EnclosureFeatureService {
       }
     } catch { /* offline: fall back to caller-supplied list only */ }
     const deps: any[] = [...new Set([...(request.managed_dependents ?? []), ...discovered])];
-    if (deps.length > 0 && !cascade) {
+    if (deps.length > 0 && !cascadeFlag) {
       result.refusal = makeRefusal(
         "managed-dependent-exists",
         `Cannot delete: ${deps.length} managed dependent(s).`,
@@ -913,7 +941,7 @@ export class EnclosureFeatureService {
         cleanupParamsFor(depMatches[0], depId);
       }
     };
-    if (cascade && deps.length > 0) {
+    if (cascadeFlag && deps.length > 0) {
       cascadeDependents(deps, 1);
     }
     const failed: string[] = [];
@@ -1149,10 +1177,24 @@ export class EnclosureFeatureService {
       String(request.recipe_id ?? "pattern"),
       String(request.recipe_version ?? "0.1.0"), upstreamIds);
 
+    /** Mirror planes arrive as serialized selection tokens like other wire
+      * selections; resolve them before the native operation. */
+    const resolveMirrorPlane = (value: Any): Any => {
+      if (typeof value === "string") {
+        try {
+          return root.findEntityByToken(value);
+        } catch {
+          return null;
+        }
+      }
+      return value ?? null;
+    };
+
     let created: Any = null;
     if (request.operation === "mirror") {
-      const plane = request.mirror_plane ?? null;
-      if (!plane) {
+      const plane = resolveMirrorPlane(request.mirror_plane);
+      const planeType = String(plane?.objectType ?? "");
+      if (!plane || !planeType.includes("Plane")) {
         result.refusal = makeRefusal("target-not-found", "Mirror requires mirror_plane.");
         return result.toDict();
       }
