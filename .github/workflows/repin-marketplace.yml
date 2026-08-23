@@ -1,0 +1,30 @@
+name: Repin marketplace
+
+# Every merge that touches plugins/ has to be repinned in novotnyllc/marketplace
+# by hand today, and a pin that lags behind main ships stale skills to the fleet.
+# scripts/repin-marketplace holds all the logic; this only supplies the trigger
+# and the cross-repo credential.
+
+on:
+  push:
+    branches: [main]
+    paths: ['plugins/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repin-marketplace
+  cancel-in-progress: false
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # the script verifies the pinned sha is on origin/main
+      - run: scripts/repin-marketplace
+        env:
+          MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}

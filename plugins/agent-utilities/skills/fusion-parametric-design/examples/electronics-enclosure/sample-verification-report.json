@@ -1,0 +1,113 @@
+{
+  "brep_bounding_boxes_mm": {
+    "Product/Base": {
+      "max": [
+        100.0,
+        110.0,
+        2.0
+      ],
+      "min": [
+        0.0,
+        50.0,
+        0.0
+      ]
+    },
+    "Product/Lid": {
+      "max": [
+        35.0,
+        13.0,
+        12.0
+      ],
+      "min": [
+        0.0,
+        0.0,
+        10.0
+      ]
+    },
+    "Validation/PD Fit Coupon": {
+      "max": [
+        10.0,
+        110.0,
+        2.0
+      ],
+      "min": [
+        0.0,
+        100.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "Product/Base": {
+      "total_solid_volume_mm3": 12000.0
+    },
+    "Product/Lid": {
+      "total_solid_volume_mm3": 910.0
+    },
+    "Validation/PD Fit Coupon": {
+      "total_solid_volume_mm3": 200.0
+    }
+  },
+  "kind": "verification",
+  "manifest_sha256": "40a7264c16975c5bfd37627450fd8a156c2f483becd936c0dae268ce6e45f4d1",
+  "note": "Sample report for the checked-in export example; live runs bind a real verification report.",
+  "occurrence_transforms": {
+    "Product/Base": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "Product/Lid": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "Validation/PD Fit Coupon": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  "ok": true,
+  "project": "wearable-controller-pod",
+  "sample": true
+}

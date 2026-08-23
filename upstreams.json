@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "updatePolicy": "review-only",
+  "skills": [
+    {
+      "name": "browser-use",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/browser-use",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "create-cli",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/create-cli",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "frontend-design",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/frontend-design",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "instruments-profiling",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/instruments-profiling",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "native-app-performance",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/native-app-performance",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "one-password",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/one-password",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    },
+    {
+      "name": "skill-cleaner",
+      "repository": "https://github.com/steipete/agent-scripts.git",
+      "path": "skills/skill-cleaner",
+      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "track": "refs/heads/main",
+      "license": "MIT"
+    }
+  ]
+}

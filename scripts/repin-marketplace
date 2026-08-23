@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Repin agent-utilities in the novotnyllc/marketplace catalog.
+
+The marketplace pins this plugin by full sha AND labels it with a version.
+The sha is what gets fetched; the version is what `claude plugin update`
+compares. Move one without the other and the fleet breaks quietly:
+
+  version bumped, sha stale -> update reports success, installs nothing
+  sha bumped, version stale -> update is never offered at all
+
+So this never writes either field itself. It reads the version both plugin
+manifests declare (they must agree), then hands sha+version to the
+marketplace's own scripts/repin, which stages and validates all three catalog
+files before writing any of them.
+
+Usage:
+  scripts/repin-marketplace [SHA]   repin to SHA (default: HEAD)
+  scripts/repin-marketplace selftest
+
+Auth: MARKETPLACE_TOKEN (a token with contents:write on
+novotnyllc/marketplace), falling back to the local `gh` login.
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PLUGIN = "agent-utilities"
+MANIFESTS = [
+    ROOT / "plugins" / PLUGIN / ".claude-plugin" / "plugin.json",
+    ROOT / "plugins" / PLUGIN / ".codex-plugin" / "plugin.json",
+]
+MARKETPLACE = "novotnyllc/marketplace"
+SOURCE = "novotnyllc/agent-utilities"
+CATALOG = ".claude-plugin/marketplace.json"
+BOT = [
+    "-c", "user.name=github-actions[bot]",
+    "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+]
+
+
+def run(cmd, cwd=None, check=True, capture=True):
+    result = subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True)
+    if check and result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        sys.exit(f"error: {' '.join(cmd[:3])} failed: {err}")
+    return result
+
+
+def git(*args, cwd=ROOT, **kw):
+    return run(["git", *args], cwd=cwd, **kw)
+
+
+def declared_version():
+    """The version both manifests declare. A disagreement is a real bug —
+    picking one would ship the wrong label fleet-wide, so refuse."""
+    declared = {}
+    for path in MANIFESTS:
+        try:
+            declared[path] = json.loads(path.read_text())["version"]
+        except (OSError, ValueError, KeyError) as exc:
+            sys.exit(f"error: cannot read version from {path}: {exc}")
+    if len(set(declared.values())) != 1:
+        detail = "; ".join(f"{p.relative_to(ROOT)}={v}" for p, v in declared.items())
+        sys.exit(f"error: plugin manifests disagree on version: {detail}")
+    return next(iter(declared.values()))
+
+
+def plan(current, target):
+    """(sha, version) now vs wanted -> "noop" | "repin". Exits on the unsafe
+    case: new code hiding behind the version label already published."""
+    if current == target:
+        return "noop"
+    if current[0] != target[0] and current[1] == target[1]:
+        sys.exit(
+            f"error: {PLUGIN} moved to {target[0][:12]} but still declares version "
+            f"{target[1]}, which the marketplace already publishes.\n"
+            "       Repinning that is a silent no-op: `claude plugin update` compares "
+            "versions, sees no change, and installs nothing.\n"
+            f"       Bump the version in both plugins/{PLUGIN} manifests, push, and "
+            "let this run again."
+        )
+    return "repin"
+
+
+def token():
+    tok = os.environ.get("MARKETPLACE_TOKEN") or ""
+    if not tok and not os.environ.get("CI"):
+        # Local convenience only. Under CI the secret is the sole credential, so
+        # a missing one fails here rather than quietly borrowing another login.
+        gh = run(["gh", "auth", "token"], check=False)
+        tok = gh.stdout.strip() if gh.returncode == 0 else ""
+    if not tok:
+        sys.exit(
+            "error: no credential for a cross-repo push. The default GITHUB_TOKEN is "
+            f"scoped to this repo only.\n       Create repository secret "
+            f"MARKETPLACE_TOKEN — a fine-grained PAT (or app token) with "
+            f"Contents: read and write on {MARKETPLACE} — and rerun.\n"
+            "       Locally, `gh auth login` works instead."
+        )
+    return tok
+
+
+def main(sha):
+    version = declared_version()
+
+    if git("status", "--porcelain").stdout.strip():
+        sys.exit("error: working tree is dirty; commit or stash before repinning")
+    sha = git("rev-parse", sha).stdout.strip()
+    git("fetch", "--quiet", "origin", "main")
+    if git("merge-base", "--is-ancestor", sha, "origin/main", check=False).returncode:
+        sys.exit(f"error: {sha[:12]} is not on origin/main; push it before pinning it")
+
+    tok = token()
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = Path(tmp) / "marketplace"
+        url = f"https://x-access-token:{tok}@github.com/{MARKETPLACE}.git"
+        result = subprocess.run(
+            ["git", "clone", "--quiet", "--depth", "1", url, str(clone)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            sys.exit(f"error: cannot clone {MARKETPLACE}: "
+                     f"{result.stderr.strip().replace(tok, '***')}")
+
+        try:
+            catalog = json.loads((clone / CATALOG).read_text())["plugins"]
+            entry = next(p for p in catalog if p["name"] == PLUGIN)
+            current = (entry["source"]["sha"], entry["version"])
+        except (OSError, ValueError, KeyError, StopIteration) as exc:
+            sys.exit(f"error: {MARKETPLACE}:{CATALOG} has no usable {PLUGIN} entry "
+                     f"(sha-pinned, with a version): {exc!r}")
+
+        if plan(current, (sha, version)) == "noop":
+            print(f"already pinned: {PLUGIN} {version} @ {sha[:12]}")
+            return
+
+        run([sys.executable, "scripts/repin", PLUGIN, sha, version],
+            cwd=clone, capture=False)
+        if not run(["git", "status", "--porcelain"], cwd=clone).stdout.strip():
+            print(f"already pinned: {PLUGIN} {version} @ {sha[:12]}")
+            return
+
+        ident = [] if git("config", "user.email", cwd=clone, check=False).returncode == 0 else BOT
+        message = (f"chore: repin {PLUGIN} to {version}\n\n"
+                   f"https://github.com/{SOURCE}/commit/{sha}")
+        run(["git", *ident, "commit", "--quiet", "--all", "-m", message], cwd=clone)
+        push = subprocess.run(["git", "push", "--quiet", "origin", "HEAD:main"],
+                              cwd=clone, capture_output=True, text=True)
+        if push.returncode != 0:
+            sys.exit(f"error: push failed: {push.stderr.strip().replace(tok, '***')}")
+        print(f"repinned {PLUGIN} -> {version} @ {sha[:12]}")
+
+
+def selftest():
+    global MANIFESTS, ROOT
+    saved = (MANIFESTS, ROOT)
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        ROOT = tmp
+        MANIFESTS = [tmp / "claude.json", tmp / "codex.json"]
+        MANIFESTS[0].write_text('{"version": "1.2.0"}')
+        MANIFESTS[1].write_text('{"version": "1.2.1"}')
+        try:
+            declared_version()
+        except SystemExit as exc:
+            assert "disagree" in str(exc), exc
+        else:
+            raise AssertionError("declared_version accepted disagreeing manifests")
+        MANIFESTS[1].write_text('{"version": "1.2.0"}')
+        assert declared_version() == "1.2.0"
+
+        old, new = "a" * 40, "b" * 40
+        assert plan((new, "1.2.0"), (new, "1.2.0")) == "noop"
+        assert plan((old, "1.1.0"), (new, "1.2.0")) == "repin"
+        assert plan((old, "1.2.0"), (old, "1.2.0")) == "noop"
+        try:
+            plan((old, "1.2.0"), (new, "1.2.0"))
+        except SystemExit as exc:
+            assert "silent no-op" in str(exc), exc
+        else:
+            raise AssertionError("plan accepted a sha move under an unchanged version")
+        print("selftest ok: manifest agreement and the sha/version coupling both hold")
+    finally:
+        MANIFESTS, ROOT = saved
+        __import__("shutil").rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if args == ["selftest"]:
+        selftest()
+    elif len(args) <= 1:
+        main(args[0] if args else "HEAD")
+    else:
+        sys.exit(__doc__)

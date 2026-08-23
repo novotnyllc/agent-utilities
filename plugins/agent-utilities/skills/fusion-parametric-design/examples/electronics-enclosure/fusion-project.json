@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "wearable-controller-pod",
+    "units": "mm",
+    "process": "FDM",
+    "material": "PETG",
+    "fusion_document": "Wearable Controller Pod"
+  },
+  "sources": [
+    {
+      "id": "pd_trigger_board_measurement",
+      "kind": "user_measurement",
+      "locator": "design-brief://pd-trigger-board",
+      "revision": "2026-08-17 sample A",
+      "confidence": "measured",
+      "notes": "Caliper measurements supplied in the design brief."
+    },
+    {
+      "id": "ekylin_converter_measurement",
+      "kind": "user_measurement",
+      "locator": "design-brief://ekylin-20v-to-12v",
+      "revision": "2026-08-17 sample A",
+      "confidence": "measured",
+      "notes": "Converter body dimensions; wire and bend zones are separate keep-outs."
+    },
+    {
+      "id": "enclosure_material_requirements",
+      "kind": "conservative_proxy",
+      "locator": "design-brief://enclosure-material-requirements",
+      "revision": "2026-08-19",
+      "confidence": "provisional",
+      "notes": "Requirements the material must satisfy: indoor use, handled and occasionally dropped, no sunlight, no sustained load, a lid snap fit that must recover at every opening. Family selected from those requirements; no specific product is chosen, so generic PETG behavior is the conservative assumption and no numeric property is claimed."
+    },
+    {
+      "id": "provisional_starting_assumptions",
+      "kind": "conservative_proxy",
+      "locator": "design-brief://provisional-starting-assumptions",
+      "revision": "2026-08-17 unvalidated starting point",
+      "confidence": "provisional",
+      "notes": "Unvalidated conservative starting values for wall thickness, clearance, printed fit, and cable departure on this printer/material pair. Nothing here is measured evidence, so every parameter pointing at this source stays provisional; printing Validation/PD Fit Coupon and measuring it, or measuring the actual cable, is what replaces it."
+    }
+  ],
+  "material_decision": {
+    "family": "PETG",
+    "formulation": null,
+    "source_id": "enclosure_material_requirements",
+    "confidence": "provisional",
+    "coupon_component": "Validation/PD Fit Coupon",
+    "rationale": "The lid snap rim deflects at every opening and must recover; PETG has the toughness and strain recovery for a repeatedly deflected snap, where PLA would be brittle at the snap root and crack after a few cycles. Nothing here needs heat, UV, or sustained-load resistance beyond PETG, so the tougher families are not warranted. Family only: the specific product is not chosen, so every material-dependent number stays provisional.",
+    "unresolved_risks": [
+      "No formulation is named, so no data-sheet number backs any material-dependent value.",
+      "fab_fit_clearance is a hypothesis until PD Fit Coupon is printed and measured on the machine that will make the parts.",
+      "Snap-rim strain and cycle life are unverified; the coupon proves the pocket fit, not the snap."
+    ]
+  },
+  "parameters": [
+    {
+      "name": "src_pd_board_length",
+      "expression": "35 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured PD trigger board length."
+    },
+    {
+      "name": "src_pd_board_width",
+      "expression": "13 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured PD trigger board width."
+    },
+    {
+      "name": "src_pd_board_height",
+      "expression": "5 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "pd_trigger_board_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured rigid board-and-component height."
+    },
+    {
+      "name": "src_ekylin_length",
+      "expression": "62 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body length, excluding flexible leads."
+    },
+    {
+      "name": "src_ekylin_width",
+      "expression": "31 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body width."
+    },
+    {
+      "name": "src_ekylin_height",
+      "expression": "27 mm",
+      "units": "mm",
+      "role": "source",
+      "source_id": "ekylin_converter_measurement",
+      "critical": true,
+      "provisional": false,
+      "description": "Measured converter body height."
+    },
+    {
+      "name": "clr_rigid_xy",
+      "expression": "0.5 mm",
+      "units": "mm",
+      "role": "clearance",
+      "source_id": "provisional_starting_assumptions",
+      "critical": true,
+      "provisional": true,
+      "description": "Per-side clearance around rigid electronic bodies; a starting value, not yet confirmed against a printed part."
+    },
+    {
+      "name": "clr_rigid_z",
+      "expression": "1 mm",
+      "units": "mm",
+      "role": "clearance",
+      "source_id": "provisional_starting_assumptions",
+      "critical": true,
+      "provisional": true,
+      "description": "Vertical clearance above rigid electronic bodies; a starting value, not yet confirmed against a printed part."
+    },
+    {
+      "name": "fab_wall_thickness",
+      "expression": "2 mm",
+      "units": "mm",
+      "role": "fabrication",
+      "source_id": "provisional_starting_assumptions",
+      "critical": true,
+      "provisional": true,
+      "description": "Nominal PETG enclosure wall thickness. A bare '2 mm wall' is folklore until it is reconciled with the nozzle width and the actual load; confirm both before settling it."
+    },
+    {
+      "name": "fab_fit_clearance",
+      "expression": "0.35 mm",
+      "units": "mm",
+      "role": "fabrication",
+      "source_id": "provisional_starting_assumptions",
+      "critical": true,
+      "provisional": true,
+      "description": "Per-side printed sliding-fit clearance. Printer- and material-specific; settle it by printing and measuring PD Fit Coupon, never by reusing this number."
+    },
+    {
+      "name": "des_corner_radius",
+      "expression": "5 mm",
+      "units": "mm",
+      "role": "design",
+      "critical": false,
+      "provisional": false,
+      "description": "Exterior corner radius; adjustable without changing fit evidence."
+    },
+    {
+      "name": "pack_usb_c_straight_departure",
+      "expression": "20 mm",
+      "units": "mm",
+      "role": "packing",
+      "source_id": "provisional_starting_assumptions",
+      "critical": true,
+      "provisional": true,
+      "description": "Conservative initial straight cable-departure keep-out; confirm with the actual cable."
+    }
+  ],
+  "component_tree": [
+    "References",
+    "References/PD Trigger Reference",
+    "References/PD Trigger Envelope",
+    "References/USB-C Insertion Keep-Out",
+    "References/EKYLIN Converter Reference",
+    "References/EKYLIN Converter Envelope",
+    "References/EKYLIN Wire Bend Keep-Out",
+    "Product",
+    "Product/Base",
+    "Product/Lid",
+    "Fixtures",
+    "Validation",
+    "Validation/PD Fit Coupon"
+  ],
+  "references": [
+    {
+      "id": "pd_trigger",
+      "source_id": "pd_trigger_board_measurement",
+      "authoring_component": "References/PD Trigger Reference",
+      "packing_component": "References/PD Trigger Envelope",
+      "representation": "parametric_proxy_plus_conservative_pack",
+      "keepout_components": [
+        "References/USB-C Insertion Keep-Out"
+      ]
+    },
+    {
+      "id": "ekylin_converter",
+      "source_id": "ekylin_converter_measurement",
+      "authoring_component": "References/EKYLIN Converter Reference",
+      "packing_component": "References/EKYLIN Converter Envelope",
+      "representation": "parametric_proxy_plus_conservative_pack",
+      "keepout_components": [
+        "References/EKYLIN Wire Bend Keep-Out"
+      ]
+    }
+  ],
+  "verification": {
+    "required_components": [
+      "Product/Base",
+      "Product/Lid",
+      "Validation/PD Fit Coupon",
+      "References/PD Trigger Envelope",
+      "References/EKYLIN Converter Envelope"
+    ],
+    "clearance_checks": [
+      {
+        "id": "pd-to-lid-clearance",
+        "one": "References/PD Trigger Envelope",
+        "two": "Product/Lid",
+        "minimum_mm": 1.0
+      }
+    ],
+    "interference_checks": [
+      {
+        "id": "usb-c-insertion-zone",
+        "one": "References/USB-C Insertion Keep-Out",
+        "two": "Product/Base",
+        "allow_interference": false
+      },
+      {
+        "id": "ekylin-wire-bend-zone",
+        "one": "References/EKYLIN Wire Bend Keep-Out",
+        "two": "Product/Lid",
+        "allow_interference": false
+      }
+    ],
+    "expected_print_parts": [
+      "Product/Base",
+      "Product/Lid",
+      "Validation/PD Fit Coupon"
+    ]
+  },
+  "printable_parts": [
+    {
+      "id": "prod_base",
+      "path": "Product/Base",
+      "minimum_volume_mm3": 1000,
+      "quantity": 1,
+      "print_as": "separate",
+      "orientation": {
+        "contact_face": "-Z",
+        "rationale": "The flat floor sits on the plate, which is why support_policy is 'none' here, and keeps the seam off the mating rim. Whether the part actually needs supports is a slicer result, not a manifest claim.",
+        "allowed_alternatives": []
+      },
+      "support_policy": "none",
+      "strength": {
+        "min_perimeters": 3,
+        "infill_percent": {
+          "target": 25,
+          "min": 20,
+          "max": 40
+        }
+      },
+      "protected_features": [
+        {
+          "kind": "mating-face",
+          "description": "Top rim mates with the lid; keep it support-free and unscarred."
+        },
+        {
+          "kind": "hole",
+          "description": "USB-C insertion opening must stay dimensionally clean."
+        }
+      ],
+      "material": {
+        "assumption": "PETG",
+        "status": "provisional"
+      }
+    },
+    {
+      "id": "prod_lid",
+      "path": "Product/Lid",
+      "minimum_volume_mm3": 500,
+      "quantity": 1,
+      "print_as": "separate",
+      "orientation": {
+        "contact_face": "+Z",
+        "rationale": "Printing the lid top-down keeps the visible outer face against the plate and the snap rim accessible.",
+        "allowed_alternatives": [
+          "-Z"
+        ]
+      },
+      "support_policy": "build-plate-only",
+      "strength": {
+        "min_perimeters": 3,
+        "infill_percent": {
+          "target": 20
+        }
+      },
+      "protected_features": [
+        {
+          "kind": "mating-face",
+          "description": "Snap rim engages the base; supports must not touch it."
+        }
+      ],
+      "material": {
+        "assumption": "PETG",
+        "status": "provisional"
+      }
+    },
+    {
+      "id": "val_pd_fit_coupon",
+      "path": "Validation/PD Fit Coupon",
+      "minimum_volume_mm3": 100,
+      "quantity": 1,
+      "print_as": "separate",
+      "orientation": {
+        "contact_face": "-Z",
+        "rationale": "Coupon prints flat in the same orientation as the base pocket it validates.",
+        "allowed_alternatives": []
+      },
+      "support_policy": "none",
+      "strength": {
+        "min_perimeters": 2,
+        "infill_percent": {
+          "target": 15
+        }
+      },
+      "protected_features": [
+        {
+          "kind": "critical-surface",
+          "description": "Pocket walls are the measured fit surfaces."
+        }
+      ],
+      "material": {
+        "assumption": "PETG",
+        "status": "provisional"
+      }
+    }
+  ]
+}

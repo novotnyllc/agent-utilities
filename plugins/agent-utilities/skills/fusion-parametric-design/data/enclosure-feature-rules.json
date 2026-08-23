@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "description": "Shipped generic enclosure-feature intent. No unsourced universal numbers for wall thickness, rib/wall ratio, boss/wall ratio, snap strain, hole compensation, sliding clearance, press interference, heat-set bore, nut pocket clearance, O-ring gland, or minimum printable slot. Fit-sensitive entries are provisional placeholders that must be replaced by user-owned parameters or coupon evidence.",
+  "rules": [
+    {
+      "rule_id": "geometry.square_corner_radius",
+      "expression": "square_across_flats / sqrt(2)",
+      "units": "mm",
+      "classification": "geometric-invariant",
+      "source_id": "regular-polygon-identity",
+      "confidence": "exact",
+      "safe_as_default": true,
+      "confirm_before_export": false,
+      "invalidated_by_material_change": false,
+      "invalidated_by_nozzle_change": false,
+      "invalidated_by_layer_height_change": false,
+      "invalidated_by_orientation_change": false,
+      "coupon_requirement": null
+    },
+    {
+      "rule_id": "geometry.hex_corner_radius",
+      "expression": "hex_across_flats / sqrt(3)",
+      "units": "mm",
+      "classification": "geometric-invariant",
+      "source_id": "regular-polygon-identity",
+      "confidence": "exact",
+      "safe_as_default": true,
+      "confirm_before_export": false,
+      "invalidated_by_material_change": false,
+      "invalidated_by_nozzle_change": false,
+      "invalidated_by_layer_height_change": false,
+      "invalidated_by_orientation_change": false,
+      "coupon_requirement": null
+    },
+    {
+      "rule_id": "process.fdm_layer_adhesion_anisotropy_warning",
+      "value": 0,
+      "units": "ratio",
+      "classification": "fdm-process-heuristic",
+      "source_id": "prusa-fff-design-guidance",
+      "confidence": "qualitative",
+      "safe_as_default": true,
+      "confirm_before_export": false,
+      "invalidated_by_material_change": true,
+      "invalidated_by_nozzle_change": true,
+      "invalidated_by_layer_height_change": true,
+      "invalidated_by_orientation_change": true,
+      "coupon_requirement": null,
+      "description": "Marker rule: zero numeric weight; orientation-sensitive strength claims require physical evidence, never a shipped coefficient."
+    }
+  ],
+  "named_presets": [
+    {
+      "preset_id": "generic-fdm-fit-placeholder",
+      "parameters": [
+        {
+          "rule_id": "fit.sliding_clearance_placeholder",
+          "expression": "clr_ef_user_sliding_clearance",
+          "classification": "provisional-default",
+          "source_id": "user-owned-parameter-required",
+          "confidence": "placeholder",
+          "safe_as_default": false,
+          "confirm_before_export": true,
+          "invalidated_by_material_change": true,
+          "invalidated_by_nozzle_change": true,
+          "invalidated_by_layer_height_change": true,
+          "invalidated_by_orientation_change": true,
+          "coupon_requirement": "sliding-clearance-coupon"
+        },
+        {
+          "rule_id": "fit.press_interference_placeholder",
+          "expression": "clr_ef_user_press_interference",
+          "classification": "provisional-default",
+          "source_id": "user-owned-parameter-required",
+          "confidence": "placeholder",
+          "safe_as_default": false,
+          "confirm_before_export": true,
+          "invalidated_by_material_change": true,
+          "invalidated_by_nozzle_change": true,
+          "invalidated_by_layer_height_change": true,
+          "invalidated_by_orientation_change": true,
+          "coupon_requirement": "press-fit-coupon"
+        },
+        {
+          "rule_id": "hardware.insert_bore_placeholder",
+          "expression": "src_ef_insert_spec_recommended_bore",
+          "classification": "manufacturer-specified",
+          "source_id": "insert-manufacturer-datasheet",
+          "confidence": "sourced",
+          "safe_as_default": false,
+          "confirm_before_export": true,
+          "invalidated_by_material_change": true,
+          "invalidated_by_nozzle_change": false,
+          "invalidated_by_layer_height_change": false,
+          "invalidated_by_orientation_change": true,
+          "coupon_requirement": "heat-set-insert-coupon"
+        },
+        {
+          "rule_id": "design.wall_thickness_placeholder",
+          "expression": "des_ef_user_wall_thickness",
+          "classification": "user-preference",
+          "source_id": "explicit-user-parameter-required",
+          "confidence": "user-owned",
+          "safe_as_default": false,
+          "confirm_before_export": true,
+          "invalidated_by_material_change": false,
+          "invalidated_by_nozzle_change": false,
+          "invalidated_by_layer_height_change": false,
+          "invalidated_by_orientation_change": false,
+          "coupon_requirement": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "agent-utilities",
+  "version": "0.17.0",
+  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, and Fusion parametric CAD.",
+  "author": {
+    "name": "Claire Novotny LLC",
+    "url": "https://github.com/novotnyllc"
+  },
+  "homepage": "https://github.com/novotnyllc/agent-utilities",
+  "repository": "https://github.com/novotnyllc/agent-utilities",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "browser",
+    "1password",
+    "macos",
+    "profiling",
+    "cli",
+    "frontend",
+    "skills",
+    "fusion",
+    "cad",
+    "chezmoi"
+  ],
+  "skills": [
+    "./skills/browser-use",
+    "./skills/create-cli",
+    "./skills/frontend-design",
+    "./skills/instruments-profiling",
+    "./skills/native-app-performance",
+    "./skills/onedrive-fileprovider-repair",
+    "./skills/one-password",
+    "./skills/skill-cleaner",
+    "./skills/fleet-chezmoi",
+    "./skills/unifi-network-api",
+    "./skills/fusion-parametric-design"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

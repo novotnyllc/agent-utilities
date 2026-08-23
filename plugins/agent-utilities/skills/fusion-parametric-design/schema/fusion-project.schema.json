@@ -1,0 +1,835 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fusion-parametric-design/fusion-project.schema.json",
+  "title": "Fusion Parametric Design Project Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project",
+    "sources",
+    "parameters",
+    "component_tree",
+    "references",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "units",
+        "process",
+        "material",
+        "fusion_document"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "units": {
+          "type": "string",
+          "minLength": 1
+        },
+        "process": {
+          "type": "string",
+          "minLength": 1
+        },
+        "material": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fusion_document": {
+          "type": "string",
+          "minLength": 1
+        },
+        "document_folder": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^/]*\\S[^/]*(/[^/]*\\S[^/]*)*$"
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/parameter"
+      }
+    },
+    "component_tree": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "component_roles": {
+      "description": "Explicit component-path -> role declarations for components no other block classifies. Roles derived from references, material_decision, and printable_parts must not be contradicted here; one component owns one role.",
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "enum": [
+          "reference",
+          "packing",
+          "keepout",
+          "product",
+          "fixture",
+          "validation"
+        ]
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/reference"
+      }
+    },
+    "verification": {
+      "$ref": "#/$defs/verification"
+    },
+    "printable_parts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/printable_part"
+      }
+    },
+    "material_decision": {
+      "$ref": "#/$defs/material_decision"
+    },
+    "variants": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/variant"
+      }
+    }
+  },
+  "$defs": {
+    "material_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "source_id",
+        "confidence",
+        "rationale",
+        "unresolved_risks"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "PLA",
+            "PLA_SILK",
+            "PETG",
+            "TPU",
+            "ASA",
+            "ABS",
+            "PC",
+            "PC_CF",
+            "PA",
+            "PA_CF",
+            "PET_CF",
+            "OTHER"
+          ]
+        },
+        "formulation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "confidence": {
+          "enum": [
+            "published",
+            "verified_cad",
+            "measured",
+            "provisional",
+            "coupon_verified"
+          ]
+        },
+        "coupon_component": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unresolved_risks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "printer_requirements": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "nozzle": {
+          "enum": [
+            "brass",
+            "hardened_steel",
+            "ruby",
+            "tungsten_carbide",
+            null
+          ]
+        },
+        "drying": {
+          "enum": [
+            "required",
+            "done",
+            "not_needed",
+            null
+          ]
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "parameters"
+          ],
+          "not": {
+            "required": [
+              "configuration"
+            ]
+          }
+        },
+        {
+          "required": [
+            "configuration"
+          ],
+          "not": {
+            "required": [
+              "parameters"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "configuration": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "locator",
+        "revision",
+        "confidence",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "kind": {
+          "enum": [
+            "manufacturer_cad",
+            "manufacturer_drawing",
+            "standard",
+            "authorized_distributor",
+            "third_party_cad",
+            "user_measurement",
+            "conservative_proxy"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "enum": [
+            "published",
+            "verified_cad",
+            "measured",
+            "provisional",
+            "coupon_verified"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "expression",
+        "units",
+        "role",
+        "critical",
+        "provisional",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
+        "units": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "source",
+            "clearance",
+            "fabrication",
+            "design",
+            "packing",
+            "derived"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "critical": {
+          "type": "boolean"
+        },
+        "provisional": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "critical": {
+                "const": true
+              },
+              "role": {
+                "enum": [
+                  "source",
+                  "clearance",
+                  "fabrication",
+                  "packing"
+                ]
+              }
+            },
+            "required": [
+              "critical",
+              "role"
+            ]
+          },
+          "then": {
+            "required": [
+              "source_id"
+            ]
+          }
+        }
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_id",
+        "authoring_component",
+        "packing_component",
+        "representation",
+        "keepout_components"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "authoring_component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packing_component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "representation": {
+          "enum": [
+            "native_parametric_plus_exact_brep",
+            "parametric_proxy_plus_conservative_pack",
+            "linked_native_component"
+          ]
+        },
+        "keepout_components": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "no_keepout_rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "keepout_components": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "required": [
+                "no_keepout_rationale"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "printable_part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "minimum_volume_mm3",
+        "print_as",
+        "orientation",
+        "support_policy",
+        "strength",
+        "protected_features",
+        "material"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimum_volume_mm3": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "print_as": {
+          "enum": [
+            "separate",
+            "assembled"
+          ]
+        },
+        "orientation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contact_face",
+            "rationale",
+            "allowed_alternatives"
+          ],
+          "properties": {
+            "contact_face": {
+              "$ref": "#/$defs/contact_face"
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1
+            },
+            "allowed_alternatives": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/contact_face"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "support_policy": {
+          "enum": [
+            "none",
+            "build-plate-only",
+            "everywhere",
+            "explicit-regions"
+          ]
+        },
+        "support_regions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "description"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "enforcer",
+                  "blocker"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "strength": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "min_perimeters",
+            "infill_percent"
+          ],
+          "properties": {
+            "min_perimeters": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "infill_percent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ],
+              "properties": {
+                "target": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "min": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          }
+        },
+        "protected_features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "description"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "critical-surface",
+                  "hole",
+                  "bridge",
+                  "overhang",
+                  "mating-face",
+                  "cosmetic-face"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "material": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "assumption",
+            "status"
+          ],
+          "properties": {
+            "assumption": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+            },
+            "status": {
+              "enum": [
+                "provisional",
+                "coupon_verified"
+              ]
+            }
+          }
+        },
+        "print_intent": {
+          "enum": [
+            "fast-structural",
+            "fine-detail",
+            "enclosure"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "support_policy": {
+                "const": "explicit-regions"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "support_regions"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "support_regions"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "material": {
+                "properties": {
+                  "status": {
+                    "const": "coupon_verified"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "material"
+            ]
+          },
+          "then": {
+            "properties": {
+              "material": {
+                "required": [
+                  "source_id"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "contact_face": {
+      "enum": [
+        "+X",
+        "-X",
+        "+Y",
+        "-Y",
+        "+Z",
+        "-Z"
+      ]
+    },
+    "clearance_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "one",
+        "two",
+        "minimum_mm"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "one": {
+          "type": "string",
+          "minLength": 1
+        },
+        "two": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimum_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "interference_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "one",
+        "two",
+        "allow_interference"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "one": {
+          "type": "string",
+          "minLength": 1
+        },
+        "two": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allow_interference": {
+          "type": "boolean"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_components",
+        "clearance_checks",
+        "interference_checks",
+        "expected_print_parts"
+      ],
+      "properties": {
+        "required_components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "clearance_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/clearance_check"
+          }
+        },
+        "interference_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interference_check"
+          }
+        },
+        "expected_print_parts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "allowed_suppressed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "allow_suppressed_timeline_features": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

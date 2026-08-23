@@ -1,0 +1,74 @@
+/**
+ * Fusion user-parameter creation with explicit units and comments.
+ *
+ * Translated from fusion_addin/AgentUtilitiesEnclosure/native/parameters.py.
+ */
+
+import { adsk } from "@adsk/fas";
+import { PARAM_PREFIXES, ManagedIdentity } from "../identity";
+
+type Any = any;
+
+export function ownedParamName(
+  identity: Pick<ManagedIdentity, "parameterNamespace">,
+  ownership: keyof typeof PARAM_PREFIXES,
+  name: string,
+): string {
+  const prefix = PARAM_PREFIXES[ownership];
+  if (!prefix) {
+    throw new Error("unknown parameter ownership: " + String(ownership));
+  }
+  return prefix + identity.parameterNamespace + "_" + name;
+}
+
+export function makeParameter(
+  design: Any,
+  name: string,
+  expression: string,
+  unitType: string = "mm",
+  comment: string = "",
+): Any | null {
+  const params = design.userParameters;
+  const existing = params.itemByName(name);
+  if (existing !== null && existing !== undefined) {
+    if (expression) {
+      existing.expression = expression;
+    }
+    if (comment) {
+      existing.comment = comment;
+    }
+    return existing;
+  }
+
+  // Fusion's UserParameters.add expects a UNIT STRING ("mm", "deg"), not a
+  // display-format object. Validate against a small allowlist.
+  const allowed = new Set(["mm", "cm", "m", "in", "deg", "rad", ""]);
+  const unit = allowed.has(unitType) ? (unitType || "mm") : null;
+  if (unit === null) {
+    throw new Error(`Unsupported parameter unit type: ${unitType}`);
+  }
+  const valueInput = adsk.core.ValueInput.createByString(expression);
+  return params.add(name, valueInput, unit, comment);
+}
+
+function unusedResolveUnitEnum(unitsMgr: Any, unitType: string): Any {
+  /**
+   * Map a unit string to the Fusion UnitTypes enum value.
+   *
+   * Fusion's unitsManager handles expression strings; the unit_type controls
+   * display. For simplicity, use the design's default distance/angle format.
+   */
+  const mapping: Record<string, string> = {
+    "mm": "MillimeterDecimalFormat",
+    "cm": "CentimeterDecimalFormat",
+    "m": "MeterDecimalFormat",
+    "in": "InchDecimalFormat",
+    "deg": "DegreeDecimalFormat",
+    "rad": "RadianDecimalFormat",
+  };
+  void mapping; // kept for documentation parity with Python source
+  if (unitType === "deg" || unitType === "rad") {
+    return unitsMgr.angleFormat;
+  }
+  return unitsMgr.distanceFormat;
+}

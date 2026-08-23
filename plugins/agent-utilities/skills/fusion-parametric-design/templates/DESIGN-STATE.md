@@ -1,0 +1,126 @@
+# Design State
+
+Use one copy per Fusion design that runs the skill's automation and release lanes — a project with a manifest, verification evidence, or exports. Name it per design: any `*.design-state.md`, one ledger per design (`power-pod.design-state.md` beside `cable-clip.design-state.md`), with bare `DESIGN-STATE.md` the natural name in a single-design directory. Ordinary modeling keeps no state ledger at all — Fusion itself is the identity store. Replace the instructional text with project facts; do not mark an unperformed check as passed.
+
+## Intent and current variant
+
+- Project intent: Not recorded.
+- Intended user/environment: Not recorded.
+- Active configuration or parameter set: Default.
+- Current release state: Exploratory.
+- Known scope exclusions: None recorded.
+
+## Fusion document state
+
+- Fusion document: Not recorded.
+- Document dataFile id (durable identity; from the document-save report — later sessions reconnect by this id, never by name): Not recorded.
+- Document project id / folder id: Not recorded.
+- Document/version/checkpoint: Not recorded.
+- Fusion release: Not recorded.
+- Fusion MCP/package version: Not recorded.
+- Design type: Must be parametric before managed mutation.
+- Manifest file (`*.fusion-project.json`; the filename identifies which design's manifest): Not recorded.
+- Manifest SHA-256: Not recorded.
+- Latest inventory report: Not recorded.
+- Latest verification report: Not recorded.
+
+## Source and parameter ledger
+
+| Parameter | Expression | Role | Source id/revision | Confidence | Provisional | Notes |
+|---|---:|---|---|---|---|---|
+| None recorded | — | — | — | — | — | — |
+
+Unresolved critical dimensions: None recorded.
+
+## Reference geometry
+
+| Source id | File SHA-256 | Units | Provenance | Exact source retained? | Recorded path | Notes |
+|---|---|---|---|---|---|---|
+| None recorded | — | — | — | — | — | — |
+
+Reference Fusion bodies (component path / body name, from the capture report):
+None recorded.
+
+Record any native measurements, envelope assumptions, or keep-out decisions
+that depend on imported reference geometry in the notes above and in the
+packing ledger below. Keep the source identity and units explicit; do not
+replace a reference with an unrecorded approximation.
+
+## Packing and component ledger
+
+| Item | Installed transform/orientation | Authoring (reference) model | Packing (checking) model | Keep-out volumes | Support/retention | Insertion/removal sequence | Confidence |
+|---|---|---|---|---|---|---|---|
+| None recorded | — | — | — | — | — | — | — |
+
+Smallest recorded critical packing margin: Not measured.
+
+## Verification results
+
+| Check | Required result | Actual result | Status | Evidence |
+|---|---|---|---|---|
+| Parametric design | Parametric | Not checked | not run | — |
+| Compute All | Completes | Not checked | not run | — |
+| Timeline health | No unexplained warning/error | Not checked | not run | — |
+| Required components | Present once at declared paths | Not checked | not run | — |
+| Expected print parts | Positive-volume solids | Not checked | not run | — |
+| Clearance checks | At or above manifest minimums | Not checked | not run | — |
+| Forbidden interference | Zero | Not checked | not run | — |
+| Parametric range/configurations | All intended cases recompute and verify | Not checked | not run | — |
+| Printability review | Applicable checks documented | Not checked | not run | — |
+
+Required visual evidence:
+
+- Exterior view: Not captured.
+- Internal packing view: Not captured.
+- Section or transparent view: Not captured.
+- Open/service state: Not captured or not applicable.
+
+## Physical validation
+
+Use only `not run`, `pass`, `fail`, or `not applicable`.
+
+| Test | Status | Article/revision | Conditions | Result/evidence |
+|---|---|---|---|---|
+| Actual component fit | not run | — | — | — |
+| Connector/cable fit | not run | — | — | — |
+| Fit coupon | not run | — | — | — |
+| Fastener torque/retention | not run | — | — | — |
+| Lid/clip cycles | not run | — | — | — |
+| Thermal soak | not run | — | — | — |
+| Proof load | not run | — | — | — |
+| Comfort/attachment | not run | — | — | — |
+| Ingress claim | not run | — | — | — |
+
+## Manufacturing assumptions
+
+Material decision — copy from the manifest's `material_decision`; a family with no named formulation is a legitimate row, a guessed formulation is not.
+
+| Chosen material | Family | Formulation | Source id | Confidence | Coupon | Printer requirements | Unresolved risk |
+|---|---|---|---|---|---|---|---|
+| Not decided | — | — | — | — | — | — | Material not chosen; no material-dependent geometry may be finalized. |
+
+- Process/material: Not recorded.
+- Printer/nozzle/layer height: Not recorded.
+- Intended build orientation: Not recorded.
+- Slicer and exact machine/material/process profile: Not recorded.
+- Support strategy: Not recorded.
+- Known anisotropic load direction: Not recorded.
+- Thermal/material limits: Not recorded.
+
+## Exports
+
+| Artifact | Fusion version/checkpoint | Component path | Units | Export options | Byte size | File SHA-256 | Export run ID | Verification report | Slicer/profile | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| None | — | — | — | — | — | — | — | — | — | — |
+
+Rows come from the export transaction's `design_state_rows`; append them verbatim rather than hand-copying hashes.
+
+## Unsupported or outstanding proof
+
+- No outstanding items recorded. Replace this line with every unsupported digital check, provisional measurement, required external analysis, and unperformed physical test.
+
+## Rejected decisions
+
+| Decision rejected | Reason | Evidence | Reconsider only when |
+|---|---|---|---|
+| None recorded | — | — | — |
