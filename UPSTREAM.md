@@ -12,7 +12,7 @@ only when an imported path changes.
 The agent-scripts imports were most recently reviewed against:
 
 - Repository: `https://github.com/steipete/agent-scripts`
-- Commit: `dc4f583a2c1a6f3a93e81a972eee89f59aca32f7`
+- Commit: `8649e487685494e57bb851285f57ef24e15268d3`
 - License: MIT
 
 Oracle, the thermos family, and the delivery/orchestration skills moved to
@@ -31,7 +31,6 @@ chezmoi integration lives here as `fleet-chezmoi`.
 | `frontend-design` | `skills/frontend-design` |
 | `instruments-profiling` | `skills/instruments-profiling` |
 | `native-app-performance` | `skills/native-app-performance` |
-| `one-password` | `skills/one-password` |
 | `skill-cleaner` | `skills/skill-cleaner` |
 
 ## Adaptation Notes
@@ -44,3 +43,6 @@ chezmoi integration lives here as `fleet-chezmoi`.
   project roots without depending on one `~/Projects` layout.
 - Retained portable browser and 1Password routing while adapting generic
   service-account prompt isolation and root-only skill auditing.
+- `one-password` was removed from upstream (commit `55a8735`, "remove private
+  one-password workflow from public skills") and graduated here to a native
+  skill; it is no longer tracked in `upstreams.json`.
