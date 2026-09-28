@@ -464,13 +464,24 @@ scan_writer() {
       '{kind:$kind,label:$label,flags:$flags}' >>"$work/writers"
   fi
 }
+# Only what a job runs counts, not its label or log paths. For launchd that is
+# the plist's arguments and, separately, the arguments of the job launchd has
+# actually loaded: chezmoi can rewrite a plist that launchd never reloads.
 for plist in "$HOME"/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
-  scan_writer launchd "$(basename -- "$plist" .plist)" "$plist"
+  label=$(basename -- "$plist" .plist)
+  plutil -convert json -o - "$plist" 2>/dev/null |
+    jq -r '[.Program // empty] + (.ProgramArguments // []) | join(" ")' >"$work/job" 2>/dev/null || : >"$work/job"
+  scan_writer launchd "$label" "$work/job"
+  if launchctl print "gui/$(id -u)/$label" 2>/dev/null |
+    awk '/arguments = \{/ {f=1; next} f && /^[[:space:]]*\}/ {exit} f' >"$work/job" && [ -s "$work/job" ]; then
+    scan_writer launchd "$label (loaded)" "$work/job"
+  fi
 done
 for unit in "$HOME"/.config/systemd/user/*.service; do
   [ -f "$unit" ] || continue
-  scan_writer systemd "$(basename -- "$unit")" "$unit"
+  grep -E '^[[:space:]]*Exec' "$unit" >"$work/job" 2>/dev/null || : >"$work/job"
+  scan_writer systemd "$(basename -- "$unit")" "$work/job"
 done
 if crontab -l >"$work/crontab" 2>/dev/null; then scan_writer cron crontab "$work/crontab"; fi
 writers_json=$(jq -sc '[.[] | select((.flags | length) > 0)]' "$work/writers")
