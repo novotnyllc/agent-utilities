@@ -61,7 +61,7 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       ( $p.externals // [] | .[] | select(.fetch == "failed")
         | reason("external-fetch-failed"; .path)),
       ( $p.externals // [] | .[] | select(.state == "behind")
-        | reason("external-behind"; "\(.path): \(.behind) upstream commit(s) not pulled; chezmoi fast-forwards it when its refreshPeriod elapses, or run `chezmoi apply --refresh-externals` on that host")),
+        | reason("external-behind"; "\(.path): \(.behind) upstream commit(s) not pulled; the next sealed apply fast-forwards it once its refreshPeriod elapses")),
       ( if (($p.source.dirty // []) | sort) as $d | ($d | length) > 0 and any($repeated_dirty[]; . == $d) then
           reason("repeated-source-drift"; "same uncommitted paths on several hosts: \($p.source.dirty | join(", "))")
         else empty end ),
