@@ -1,7 +1,7 @@
 #!/bin/sh
 # fleet-chezmoi backup: preserve what an apply will change, on the target.
 #
-#   backup.sh SET-ID EXPECTED-STATUS-DIGEST [ABSOLUTE-TARGET...]
+#   backup.sh SET-ID EXPECTED-STATUS-DIGEST EXPECTED-HOSTNAME EXPECTED-USER [ABSOLUTE-TARGET...]
 #
 # With targets, status and diff are scoped to them (`chezmoi status -- ...`),
 # the same bytes a targeted Roundhouse plan seals.
@@ -13,7 +13,8 @@ set -u
 
 case ${1:-} in set-[0-9a-f]*) set_id=$1 ;; *) printf 'backup: invalid set ID\n' >&2; exit 64 ;; esac
 case ${2:-} in ''|*[!0-9a-f]*) printf 'backup: invalid status digest\n' >&2; exit 64 ;; *) expected=$2 ;; esac
-shift 2
+expected_host=${3:-} expected_user=${4:-}
+shift 4 2>/dev/null || { printf 'backup: missing expected identity\n' >&2; exit 64; }
 for target in "$@"; do
   case $target in
     /*) ;;
@@ -33,6 +34,13 @@ fail() {
   jq -cn --arg error "$1" '{schema:"fleet-chezmoi.backup",version:1,ok:false,error:$error}'
   exit 0
 }
+
+# Nothing is read or written unless this host is the one the probe verified:
+# the SSH alias may resolve elsewhere since sealing.
+if [ -z "$expected_host" ] || [ "$expected_host" = null ] ||
+  [ "$(hostname 2>/dev/null || uname -n)" != "$expected_host" ] || [ "$(id -un)" != "$expected_user" ]; then
+  fail "identity does not match the sealed host"
+fi
 
 status=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-status.XXXXXX") || fail "cannot create a temporary file"
 trap 'rm -f "$status"' EXIT HUP INT TERM

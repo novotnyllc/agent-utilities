@@ -376,10 +376,13 @@ seal_command() {
         exit 0
       fi
       chmod 600 "$plan"
+      # The identity this run's probe verified; payloads check the host against
+      # it, never against config edited since.
       jq -cn --arg host "$host" --argjson d "$decision" --arg plan "plans/$host.json" --argjson extra "$extra" \
+        --argjson identity "$(jq -c '.probe.identity // {} | {hostname, user}' "$run/probes/$host.json")" \
         --arg plan_id "$(jq -r '.plan_id' "$plan")" --arg plan_digest "$(jq -r '.plan_digest.value' "$plan")" \
         --argjson ops "$(jq -c '[.operations[] | {type, id, argv}]' "$plan")" \
-        '{host:$host,transport:$d.transport,plan:$plan,plan_id:$plan_id,plan_digest:$plan_digest,
+        '{host:$host,identity:$identity,transport:$d.transport,plan:$plan,plan_id:$plan_id,plan_digest:$plan_digest,
           source_head:$d.source.head,upstream_head:$d.source.upstream_head,
           status_digest:$d.status_digest,pending:$d.pending,operations:$ops} + $extra' >"$set_dir/entries/$host.json"
     ) &
@@ -441,7 +444,8 @@ apply_command() {
       if [ "$stage" = apply ] || [ "$stage" = targets ]; then
         # Back up before mutating: the pending files and the rendered diff stay
         # on the target in a private directory; only digests come back.
-        backup_args=("$set_id" "$(jq -r '.status_digest' <<<"$entry")")
+        backup_args=("$set_id" "$(jq -r '.status_digest' <<<"$entry")"
+          "$(jq -r '.identity.hostname' <<<"$entry")" "$(jq -r '.identity.user' <<<"$entry")")
         while IFS= read -r target; do backup_args+=("$target"); done < <(jq -r '.targets[]?' <<<"$entry")
         backup=$(run_on "$meta" "$script_dir/backup.sh" "${backup_args[@]}" \
           2>"$run/logs/$host.backup.err" | last_json fleet-chezmoi.backup) || backup=''
@@ -704,8 +708,10 @@ plugins_command() {
     valid_host "$host" || die "invalid host name"
     # The payload rechecks the configured identity on the host itself, right
     # before it changes anything: the alias may resolve elsewhere by now.
+    # The identity this run's probe verified, not the config as it is now.
     ( run_on "$(host_meta "$host")" "$script_dir/converge-plugins.sh" \
-        "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
+        "$(jq -r '.probe.identity.hostname // empty' "$run/probes/$host.json")" \
+        "$(jq -r '.probe.identity.user // empty' "$run/probes/$host.json")" \
         2>"$run/logs/$host.plugins.err" |
         last_json fleet-chezmoi.plugins >"$run/plugins/$host.json" ) &
     workers+=("$! $host")

@@ -200,6 +200,10 @@ set_id=$(awk 'END {print $1}' "$T/seal.out")
 [ -z "${DEBUG:-}" ] || { cat "$T/seal.out"; cat "$run"/logs/*.seal.log 2>/dev/null; }
 "$fc" apply "$run" "$set_id" >"$T/apply.out"
 check "apply ran after exactly one backup" grep -q '^apply h1 plan-[0-9a-f]* backups=1' "$STUB_LOG"
+check "the set seals the probe-verified identity" \
+  [ "$(jq -r '.hosts[0].identity | [.hostname, .user] | join("|")' "$run/sets/apply/set.json")" = "$host|$user" ]
+check "a backup on an unverified host writes nothing" \
+  [ "$(sh "$here/backup.sh" set-0000000000000000 00 elsewhere "$user" | jq -r .error)" = "identity does not match the sealed host" ]
 check "host converged" [ "$(class_of "$run" h1)" = in-sync ]
 backup_dir=$(jq -r '.backup_dir' "$run/sets/apply/results/h1.backup.json")
 check "backup is private" [ "$(stat -c %a "$backup_dir" 2>/dev/null || stat -f %Lp "$backup_dir")" = 700 ]
