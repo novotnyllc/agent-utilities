@@ -100,6 +100,7 @@ case $1 in
     printf 'collect %s\n' "$target" >>"$log"
     ;;
   seal-plan)
+    if [ -n "${STUB_BAD_SEAL:-}" ]; then printf 'not json\n' >"$4"; exit 0; fi
     body=$(jq -cS --slurpfile s "$3" '{schema:"roundhouse.plan",target,domain,operations,
       bound:[$s[] | {kind,id,data}]}' "$2")
     digest=$(printf '%s' "$body" | jq -cS . | (sha256sum 2>/dev/null || shasum -a 256) | cut -d ' ' -f 1)
@@ -148,6 +149,8 @@ mkdir -p "$T/stub"
 export ROUNDHOUSE_CLI=$T/bin/roundhouse STUB_LOG=$T/stub.log STUB_DIR=$T/stub STUB_PROBE=$here/probe.sh
 : >"$STUB_LOG"
 
+if STUB_BAD_SEAL=1 "$fc" seal "$run" pull >"$T/bad-seal.out" 2>&1; then fail "seal succeeded with a crashed worker"; fi
+check "a crashed seal worker is reported, not dropped" grep -q "seal worker failed" "$T/bad-seal.out"
 "$fc" seal "$run" pull >"$T/seal.out"
 set_id=$(awk 'END {print $1}' "$T/seal.out")
 [ -z "${DEBUG:-}" ] || { cat "$T/seal.out"; cat "$run"/logs/*.seal.log 2>/dev/null; }

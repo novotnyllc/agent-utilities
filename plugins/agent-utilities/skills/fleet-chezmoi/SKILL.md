@@ -30,7 +30,8 @@ another host needs the Roundhouse CLI (`ROUNDHOUSE_CLI`, default
 ## Fast path
 
 1. `"$FC" probe --gold GOLD HOST...` — one read-only batch per host, in
-   parallel, under each login shell. Add `--plugins` to compare Claude/Codex
+   parallel, in the environment its executor uses: the login shell for SSH
+   hosts, the controller's own environment for a local host. Add `--plugins` to compare Claude/Codex
    plugin registration and versions against the gold; `--require TOOL` for
    tools run scripts need.
 2. Act on each host's class:

@@ -103,6 +103,34 @@ run_on() {
   return "$rc"
 }
 
+# await_workers ON_FAIL — wait for each "PID HOST" in the caller's `workers`
+# array and call ON_FAIL HOST STATUS for every worker that exited nonzero.
+# A bare `wait` returns 0 even when a worker failed.
+await_workers() {
+  local on_fail=$1 entry rc
+  for entry in "${workers[@]+"${workers[@]}"}"; do
+    rc=0
+    wait "${entry%% *}" || rc=$?
+    [ "$rc" -eq 0 ] || "$on_fail" "${entry#* }" "$rc"
+  done
+}
+
+probe_failed() {
+  jq -cn --arg h "$1" --arg e "probe worker failed (exit $2); see logs" \
+    '{host:$h,transport:"unknown",gold:false,expected:null,probe:null,error:$e}' >"$run/probes/$1.json"
+}
+
+seal_failed() {
+  rm -f "$set_dir/entries/$1.json"
+  printf '%s\t%s\n' "$1" "skipped: seal worker failed (exit $2); see logs" >>"$set_dir/skipped.tsv"
+}
+
+apply_failed() {
+  jq -cn --arg h "$1" --argjson rc "$2" \
+    '{host:$h,outcome:"unknown",exit:$rc,reason:"apply worker failed; the host may have changed, check logs and re-probe"}' \
+    >"$set_dir/results/$1.outcome.json"
+}
+
 # last_json SCHEMA — the last stdout line that is a JSON object of SCHEMA; login
 # shells may print banners before it.
 last_json() {
@@ -181,14 +209,15 @@ probe_command() {
     --argjson requires "$(printf '%s\n' "${requires[@]+"${requires[@]}"}" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
     --argjson hosts "$(printf '%s\n' "${hosts[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
     '{gold:$gold,fetch:$fetch,requires:$requires,hosts:$hosts}' >"$run/options.json"
-  local args=("${requires[@]+"${requires[@]}"}") host
+  local args=("${requires[@]+"${requires[@]}"}") host workers=()
   [ "$fetch" = true ] || args+=(--no-fetch)
   for host in "${hosts[@]}"; do
     local is_gold=false
     [ "$host" != "$gold" ] || is_gold=true
     probe_one "$run" "$(host_meta "$host")" "$is_gold" "${args[@]+"${args[@]}"}" &
+    workers+=("$! $host")
   done
-  wait
+  await_workers probe_failed
   classify_run "$run"
 }
 
@@ -199,15 +228,16 @@ reprobe() {
   options=$run/options.json
   gold=$(jq -r '.gold' "$options")
   fetch=$(jq -r '.fetch' "$options")
-  local args=() host
+  local args=() host workers=()
   while IFS= read -r req; do args+=("$req"); done < <(jq -r '.requires[]' "$options")
   [ "$fetch" = true ] || args+=(--no-fetch)
   for host in "$@"; do
     local is_gold=false
     [ "$host" != "$gold" ] || is_gold=true
     probe_one "$run" "$(host_meta "$host")" "$is_gold" "${args[@]+"${args[@]}"}" &
+    workers+=("$! $host")
   done
-  wait
+  await_workers probe_failed
   classify_run "$run"
 }
 
@@ -248,7 +278,7 @@ seal_command() {
   mkdir -p "$set_dir/plans" "$set_dir/snapshots"
   chmod 700 "$run/sets" "$set_dir"
   mkdir -p "$set_dir/entries"
-  local requested=("$@")
+  local requested=("$@") workers=()
   for host in "${hosts[@]}"; do
     (
       decision=$(jq -c --arg h "$host" '.[] | select(.host == $h)' "$run/classes.json")
@@ -337,8 +367,9 @@ seal_command() {
           source_head:$d.source.head,upstream_head:$d.source.upstream_head,
           status_digest:$d.status_digest,pending:$d.pending,operations:$ops} + $extra' >"$set_dir/entries/$host.json"
     ) &
+    workers+=("$! $host")
   done
-  wait
+  await_workers seal_failed
   local entries=()
   for candidate in "$set_dir"/entries/*.json; do [ -f "$candidate" ] && entries+=("$candidate"); done
   jq -s --arg stage "$stage" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -379,6 +410,7 @@ apply_command() {
 
   rm -rf "$set_dir/results"
   mkdir -p "$set_dir/results"
+  local workers=()
   while IFS= read -r host; do
     (
       entry=$(jq -c --arg h "$host" '.hosts[] | select(.host == $h)' "$set_file")
@@ -417,8 +449,9 @@ apply_command() {
         '{host:$h,outcome:$outcome,exit:$rc,backup_dir:(if $backup == "" then null else $backup end)}' \
         >"$set_dir/results/$host.outcome.json"
     ) &
+    workers+=("$! $host")
   done < <(jq -r '.hosts[].host' "$set_file")
-  wait
+  await_workers apply_failed
   jq -r '"\(.host)\t\(.outcome)\(if .backup_dir then "\tbackup " + .backup_dir else "" end)\(if .reason then "\t" + .reason else "" end)"' \
     "$set_dir"/results/*.outcome.json | table
   local applied=()
