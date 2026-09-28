@@ -642,6 +642,13 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   live_mtime:900,history_truncated:false,edits:[{path:["theme"],state:"set",value_sha256:"v",upstream_path_time:10,
   review:false,upstream_change_in_head:false}]}]}}]' |
   jq -f "$here/classify.jq" >"$T/managed-stale.json"
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},managed_json:[{target:".s.json",managed:"t.json",
+  live_mtime:900,history_truncated:false,edits:[{path:["theme"],state:"set",value_sha256:"v",upstream_path_time:10,
+  review:false,upstream_change_in_head:true,upstream_change_arrived:900}]}]}}]' |
+  jq -f "$here/classify.jq" >"$T/managed-tie.json"
+check "a pull in the same second as the last write is stale" \
+  [ "$(jq -r '.[0].decisions[0].decision' "$T/managed-tie.json")" = stale-base ]
 check "a managed edit over an unpulled upstream change is stale" \
   [ "$(jq -r '.[0].decisions[0].decision' "$T/managed-stale.json")" = stale-base ]
 # A verified content base outranks a skewed upstream commit date.

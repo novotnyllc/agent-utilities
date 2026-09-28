@@ -141,7 +141,9 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
              # (one host clock): it was pulled but never applied to this file.
              # An unknown arrival (-1) is refused too.
              elif ($newest.upstream_change_arrived // -1) < 0
-               or $newest.upstream_change_arrived > $newest.live_mtime then "stale-base"
+               # Both clocks have one-second resolution: a tie cannot order the
+               # write and the pull, so it is refused too.
+               or $newest.upstream_change_arrived >= $newest.live_mtime then "stale-base"
              elif any(.[]; .review) then "capture-manual"
              # A value older than the retained history, or removing a whole
              # fleet-wide key, is a decision for a person.
