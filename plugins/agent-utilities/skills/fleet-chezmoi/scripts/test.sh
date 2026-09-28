@@ -131,8 +131,9 @@ case $1 in
             "$plan" >/dev/null || { echo "stub: precondition changed" >&2; exit 65; }
           chezmoi --no-tty apply ;;
         chezmoi-external-reset)
-          path=$(jq -r .id <<<"$op") head=$(jq -r .upstream_head <<<"$op")
-          [ -z "$(git -C "$path" status --porcelain)" ] && [ "$(git -C "$path" rev-parse '@{u}')" = "$head" ] ||
+          path=$(jq -r .id <<<"$op") head=$(jq -r .upstream_head <<<"$op") sealed=$(jq -r .head <<<"$op")
+          [ -z "$(git -C "$path" status --porcelain --ignored)" ] && [ "$(git -C "$path" rev-parse '@{u}')" = "$head" ] &&
+            [ "$(git -C "$path" rev-parse HEAD)" = "$sealed" ] ||
             { echo "stub: external changed" >&2; exit 65; }
           git -C "$path" reset --hard --quiet "$head" ;;
       esac
@@ -260,6 +261,18 @@ check "sealed reset moved the external to upstream" \
 check "external is current after reset" [ "$(jq -r '.probe.externals[0].state' "$run/probes/h1.json")" = current ]
 git -C "$T/up" commit -q --amend -m rewritten-again
 probe h1
+check "rewritten again is resettable" [ "$(field "$run" h1 '[.blockers[].code] | join(",")')" = external-rewritten ]
+[ -z "${DEBUG:-}" ] || jq ".[0].blockers" "$run/classes.json"
+printf 'kept\n' >"$HOME/.ext/local-only" && printf 'local-only\n' >>"$HOME/.ext/.git/info/exclude"
+probe h1
+check "an ignored local file blocks the reset" [ "$(field "$run" h1 '[.blockers[].code] | join(",")')" = external-local-changes ]
+rm -f "$HOME/.ext/local-only"
+git -C "$HOME/.ext" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m Fast-forward
+probe h1
+check "a local Fast-forward-subject commit is not upstream history" \
+  [ "$(field "$run" h1 '[.blockers[].code] | join(",")')" = external-local-changes ]
+git -C "$HOME/.ext" reset -q --hard HEAD~1
+probe h1
 printf 'local\n' >"$HOME/.ext/f"
 probe h1
 check "rewritten external with local changes is not resettable" \
@@ -285,6 +298,14 @@ rm -f "$src/dot_broken.tmpl"
 "$fc" probe --run "$run" --gold h1 h1 >/dev/null
 check "gold pending apply is review" \
   [ "$(field "$run" h1 '[.blockers[].code] | index("gold-pending-apply") != null')" = true ]
+
+# 12b. arguments survive the payload framing: spaces and quotes in a target
+mkdir -p "$T/gold/space dir" && printf 'x\n' >"$T/gold/space dir/it's.txt"
+git -C "$T/gold" add -A && git -C "$T/gold" commit -qm spaced && git -C "$T/gold" push -q origin main
+chezmoi git -- pull -q --ff-only
+"$fc" evidence "$run" h1 "space dir/it's.txt" >/dev/null
+check "a spaced, quoted target reaches the host intact" \
+  [ "$(jq -r '.targets[0] | [.target, .source] | join("|")' "$run/evidence/h1.json")" = "space dir/it's.txt|space dir/it's.txt" ]
 
 # 13. plugin registration against the gold host (classifier only)
 jq -n '[

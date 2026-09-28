@@ -69,29 +69,38 @@ host_meta() {
 # user's login shell over SSH (the same environment the Roundhouse executor and
 # chezmoi run scripts get), or in-process for a local target.
 run_on() {
-  local meta=$1 payload=$2 transport alias
+  local meta=$1 payload=$2 transport alias framed arg
   shift 2
   transport=$(jq -r '.transport' <<<"$meta")
   alias=$(jq -r '.alias' <<<"$meta")
   # An alias is a destination, never an option.
   [[ $alias =~ ^[A-Za-z0-9._@][A-Za-z0-9._@-]*$ ]] || die "unsafe SSH destination for $(jq -r '.host' <<<"$meta")"
+  # Arguments travel inside the payload as one single-quoted `set --` line, so
+  # no remote shell ever parses them: paths with spaces stay intact and nothing
+  # in them can become syntax.
+  for arg in "$@"; do
+    case $arg in *$'\n'*) die "payload arguments cannot contain newlines" ;; esac
+  done
+  framed=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-payload.XXXXXX")
+  {
+    printf 'set --'
+    for arg in "$@"; do printf " '%s'" "${arg//\'/\'\\\'\'}"; done
+    printf '\n'
+    cat "$payload"
+  } >"$framed"
+  local rc=0
   case $transport in
-    local) sh "$payload" "$@" </dev/null ;;
+    local) sh "$framed" </dev/null || rc=$? ;;
     ssh)
-      # Arguments are closed-vocabulary tokens; anything else is refused rather
-      # than quoted through two remote shells.
-      local arg quoted=''
-      for arg in "$@"; do
-        [[ $arg =~ ^[A-Za-z0-9._+=/-]+$ ]] || die "unsafe payload argument: $arg"
-        quoted="$quoted $arg"
-      done
       ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
-        "if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo 'fleet-chezmoi: login shell unavailable' >&2; exit 69; fi; exec \"\$SHELL\" -lc 'f=\$(mktemp) && cat >\"\$f\" && sh \"\$f\"$quoted; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
-        <"$payload"
+        "if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo 'fleet-chezmoi: login shell unavailable' >&2; exit 69; fi; exec \"\$SHELL\" -lc 'f=\$(mktemp) && cat >\"\$f\" && sh \"\$f\"; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
+        <"$framed" || rc=$?
       ;;
-    *) return 69 ;;
+    *) rc=69 ;;
   esac
+  rm -f "$framed"
+  return "$rc"
 }
 
 # last_json SCHEMA — the last stdout line that is a JSON object of SCHEMA; login
@@ -217,7 +226,7 @@ seal_command() {
   shift 2
   [ -f "$run/classes.json" ] || die "no classification in $run; run probe first"
   command -v "$CLI" >/dev/null 2>&1 || die "sealing requires the Roundhouse CLI ($CLI)" 69
-  local hosts=() host set_name=$stage
+  local hosts=() host set_name=$stage candidate
   case $stage in
     pull|apply)
       [ "$#" -eq 0 ] || usage
@@ -238,7 +247,7 @@ seal_command() {
   rm -rf "$set_dir"
   mkdir -p "$set_dir/plans" "$set_dir/snapshots"
   chmod 700 "$run/sets" "$set_dir"
-  : >"$set_dir/entries.jsonl"
+  mkdir -p "$set_dir/entries"
   local requested=("$@")
   for host in "${hosts[@]}"; do
     (
@@ -289,7 +298,7 @@ seal_command() {
         reset)
           jq -c --arg h "$host" '{domain:"chezmoi",target:$h,operations:[
             .probe.externals[] | select(.state == "rewritten-resettable") |
-            {type:"chezmoi-external-reset",kind:"chezmoi_external",id:.path,upstream_head:.upstream_head,
+            {type:"chezmoi-external-reset",kind:"chezmoi_external",id:.path,head:.head,upstream_head:.upstream_head,
              argv:["git","-C",.path,"reset","--hard","--quiet",.upstream_head]}]}' \
             "$run/probes/$host.json" >"$draft"
           if [ "$(jq '.operations | length' "$draft")" -eq 0 ]; then
@@ -310,7 +319,8 @@ seal_command() {
             .data.status_digest.value == $d.status_digest)
          elif $stage == "reset" then . as $records | all($draft[0].operations[]; . as $op |
             any($records[]; .kind == "chezmoi_external" and .id == $op.id and
-              .data.state == "rewritten-resettable" and .data.upstream_head == $op.upstream_head))
+              .data.state == "rewritten-resettable" and .data.head == $op.head and
+              .data.upstream_head == $op.upstream_head))
          else true end)' "$snap" >/dev/null; then
         printf '%s\t%s\n' "$host" "skipped: state changed since probe; re-probe" >>"$set_dir/skipped.tsv"
         exit 0
@@ -325,13 +335,15 @@ seal_command() {
         --argjson ops "$(jq -c '[.operations[] | {type, id, argv}]' "$plan")" \
         '{host:$host,transport:$d.transport,plan:$plan,plan_id:$plan_id,plan_digest:$plan_digest,
           source_head:$d.source.head,upstream_head:$d.source.upstream_head,
-          status_digest:$d.status_digest,pending:$d.pending,operations:$ops} + $extra' >>"$set_dir/entries.jsonl"
+          status_digest:$d.status_digest,pending:$d.pending,operations:$ops} + $extra' >"$set_dir/entries/$host.json"
     ) &
   done
   wait
+  local entries=()
+  for candidate in "$set_dir"/entries/*.json; do [ -f "$candidate" ] && entries+=("$candidate"); done
   jq -s --arg stage "$stage" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{schema:"fleet-chezmoi.set",version:1,stage:$stage,created_at:$created,hosts:(sort_by(.host))}' \
-    "$set_dir/entries.jsonl" >"$set_dir/set.json"
+    "${entries[@]+"${entries[@]}"}" /dev/null >"$set_dir/set.json"
   chmod 600 "$set_dir/set.json"
   [ ! -f "$set_dir/skipped.tsv" ] || sed 's/^/skipped /' "$set_dir/skipped.tsv"
   [ "$(jq '.hosts | length' "$set_dir/set.json")" -gt 0 ] || die "nothing was sealed" 65

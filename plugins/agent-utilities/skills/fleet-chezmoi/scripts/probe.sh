@@ -171,7 +171,14 @@ chezmoi managed --include=externals --path-style=absolute 2>/dev/null |
     fi
     ext_head=$(git -C "$ext" rev-parse HEAD 2>/dev/null || true)
     ext_up=$(git -C "$ext" rev-parse '@{u}' 2>/dev/null || true)
-    ext_dirty=$(git -C "$ext" status --porcelain 2>/dev/null | awk 'NF {n++} END {print n+0}')
+    # Ignored and untracked files count: a hard reset overwrites an ignored local
+    # file whose path the rewritten upstream now tracks. A failed status is
+    # never read as clean.
+    if git -C "$ext" status --porcelain --ignored --untracked-files=all >"$work/ext-status" 2>/dev/null; then
+      ext_dirty=$(awk 'NF {n++} END {print n+0}' "$work/ext-status")
+    else
+      ext_dirty=1
+    fi
     ext_ahead=0 ext_behind=0 upstream_origin=false state=no-upstream
     if [ -n "$ext_up" ]; then
       counts=$(git -C "$ext" rev-list --left-right --count 'HEAD...@{u}' 2>/dev/null || printf '0 0')
@@ -189,19 +196,29 @@ chezmoi managed --include=externals --path-style=absolute 2>/dev/null |
       case $up_log in /*) ;; *) up_log=$ext/$up_log ;; esac
       local_writes=true
       : >"$work/tips"
+      : >"$work/up-tips"
+      : >"$work/resets"
+      if [ -f "$up_log" ]; then
+        awk '{print $1; print $2}' "$up_log" >"$work/up-tips"
+        cat "$work/up-tips" >>"$work/tips"
+      fi
       if [ -n "$branch_ref" ] && [ -f "$branch_log" ]; then
         local_writes=false
         # Reflog lines: OLD NEW IDENT<TAB>MESSAGE.
         awk -F '\t' '{split($1, f, " "); print f[2] "\t" $2}' "$branch_log" >"$work/branch-log"
         while IFS="$(printf '\t')" read -r new message; do
           case $message in
-            clone:*|*Fast-forward*|"pull --ff-only"*) printf '%s\n' "$new" >>"$work/tips" ;;
+            # Match the reflog operation, never a commit subject.
+            "clone: "*|"pull: Fast-forward"|"pull "*": Fast-forward") printf '%s\n' "$new" >>"$work/tips" ;;
+            # An earlier sealed reset: upstream-delivered only if it moved to a
+            # commit the upstream ref itself recorded.
+            "reset: moving to "*) printf '%s\n' "$new" >>"$work/resets" ;;
             *) local_writes=true ;;
           esac
         done <"$work/branch-log"
-      fi
-      if [ -f "$up_log" ]; then
-        awk '{print $1; print $2}' "$up_log" >>"$work/tips"
+        while IFS= read -r target; do
+          grep -qx -- "$target" "$work/up-tips" || local_writes=true
+        done <"$work/resets"
       fi
       if [ "$local_writes" = false ]; then
         for tip in $(grep -v '^0*$' "$work/tips" | sort -u | head -n 400); do

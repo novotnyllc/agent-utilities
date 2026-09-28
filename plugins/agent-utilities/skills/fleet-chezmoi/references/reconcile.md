@@ -89,7 +89,8 @@ Each blocker code has a cause and a fix in
 
 - `external-rewritten`: `"$FC" seal RUN reset HOST`, show the user the argv
   (`git -C PATH reset --hard --quiet UPSTREAM`), then `"$FC" apply RUN SET-ID`.
-  Roundhouse 0.9.24+ seals it only when the clone is clean and every commit it
-  holds came from upstream, and rechecks both before resetting.
+  Roundhouse 0.9.24+ seals it only when the clone has no local, untracked, or
+  ignored files and every commit it holds came from upstream, binds its current
+  HEAD, and rechecks all of that before resetting.
 - `source-dirty`, `source-ahead`: reconcile the source repository first (see
   scheduled writers in failure modes); never reset or auto-commit it.

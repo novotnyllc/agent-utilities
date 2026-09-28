@@ -14,7 +14,7 @@ host to `review`; findings only report.
 | `source-fetch-failed`, `source-no-upstream`, `source-not-git` | Upstream state is unknown. | Fix the remote, credentials, or checkout, then re-probe. |
 | `status-failed` | `chezmoi status` failed, usually a template error or a secret manager that needs a signed-in session. | Fix the template or sign in interactively on that host; never paste secrets to work around it. |
 | `status-too-large` | More than 200 pending entries. | Too much to classify safely; reconcile in batches. |
-| `external-rewritten` | A `.chezmoiexternal` `git-repo` (for example oh-my-tmux) whose upstream rewrote history. chezmoi's `pull --ff-only` fails and aborts the whole apply. The clone is clean and every commit it holds came from upstream. | `"$FC" seal RUN reset HOST`, then `apply` ([reconcile](reconcile.md#blockers)). |
+| `external-rewritten` | A `.chezmoiexternal` `git-repo` (for example oh-my-tmux) whose upstream rewrote history. chezmoi's `pull --ff-only` fails and aborts the whole apply. The clone has no local, untracked, or ignored files, and every commit it holds came from upstream. | `"$FC" seal RUN reset HOST`, then `apply` ([reconcile](reconcile.md#blockers)). |
 | `external-local-changes` | The same, but the clone has local changes or local commits. | Stop. Never reset; ask the user. |
 | `gold-pending-apply` | The gold's source would change its live files. Its live state is authoritative, so this is a stale capture or a commit from elsewhere. | See stale captures below. Never apply over the gold. |
 
