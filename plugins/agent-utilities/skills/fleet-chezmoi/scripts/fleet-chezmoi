@@ -302,6 +302,19 @@ seal_command() {
           printf '%s\t%s\n' "$host" "skipped: class $(jq -r '.class' <<<"$decision")" >>"$set_dir/skipped.tsv"
           exit 0 ;;
       esac
+      # Roundhouse seals against the configured identity; it must still be the
+      # one this run's probe verified, or the route changed since the probe.
+      if ! jq -e --argjson m "$(host_meta "$host")" '
+          (.probe.identity // {}) as $p
+          # Windows names compare case-insensitively, as Roundhouse does there.
+          | def norm: if (($p.os // "") | test("^(MINGW|MSYS|CYGWIN)")) then ascii_downcase else . end;
+          $m.expected != null
+          and ($m.expected.hostname | norm) == (($p.hostname // "") | norm)
+          and ($m.expected.user | norm) == (($p.user // "") | norm)' \
+          "$run/probes/$host.json" >/dev/null; then
+        printf '%s\t%s\n' "$host" "skipped: configured identity no longer matches the probe; re-probe" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
       snap=$set_dir/snapshots/$host.jsonl
       plan=$set_dir/plans/$host.json
       draft=$set_dir/plans/$host.draft.json

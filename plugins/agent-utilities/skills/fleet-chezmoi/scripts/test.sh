@@ -151,6 +151,13 @@ export ROUNDHOUSE_CLI=$T/bin/roundhouse STUB_LOG=$T/stub.log STUB_DIR=$T/stub ST
 
 if STUB_BAD_SEAL=1 "$fc" seal "$run" pull >"$T/bad-seal.out" 2>&1; then fail "seal succeeded with a crashed worker"; fi
 check "a crashed seal worker is reported, not dropped" grep -q "seal worker failed" "$T/bad-seal.out"
+# A route re-pointed after the probe (config identity changed) is never sealed.
+cp "$T/rh.json" "$T/rh.json.probed"
+jq '.machines.h1.expected_hostname = "moved-after-probe"' "$T/rh.json.probed" >"$T/rh.json" && chmod 600 "$T/rh.json"
+"$fc" seal "$run" pull >"$T/seal.out" 2>&1 || true
+check "a host whose configured identity changed since the probe is not sealed" \
+  grep -q "configured identity no longer matches the probe" "$T/seal.out"
+mv "$T/rh.json.probed" "$T/rh.json"
 "$fc" seal "$run" pull >"$T/seal.out"
 set_id=$(awk 'END {print $1}' "$T/seal.out")
 [ -z "${DEBUG:-}" ] || { cat "$T/seal.out"; cat "$run"/logs/*.seal.log 2>/dev/null; }
