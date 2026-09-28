@@ -177,7 +177,10 @@ if "$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1; then fail "apply exited 0 
 check "changed live state is skipped" grep -q 'skipped' "$T/apply.out"
 check "live edit survived" grep -q edited-after-seal "$HOME/.b"
 check "skipped host never reached the executor" [ "$(grep -c '^apply' "$STUB_LOG")" = 1 ]
-check "a lone live edit makes its host the origin" [ "$(class_of "$run" h1)" = capture ]
+# The edit started from the .b chezmoi last wrote, not the newer upstream .b
+# already pulled: capturing it would discard that upstream change.
+check "an edit of an older version than upstream is stale" \
+  [ "$(jq -r '.[] | select(.host == "h1") | [.class, .decisions[0].decision] | join(",")' "$run/classes.json")" = review,stale-base ]
 "$fc" evidence "$run" h1 .b >"$T/evidence.out"
 check "evidence covers the conflict" [ "$(jq -r '.targets[0] | [.target, .kind, (.rendered_sha256 != .live_sha256)] | join(",")' "$run/evidence/h1.json")" = ".b,plain,true" ]
 check "evidence records source history" [ "$(jq -r '.targets[0].history[0].subject' "$run/evidence/h1.json")" = change ]
@@ -396,7 +399,7 @@ before=$(git -C "$T/origin.git" rev-parse main)
 if "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1; then
   fail "a removal was published with no retired file"
 fi
-check "a removal needs a retired file" grep -q "declares no existing retired file" "$T/apply.out"
+check "a removal needs a retired file" grep -q "declares no existing, non-symlinked retired file" "$T/apply.out"
 check "nothing was published without one" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
 git -C "$T/pub" revert --no-edit HEAD >/dev/null && git -C "$T/pub" push -q origin main
@@ -565,16 +568,25 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   jq -f "$here/classify.jq" >"$T/stale-blob.json"
 check "an older source revision is stale whatever the dates say" \
   [ "$(jq -r '.[0].decisions[0].decision' "$T/stale-blob.json")" = stale-base ]
+# Bytes unchanged since chezmoi wrote them are a mode-only change, never
+# "already published".
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
+  live_sha256:"u",base_sha256:"u",upstream_sha256:"u",live_mtime:300,source:"dot_f",kind:"plain",
+  source_upstream_time:10,source_head_time:10}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/mode-only.json"
+check "a mode-only change goes to a person" \
+  [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 
 # 17. a mismatched host never steers another host's decision; removing a whole
 # fleet-wide key is a decision for a person
 jq -n '[
   {host:"good",transport:"ssh",expected:{hostname:"g",user:"u"},error:null,probe:{identity:{hostname:"g",user:"u"},
     source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
-    live_sha256:"d1",live_mtime:100,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u"}]}}},
+    live_sha256:"d1",live_mtime:100,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u",base_sha256:"u"}]}}},
   {host:"wrong",transport:"ssh",expected:{hostname:"w",user:"u"},error:null,probe:{identity:{hostname:"imposter",user:"u"},
     source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
-    live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u"}]}}},
+    live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u",base_sha256:"u"}]}}},
   {host:"m",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
     managed_json:[{target:".s.json",managed:"t.json",live_mtime:300,history_truncated:false,
       edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false}]}]}}]' |

@@ -47,6 +47,11 @@ def reason($code; $detail): {code:$code,detail:$detail};
 def when($t): if ($t // 0) > 0 then ($t | todate) else "unknown time" end;
 
 # Version order for plugin versions: numeric where numeric.
+# A live edit whose bytes equal upstream and differ from what chezmoi last
+# wrote: another host's change, already published.
+def published_edit: (.upstream_sha256 // "") != "" and .live_sha256 == .upstream_sha256
+  and (.base_sha256 // "") != .live_sha256;
+
 def vkey: tostring | split(".") | map(tonumber? // .);
 
 # Keep plugin IDs (NAME@MARKETPLACE) whose marketplace is in $scope.
@@ -66,11 +71,13 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
 | ($eligible | map(.probe.source.upstream_head // empty | select(. != "")) | unique) as $upstream_views
 # Per-path origin decisions from every host's live edits.
 # An edit whose content already equals upstream has been published: a pull
-# resolves it, so it takes no part in deciding anything.
+# resolves it, so it takes no part in deciding anything. Content that still
+# equals what chezmoi last wrote was not edited at all (a mode-only change), so
+# it is never "published".
 | ($eligible | map(.host as $h | (.probe.status.edits // [])[]
-    | select((.upstream_sha256 // "") != "" and .live_sha256 == .upstream_sha256) | "\($h)\t\(.path)")) as $published
+    | select(published_edit) | "\($h)\t\(.path)")) as $published
 | ($eligible | map(.host as $h | (.probe.status.edits // [])[]
-    | select((.upstream_sha256 // "") == "" or .live_sha256 != .upstream_sha256) | . + {host:$h}) | flatten
+    | select(published_edit | not) | . + {host:$h}) | flatten
   | group_by(.path)
   | map(
       (max_by(.live_mtime)) as $newest
@@ -83,6 +90,14 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
              # The origin must have edited the upstream revision of the source:
              # its HEAD blob must equal upstream's (commit times are only a
              # fallback for records without blobs).
+             # Bytes unchanged since chezmoi wrote them: a mode-only change,
+             # which needs a private_/executable_ rename by hand.
+             elif $newest.kind == "plain" and ($newest.base_sha256 // "") == $newest.live_sha256 then "capture-manual"
+             # The edit must start from the current upstream content: what
+             # chezmoi last wrote there equals the upstream file. Unknown or
+             # older bases are refused, whatever the dates say.
+             elif $newest.kind == "plain" and ($newest.upstream_sha256 // "") != ""
+               and ($newest.base_sha256 // "") != $newest.upstream_sha256 then "stale-base"
              elif ($newest.source_head_blob // "") != ($newest.source_upstream_blob // "") then "stale-base"
              elif ($newest.source_head_time // 0) < ($newest.source_upstream_time // 0) then "stale-base"
              # Templates and modify_ scripts render per host, so their live

@@ -181,6 +181,9 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
       '') kind=unmapped ;;
     esac
     upstream_time=0 head_time=0 upstream_sha='' head_blob='' upstream_blob=''
+    # What chezmoi last wrote here is the version this edit started from.
+    base_sha=$(chezmoi state get --bucket=entryState --key="$live" 2>/dev/null </dev/null |
+      jq -r '.contentsSHA256 // empty' 2>/dev/null || true)
     if [ -n "$source_file" ]; then
       head_time=$(git -C "$src" log -1 --format=%ct HEAD -- "$source_rel" 2>/dev/null || true)
       head_time=${head_time:-0}
@@ -202,7 +205,8 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
     jq -cn --arg path "$rel" --arg sha "$live_sha" --argjson mtime "$live_mtime" --arg source "$source_rel" \
       --arg kind "$kind" --argjson upstream_time "$upstream_time" --argjson head_time "$head_time" \
       --arg upstream_sha "$upstream_sha" --arg head_blob "$head_blob" --arg upstream_blob "$upstream_blob" \
-      '{path:$path,live_sha256:$sha,live_mtime:$mtime,source:$source,kind:$kind,
+      --arg base_sha "$base_sha" \
+      '{path:$path,live_sha256:$sha,live_mtime:$mtime,source:$source,kind:$kind,base_sha256:$base_sha,
         source_upstream_time:$upstream_time,source_head_time:$head_time,upstream_sha256:$upstream_sha,
         source_head_blob:$head_blob,source_upstream_blob:$upstream_blob}' >>"$work/edits"
   done

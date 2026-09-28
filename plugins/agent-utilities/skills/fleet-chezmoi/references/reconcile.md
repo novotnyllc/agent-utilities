@@ -51,7 +51,7 @@ Across all hosts, per file:
 | `capture` | The newest edit is newer than any upstream change to the source, every host that edited it holds the same content, the origin had pulled the latest change to that file, and the source is a plain file. | The origin host is `capture`; hosts that already hold the same content are `awaiting-capture`. `seal RUN capture` publishes it. |
 | published | The edit already equals the upstream file. | A pull resolves it. |
 | `source-newer` | Upstream changed the source after the edit. | The edit is stale. Overwriting it needs the owner (below). |
-| `stale-base` | The origin's source revision of the file differs from upstream's (compared by blob, not commit date), so it edited an older version. | Capturing would discard that change: pull there, then reconcile by hand. |
+| `stale-base` | The edit did not start from the current upstream content: what chezmoi last wrote there (its entry state) differs from the upstream file, or the source revisions differ. Dates never decide this. | Capturing would discard that change: pull there, then reconcile by hand. |
 | `competing` | Hosts hold different content. | The newest is proposed; a person decides. |
 | `capture-manual` | The origin's source is a template, `modify_` script, encrypted, or a sensitive path. | Edit the source by hand (below). |
 

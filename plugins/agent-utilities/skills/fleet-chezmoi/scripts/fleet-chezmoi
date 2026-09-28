@@ -632,8 +632,8 @@ capture_json_item() {
   retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
   case $retired_rel in /*|*..*) retired_rel='' ;; esac
   if jq -e 'any(.entries[]; .state == "removed")' <<<"$fetched" >/dev/null &&
-    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ]; }; then
-    printf 'fleet-chezmoi: %s removes entries but declares no existing retired file; nothing was captured\n' "$path" >&2
+    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ] || [ -L "$src/$retired_rel" ]; }; then
+    printf 'fleet-chezmoi: %s removes entries but declares no existing, non-symlinked retired file; nothing was captured\n' "$path" >&2
     return 1
   fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
@@ -643,7 +643,7 @@ capture_json_item() {
   cat "$tmp" >"$template"
   rm -f "$tmp"
   paths+=("$source")
-  if [ -n "$retired_rel" ] && [ -f "$src/$retired_rel" ]; then
+  if [ -n "$retired_rel" ] && [ -f "$src/$retired_rel" ] && [ ! -L "$src/$retired_rel" ]; then
     tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
     jq --indent 2 --argjson f "$fetched" 'reduce ($f.entries[] | select(.path | length == 2)) as $e (.;
         if $e.state == "removed" then .[$e.path[0]] = (((.[$e.path[0]] // []) + [$e.path[1]]) | unique)
