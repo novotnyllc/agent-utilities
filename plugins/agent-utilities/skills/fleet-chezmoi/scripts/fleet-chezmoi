@@ -341,7 +341,7 @@ seal_command() {
           # chezmoi never overwrites a live edit non-interactively, and a sealed
           # plan never adds --force: those paths need the owner's confirmation.
           if jq -e '[.targets[] | select((.status | .[0:1]) != " ")] | length > 0' "$evidence" >/dev/null; then
-            printf '%s\t%s\n' "$host" "skipped: live-edited targets need the owner's interactive confirmation: $(jq -r '[.targets[] | select((.status | .[0:1]) != " ") | .target] | join(" ")' "$evidence")" \
+            printf '%s\t%s\n' "$host" "skipped: live-edited targets need the owner's interactive confirmation: $(jq -c '[.targets[] | select((.status | .[0:1]) != " ") | .target]' "$evidence")" \
               >>"$set_dir/skipped.tsv"
             exit 0
           fi
@@ -410,8 +410,9 @@ seal_command() {
   [ "$(jq '.hosts | length' "$set_dir/set.json")" -gt 0 ] || die "nothing was sealed" 65
   jq -r --arg stage "$stage" '.hosts[] | [.host, .plan_id,
     (if $stage == "pull" then "ff-only pull \(.source_head[0:12])..\(.upstream_head[0:12])"
-     elif $stage == "apply" then "apply " + (.pending | to_entries | map("\(.key): \(.value | join(" "))") | join("; "))
-     else (.operations | map(.argv | join(" ")) | join("; ")) end)] | @tsv' \
+     elif $stage == "apply" then "apply " + (.pending | to_entries | map("\(.key): \(.value | tojson)") | join("; "))
+     # Each sealed argv as a JSON array: a path with a space stays one argument.
+     else (.operations | map(.argv | tojson) | join("; ")) end)] | @tsv' \
     "$set_dir/set.json" | table
   printf '%s %s\n' "$(set_id_of "$set_dir/set.json")" "$set_dir"
 }
@@ -583,7 +584,7 @@ capture_apply() {
       die "could not fetch $path from $host: $(jq -r '.error // "no response"' <<<"${fetched:-null}" 2>/dev/null)" 70
     fi
     tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
-    jq -r '.b64' <<<"$fetched" | base64 --decode >"$tmp"
+    jq -r '.b64' <<<"$fetched" | base64 -d >"$tmp"
     if [ "$(sha256_stream <"$tmp")" != "$digest" ]; then
       rm -f "$tmp"
       capture_restore
@@ -642,7 +643,7 @@ capture_json_item() {
   fi
   # Every set value must still match the digest that was approved.
   while IFS= read -r entry; do
-    value_sha=$(jq -r '.b64' <<<"$entry" | base64 --decode | sha256_stream)
+    value_sha=$(jq -r '.b64' <<<"$entry" | base64 -d | sha256_stream)
     [ "$value_sha" = "$(jq -r --argjson p "$(jq -c '.path' <<<"$entry")" \
       '.entries[] | select(.path == $p) | .digest' <<<"$item")" ] || {
       printf 'fleet-chezmoi: an entry of %s from %s did not match its approved digest\n' "$path" "$host" >&2
@@ -656,13 +657,13 @@ capture_json_item() {
     if [ "$(jq -r '.state' <<<"$entry")" = set ]; then
       # Scan every leaf with each key above it, so a credential under a
       # secret-named parent ({"token":{"primary":...}}) is still caught.
-      entry_text=$(jq -r '.b64' <<<"$entry" | base64 --decode |
+      entry_text=$(jq -r '.b64' <<<"$entry" | base64 -d |
         jq -r --argjson p "$(jq -c '.path' <<<"$entry")" '
           . as $v | [paths(scalars)] as $leaves
           | (if ($leaves | length) == 0 then [[]] else $leaves end)[] as $lp
           | ($v | getpath($lp) | tostring) as $leaf
           | ($p + ($lp | map(tostring)))[] | "\"\(.)\": \($leaf)"' 2>/dev/null) ||
-        entry_text=$(jq -r '.b64' <<<"$entry" | base64 --decode)
+        entry_text=$(jq -r '.b64' <<<"$entry" | base64 -d)
       if printf '%s\n' "$entry_text" | grep -Eiq -- "$secret_pattern"; then
         held+=("$path $(jq -r '.path | join(".")' <<<"$entry") (from $host)")
         continue

@@ -295,7 +295,7 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
       if [ "$m_state" = removed ]; then
         m_sha=absent
       else
-        printf '%s' "$m_value" | base64 --decode >"$work/value" 2>/dev/null
+        printf '%s' "$m_value" | base64 -d >"$work/value" 2>/dev/null
         m_sha=$(sha_file "$work/value")
         rm -f "$work/value"
       fi

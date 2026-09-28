@@ -576,6 +576,9 @@ chezmoi git -- pull -q --ff-only
 "$fc" evidence "$run" h1 "space dir/it's.txt" >/dev/null
 check "a spaced, quoted target reaches the host intact" \
   [ "$(jq -r '.targets[0] | [.target, .source] | join("|")' "$run/evidence/h1.json")" = "space dir/it's.txt|space dir/it's.txt" ]
+probe h1
+"$fc" seal "$run" targets h1 "space dir/it's.txt" >"$T/seal.out" 2>&1 || { cat "$T/seal.out"; fail "targeted seal failed"; }
+check "the approval table shows a spaced argument as one argument" grep -qF "/space dir/it's.txt\"]" "$T/seal.out"
 
 # 13. plugin registration against the rest of the fleet (classifier only)
 jq -n '[
