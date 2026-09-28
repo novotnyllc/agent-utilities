@@ -52,6 +52,11 @@ source, and the classifier works out per file where each change came from.
    - `pull`: clean source strictly behind upstream. `"$FC" seal RUN pull`,
      then `"$FC" apply RUN SET-ID`; no live file changes, so the sync request
      covers it.
+   - Plugins, after any capture or pull and before sealing `apply`: run
+     `"$FC" plugins RUN` (identity-verified hosts only), because plugin
+     commands rewrite settings. It runs Roundhouse's plugin convergence now (it
+     also runs every 20 minutes), installs any Claude plugin the synced
+     settings enable but the host lacks, and re-probes; seal from that state.
    - `apply`: every pending entry is source-driven. `"$FC" seal RUN apply`,
      show the user the per-host list and set ID, get one approval, then
      `"$FC" apply RUN SET-ID`.
@@ -61,12 +66,7 @@ source, and the classifier works out per file where each change came from.
      blockers, follow [reconcile](references/reconcile.md).
    - `in-sync`: nothing to do. `identity-mismatch`, `unreachable`: stop for
      that host and report. `unsupported`: see Windows below.
-3. Plugin findings: before sealing `apply`, run `"$FC" plugins RUN`
-   (identity-verified hosts only), because plugin commands rewrite settings. It
-   runs Roundhouse's plugin convergence now (it also runs every 20 minutes),
-   installs any Claude plugin the synced settings enable but the host lacks,
-   and re-probes.
-4. Report the final table, every `decide` line, and every finding.
+3. Report the final table, every `decide` line, and every finding.
 
 Why each step is safe, and how origins are decided:
 [reconcile](references/reconcile.md).
