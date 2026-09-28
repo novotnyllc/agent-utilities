@@ -52,9 +52,21 @@ missing=
 for tool in $required; do
   command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
-host_name=$(hostname 2>/dev/null || uname -n)
-user_name=$(id -un)
 os_name=$(uname -s)
+windows=false
+case $os_name in MINGW*|MSYS*|CYGWIN*) windows=true ;; esac
+if [ "$windows" = true ]; then
+  # Native Windows through Git for Windows sh: name the machine and user the
+  # way Roundhouse's Windows executor does, and keep MSYS from rewriting
+  # `REV:PATH` arguments as Windows paths.
+  host_name=${COMPUTERNAME:-$(hostname)}
+  user_name=${USERNAME:-$(id -un)}
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+  export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+else
+  host_name=$(hostname 2>/dev/null || uname -n)
+  user_name=$(id -un)
+fi
 wsl=false
 if [ -r /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null; then wsl=true; fi
 shell_umask=$(umask)
@@ -169,7 +181,8 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
       live_sha=$(sha_file "$live")
       live_mtime=$(stat -c %Y "$live" 2>/dev/null || stat -f %m "$live" 2>/dev/null || printf '0')
       live_size=$(wc -c <"$live" | tr -d ' ')
-      live_mode=$(stat -c %a "$live" 2>/dev/null || stat -f %Lp "$live" 2>/dev/null || true)
+      # Windows files have no POSIX mode; Git for Windows' stat invents one.
+      [ "$windows" = true ] || live_mode=$(stat -c %a "$live" 2>/dev/null || stat -f %Lp "$live" 2>/dev/null || true)
     else
       kind=not-a-file
     fi
@@ -403,6 +416,8 @@ externals_json=$(jq -sc '.' "$work/externals")
 # --- permission hygiene ------------------------------------------------------
 # chezmoi reports umask in decimal; 18 == 0o022. Group/other write bits in the
 # effective umask cause permission-only drift and loosen created files.
+# Windows has no POSIX modes: umask and private_ checks do not apply there.
+[ "$windows" = false ] || chezmoi_umask=''
 umask_json=$(jq -cn --arg shell "$shell_umask" --arg chezmoi "$chezmoi_umask" '
   ($chezmoi | if . == "" then null else tonumber end) as $u |
   {shell:$shell,chezmoi:(if $u == null then null else ($u | tostring) end),
@@ -414,6 +429,7 @@ umask_json=$(jq -cn --arg shell "$shell_umask" --arg chezmoi "$chezmoi_umask" '
 
 : >"$work/sensitive"
 for rel in .ssh .gnupg .aws .kube .docker .config/gh .config/op .password-store .netrc .pgpass; do
+  [ "$windows" = false ] || break
   live=$dest/$rel
   [ -e "$live" ] || continue
   source_file=$(chezmoi source-path -- "$live" 2>/dev/null) || continue
@@ -448,13 +464,27 @@ scan_writer() {
       '{kind:$kind,label:$label,flags:$flags}' >>"$work/writers"
   fi
 }
+# Only what a job runs counts, not its label or log paths. For launchd that is
+# the plist's arguments and, separately, the arguments of the job launchd has
+# actually loaded: chezmoi can rewrite a plist that launchd never reloads.
 for plist in "$HOME"/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
-  scan_writer launchd "$(basename -- "$plist" .plist)" "$plist"
+  label=$(basename -- "$plist" .plist)
+  plutil -convert json -o - "$plist" 2>/dev/null |
+    jq -r '[.Program // empty] + (.ProgramArguments // []) | join(" ")' >"$work/job" 2>/dev/null || : >"$work/job"
+  scan_writer launchd "$label" "$work/job"
+  if launchctl print "gui/$(id -u)/$label" 2>/dev/null |
+    awk '/arguments = \{/ {f=1; next} f && /^[[:space:]]*\}/ {exit} f' >"$work/job" && [ -s "$work/job" ]; then
+    scan_writer launchd "$label (loaded)" "$work/job"
+  fi
 done
 for unit in "$HOME"/.config/systemd/user/*.service; do
   [ -f "$unit" ] || continue
-  scan_writer systemd "$(basename -- "$unit")" "$unit"
+  # Join backslash-continued lines first: a flag can sit on a later line.
+  awk '{ if (sub(/\\$/, "")) { line = line $0 " "; next } print line $0; line = "" }
+    END { if (line != "") print line }' "$unit" 2>/dev/null |
+    grep -E '^[[:space:]]*Exec' >"$work/job" 2>/dev/null || : >"$work/job"
+  scan_writer systemd "$(basename -- "$unit")" "$work/job"
 done
 if crontab -l >"$work/crontab" 2>/dev/null; then scan_writer cron crontab "$work/crontab"; fi
 writers_json=$(jq -sc '[.[] | select((.flags | length) > 0)]' "$work/writers")

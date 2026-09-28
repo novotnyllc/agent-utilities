@@ -37,10 +37,19 @@ fail() {
 
 # Nothing is read or written unless this host is the one the probe verified:
 # the SSH alias may resolve elsewhere since sealing.
-if [ -z "$expected_host" ] || [ "$expected_host" = null ] ||
-  [ "$(hostname 2>/dev/null || uname -n)" != "$expected_host" ] || [ "$(id -un)" != "$expected_user" ]; then
-  fail "identity does not match the sealed host"
-fi
+# this_host_is HOST USER — this machine is HOST/USER. On native Windows (Git
+# for Windows sh) the names are COMPUTERNAME/USERNAME, compared
+# case-insensitively, exactly as Roundhouse's Windows executor compares them.
+this_host_is() {
+  [ -n "$1" ] && [ "$1" != null ] && [ -n "$2" ] && [ "$2" != null ] || return 1
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*)
+      [ "$(printf '%s|%s' "${COMPUTERNAME:-$(hostname)}" "${USERNAME:-$(id -un)}" | tr '[:upper:]' '[:lower:]')" = \
+        "$(printf '%s|%s' "$1" "$2" | tr '[:upper:]' '[:lower:]')" ] ;;
+    *) [ "$(hostname 2>/dev/null || uname -n)" = "$1" ] && [ "$(id -un)" = "$2" ] ;;
+  esac
+}
+this_host_is "$expected_host" "$expected_user" || fail "identity does not match the sealed host"
 
 status=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-status.XXXXXX") || fail "cannot create a temporary file"
 trap 'rm -f "$status"' EXIT HUP INT TERM
