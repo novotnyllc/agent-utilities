@@ -52,9 +52,21 @@ missing=
 for tool in $required; do
   command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
-host_name=$(hostname 2>/dev/null || uname -n)
-user_name=$(id -un)
 os_name=$(uname -s)
+windows=false
+case $os_name in MINGW*|MSYS*|CYGWIN*) windows=true ;; esac
+if [ "$windows" = true ]; then
+  # Native Windows through Git for Windows sh: name the machine and user the
+  # way Roundhouse's Windows executor does, and keep MSYS from rewriting
+  # `REV:PATH` arguments as Windows paths.
+  host_name=${COMPUTERNAME:-$(hostname)}
+  user_name=${USERNAME:-$(id -un)}
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+  export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+else
+  host_name=$(hostname 2>/dev/null || uname -n)
+  user_name=$(id -un)
+fi
 wsl=false
 if [ -r /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null; then wsl=true; fi
 shell_umask=$(umask)
@@ -403,6 +415,8 @@ externals_json=$(jq -sc '.' "$work/externals")
 # --- permission hygiene ------------------------------------------------------
 # chezmoi reports umask in decimal; 18 == 0o022. Group/other write bits in the
 # effective umask cause permission-only drift and loosen created files.
+# Windows has no POSIX modes: umask and private_ checks do not apply there.
+[ "$windows" = false ] || chezmoi_umask=''
 umask_json=$(jq -cn --arg shell "$shell_umask" --arg chezmoi "$chezmoi_umask" '
   ($chezmoi | if . == "" then null else tonumber end) as $u |
   {shell:$shell,chezmoi:(if $u == null then null else ($u | tostring) end),
@@ -414,6 +428,7 @@ umask_json=$(jq -cn --arg shell "$shell_umask" --arg chezmoi "$chezmoi_umask" '
 
 : >"$work/sensitive"
 for rel in .ssh .gnupg .aws .kube .docker .config/gh .config/op .password-store .netrc .pgpass; do
+  [ "$windows" = false ] || break
   live=$dest/$rel
   [ -e "$live" ] || continue
   source_file=$(chezmoi source-path -- "$live" 2>/dev/null) || continue

@@ -21,7 +21,8 @@
 #
 # Classes:
 #   unreachable        probe did not return a usable record
-#   unsupported        transport has no fast path (native Windows uses remote control)
+#   unsupported        transport has no fast path (native Windows without a WSL
+#                      interop sibling uses Codex remote control)
 #   identity-mismatch  hostname/user differ from the configured expectation: stop
 #   review             blockers or conflicts; reconcile the listed paths only
 #   capture            this host is the origin of changes to publish
@@ -54,6 +55,15 @@ def published_edit: (.upstream_sha256 // "") != "" and .live_sha256 == .upstream
   # A mode change rides along with the bytes; it is not published by them.
   and ((.base_mode // "") == "" or (.live_mode // "") == "" or .base_mode == .live_mode);
 
+# A record's configured identity matches its probe. Native Windows names
+# compare case-insensitively, as Roundhouse's Windows executor compares them.
+def identity_matches:
+  .expected != null and .probe != null
+  and (((.probe.identity.os // "") | test("^(MINGW|MSYS|CYGWIN)")) as $win
+    | [.expected.hostname, .expected.user, (.probe.identity.hostname // ""), (.probe.identity.user // "")]
+    | map(tostring | if $win then ascii_downcase else . end)
+    | .[0] == .[2] and .[1] == .[3]);
+
 def vkey: tostring | split(".") | map(tonumber? // .);
 
 # Keep plugin IDs (NAME@MARKETPLACE) whose marketplace is in $scope.
@@ -62,9 +72,7 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
 . as $records
 # Only records with a configured identity that matched inform fleet-wide
 # decisions; an unconfigured or wrong host's data never steers another host.
-| ($records | map(select(.probe != null and (.probe.error // null) == null and
-    .expected != null and .expected.hostname == .probe.identity.hostname and
-      .expected.user == .probe.identity.user))) as $eligible
+| ($records | map(select(.probe != null and (.probe.error // null) == null and identity_matches))) as $eligible
 # --- fleet-wide facts --------------------------------------------------------
 # Source trees that carry the same uncommitted paths on several hosts point at a
 # scheduled writer, not at a person.
@@ -269,12 +277,11 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   | {
       host: $r.host,
       transport: $r.transport,
-      identity_verified: ($r.expected != null and $r.probe != null and
-        $r.expected.hostname == ($p.identity.hostname // null) and $r.expected.user == ($p.identity.user // null)),
+      identity_verified: ($r | identity_matches),
       class: (
         if $r.transport == "codex-remote-control" or $r.transport == "windows" then "unsupported"
         elif $r.probe == null or ($p.error // null) != null then "unreachable"
-        elif $r.expected != null and ($r.expected.hostname != $p.identity.hostname or $r.expected.user != $p.identity.user) then "identity-mismatch"
+        elif $r.expected != null and ($r | identity_matches | not) then "identity-mismatch"
         elif ($blockers | length) > 0 or ($conflict_paths | length) > 0 then "review"
         elif any($lines[]; .kind == "capture") or ($mcaptures | length) > 0 then "capture"
         elif ($p.source.behind // 0) > 0 then "pull"

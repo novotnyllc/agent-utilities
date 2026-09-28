@@ -15,12 +15,19 @@
 #
 # Nothing changes unless this host is the one the controller verified.
 set -u
-expected_host=${1:-}
-expected_user=${2:-}
-actual_host=$(hostname 2>/dev/null || uname -n)
-actual_user=$(id -un)
-if [ -z "$expected_host" ] || [ -z "$expected_user" ] || [ "$expected_host" = null ] ||
-  [ "$actual_host" != "$expected_host" ] || [ "$actual_user" != "$expected_user" ]; then
+# this_host_is HOST USER — this machine is HOST/USER. On native Windows (Git
+# for Windows sh) the names are COMPUTERNAME/USERNAME, compared
+# case-insensitively, exactly as Roundhouse's Windows executor compares them.
+this_host_is() {
+  [ -n "$1" ] && [ "$1" != null ] && [ -n "$2" ] && [ "$2" != null ] || return 1
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*)
+      [ "$(printf '%s|%s' "${COMPUTERNAME:-}" "${USERNAME:-}" | tr '[:upper:]' '[:lower:]')" = \
+        "$(printf '%s|%s' "$1" "$2" | tr '[:upper:]' '[:lower:]')" ] ;;
+    *) [ "$(hostname 2>/dev/null || uname -n)" = "$1" ] && [ "$(id -un)" = "$2" ] ;;
+  esac
+}
+if ! this_host_is "${1:-}" "${2:-}"; then
   jq -cn '{schema:"fleet-chezmoi.plugins",version:1,ok:false,exit:65,installed:[],failed:[],
     error:"identity does not match the verified host; nothing was changed"}'
   exit 0
@@ -29,11 +36,17 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-chezmoi-plugins.XXXXXX") || exit 70
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 rc=0
-if command -v roundhouse >/dev/null 2>&1; then
-  roundhouse fleet-run --fast >/dev/null 2>&1 </dev/null || rc=$?
-else
-  rc=127
-fi
+case $(uname -s) in
+  # Roundhouse's fleet-run is a POSIX maintenance pass; native Windows has no
+  # scheduled run, so only the settings-driven installs below apply there.
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    if command -v roundhouse >/dev/null 2>&1; then
+      roundhouse fleet-run --fast >/dev/null 2>&1 </dev/null || rc=$?
+    else
+      rc=127
+    fi ;;
+esac
 
 : >"$work/installed"
 : >"$work/failed"

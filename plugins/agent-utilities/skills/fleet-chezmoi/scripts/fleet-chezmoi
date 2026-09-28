@@ -54,10 +54,15 @@ host_meta() {
   local config
   config=$(config_path)
   if [ -f "$config" ] && jq -e --arg h "$1" '.machines[$h] != null' "$config" >/dev/null 2>&1; then
-    jq -c --arg h "$1" '.machines[$h] as $m | {
+    # Native Windows is reached through its WSL sibling's SSH, launching Git for
+    # Windows sh as a native process in the logged-in session (the interop lane).
+    jq -c --arg h "$1" '.machines[$h] as $m
+      | (if ($m.wsl_interop_via // "") != "" then .machines[$m.wsl_interop_via] else null end) as $via | {
       host:$h,
-      transport:(if $m.platform == "windows" then "windows" else $m.transport end),
-      alias:($m.ssh_alias // $h),
+      transport:(if $m.platform != "windows" then $m.transport
+        elif $via != null and $via.transport == "ssh" then "interop" else "windows" end),
+      alias:(if $m.platform == "windows" and $via != null and $via.transport == "ssh"
+        then ($via.ssh_alias // $m.wsl_interop_via) else ($m.ssh_alias // $h) end),
       expected:(if ($m.expected_hostname // "") != "" and ($m.expected_user // "") != "" then
         {hostname:$m.expected_hostname,user:$m.expected_user} else null end)}' "$config"
   else
@@ -72,6 +77,9 @@ host_meta() {
 # chezmoi run scripts get), or in-process for a local target.
 run_on() {
   local meta=$1 payload=$2 transport alias framed arg
+  # Where WSL mounts the Windows system drive (overridable for the self-test).
+  local windows_root=${FLEET_CHEZMOI_WINDOWS_ROOT:-/mnt/c}
+  [[ $windows_root =~ ^/[A-Za-z0-9/._-]*$ ]] || die "unsafe FLEET_CHEZMOI_WINDOWS_ROOT"
   shift 2
   transport=$(jq -r '.transport' <<<"$meta")
   alias=$(jq -r '.alias' <<<"$meta")
@@ -85,6 +93,9 @@ run_on() {
   done
   framed=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-payload.XXXXXX")
   {
+    # Git for Windows would otherwise rewrite REV:PATH and /x arguments as
+    # Windows paths; harmless elsewhere.
+    printf '%s\n' "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'; export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL"
     printf 'set --'
     for arg in "$@"; do printf " '%s'" "${arg//\'/\'\\\'\'}"; done
     printf '\n'
@@ -102,6 +113,16 @@ run_on() {
       ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
         "/bin/sh -c 'if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo \"fleet-chezmoi: login shell unavailable\" >&2; exit 69; fi; f=\$(mktemp) || exit 70; cat >\"\$f\" || { rm -f \"\$f\"; exit 70; }; \"\$SHELL\" -lc \"sh \$f\"; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
+        <"$framed" || rc=$?
+      ;;
+    interop)
+      # Native Windows via its WSL sibling: WSL only launches Git for Windows
+      # sh by full path from /mnt/c, so the payload runs as a native process
+      # in the user's logged-in session (with its Entra token), never in WSL.
+      # The payload arrives on stdin; MSYS path conversion is off (see above).
+      ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
+        "/bin/sh -c 'cd \"$windows_root\" || exit 69; g=\"$windows_root/Program Files/Git/bin/sh.exe\"; if [ ! -x \"\$g\" ]; then echo \"fleet-chezmoi: Git for Windows sh not found on the Windows side\" >&2; exit 69; fi; exec \"\$g\" -l -s'" \
         <"$framed" || rc=$?
       ;;
     *) rc=69 ;;
@@ -157,7 +178,7 @@ probe_one() {
   host=$(jq -r '.host' <<<"$meta")
   transport=$(jq -r '.transport' <<<"$meta")
   out=$run/probes/$host.json
-  if [ "$transport" != local ] && [ "$transport" != ssh ]; then
+  if [ "$transport" != local ] && [ "$transport" != ssh ] && [ "$transport" != interop ]; then
     jq -c '. + {probe:null,error:"no fast path for this transport"}' \
       <<<"$meta" >"$out"
     return
@@ -311,6 +332,12 @@ seal_command() {
           and ($m.expected.user | norm) == (($p.user // "") | norm)' \
           "$run/probes/$host.json" >/dev/null; then
         printf '%s\t%s\n' "$host" "skipped: configured identity no longer matches the probe; re-probe" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
+      # The native Windows executor has neither a targeted apply with a status
+      # recheck nor an external reset.
+      if [ "$(jq -r '.transport' <<<"$decision")" = interop ] && { [ "$stage" = targets ] || [ "$stage" = reset ]; }; then
+        printf '%s\t%s\n' "$host" "skipped: $stage is not supported by the native Windows executor" >>"$set_dir/skipped.tsv"
         exit 0
       fi
       snap=$set_dir/snapshots/$host.jsonl
@@ -473,6 +500,9 @@ apply_command() {
       rc=0
       if [ "$transport" = local ]; then
         "$CLI" apply-plan "$plan" "$plan_id" "$result" >"$run/logs/$host.apply.log" 2>&1 || rc=$?
+      elif [ "$transport" = interop ]; then
+        # Roundhouse runs the verified Windows executor through the same lane.
+        "$CLI" apply-interop-plan "$plan" "$plan_id" "$result" >"$run/logs/$host.apply.log" 2>&1 || rc=$?
       else
         "$CLI" apply-ssh-plan "$plan" "$plan_id" "$result" >"$run/logs/$host.apply.log" 2>&1 || rc=$?
       fi

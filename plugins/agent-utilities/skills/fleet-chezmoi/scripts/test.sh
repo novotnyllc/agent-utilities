@@ -271,6 +271,57 @@ chmod +x "$T/sshbin/fakefish"
 FAKE_LOGIN_SHELL=$T/sshbin/fakefish probe h1 h2
 check "a non-POSIX login shell still runs the probe" [ "$(class_of "$run" h2)" = in-sync ]
 
+# Native Windows over the WSL interop lane: SSH to the WSL sibling launches Git
+# for Windows sh by full path. The stand-in reports a Windows machine (MINGW
+# uname, COMPUTERNAME/USERNAME) running in h2's home.
+winroot=$T/winroot
+mkdir -p "$winroot/Program Files/Git/bin" "$T/winbin"
+cat >"$winroot/Program Files/Git/bin/sh.exe" <<'GITSH'
+#!/bin/sh
+[ "$1" = -l ] && [ "$2" = -s ] || { echo "stand-in: expected -l -s" >&2; exit 99; }
+COMPUTERNAME=HW-PC USERNAME=Claire PATH="$FAKE_WIN_BIN:$PATH"
+export COMPUTERNAME USERNAME PATH
+exec sh -s
+GITSH
+cat >"$T/winbin/uname" <<'UNAME'
+#!/bin/sh
+if [ "${1:-}" = -s ]; then echo MINGW64_NT-10.0-26100; else exec /usr/bin/uname "$@"; fi
+UNAME
+chmod +x "$winroot/Program Files/Git/bin/sh.exe" "$T/winbin/uname"
+export FLEET_CHEZMOI_WINDOWS_ROOT=$winroot FAKE_WIN_BIN=$T/winbin
+jq --arg user "$user" '.machines.hwsl = {platform:"linux",transport:"ssh",ssh_alias:"h2",expected_hostname:"wsl",expected_user:$user}
+  | .machines.hw = {platform:"windows",transport:"codex-remote-control",wsl_interop_via:"hwsl",
+      expected_hostname:"hw-pc",expected_user:"claire"}' "$T/rh.json" >"$T/rh.json.new" &&
+  mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+probe h1 hw
+check "native Windows is probed over the interop lane" [ "$(jq -r .transport "$run/probes/hw.json")" = interop ]
+check "Windows names match case-insensitively" [ "$(jq -r '.[] | select(.host == "hw") | [.class, .identity_verified] | join(",")' "$run/classes.json")" = in-sync,true ]
+check "Windows has no umask finding" [ "$(jq -r '.probe.umask.allows_group_or_other_write' "$run/probes/hw.json")" = null ]
+# win_payload FILE ARGS... — run a payload on the stand-in Windows machine.
+# shellcheck disable=SC2029 # the stand-in root is a controller-side path
+win_payload() {
+  local file=$1; shift
+  { printf 'set --'; printf " '%s'" "$@"; printf '\n'; cat "$file"; } |
+    ssh h2 "/bin/sh -c 'cd $winroot && exec \"$winroot/Program Files/Git/bin/sh.exe\" -l -s'"
+}
+printf 'ok\n' >"$hosts/h2/.winfetch"
+ok_digest=$(printf 'ok\n' | (sha256sum 2>/dev/null || shasum -a 256) | cut -d ' ' -f 1)
+check "a Windows fetch accepts its identity in any case" \
+  [ "$(win_payload "$here/fetch.sh" .winfetch "$ok_digest" HW-PC CLAIRE | jq -r .ok)" = true ]
+check "a Windows fetch refuses another machine" \
+  [ "$(win_payload "$here/fetch.sh" .winfetch "$ok_digest" OTHER-PC claire | jq -r .error)" = "identity does not match the verified host" ]
+printf 'b-win\n' >"$hosts/h2/.b"
+probe h1 hw
+"$fc" seal "$run" targets hw >"$T/seal.out" 2>&1 || true
+check "a targeted apply is refused on native Windows" grep -q "targets is not supported by the native Windows executor" "$T/seal.out"
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
+jq '.machines.hw.expected_hostname = "other-pc"' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+probe h1 hw
+check "a different Windows machine is identity-mismatch" [ "$(class_of "$run" hw)" = identity-mismatch ]
+jq 'del(.machines.hw, .machines.hwsl)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+unset FLEET_CHEZMOI_WINDOWS_ROOT
+probe h1 h2
+
 # An unconfigured host can be probed, but nothing is captured from it.
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 printf 'b-unverified\n' >"$hosts/h2/.b"

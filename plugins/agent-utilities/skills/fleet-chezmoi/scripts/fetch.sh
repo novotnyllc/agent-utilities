@@ -20,10 +20,19 @@ sha_file() {
 
 # Nothing is read unless this host is the one the controller verified: the
 # SSH alias may resolve elsewhere since the probe.
-case "$(hostname 2>/dev/null || uname -n)|$(id -un)" in
-  "${3:-}|${4:-}") [ -n "${3:-}" ] && [ "${3:-}" != null ] || fail "identity does not match the verified host" ;;
-  *) fail "identity does not match the verified host" ;;
-esac
+# this_host_is HOST USER — this machine is HOST/USER. On native Windows (Git
+# for Windows sh) the names are COMPUTERNAME/USERNAME, compared
+# case-insensitively, exactly as Roundhouse's Windows executor compares them.
+this_host_is() {
+  [ -n "$1" ] && [ "$1" != null ] && [ -n "$2" ] && [ "$2" != null ] || return 1
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*)
+      [ "$(printf '%s|%s' "${COMPUTERNAME:-}" "${USERNAME:-}" | tr '[:upper:]' '[:lower:]')" = \
+        "$(printf '%s|%s' "$1" "$2" | tr '[:upper:]' '[:lower:]')" ] ;;
+    *) [ "$(hostname 2>/dev/null || uname -n)" = "$1" ] && [ "$(id -un)" = "$2" ] ;;
+  esac
+}
+this_host_is "${3:-}" "${4:-}" || fail "identity does not match the verified host"
 rel=${1:-}
 expected=${2:-}
 case $rel in ''|/*|-*|..|../*|*/../*|*/..) fail "unsafe target" ;; esac
