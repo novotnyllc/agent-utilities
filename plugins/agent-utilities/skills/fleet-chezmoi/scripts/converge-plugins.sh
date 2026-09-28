@@ -22,7 +22,7 @@ this_host_is() {
   [ -n "$1" ] && [ "$1" != null ] && [ -n "$2" ] && [ "$2" != null ] || return 1
   case $(uname -s) in
     MINGW*|MSYS*|CYGWIN*)
-      [ "$(printf '%s|%s' "${COMPUTERNAME:-}" "${USERNAME:-}" | tr '[:upper:]' '[:lower:]')" = \
+      [ "$(printf '%s|%s' "${COMPUTERNAME:-$(hostname)}" "${USERNAME:-$(id -un)}" | tr '[:upper:]' '[:lower:]')" = \
         "$(printf '%s|%s' "$1" "$2" | tr '[:upper:]' '[:lower:]')" ] ;;
     *) [ "$(hostname 2>/dev/null || uname -n)" = "$1" ] && [ "$(id -un)" = "$2" ] ;;
   esac

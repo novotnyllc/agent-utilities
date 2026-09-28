@@ -82,6 +82,11 @@ cat >"$T/bin/roundhouse" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 log=$STUB_LOG
+if [ $# -eq 0 ]; then
+  # Usage lists the commands this Roundhouse provides.
+  printf 'usage: roundhouse collect|seal-plan|apply-plan|apply-ssh-plan%s\n' "${STUB_NO_INTEROP:+}${STUB_NO_INTEROP:-|apply-interop-plan}" >&2
+  exit 64
+fi
 case $1 in
   collect)
     target=$3
@@ -314,6 +319,8 @@ printf 'b-win\n' >"$hosts/h2/.b"
 probe h1 hw
 "$fc" seal "$run" targets hw >"$T/seal.out" 2>&1 || true
 check "a targeted apply is refused on native Windows" grep -q "targets is not supported by the native Windows executor" "$T/seal.out"
+STUB_NO_INTEROP=1 "$fc" seal "$run" targets hw >"$T/seal.out" 2>&1 || true
+check "Windows is not sealed without Roundhouse's interop apply" grep -q "cannot apply over the interop lane" "$T/seal.out"
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
 jq '.machines.hw.expected_hostname = "other-pc"' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1 hw

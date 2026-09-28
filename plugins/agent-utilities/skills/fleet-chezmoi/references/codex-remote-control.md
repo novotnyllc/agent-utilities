@@ -1,8 +1,9 @@
 # Codex Desktop remote control
 
-Use this only for a `codex-remote-control` machine that has no reachable
-`wsl_interop_via` sibling (that machine takes the fast path's interop lane),
-or for work that needs the Codex Desktop app surface. Use that transport for
+Use this only for a `codex-remote-control` machine with no configured
+`wsl_interop_via` sibling (a machine with one takes the fast path's interop
+lane, and reads `unreachable` when the user is logged off; this is not its
+recovery path), or for work that needs the Codex Desktop app surface. Use that transport for
 every operation here. Never substitute WSL-side execution, SSH, or another
 execution context.
 

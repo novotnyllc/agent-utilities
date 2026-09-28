@@ -87,7 +87,8 @@ token. It needs Git for Windows and a logged-in user (logoff stops WSL; the
 host then reads `unreachable`). Names compare case-insensitively, as
 Roundhouse's Windows executor does; mode and umask checks do not apply;
 `seal ... targets` and `reset` are refused there, and `apply` runs through
-Roundhouse's `apply-interop-plan` (Roundhouse 0.9.25 or later). Without a WSL
+Roundhouse's `apply-interop-plan`: seal skips the host until the installed
+Roundhouse (0.9.25 or later) provides it. Without a WSL
 sibling, a `codex-remote-control` target follows
 [Codex remote control](references/codex-remote-control.md), and Claude
 reports it `unsupported`. Protected broker, SFTP, S4U profile-bundle, and

@@ -334,6 +334,13 @@ seal_command() {
         printf '%s\t%s\n' "$host" "skipped: configured identity no longer matches the probe; re-probe" >>"$set_dir/skipped.tsv"
         exit 0
       fi
+      # Mutating native Windows needs Roundhouse's interop apply (0.9.25+).
+      # (Usage exits nonzero; capture it before matching, or pipefail hides a match.)
+      if [ "$(jq -r '.transport' <<<"$decision")" = interop ] &&
+        ! grep -q 'apply-interop-plan' <<<"$("$CLI" 2>&1 || true)"; then
+        printf '%s\t%s\n' "$host" "skipped: this Roundhouse cannot apply over the interop lane; update it to 0.9.25 or later" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
       # The native Windows executor has neither a targeted apply with a status
       # recheck nor an external reset.
       if [ "$(jq -r '.transport' <<<"$decision")" = interop ] && { [ "$stage" = targets ] || [ "$stage" = reset ]; }; then
