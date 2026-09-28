@@ -47,7 +47,8 @@ source, and the classifier works out per file where each change came from.
      App-written settings declared in the source's `.fleet-chezmoi.json` (for
      example Claude's `settings.json`) are captured per entry: a changed,
      added, or removed entry is merged into the template from the host that
-     changed it, and removals reach every host through the retired list.
+     changed it, and removals reach every host through the retired list. Only
+     a value that looks like a secret is held back and reported by name.
    - `pull`: clean source strictly behind upstream. `"$FC" seal RUN pull`,
      then `"$FC" apply RUN SET-ID`; no live file changes, so the sync request
      covers it.

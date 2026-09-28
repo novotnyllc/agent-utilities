@@ -301,7 +301,7 @@ h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
 mkdir -p "$T/pub/.chezmoitemplates"
 printf '%s\n' '{"theme":"dark","plugins":{"a@m":true},"env":{"X":"1"}}' | jq --indent 2 . >"$T/pub/.chezmoitemplates/app.json"
 printf '{}\n' >"$T/pub/.chezmoitemplates/app.retired.json"
-printf '%s\n' '{"version":1,"managed_json":[{"target":".app.json","managed":".chezmoitemplates/app.json","retired":".chezmoitemplates/app.retired.json","review_keys":["env"]}]}' \
+printf '%s\n' '{"version":1,"managed_json":[{"target":".app.json","managed":".chezmoitemplates/app.json","retired":".chezmoitemplates/app.retired.json"}]}' \
   >"$T/pub/.fleet-chezmoi.json"
 cat >"$T/pub/modify_dot_app.json" <<'TMPL'
 {{- /* chezmoi:modify-template */ -}}
@@ -373,11 +373,17 @@ probe h1 h2
 check "competing managed values need review" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = review,review ]
 chezmoi apply --no-tty --force -- "$HOME/.app.json"; h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
 
-# A hand-reviewed key (env) is never captured automatically.
-setjson "$hosts/h2/.app.json" '.env.X = "2"'
+# env syncs like any other key; only a value that looks like a secret is held
+# back, per entry, while the rest of the capture still publishes.
+setjson "$hosts/h2/.app.json" '.env.X = "2" | .env.OPENAI_API_KEY = "sk-abcdefghijklmnopqrstuvwxyz0123"'
 probe h1 h2
-check "a review key needs a person" [ "$(jq -r '.[] | select(.host == "h2") | .decisions[0].decision' "$run/classes.json")" = capture-manual ]
-h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+check "env changes are captured automatically" [ "$(class_of "$run" h2)" = capture ]
+capture_now
+check "the ordinary env change was published" [ "$(published app.json .env.X)" = '"2"' ]
+check "the secret-looking env value was not" [ "$(published app.json '.env | has("OPENAI_API_KEY")')" = false ]
+check "the held entry is reported" grep -q "held back.*env.OPENAI_API_KEY" "$T/apply.out"
+check "the secret never appears in run records" ! grep -rq sk-abcdefghijklmnopqrstuvwxyz0123 "$run"
+sync_all
 check "no secret in managed-settings records" no_secret "$run"
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1

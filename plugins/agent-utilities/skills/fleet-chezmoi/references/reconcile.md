@@ -68,8 +68,7 @@ host's file. Declare it in the source's `.fleet-chezmoi.json`:
 ```json
 {"version": 1, "managed_json": [{"target": ".claude/settings.json",
   "managed": ".chezmoitemplates/claude-code-settings.json",
-  "retired": ".chezmoitemplates/claude-code-settings.retired.json",
-  "review_keys": ["env"]}]}
+  "retired": ".chezmoitemplates/claude-code-settings.retired.json"}]}
 ```
 
 The probe compares each host's values for the template's keys, one level into
@@ -79,7 +78,12 @@ version means the host is behind; the apply fixes it. A value that matches
 none is an edit, even when chezmoi reports nothing (an added entry survives
 the merge). Per entry, across hosts, the same rules apply: newest edit newer
 than upstream and agreed by every host is captured; different values are a
-decision; `review_keys` (secrets can live in `env`) are always hand-reviewed.
+decision. Every key syncs, `env` included. A value that looks like a secret
+(token shapes, private keys, or an `*API_KEY`/`*TOKEN`/`*PASSWORD`-style key
+with a long value) is held back on its own and reported by name; the rest of
+the capture still publishes. The user decides whether to commit it or keep it
+in a secret manager. An optional `review_keys` list forces named keys to
+review.
 Edits to different entries on different hosts are all captured in one set.
 The capture fetches only the approved entries, merges them into the template,
 and records a removed entry in the `retired` file, which the `modify_` script

@@ -516,7 +516,7 @@ capture_seal() {
 
 capture_apply() {
   local run=$1 set_dir=$2 src item host path source digest target fetched tmp hosts
-  local paths=()
+  local paths=() held=()
   src=$(local_source)
   [ -z "$(git -C "$src" status --porcelain)" ] || die "the local source changed since the capture was sealed" 65
   [ "$(git -C "$src" rev-parse HEAD)" = "$(jq -r '.controller_head' "$set_dir/set.json")" ] ||
@@ -551,6 +551,9 @@ capture_apply() {
     rm -f "$tmp"
     paths+=("$source")
   done < <(jq -c '.items[]' "$set_dir/set.json")
+  if [ "${#paths[@]}" -eq 0 ]; then
+    die "nothing to publish; held back because it looks like a secret: $(printf '%s; ' "${held[@]}")say so to commit it, or keep it in 1Password" 65
+  fi
   if [ -z "$(git -C "$src" status --porcelain -- "${paths[@]}")" ]; then
     die "the captured files already match the source (a mode-only change needs a private_/executable_ rename)" 65
   fi
@@ -569,6 +572,8 @@ capture_apply() {
   git -C "$src" push -q ||
     die "committed $(git -C "$src" rev-parse --short HEAD) locally but the push failed; push it by hand" 70
   printf 'published %s: %s\n' "$(git -C "$src" rev-parse --short HEAD)" "${paths[*]}"
+  [ "${#held[@]}" -eq 0 ] ||
+    printf 'held back (looks like a secret; say so to commit it, or keep it in 1Password): %s\n' "${held[*]}"
   printf 'verification probe:\n'
   reprobe "$run"
 }
@@ -598,6 +603,21 @@ capture_json_item() {
       return 1
     }
   done < <(jq -c '.entries[] | select(.state == "set")' <<<"$fetched")
+  # Hold back, per entry, any value that looks like a secret: everything else
+  # still syncs, and the held entries are reported for the user to decide.
+  local keep='[]' entry_text
+  while IFS= read -r entry; do
+    if [ "$(jq -r '.state' <<<"$entry")" = set ]; then
+      entry_text="\"$(jq -r '.path[-1]' <<<"$entry")\": $(jq -r '.b64' <<<"$entry" | base64 --decode)"
+      if printf '%s\n' "$entry_text" | grep -Eiq -- "$secret_pattern"; then
+        held+=("$path $(jq -r '.path | join(".")' <<<"$entry") (from $host)")
+        continue
+      fi
+    fi
+    keep=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$keep")
+  done < <(jq -c '.entries[]' <<<"$fetched")
+  fetched=$(jq -c --argjson keep "$keep" '.entries = $keep' <<<"$fetched")
+  [ "$(jq '.entries | length' <<<"$fetched")" -gt 0 ] || return 0
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
   jq --indent 2 --argjson f "$fetched" 'reduce $f.entries[] as $e (.;
       if $e.state == "removed" then delpaths([$e.path])
