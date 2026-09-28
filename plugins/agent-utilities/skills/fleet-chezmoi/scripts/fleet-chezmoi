@@ -85,9 +85,6 @@ run_on() {
   done
   framed=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-payload.XXXXXX")
   {
-    # The payload file removes itself first: on an SSH host it is a mktemp file.
-    # shellcheck disable=SC2016 # $0 is expanded by the payload, not here.
-    printf 'rm -f -- "$0"\n'
     printf 'set --'
     for arg in "$@"; do printf " '%s'" "${arg//\'/\'\\\'\'}"; done
     printf '\n'
@@ -101,10 +98,10 @@ run_on() {
       # and `sh FILE`, which bash, zsh, and fish read alike; the bootstrap holds
       # no single quote or backslash (fish treats those specially in quotes).
       # So the payload never depends on the login shell's syntax, and still runs
-      # in its environment.
+      # in its environment. /bin/sh removes the payload file afterwards.
       ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
-        "/bin/sh -c 'if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo \"fleet-chezmoi: login shell unavailable\" >&2; exit 69; fi; f=\$(mktemp) || exit 70; cat >\"\$f\" || exit 70; exec \"\$SHELL\" -lc \"sh \$f\"'" \
+        "/bin/sh -c 'if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo \"fleet-chezmoi: login shell unavailable\" >&2; exit 69; fi; f=\$(mktemp) || exit 70; cat >\"\$f\" || { rm -f \"\$f\"; exit 70; }; \"\$SHELL\" -lc \"sh \$f\"; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
         <"$framed" || rc=$?
       ;;
     *) rc=69 ;;
