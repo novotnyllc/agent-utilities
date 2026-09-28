@@ -5,78 +5,86 @@ description: Inspect, compare, and deliberately reconcile chezmoi source and liv
 
 # Fleet Chezmoi
 
-Set `SKILL_DIR` to the absolute directory containing this loaded `SKILL.md` and
-`CLI="${ROUNDHOUSE_CLI:-roundhouse}"`; the shell working directory is not the
-skill directory. This skill is an optional integration with the roundhouse
-CLI; chezmoi remains usable without it. Collect the `chezmoi` section, then use native
-read-only commands such as `chezmoi status`, `chezmoi diff`,
-`chezmoi source-path`, and Git status in the source repository. Determine
-whether source, live state, or both changed; do not assume the source always
-wins.
+Set `SKILL_DIR` to the absolute directory containing this `SKILL.md` and
+`FC="$SKILL_DIR/scripts/fleet-chezmoi"`; the shell working directory is not
+the skill directory. Probing needs `chezmoi`, `git`, `jq`, and SSH. Mutating
+another host needs the Roundhouse CLI (`ROUNDHOUSE_CLI`, default
+`roundhouse`); without it, mutate only the local host.
 
-Reconcile each requested target path on every requested host, including hosts
-that appear clean. Build a per-target evidence table containing the rendered
-content or digest, mapped source path, live and source mtimes, and per-file Git
-history. Timestamps are evidence, never automatic precedence: `add`, `apply`,
-copy, checkout, and pull can rewrite them. Infer intent from semantic content,
-Git history, templates and host conditions, and cross-host agreement.
+## Invariants
 
-Preserve disjoint edits with a deliberate source merge. Stop for conflicts in
-the same semantic region or ambiguous intent. Never use newest-wins or blanket
-`chezmoi add`/`chezmoi apply` before path-level reconciliation. Preview the
-reconciled source on every requested host before any mutation.
+- Never print or bundle secret values. The scripts emit paths, status codes,
+  commit IDs, and digests; never paste `chezmoi diff`/`cat`/`dump-config`,
+  `.chezmoidata*`, or rendered files. Backups stay on their host.
+- Mutate a host only after Roundhouse verifies its configured hostname/user,
+  and only after backing up its pending files and rendered diff.
+- No blanket `chezmoi add`, no newest-wins: timestamps are evidence only.
+- No force-reset, `apply --force`, auto-commit, or auto-push of user drift.
+- Remote mutation runs only as a sealed Roundhouse plan with exact argv; its
+  executor rechecks the sealed preconditions immediately before mutating.
+- Targeted applies name 1-16 absolute paths under the target's home, with no
+  flags or traversal.
+- Never ask for or relay a sudo or Administrator password.
+- Native Windows uses Codex remote control only; never fall back to WSL.
 
-Default to a plan per host:
+## Fast path
 
-- source should win: preview `chezmoi apply --dry-run --verbose`;
-- live state should win: list exact `chezmoi add` targets;
-- remote source advanced: plan a clean fast-forward pull before apply;
-- both changed or source is dirty/diverged: stop for reconciliation.
+No host is special: a change can start on any machine. The probe records, for
+every live-edited file, when it changed and what upstream last did to its
+source, and the classifier works out per file where each change came from.
 
-Before apply, verify host identity, preserve a diff/backup, and seal the exact
-approved operations with `"$CLI" seal-plan DRAFT SNAPSHOT PLAN`. Recapture
-chezmoi inventory and require
-`"$CLI" verify-preconditions PLAN CURRENT-SNAPSHOT` to succeed immediately
-before mutation. Obtain separate approval and execute only the sealed argv.
-Never force-reset, auto-commit, or reveal template secret values.
-For a local target use `"$CLI" apply-plan PLAN PLAN-ID OUTPUT`; for SSH use
-`"$CLI" apply-ssh-plan PLAN PLAN-ID OUTPUT`; native Windows uses the
-remote-control worker contract. Apply recaptures trusted preflight itself and
-preserves authoritative partial output after a failed operation or
-postcondition when post-inventory remains available. SSH uses bounded
-connection/keepalive timeouts and verifies the configured native hostname/user.
-The executor
-supports a clean fast-forward source pull, a non-TTY full apply, and a sealed
-target-scoped apply. A target-scoped apply names 1-16 exact absolute destination
-paths under the target user's home directory. Its sealed argv is exactly
-`chezmoi --no-tty apply -- TARGET...`; it rejects flags, duplicates, traversal,
-cross-platform path forms, and paths outside that home boundary. Its immediate
-precondition and postcondition run `chezmoi status -- TARGET...`, so unrelated
-drift does not authorize or fail the target change. `chezmoi add` remains
-unsupported because source additions require user-specific reconciliation.
+1. `"$FC" probe HOST...` — probe every host you sync, in one call: one
+   read-only batch per host, in parallel, in the environment its executor uses
+   (the login shell for SSH hosts, the controller's own environment for a local
+   host). Add `--plugins` to compare Claude/Codex plugin registration and
+   versions across the fleet; `--require TOOL` for tools run scripts need.
+2. Act on each host's class, in this order:
+   - `capture`: this host is where a change was made (its edit is the newest,
+     newer than upstream, and every host that has it agrees). Run
+     `"$FC" seal RUN capture`, show the user what is captured from where, get
+     one approval, then `"$FC" apply RUN SET-ID`. It copies each file from its
+     origin into the local source, secret-scans, commits, pushes, and re-probes.
+     App-written settings declared in the source's `.fleet-chezmoi.json` (for
+     example Claude's `settings.json`) are captured per entry: a changed,
+     added, or removed entry is merged into the template from the host that
+     changed it, and removals reach every host through the retired list. Only
+     a value that looks like a secret is held back and reported by name.
+   - `pull`: clean source strictly behind upstream. `"$FC" seal RUN pull`,
+     then `"$FC" apply RUN SET-ID`; no live file changes, so the sync request
+     covers it.
+   - Plugins, after any capture or pull and before sealing `apply`: run
+     `"$FC" plugins RUN` (identity-verified hosts only), because plugin
+     commands rewrite settings. It runs Roundhouse's plugin convergence now (it
+     also runs every 20 minutes), installs any Claude plugin the synced
+     settings enable but the host lacks, and re-probes; seal from that state.
+   - `apply`: every pending entry is source-driven. `"$FC" seal RUN apply`,
+     show the user the per-host list and set ID, get one approval, then
+     `"$FC" apply RUN SET-ID`.
+   - `awaiting-capture`: the host already has a change that is being
+     published; it converges after the capture and a pull.
+   - `review`: only these hosts, and only their listed paths, decisions, and
+     blockers, follow [reconcile](references/reconcile.md).
+   - `in-sync`: nothing to do. `identity-mismatch`, `unreachable`: stop for
+     that host and report. `unsupported`: see Windows below.
+3. Report the final table, every `decide` line, and every finding.
 
-For a readiness-advertised Windows profile action, render only the already
-authorized target-specific managed files into a private source root and build
-the payload with `"$CLI" profile-bundle SPEC SOURCE-ROOT OUTPUT`. Codex and
-Claude must produce the same bundle bytes. Do not include chezmoi secrets,
-secret-backed templates, credentials, installed plugin caches, arbitrary paths,
-or content outside the protected entry map. S4U is logged-off and has no
-network or encrypted-file access; use ordinary user-session reconciliation
-when those capabilities are required.
+Why each step is safe, and how origins are decided:
+[reconcile](references/reconcile.md).
 
-Use `"$CLI" privilege-status HOST SNAPSHOT` and the shared protected vocabulary
-`prepare-privilege-identity`, `prepare-privilege-enrollment`,
-`verify-privilege-plan`, `submit-privilege-plan`,
-`lookup-privilege-result`, `preview-privilege-upgrade`, and
-`preview-privilege-revocation`. Preserve all readiness/result states and never
-fall back through WSL, a shell, or a visible Codex task.
-Never ask for or relay a sudo or Administrator password; stop lifecycle changes at the local
-human password/UAC boundary.
+## Blockers and findings
 
-Use local/SSH execution. If a Windows host is configured for Codex remote
-control, read and follow
-`"$SKILL_DIR/references/codex-remote-control.md"`, including its exact
-shared `railyard/model-routing/v1` dispatch before task creation or a
-work-starting follow-up; Claude reports unsupported and no WSL fallback is
-allowed. Verify `chezmoi status`, rendered
-diff, source Git state, and relevant auth/tool health afterward.
+Blockers force `review`; findings only report. Every code's cause and fix is
+in [failure modes](references/failure-modes.md).
+
+## Windows and privileged lanes
+
+Load these only when such a target is in scope. A native Windows target on
+`codex-remote-control` follows
+[Codex remote control](references/codex-remote-control.md); Claude reports it
+unsupported. Protected broker, SFTP, S4U profile-bundle, and privilege
+lifecycle work follows [privileged lanes](references/privileged-lanes.md).
+
+## Verify
+
+`apply` ends with a fresh probe of every host it touched: expect `in-sync`.
+Also check auth/tool health the change could affect.

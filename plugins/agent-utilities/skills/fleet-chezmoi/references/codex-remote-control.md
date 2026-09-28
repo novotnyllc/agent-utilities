@@ -1,10 +1,8 @@
 # Codex Desktop remote control
 
-Use the configured `codex-remote-control` transport for every operation in
-this contract. Never substitute WSL, SSH, or another execution context.
-
 Use this only for a machine whose configured transport is
-`codex-remote-control`. Never substitute WSL or SSH.
+`codex-remote-control`, and use that transport for every operation here.
+Never substitute WSL, SSH, or another execution context.
 
 ## Task-control capability check
 
@@ -35,70 +33,14 @@ that a tool is unavailable. Classify failure precisely:
 
 Do not collapse these states into a generic task-control failure.
 
-## Shared model-routing dispatch
+## Task creation
 
-Before every visible Codex task creation and every task message or follow-up,
-invoke the installed runtime skill `railyard:model-routing`; it is the
-only routing authority used here. Send exact
-`contractVersion: "railyard/model-routing/v1"`. Do not call a provider
-router, copy model constants, effort defaults, a transport matrix, scoring,
-state, or cache lookup into Roundhouse. If the skill or that exact
-compatible contract is absent, stop the affected Codex dispatch with
-`model_routing_capability_unavailable`; retain local/SSH evidence but never
-create an unbound task or omit model/effort controls.
-
-Roundhouse remains the sole sender for its native remote actions and
-retains host/project matching, Windows-native execution, executor readiness,
-payload/chunk validation, and cleanup. The routing request is bounded,
-content-free policy metadata and includes:
-
-- `callerKind: "fleet"`, a stable `senderOwnerDigest`, unique
-  request/action ID, `adapterId` (`codex-task-create` or
-  `codex-task-message`), and `dispatchKind` (`task_create` or `task_message`);
-- the selected host/task/transport readiness, separate execution-host and
-  target-platform identities, exact carrier transport, bounded destination
-  work-class digest and `workShape`, privacy/context constraints, and the
-  standalone task/run budget scope or accepted orchestrator lease;
-- a one-use visible-task authority receipt for `task_create`. A user policy,
-  catalog entry, prior task, or caller Boolean is not task authority; and
-- for `task_message`, the destination task identity, its resolver-owned prior
-  route receipt with prior model/effort, and whether the bounded work class
-  continues or changes.
-
-For a work-starting task creation or message, set `budgetEffect: "start"` and
-follow the returned sequence exactly: resolve, `admit(requestId)`,
-`claim-dispatch`, perform the native action, then reconcile the returned
-receipt. Pass the returned validated adapter/path/model/effort controls to the
-Codex task action verbatim. A missing/unselectable control, requested-versus-
-actual mismatch, or incompatible path uses only the resolver's disclosed
-fallback or blocks; never silently inherit or substitute a route.
-
-A status request, non-expanding clarification, cancellation, or narrowing that
-the adapter attests does not start work instead uses `budgetEffect: "none"` and
-obtains an immutable no-start action receipt. It does not reserve, claim, or
-authorize later work. A message that expands the objective, acceptance checks,
-files, unit volume, provider/carrier calls, or expected duration is active work:
-before sending, use `budgetEffect: "adjust_active"` to admit the additional
-conservative ceiling against the existing attempt, then send and reconcile it;
-an active-work adjustment creates no new dispatch claim.
-If it cannot fit, narrow, cancel, wait for newly admitted work, or block.
-
-Every same-task chunk retrieval is a fresh `task_message` routing boundary.
-Re-resolve its bounded chunk work class and prior route before each follow-up;
-inherit only when the fresh decision selects the exact attested winning prior
-model and effort for the unchanged class. Status replies never prove that later
-chunk work is admitted. Preserve the existing 48 KiB limits, ordering, digest
-validation, and task correlation after routing.
-
-When the returned path requires a visible-provider bridge, it is two separately
-accounted actions. First resolve/admit/claim an acknowledgement-only bootstrap,
-consume the visible-task authority, create the task with its returned controls,
-verify tool-returned task identity, and compare the secret-free acknowledgement.
-That bootstrap forbids mutable work. Only after it succeeds, re-resolve,
-admit, and claim the provider-local activation/follow-up; reconcile each phase
-separately. A bootstrap failure settles only that attempt and never authorizes
-activation. Same-provider or verified plaintext paths use the single returned
-native action instead.
+Create each task with the Codex app's native `create_thread`, using the
+project binding below; pass no routing receipts or external route contract.
+Model and effort follow the user's Codex defaults unless the user names them.
+Roundhouse remains the sole sender of its native remote actions and keeps
+host/project matching, Windows-native execution, executor readiness,
+payload/chunk validation, and cleanup.
 
 ## Fresh-task project binding
 
@@ -277,131 +219,10 @@ authoritative partial result with fresh post-inventory whenever collection is
 still possible; validate and preserve that evidence even though the task
 failed.
 
-Codex remote control is an ordinary, interactive schema-2 lane only.
-`apply-windows.ps1` rejects semantic actions and every protected broker field,
-even if those fields are injected into an otherwise ordinary operation.
-Schema-3 and schema-4 plans never use the Codex task, the legacy SSH workspace,
-WSL, SCP, a shell fallback, or another execution context.
-
-Protected Windows operations use only the enrolled `windows-sftp` route. The
-controller signs a closed request and transfers exactly the four preallocated
-slot files `request`, `request.sig`, `payload`, and `commit`; `commit` is last.
-Machine-package and inventory actions have an empty payload. Only
-`profile.apply-managed-bundle.v1` has a nonempty payload. The four exact
-chroot-relative upload paths are `/ingress/slot/request`,
-`/ingress/slot/request.sig`, `/ingress/slot/payload`, and
-`/ingress/slot/commit`. Polling performs only bounded `get` attempts for
-`/results/REQUEST-ID.result`; it never resubmits. The client accepts only the
-fixed sanitized public-result fields bound to the request, plan, action,
-epoch, and protected-result digest, and preserves both that protected digest
-and the exact public-projection digest in operation/final evidence. The SFTP
-batch contains no directory creation, listing, execution, SCP, or shell
-command.
-
-The shared lifecycle commands are `privilege-status`,
-`prepare-privilege-enrollment`, `verify-privilege-plan`,
-`submit-privilege-plan`, `lookup-privilege-result`,
-`preview-privilege-upgrade`, and `preview-privilege-revocation`. They are also
-the Claude vocabulary. Preparation and previews are inert and stop before a
-human password or UAC boundary. They never request or relay an Administrator
-credential. `lookup-privilege-result` performs result-only reads and never
-recreates or resubmits a slot. See `windows-sftp.md` for the owner-operated
-enrollment-to-revocation runbook.
-
-For a configured Windows SFTP route, `privilege-status` is not a Codex
-inventory task. It creates a fresh signed `broker.readiness.v1` request, uses
-the same four exact slot uploads with `commit` last, and performs bounded reads
-only from `/results/REQUEST-ID.readiness`. The response must match the request
-ID, configured ceremony-derived `request_sid`, request principal, and pinned
-route; it must be canonical, sorted, unique, and unexpired. It never reads the
-normal `.result`, `active`, `last`, or a directory listing. An unavailable or
-invalid response yields unavailable readiness, not a fallback to Codex, local
-files, WSL, or ordinary SSH.
-
-Plugin integrity and protected host attestation answer different questions.
-`integrity.json` authenticates the installed plugin source and controller
-executor. Protected readiness separately attests the Administrator-owned
-broker generation, policy, WinGet provider context, tasks, SFTP configuration,
-ACLs, and native-canary receipts. A plugin update does not upgrade protected
-code, and removing the plugin does not revoke its broker, request account,
-certificate trust, policy, or tasks.
-
-Ordinary Windows inventory still surfaces SFTP state as a
-`protected-local-observation`: exact local public-file ACLs, a controller-signed
-candidate, its detached CMS signer, and current local readiness/route
-projections are checked together. Once promoted, the candidate is historical
-authorization evidence. Validation binds its exact bytes and verifies that the
-signer certificate covered the original `issued-at`/`expires-at` interval; it
-does not require that certificate to be valid today and does not turn history
-into current mutation authority. U6 v1 public bytes do not publish the native
-canary evidence needed for portable proof, so copied files and user-owned
-identity-overlay receipts remain non-authoritative.
-
-The remote readiness control is a separate fresh protected-broker observation.
-It returns broker/generation/policy/constraint/WinGet/provider hashes, live
-task/transport/native-canary gates, action/token preconditions, and profile
-constraints. It intentionally reports no controller policy-proposal digest,
-context-canary digest, or action-specific constraint-set digest. It therefore
-cannot replace the ordinary inventory and precondition evidence needed to seal
-or verify a mixed schema-4 plan. The ordinary `collect` path remains Codex
-Desktop and is never silently routed through SFTP.
-
-Build logged-off profile payloads with `roundhouse profile-bundle`.
-The builder compiles each destination's handler, artifact, manager, and logical
-identity; sorts destinations ordinally; binds the expected live presence,
-digest, and manager; and emits an uncompressed length-prefixed manifest and
-payload. It rejects case collisions, traversal, links, target-local overlays,
-credentials, caches, internal state, startup/task paths, and secret-backed
-templates. Caller identity is not serialized, so Codex and Claude callers
-produce identical bytes from identical inputs.
-
-The dedicated SFTP request SID and the non-elevated S4U profile target SID are
-different identities. Before staging a profile request, the controller
-revalidates the active protected token and its target SID, profile-root ID,
-entry-map digest, marketplace-set digest, deletion mode, entry cap, and byte
-cap from fresh readiness. It then validates every canonical manifest field,
-payload offset/length/digest, compiled destination/handler/artifact/manager
-association, and expected live state. The request SID is never accepted as the
-S4U target or as authority to widen the entry map.
-
-`automation_transport.request_sid` is mandatory and fail-closed. Pin it only
-from the exact authenticated controller intent/candidate receipt after the
-owner completes the Windows `-Preview`, `-Install` or `-Repair`, isolated
-detached-signing, staging, and `-Verify` ceremony. Do not infer it from a local
-account lookup, Codex or static readiness, the profile SID, or old enrollment
-history. A missing pin or a different SID in the fresh remote response rejects
-readiness. See `windows-sftp.md` for the fixed filenames and ceremony order;
-neither the fleet CA nor controller-signing private key enters automation.
-
-Protected POSIX automation uses the root-owned forced command
-`/usr/local/libexec/roundhouse/posix-dispatcher`, which executes only
-`/usr/local/libexec/roundhouse/current/scripts/roundhouse
-dispatch-posix-request`. The bounded stdin protocol contains either one sealed
-ordinary schema-2 plan plus worker configuration or one signed broker envelope;
-it has no caller-selected command, executable, shell option, or workspace path.
-Linux broker envelopes reach only
-`sudo -n /usr/libexec/roundhouse/posix-broker`. macOS supports the
-ordinary bounded lane and rejects protected root actions.
-
-Standalone schema-3 plans for each closed APT, WinGet, and profile action are
-executed by the same fixed broker path as mixed schema-4 plans. The internal
-projection adds only freshly verified UID/SID, certificate source-address,
-Windows platform-context evidence, and the matching action/token precondition.
-On Windows those fields come from fresh signed SFTP readiness, so logged-off
-submission never requires ordinary Codex collection. The projection does not
-add an executable, argv, package/source/dependency control, environment, or
-fallback context. POSIX
-result queries are freshly signed with the current node overlay certificate,
-including after renewal or from another enrolled node, while terminal evidence
-continues to match the original mutation's journaled identity and certificate.
-
-For upgrade or revocation, enter draining first and reject new submissions.
-Readiness and fresh result lookup remain available for protocol 1 and protocol
-0 while an active request reaches a protected terminal state; then remove only
-the adapter-owned grant. Emergency revocation may remove the grant earlier but
-must retain explicit partial or stale evidence. Return `needs_broker_upgrade`
-only when the sealed action/context is absent from the observed protocol, not
-for readiness, query, drain, or revocation controls.
+Codex remote control is an ordinary, interactive schema-2 lane only:
+`apply-windows.ps1` rejects semantic actions and every protected broker field.
+Protected Windows and POSIX operations never use a Codex task, WSL, SCP, or a
+shell fallback; they follow [privileged lanes](privileged-lanes.md).
 
 The controller does not need a local copy of the remote path. Task creation
 uses the saved remote project. Cross-host handoff is separate and requires the

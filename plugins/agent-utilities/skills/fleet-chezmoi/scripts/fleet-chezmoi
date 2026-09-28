@@ -1,0 +1,810 @@
+#!/usr/bin/env bash
+# fleet-chezmoi — batch the safe path of a chezmoi fleet sync.
+#
+#   fleet-chezmoi probe [--require TOOL]... [--no-fetch] [--plugins] HOST...
+#   fleet-chezmoi classify RUN-DIR
+#   fleet-chezmoi show RUN-DIR HOST
+#   fleet-chezmoi evidence RUN-DIR HOST [TARGET...]
+#   fleet-chezmoi seal RUN-DIR pull|apply
+#   fleet-chezmoi seal RUN-DIR targets HOST [TARGET...]
+#   fleet-chezmoi seal RUN-DIR reset HOST
+#   fleet-chezmoi seal RUN-DIR capture
+#   fleet-chezmoi plugins RUN-DIR [HOST...]
+#   fleet-chezmoi apply RUN-DIR SET-ID
+#
+# probe runs one read-only batch per host, in parallel, and classifies every
+# host. seal turns the `pull` or `apply` hosts into one Roundhouse sealed plan
+# each, bound together by a set ID the user approves once. apply verifies the
+# set, backs up each target, and hands each exact plan to Roundhouse, whose
+# executor rechecks identity and preconditions immediately before mutating.
+#
+# Output is paths, codes, commit IDs, and digests. Content, diffs, and backups
+# stay in private directories on the host they describe.
+set -euo pipefail
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+CLI=${ROUNDHOUSE_CLI:-roundhouse}
+
+die() { printf 'fleet-chezmoi: %s\n' "$*" >&2; exit "${2:-64}"; }
+usage() { sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d ' ' -f 1
+  else shasum -a 256 | cut -d ' ' -f 1
+  fi
+}
+
+config_path() {
+  printf '%s\n' "${ROUNDHOUSE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/roundhouse/config.json}"
+}
+
+valid_host() { [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]; }
+
+# table — align tab-separated stdin; `column` is not installed everywhere.
+table() {
+  if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"
+  else awk -F '\t' '{ rows[NR] = $0; for (i = 1; i <= NF; i++) if (length($i) > w[i]) w[i] = length($i) }
+    END { for (r = 1; r <= NR; r++) { n = split(rows[r], f, "\t"); line = ""
+      for (i = 1; i <= n; i++) line = line (i < n ? sprintf("%-" w[i] "s  ", f[i]) : f[i]); print line } }'
+  fi
+}
+
+# host_meta HOST -> {host,transport,alias,expected}
+host_meta() {
+  local config
+  config=$(config_path)
+  if [ -f "$config" ] && jq -e --arg h "$1" '.machines[$h] != null' "$config" >/dev/null 2>&1; then
+    jq -c --arg h "$1" '.machines[$h] as $m | {
+      host:$h,
+      transport:(if $m.platform == "windows" then "windows" else $m.transport end),
+      alias:($m.ssh_alias // $h),
+      expected:(if ($m.expected_hostname // "") != "" and ($m.expected_user // "") != "" then
+        {hostname:$m.expected_hostname,user:$m.expected_user} else null end)}' "$config"
+  else
+    # Unconfigured hosts can be probed over SSH but never sealed: Roundhouse
+    # refuses plans for targets it does not know.
+    jq -cn --arg h "$1" '{host:$h,transport:"ssh",alias:$h,expected:null}'
+  fi
+}
+
+# run_on META-JSON PAYLOAD [ARGS...] — run a POSIX payload on the host, under the
+# user's login shell over SSH (the same environment the Roundhouse executor and
+# chezmoi run scripts get), or in-process for a local target.
+run_on() {
+  local meta=$1 payload=$2 transport alias framed arg
+  shift 2
+  transport=$(jq -r '.transport' <<<"$meta")
+  alias=$(jq -r '.alias' <<<"$meta")
+  # An alias is a destination, never an option.
+  [[ $alias =~ ^[A-Za-z0-9._@][A-Za-z0-9._@-]*$ ]] || die "unsafe SSH destination for $(jq -r '.host' <<<"$meta")"
+  # Arguments travel inside the payload as one single-quoted `set --` line, so
+  # no remote shell ever parses them: paths with spaces stay intact and nothing
+  # in them can become syntax.
+  for arg in "$@"; do
+    case $arg in *$'\n'*) die "payload arguments cannot contain newlines" ;; esac
+  done
+  framed=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-payload.XXXXXX")
+  {
+    printf 'set --'
+    for arg in "$@"; do printf " '%s'" "${arg//\'/\'\\\'\'}"; done
+    printf '\n'
+    cat "$payload"
+  } >"$framed"
+  local rc=0
+  case $transport in
+    local) sh "$framed" </dev/null || rc=$? ;;
+    ssh)
+      # The login shell only ever parses two plain commands, `/bin/sh -c '...'`
+      # and `sh FILE`, which bash, zsh, and fish read alike; the bootstrap holds
+      # no single quote or backslash (fish treats those specially in quotes).
+      # So the payload never depends on the login shell's syntax, and still runs
+      # in its environment. /bin/sh removes the payload file afterwards.
+      ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
+        "/bin/sh -c 'if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo \"fleet-chezmoi: login shell unavailable\" >&2; exit 69; fi; f=\$(mktemp) || exit 70; cat >\"\$f\" || { rm -f \"\$f\"; exit 70; }; \"\$SHELL\" -lc \"sh \$f\"; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
+        <"$framed" || rc=$?
+      ;;
+    *) rc=69 ;;
+  esac
+  rm -f "$framed"
+  return "$rc"
+}
+
+# await_workers ON_FAIL — wait for each "PID HOST" in the caller's `workers`
+# array and call ON_FAIL HOST STATUS for every worker that exited nonzero.
+# A bare `wait` returns 0 even when a worker failed.
+await_workers() {
+  local on_fail=$1 entry rc
+  for entry in "${workers[@]+"${workers[@]}"}"; do
+    rc=0
+    wait "${entry%% *}" || rc=$?
+    [ "$rc" -eq 0 ] || "$on_fail" "${entry#* }" "$rc"
+  done
+}
+
+probe_failed() {
+  jq -cn --arg h "$1" --arg e "probe worker failed (exit $2); see logs" \
+    '{host:$h,transport:"unknown",expected:null,probe:null,error:$e}' >"$run/probes/$1.json"
+}
+
+seal_failed() {
+  rm -f "$set_dir/entries/$1.json"
+  printf '%s\t%s\n' "$1" "skipped: seal worker failed (exit $2); see logs" >>"$set_dir/skipped.tsv"
+}
+
+apply_failed() {
+  jq -cn --arg h "$1" --argjson rc "$2" \
+    '{host:$h,outcome:"unknown",exit:$rc,reason:"apply worker failed; the host may have changed, check logs and re-probe"}' \
+    >"$set_dir/results/$1.outcome.json"
+}
+
+# last_json SCHEMA — the last stdout line that is a JSON object of SCHEMA; login
+# shells may print banners before it.
+last_json() {
+  local line found=''
+  while IFS= read -r line; do
+    if jq -e --arg s "$1" 'type == "object" and .schema == $s' <<<"$line" >/dev/null 2>&1; then
+      found=$line
+    fi
+  done
+  [ -n "$found" ] && printf '%s\n' "$found"
+}
+
+probe_one() {
+  # probe_one RUN META ARGS... -> RUN/probes/HOST.json
+  local run=$1 meta=$2 host out rc=0 transport
+  shift 2
+  host=$(jq -r '.host' <<<"$meta")
+  transport=$(jq -r '.transport' <<<"$meta")
+  out=$run/probes/$host.json
+  if [ "$transport" != local ] && [ "$transport" != ssh ]; then
+    jq -c '. + {probe:null,error:"no fast path for this transport"}' \
+      <<<"$meta" >"$out"
+    return
+  fi
+  local raw
+  raw=$(run_on "$meta" "$script_dir/probe.sh" "$@" 2>"$run/logs/$host.probe.err" | last_json fleet-chezmoi.probe) || rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$raw" ]; then
+    jq -c --argjson probe "$raw" '. + {probe:$probe,error:null}' \
+      <<<"$meta" >"$out"
+  else
+    jq -c '. + {probe:null,error:"probe failed; see logs"}' \
+      <<<"$meta" >"$out"
+  fi
+}
+
+classify_run() {
+  local run=$1
+  jq -s '.' "$run"/probes/*.json | jq -f "$script_dir/classify.jq" >"$run/classes.json.tmp"
+  mv "$run/classes.json.tmp" "$run/classes.json"
+  jq -r '.[] |
+    [.host, .class,
+     (if .class == "pull" then "behind \(.source.behind): \(.source.head[0:12])..\(.source.upstream_head[0:12])"
+      elif .class == "apply" then
+        (.pending | to_entries | map("\(.value | length) \(.key)") | join(", "))
+      elif .class == "capture" then "origin of: " + (.captures | map(.path) | join(", "))
+      elif .class == "awaiting-capture" then "published from elsewhere: " + (((.pending["captured-elsewhere"] // []) + (.pending.published // [])) | join(", "))
+      elif .class == "review" then
+        ((.blockers | map(.code)) + (if (.conflicts | length) > 0 then ["conflicts: " + (.conflicts | join(", "))] else [] end) | join("; "))
+      elif .class == "identity-mismatch" then "saw \(.identity.user)@\(.identity.hostname)"
+      else (.error // "") end)] | @tsv' "$run/classes.json" | table
+  jq -r '.[] | .host as $h | (.decisions[] | select(.decision != "capture") | "  decide \($h): \(.path): \(.summary)"),
+    (.findings[] | "  finding \($h): \(.code): \(.detail)")' "$run/classes.json"
+  printf 'run: %s\n' "$run"
+}
+
+probe_command() {
+  local fetch=true run hosts=() requires=()
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --require) [ "$#" -ge 2 ] || usage; requires+=(--require "$2"); shift ;;
+      --no-fetch) fetch=false ;;
+      --plugins) requires+=(--plugins) ;;
+      --run) [ "$#" -ge 2 ] || usage; run=$2; shift ;;
+      -*) usage ;;
+      *) valid_host "$1" || die "invalid host name: $1"; hosts+=("$1") ;;
+    esac
+    shift
+  done
+  [ "${#hosts[@]}" -gt 0 ] || usage
+  if [ -z "${run:-}" ]; then
+    run=${XDG_STATE_HOME:-$HOME/.local/state}/fleet-chezmoi/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$
+  fi
+  mkdir -p "$run/probes" "$run/logs"
+  chmod 700 "$run"
+  rm -f "$run"/probes/*.json
+  jq -cn --argjson fetch "$fetch" \
+    --argjson requires "$(printf '%s\n' "${requires[@]+"${requires[@]}"}" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
+    --argjson hosts "$(printf '%s\n' "${hosts[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
+    '{fetch:$fetch,requires:$requires,hosts:$hosts}' >"$run/options.json"
+  local args=("${requires[@]+"${requires[@]}"}") host workers=()
+  [ "$fetch" = true ] || args+=(--no-fetch)
+  for host in "${hosts[@]}"; do
+    probe_one "$run" "$(host_meta "$host")" "${args[@]+"${args[@]}"}" &
+    workers+=("$! $host")
+  done
+  await_workers probe_failed
+  classify_run "$run"
+}
+
+reprobe() {
+  # reprobe RUN [HOST...] — repeat the recorded probe for the named hosts,
+  # or for every probed host when none are named.
+  local run=$1 options fetch
+  shift
+  options=$run/options.json
+  [ "$#" -gt 0 ] || while IFS= read -r host; do set -- "$@" "$host"; done < <(jq -r '.hosts[]' "$options")
+  fetch=$(jq -r '.fetch' "$options")
+  local args=() host workers=()
+  while IFS= read -r req; do args+=("$req"); done < <(jq -r '.requires[]' "$options")
+  [ "$fetch" = true ] || args+=(--no-fetch)
+  for host in "$@"; do
+    probe_one "$run" "$(host_meta "$host")" "${args[@]+"${args[@]}"}" &
+    workers+=("$! $host")
+  done
+  await_workers probe_failed
+  classify_run "$run"
+}
+
+set_id_of() {
+  # Every sealed field is approved: plans, identities, status digests, targets.
+  jq -cS '[.stage, (.hosts // []), (.items // []), (.controller_head // null)]' "$1" | sha256_stream | cut -c 1-16 |
+    sed 's/^/set-/'
+}
+
+plan_digest_of() { jq -cS 'del(.plan_id,.plan_digest)' "$1" | sha256_stream; }
+
+seal_command() {
+  # seal RUN pull|apply            every host of that class
+  # seal RUN targets HOST [REL...] a source-wins targeted apply of evidenced paths
+  # seal RUN reset HOST            reset every resettable rewritten external
+  # seal RUN capture               publish changes from the hosts they came from
+  local run=$1 stage=$2
+  shift 2
+  [ -f "$run/classes.json" ] || die "no classification in $run; run probe first"
+  if [ "$stage" = capture ]; then
+    [ "$#" -eq 0 ] || usage
+    capture_seal "$run"
+    return
+  fi
+  command -v "$CLI" >/dev/null 2>&1 || die "sealing requires the Roundhouse CLI ($CLI)" 69
+  local hosts=() host set_name=$stage candidate
+  case $stage in
+    pull|apply)
+      [ "$#" -eq 0 ] || usage
+      while IFS= read -r host; do hosts+=("$host"); done < <(jq -r --arg s "$stage" '.[] | select(.class == $s) | .host' "$run/classes.json")
+      ;;
+    targets|reset)
+      [ "$#" -ge 1 ] || usage
+      valid_host "$1" || die "invalid host name"
+      hosts=("$1")
+      set_name=$stage-$1
+      shift
+      [ "$stage" = targets ] || [ "$#" -eq 0 ] || usage
+      ;;
+    *) usage ;;
+  esac
+  [ "${#hosts[@]}" -gt 0 ] || die "no hosts are in class $stage" 65
+  local set_dir=$run/sets/$set_name
+  rm -rf "$set_dir"
+  mkdir -p "$set_dir/plans" "$set_dir/snapshots"
+  chmod 700 "$run/sets" "$set_dir"
+  mkdir -p "$set_dir/entries"
+  local requested=("$@") workers=()
+  for host in "${hosts[@]}"; do
+    (
+      decision=$(jq -c --arg h "$host" '.[] | select(.host == $h)' "$run/classes.json")
+      [ -n "$decision" ] || { printf '%s\t%s\n' "$host" "skipped: not probed" >>"$set_dir/skipped.tsv"; exit 0; }
+      case $(jq -r '.class' <<<"$decision") in
+        identity-mismatch|unreachable|unsupported)
+          printf '%s\t%s\n' "$host" "skipped: class $(jq -r '.class' <<<"$decision")" >>"$set_dir/skipped.tsv"
+          exit 0 ;;
+      esac
+      # Roundhouse seals against the configured identity; it must still be the
+      # one this run's probe verified, or the route changed since the probe.
+      if ! jq -e --argjson m "$(host_meta "$host")" '
+          (.probe.identity // {}) as $p
+          # Windows names compare case-insensitively, as Roundhouse does there.
+          | def norm: if (($p.os // "") | test("^(MINGW|MSYS|CYGWIN)")) then ascii_downcase else . end;
+          $m.expected != null
+          and ($m.expected.hostname | norm) == (($p.hostname // "") | norm)
+          and ($m.expected.user | norm) == (($p.user // "") | norm)' \
+          "$run/probes/$host.json" >/dev/null; then
+        printf '%s\t%s\n' "$host" "skipped: configured identity no longer matches the probe; re-probe" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
+      snap=$set_dir/snapshots/$host.jsonl
+      plan=$set_dir/plans/$host.json
+      draft=$set_dir/plans/$host.draft.json
+      extra='{}'
+      case $stage in
+        pull)
+          jq -cn --arg h "$host" '{domain:"chezmoi",target:$h,operations:[{type:"chezmoi-pull",
+            kind:"file",id:"chezmoi:source",argv:["chezmoi","git","--","pull","--ff-only"]}]}' >"$draft" ;;
+        apply)
+          # Every pending entry is source-driven, so a full apply touches exactly
+          # the classified entries; Roundhouse binds it to the status digest.
+          jq -cn --arg h "$host" '{domain:"chezmoi",target:$h,operations:[{type:"chezmoi-apply",
+            kind:"chezmoi_state",id:"live",argv:["chezmoi","--no-tty","apply"]}]}' >"$draft" ;;
+        targets)
+          evidence=$run/evidence/$host.json
+          [ -f "$evidence" ] || { printf '%s\t%s\n' "$host" "skipped: collect evidence first" >>"$set_dir/skipped.tsv"; exit 0; }
+          wanted=$(printf '%s\n' "${requested[@]+"${requested[@]}"}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          if ! jq -e --argjson wanted "$wanted" '
+            ([.targets[].target]) as $have |
+            ($have | length) >= 1 and ($have | length) <= 16 and
+            ($wanted | length == 0 or ($wanted | sort) == ($have | sort)) and
+            (.status_digest | test("^[0-9a-f]{64}$"))' "$evidence" >/dev/null; then
+            printf '%s\t%s\n' "$host" "skipped: targets must be the 1-16 evidenced paths" >>"$set_dir/skipped.tsv"
+            exit 0
+          fi
+          # chezmoi never overwrites a live edit non-interactively, and a sealed
+          # plan never adds --force: those paths need the owner's confirmation.
+          if jq -e '[.targets[] | select((.status | .[0:1]) != " ")] | length > 0' "$evidence" >/dev/null; then
+            printf '%s\t%s\n' "$host" "skipped: live-edited targets need the owner's interactive confirmation: $(jq -c '[.targets[] | select((.status | .[0:1]) != " ") | .target]' "$evidence")" \
+              >>"$set_dir/skipped.tsv"
+            exit 0
+          fi
+          jq -c --arg h "$host" '(.dest) as $d | [.targets[].target | $d + "/" + .] as $t |
+            {domain:"chezmoi",target:$h,operations:[{type:"chezmoi-apply",kind:"chezmoi_state",id:"live",
+              targets:$t,argv:(["chezmoi","--no-tty","apply","--"] + $t),status_digest:.status_digest}]}' \
+            "$evidence" >"$draft"
+          extra=$(jq -c '{targets:.operations[0].targets,status_digest:.operations[0].status_digest}' "$draft") ;;
+        reset)
+          jq -c --arg h "$host" '{domain:"chezmoi",target:$h,operations:[
+            # Only against a remote-tracking ref this probe just fetched: a
+            # stale ref would reset to an obsolete commit.
+            .probe.externals[] | select(.state == "rewritten-resettable" and .fetch == "ok") |
+            {type:"chezmoi-external-reset",kind:"chezmoi_external",id:.path,head:.head,upstream_head:.upstream_head,
+             argv:["git","-C",.path,"reset","--hard","--quiet",.upstream_head]}]}' \
+            "$run/probes/$host.json" >"$draft"
+          if [ "$(jq '.operations | length' "$draft")" -eq 0 ]; then
+            printf '%s\t%s\n' "$host" "skipped: no resettable external" >>"$set_dir/skipped.tsv"
+            exit 0
+          fi ;;
+      esac
+      if ! "$CLI" collect --target "$host" --section host --section chezmoi --output "$snap" \
+        >"$run/logs/$host.collect.log" 2>&1; then
+        printf '%s\t%s\n' "$host" "skipped: Roundhouse collect failed (identity or reachability)" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
+      # The sealed snapshot must describe the state that was classified.
+      if ! jq -e -s --argjson d "$decision" --arg stage "$stage" --slurpfile draft "$draft" '
+        any(.[]; .kind == "file" and .id == "chezmoi:source" and .status == "present" and
+          .data.head == $d.source.head and .data.dirty_count == 0) and
+        (if $stage == "apply" then any(.[]; .kind == "chezmoi_state" and .id == "live" and
+            .data.status_digest.value == $d.status_digest)
+         elif $stage == "reset" then . as $records | all($draft[0].operations[]; . as $op |
+            any($records[]; .kind == "chezmoi_external" and .id == $op.id and
+              .data.state == "rewritten-resettable" and .data.head == $op.head and
+              .data.upstream_head == $op.upstream_head))
+         else true end)' "$snap" >/dev/null; then
+        printf '%s\t%s\n' "$host" "skipped: state changed since probe; re-probe" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
+      if ! "$CLI" seal-plan "$draft" "$snap" "$plan" >"$run/logs/$host.seal.log" 2>&1; then
+        printf '%s\t%s\n' "$host" "skipped: seal-plan refused; see logs/$host.seal.log" >>"$set_dir/skipped.tsv"
+        exit 0
+      fi
+      chmod 600 "$plan"
+      # The identity this run's probe verified; payloads check the host against
+      # it, never against config edited since.
+      jq -cn --arg host "$host" --argjson d "$decision" --arg plan "plans/$host.json" --argjson extra "$extra" \
+        --argjson identity "$(jq -c '.probe.identity // {} | {hostname, user}' "$run/probes/$host.json")" \
+        --arg plan_id "$(jq -r '.plan_id' "$plan")" --arg plan_digest "$(jq -r '.plan_digest.value' "$plan")" \
+        --argjson ops "$(jq -c '[.operations[] | {type, id, argv}]' "$plan")" \
+        '{host:$host,identity:$identity,transport:$d.transport,plan:$plan,plan_id:$plan_id,plan_digest:$plan_digest,
+          source_head:$d.source.head,upstream_head:$d.source.upstream_head,
+          status_digest:$d.status_digest,pending:$d.pending,operations:$ops} + $extra' >"$set_dir/entries/$host.json"
+    ) &
+    workers+=("$! $host")
+  done
+  await_workers seal_failed
+  local entries=()
+  for candidate in "$set_dir"/entries/*.json; do [ -f "$candidate" ] && entries+=("$candidate"); done
+  jq -s --arg stage "$stage" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{schema:"fleet-chezmoi.set",version:1,stage:$stage,created_at:$created,hosts:(sort_by(.host))}' \
+    "${entries[@]+"${entries[@]}"}" /dev/null >"$set_dir/set.json"
+  chmod 600 "$set_dir/set.json"
+  [ ! -f "$set_dir/skipped.tsv" ] || sed 's/^/skipped /' "$set_dir/skipped.tsv"
+  [ "$(jq '.hosts | length' "$set_dir/set.json")" -gt 0 ] || die "nothing was sealed" 65
+  jq -r --arg stage "$stage" '.hosts[] | [.host, .plan_id,
+    (if $stage == "pull" then "ff-only pull \(.source_head[0:12])..\(.upstream_head[0:12])"
+     elif $stage == "apply" then "apply " + (.pending | to_entries | map("\(.key): \(.value | tojson)") | join("; "))
+     # Each sealed argv as a JSON array: a path with a space stays one argument.
+     else (.operations | map(.argv | tojson) | join("; ")) end)] | @tsv' \
+    "$set_dir/set.json" | table
+  printf '%s %s\n' "$(set_id_of "$set_dir/set.json")" "$set_dir"
+}
+
+apply_command() {
+  local run=$1 set_id=$2 stage set_dir='' set_file candidate
+  [[ $set_id =~ ^set-[0-9a-f]{16}$ ]] || die "invalid set ID"
+  for candidate in "$run"/sets/*/set.json; do
+    [ -f "$candidate" ] || continue
+    if [ "$(set_id_of "$candidate")" = "$set_id" ]; then set_dir=$(dirname -- "$candidate"); fi
+  done
+  [ -n "$set_dir" ] || die "no sealed set in $run has ID $set_id" 65
+  set_file=$set_dir/set.json
+  stage=$(jq -r '.stage' "$set_file")
+  if [ "$stage" = capture ]; then
+    capture_apply "$run" "$set_dir"
+    return
+  fi
+  command -v "$CLI" >/dev/null 2>&1 || die "apply requires the Roundhouse CLI ($CLI)" 69
+  # Every plan file must still be the bytes the set ID covers.
+  local host
+  while IFS= read -r host; do
+    local plan recorded
+    plan=$set_dir/$(jq -r --arg h "$host" '.hosts[] | select(.host == $h) | .plan' "$set_file")
+    recorded=$(jq -r --arg h "$host" '.hosts[] | select(.host == $h) | .plan_digest' "$set_file")
+    [ -f "$plan" ] && [ "$(plan_digest_of "$plan")" = "$recorded" ] &&
+      [ "$(jq -r '.plan_digest.value' "$plan")" = "$recorded" ] ||
+      die "plan for $host does not match set $set_id; reseal" 65
+  done < <(jq -r '.hosts[].host' "$set_file")
+
+  rm -rf "$set_dir/results"
+  mkdir -p "$set_dir/results"
+  local workers=()
+  while IFS= read -r host; do
+    (
+      entry=$(jq -c --arg h "$host" '.hosts[] | select(.host == $h)' "$set_file")
+      plan=$set_dir/$(jq -r '.plan' <<<"$entry")
+      plan_id=$(jq -r '.plan_id' <<<"$entry")
+      meta=$(host_meta "$host")
+      result=$set_dir/results/$host.jsonl
+      if [ "$stage" = apply ] || [ "$stage" = targets ]; then
+        # Back up before mutating: the pending files and the rendered diff stay
+        # on the target in a private directory; only digests come back.
+        backup_args=("$set_id" "$(jq -r '.status_digest' <<<"$entry")"
+          "$(jq -r '.identity.hostname' <<<"$entry")" "$(jq -r '.identity.user' <<<"$entry")")
+        while IFS= read -r target; do backup_args+=("$target"); done < <(jq -r '.targets[]?' <<<"$entry")
+        backup=$(run_on "$meta" "$script_dir/backup.sh" "${backup_args[@]}" \
+          2>"$run/logs/$host.backup.err" | last_json fleet-chezmoi.backup) || backup=''
+        if [ -z "$backup" ] || ! jq -e '.ok' <<<"$backup" >/dev/null; then
+          jq -cn --arg h "$host" --argjson b "${backup:-null}" \
+            '{host:$h,outcome:"skipped",reason:($b.error // "backup failed; nothing was applied")}' \
+            >"$set_dir/results/$host.outcome.json"
+          exit 0
+        fi
+        printf '%s\n' "$backup" >"$set_dir/results/$host.backup.json"
+      fi
+      transport=$(jq -r '.transport' <<<"$meta")
+      rc=0
+      if [ "$transport" = local ]; then
+        "$CLI" apply-plan "$plan" "$plan_id" "$result" >"$run/logs/$host.apply.log" 2>&1 || rc=$?
+      else
+        "$CLI" apply-ssh-plan "$plan" "$plan_id" "$result" >"$run/logs/$host.apply.log" 2>&1 || rc=$?
+      fi
+      if [ "$rc" -eq 0 ]; then outcome=completed
+      elif [ -s "$result" ]; then outcome=partial
+      else outcome=refused
+      fi
+      jq -cn --arg h "$host" --arg outcome "$outcome" --argjson rc "$rc" \
+        --arg backup "$(jq -r '.backup_dir // empty' "$set_dir/results/$host.backup.json" 2>/dev/null || true)" \
+        '{host:$h,outcome:$outcome,exit:$rc,backup_dir:(if $backup == "" then null else $backup end)}' \
+        >"$set_dir/results/$host.outcome.json"
+    ) &
+    workers+=("$! $host")
+  done < <(jq -r '.hosts[].host' "$set_file")
+  await_workers apply_failed
+  jq -r '"\(.host)\t\(.outcome)\(if .backup_dir then "\tbackup " + .backup_dir else "" end)\(if .reason then "\t" + .reason else "" end)"' \
+    "$set_dir"/results/*.outcome.json | table
+  local applied=()
+  while IFS= read -r host; do applied+=("$host"); done < <(jq -r '.host' "$set_dir"/results/*.outcome.json)
+  printf 'verification probe:\n'
+  reprobe "$run" "${applied[@]}"
+  # Any host that was skipped, refused, or partial makes the whole apply fail.
+  jq -e -s 'all(.[]; .outcome == "completed")' "$set_dir"/results/*.outcome.json >/dev/null ||
+    die "not every host completed; see the outcomes above" 70
+}
+
+# --- capture: publish a change from the host where it was made ---------------
+
+# Patterns that must never reach the source: private keys and common token
+# shapes. The source repository's own scanner (scripts/scan-secrets) also runs
+# when it has one.
+secret_pattern='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|(api[_-]?key|secret|token|passw(or)?d)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:]]{12,}'
+
+local_source() {
+  chezmoi source-path 2>/dev/null </dev/null || die "no local chezmoi source" 69
+}
+
+capture_seal() {
+  local run=$1 src set_dir head source
+  src=$(local_source)
+  [ -z "$(git -C "$src" status --porcelain)" ] ||
+    die "the local source has uncommitted changes; a capture starts from a clean checkout" 65
+  git -C "$src" fetch --quiet || die "cannot fetch the local source" 70
+  head=$(git -C "$src" rev-parse HEAD)
+  [ "$head" = "$(git -C "$src" rev-parse '@{u}')" ] ||
+    die "the local source is not at its upstream; pull it first" 65
+  # The decisions were made against the upstream the hosts saw; if it moved
+  # since, a capture could overwrite a newer upstream change.
+  jq -e --arg head "$head" '[.[] | select(.identity_verified) | .source.upstream_head // empty
+    | select(. != "")] | all(. == $head)' "$run/classes.json" >/dev/null ||
+    die "upstream moved since the probe; re-probe before capturing" 65
+  set_dir=$run/sets/capture
+  rm -rf "$set_dir"
+  mkdir -p "$set_dir"
+  chmod 700 "$run/sets" "$set_dir"
+  # Each item carries the identity its host's probe verified; apply checks the
+  # host against that sealed identity, never against config edited since.
+  jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson ids "$(jq -s 'map({(.host): (.probe.identity // null)}) | add // {}' "$run"/probes/*.json)" '
+    {schema:"fleet-chezmoi.set",version:1,stage:"capture",created_at:$created,controller_head:$head,
+     items:([.[] | select(.identity_verified and .class == "capture") | .host as $h | .captures[]
+       | {host:$h,identity:{hostname:$ids[$h].hostname,user:$ids[$h].user},
+          type:(.type // "file"),path,source,digest,mtime,entries}]
+       | sort_by(.path))}' \
+    "$run/classes.json" >"$set_dir/set.json"
+  jq -e 'all(.items[]; (.identity.hostname // "") != "" and (.identity.user // "") != "")' "$set_dir/set.json" >/dev/null ||
+    die "a capture origin has no verified identity in this run; re-probe" 65
+  chmod 600 "$set_dir/set.json"
+  [ "$(jq '.items | length' "$set_dir/set.json")" -gt 0 ] || die "no host is the origin of a change to capture" 65
+  while IFS= read -r source; do
+    case $source in ''|/*|-*|..|../*|*/../*|*/..) die "unsafe source path in capture: $source" 65 ;; esac
+    [ -f "$src/$source" ] && [ ! -L "$src/$source" ] || die "capture source is not a plain file here: $source" 65
+    # An ignored or untracked file would be written but never published.
+    git -C "$src" ls-files --error-unmatch -- "$source" >/dev/null 2>&1 ||
+      die "capture source is not tracked in the source repository: $source" 65
+  done < <(jq -r '.items[].source' "$set_dir/set.json")
+  jq -r '.items[] | ["capture", .path + (if .type == "json" then " (" + (.entries | map((.path | join(".")) + (if .state == "removed" then " removed" else "" end)) | join(", ")) + ")" else "" end),
+      "from " + .host, "edited " + (.mtime | todate), "into " + .source] | @tsv' \
+    "$set_dir/set.json" | table
+  printf '%s %s\n' "$(set_id_of "$set_dir/set.json")" "$set_dir"
+}
+
+capture_apply() {
+  local run=$1 set_dir=$2 src item host path source digest target fetched tmp hosts
+  local paths=() held=()
+  src=$(local_source)
+  [ -z "$(git -C "$src" status --porcelain)" ] || die "the local source changed since the capture was sealed" 65
+  [ "$(git -C "$src" rev-parse HEAD)" = "$(jq -r '.controller_head' "$set_dir/set.json")" ] ||
+    die "the local source moved since the capture was sealed; re-probe" 65
+  # The tree was clean when staging began, so restoring every tracked change
+  # (captures only write tracked files) undoes exactly this run's staging, even
+  # a half-written file. An exit trap covers failures that skip the explicit
+  # restores below; it is cleared once the commit exists.
+  capture_restore() { git -C "$src" checkout -q -- . 2>/dev/null || :; }
+  # The path is baked in: an errexit unwinds this function's locals first.
+  # shellcheck disable=SC2064
+  trap "git -C $(printf '%q' "$src") checkout -q -- . 2>/dev/null || :" EXIT
+  while IFS= read -r item; do
+    host=$(jq -r '.host' <<<"$item")
+    path=$(jq -r '.path' <<<"$item")
+    source=$(jq -r '.source' <<<"$item")
+    digest=$(jq -r '.digest' <<<"$item")
+    target=$src/$source
+    git -C "$src" ls-files --error-unmatch -- "$source" >/dev/null 2>&1 ||
+      { capture_restore; die "capture source is not tracked in the source repository: $source" 65; }
+    if [ "$(jq -r '.type' <<<"$item")" = json ]; then
+      capture_json_item "$item" || { capture_restore; exit 70; }
+      continue
+    fi
+    fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch.sh" "$path" "$digest" \
+      "$(jq -r '.identity.hostname' <<<"$item")" "$(jq -r '.identity.user' <<<"$item")" \
+      2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch) || fetched=''
+    if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
+      capture_restore
+      die "could not fetch $path from $host: $(jq -r '.error // "no response"' <<<"${fetched:-null}" 2>/dev/null)" 70
+    fi
+    tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
+    jq -r '.b64' <<<"$fetched" | base64 -d >"$tmp"
+    if [ "$(sha256_stream <"$tmp")" != "$digest" ]; then
+      rm -f "$tmp"
+      capture_restore
+      die "$path from $host did not match its approved digest" 65
+    fi
+    # Rewrite in place so the source file keeps its own mode.
+    cat "$tmp" >"$target"
+    rm -f "$tmp"
+    paths+=("$source")
+  done < <(jq -c '.items[]' "$set_dir/set.json")
+  if [ "${#paths[@]}" -eq 0 ]; then
+    die "nothing to publish; held back because it looks like a secret: $(printf '%s; ' "${held[@]}")say so to commit it, or keep it in 1Password" 65
+  fi
+  if [ -z "$(git -C "$src" status --porcelain -- "${paths[@]}")" ]; then
+    die "the captured files already match the source (a mode-only change needs a private_/executable_ rename)" 65
+  fi
+  # --text: a file with a NUL byte would otherwise diff as "Binary files
+  # differ" and hide its added lines from the scan.
+  if git -C "$src" diff --text -U0 -- "${paths[@]}" | grep -aE '^\+' | grep -aEiq -- "$secret_pattern"; then
+    capture_restore
+    die "a captured change looks like a secret; nothing was committed. Move it to a secret-manager template" 65
+  fi
+  if [ -x "$src/scripts/scan-secrets" ] && ! "$src/scripts/scan-secrets" "$src" >"$run/logs/capture.scan.log" 2>&1; then
+    capture_restore
+    die "the source repository's secret scan failed; nothing was committed (see logs/capture.scan.log)" 65
+  fi
+  hosts=$(jq -r '[.items[].host] | unique | join(", ")' "$set_dir/set.json")
+  git -C "$src" commit -q -m "chore: capture ${#paths[@]} change(s) from $hosts" \
+    -m "$(jq -r '.items[] | "- \(.path) from \(.host), edited \(.mtime | todate)"' "$set_dir/set.json")" \
+    -- "${paths[@]}" || { capture_restore; die "commit failed" 70; }
+  trap - EXIT
+  git -C "$src" push -q ||
+    die "committed $(git -C "$src" rev-parse --short HEAD) locally but the push failed; push it by hand" 70
+  printf 'published %s: %s\n' "$(git -C "$src" rev-parse --short HEAD)" "${paths[*]}"
+  [ "${#held[@]}" -eq 0 ] ||
+    printf 'held back (looks like a secret; say so to commit it, or keep it in 1Password): %s\n' "${held[*]}"
+  printf 'verification probe:\n'
+  reprobe "$run"
+}
+
+capture_json_item() {
+  # Merge an origin host's changed entries into the managed JSON template and
+  # keep the retired list in step, so a removal reaches every host.
+  local item=$1 host path source template spec retired_rel entries fetched entry value_sha tmp
+  host=$(jq -r '.host' <<<"$item")
+  path=$(jq -r '.path' <<<"$item")
+  source=$(jq -r '.source' <<<"$item")
+  template=$src/$source
+  entries=$(jq -c '[.entries[] | {path, state, digest}]' <<<"$item")
+  fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch-json.sh" "$path" "$entries" \
+    "$(jq -r '.identity.hostname' <<<"$item")" "$(jq -r '.identity.user' <<<"$item")" \
+    2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch-json) || fetched=''
+  if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
+    printf 'fleet-chezmoi: could not fetch %s entries from %s: %s\n' "$path" "$host" \
+      "$(jq -r '.error // "no response"' <<<"${fetched:-null}" 2>/dev/null)" >&2
+    return 1
+  fi
+  # Every set value must still match the digest that was approved.
+  while IFS= read -r entry; do
+    value_sha=$(jq -r '.b64' <<<"$entry" | base64 -d | sha256_stream)
+    [ "$value_sha" = "$(jq -r --argjson p "$(jq -c '.path' <<<"$entry")" \
+      '.entries[] | select(.path == $p) | .digest' <<<"$item")" ] || {
+      printf 'fleet-chezmoi: an entry of %s from %s did not match its approved digest\n' "$path" "$host" >&2
+      return 1
+    }
+  done < <(jq -c '.entries[] | select(.state == "set")' <<<"$fetched")
+  # Hold back, per entry, any value that looks like a secret: everything else
+  # still syncs, and the held entries are reported for the user to decide.
+  local keep='[]' entry_text
+  while IFS= read -r entry; do
+    if [ "$(jq -r '.state' <<<"$entry")" = set ]; then
+      # Scan every leaf with each key above it, so a credential under a
+      # secret-named parent ({"token":{"primary":...}}) is still caught.
+      entry_text=$(jq -r '.b64' <<<"$entry" | base64 -d |
+        jq -r --argjson p "$(jq -c '.path' <<<"$entry")" '
+          . as $v | [paths(scalars)] as $leaves
+          | (if ($leaves | length) == 0 then [[]] else $leaves end)[] as $lp
+          | ($v | getpath($lp) | tostring) as $leaf
+          | ($p + ($lp | map(tostring)))[] | "\"\(.)\": \($leaf)"' 2>/dev/null) ||
+        entry_text=$(jq -r '.b64' <<<"$entry" | base64 -d)
+      if printf '%s\n' "$entry_text" | grep -Eiq -- "$secret_pattern"; then
+        held+=("$path $(jq -r '.path | join(".")' <<<"$entry") (from $host)")
+        continue
+      fi
+    fi
+    keep=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$keep")
+  done < <(jq -c '.entries[]' <<<"$fetched")
+  fetched=$(jq -c --argjson keep "$keep" '.entries = $keep' <<<"$fetched")
+  [ "$(jq '.entries | length' <<<"$fetched")" -gt 0 ] || return 0
+  # A removal reaches other hosts only through the retired list: their modify_
+  # merge keeps any live key the template no longer names.
+  spec=$(jq -c --arg t "$path" '.managed_json[]? | select(.target == $t)' "$src/.fleet-chezmoi.json" 2>/dev/null || true)
+  retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
+  case $retired_rel in /*|*..*) retired_rel='' ;; esac
+  if jq -e 'any(.entries[]; .state == "removed")' <<<"$fetched" >/dev/null &&
+    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ] || [ -L "$src/$retired_rel" ] ||
+      ! git -C "$src" ls-files --error-unmatch -- "$retired_rel" >/dev/null 2>&1; }; then
+    printf 'fleet-chezmoi: %s removes entries but declares no existing, tracked, non-symlinked retired file; nothing was captured\n' "$path" >&2
+    return 1
+  fi
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
+  jq --indent 2 --argjson f "$fetched" 'reduce $f.entries[] as $e (.;
+      if $e.state == "removed" then delpaths([$e.path])
+      else setpath($e.path; ($e.b64 | @base64d | fromjson)) end)' "$template" >"$tmp" || { rm -f "$tmp"; return 1; }
+  cat "$tmp" >"$template"
+  rm -f "$tmp"
+  paths+=("$source")
+  if [ -n "$retired_rel" ] && [ -f "$src/$retired_rel" ] && [ ! -L "$src/$retired_rel" ]; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
+    jq --indent 2 --argjson f "$fetched" 'reduce ($f.entries[] | select(.path | length == 2)) as $e (.;
+        if $e.state == "removed" then .[$e.path[0]] = (((.[$e.path[0]] // []) + [$e.path[1]]) | unique)
+        else .[$e.path[0]] = ((.[$e.path[0]] // []) - [$e.path[1]]) end)' "$src/$retired_rel" >"$tmp" ||
+      { rm -f "$tmp"; return 1; }
+    cat "$tmp" >"$src/$retired_rel"
+    rm -f "$tmp"
+    paths+=("$retired_rel")
+  fi
+}
+
+plugins_command() {
+  # plugins RUN [HOST...] — run Roundhouse's plugin convergence on the hosts
+  # with plugin findings (or the named ones), then re-probe them.
+  local run=$1 host
+  local workers=()
+  shift
+  [ -f "$run/classes.json" ] || die "no classification in $run; run probe first"
+  if [ "$#" -eq 0 ]; then
+    while IFS= read -r host; do set -- "$@" "$host"; done < <(jq -r '.[] | select(.identity_verified) |
+      select(any(.findings[]; .code | startswith("plugin-"))) | .host' "$run/classes.json")
+  fi
+  # Plugins change only on hosts whose identity the probe just verified.
+  for host in "$@"; do
+    jq -e --arg h "$host" 'any(.[]; .host == $h and .identity_verified)' "$run/classes.json" >/dev/null ||
+      die "$host is not an identity-verified host in this run; probe it first" 65
+  done
+  [ "$#" -gt 0 ] || { printf 'no host has plugin findings\n'; return 0; }
+  mkdir -p "$run/plugins"
+  plugin_failed() {
+    jq -cn --arg e "worker failed (exit $2)" '{ok:false,error:$e}' >"$run/plugins/$1.json"
+  }
+  for host in "$@"; do
+    valid_host "$host" || die "invalid host name"
+    # The payload rechecks the configured identity on the host itself, right
+    # before it changes anything: the alias may resolve elsewhere by now.
+    # The identity this run's probe verified, not the config as it is now.
+    ( run_on "$(host_meta "$host")" "$script_dir/converge-plugins.sh" \
+        "$(jq -r '.probe.identity.hostname // empty' "$run/probes/$host.json")" \
+        "$(jq -r '.probe.identity.user // empty' "$run/probes/$host.json")" \
+        2>"$run/logs/$host.plugins.err" |
+        last_json fleet-chezmoi.plugins >"$run/plugins/$host.json" ) &
+    workers+=("$! $host")
+  done
+  await_workers plugin_failed
+  for host in "$@"; do
+    printf '%s\t%s\n' "$host" "$(jq -r '(if .ok then "converged" else "failed: " + (.error // "roundhouse fleet-run exited \(.exit)") end)
+      + (if (.installed // []) | length > 0 then "; installed " + (.installed | join(", ")) else "" end)' \
+      "$run/plugins/$host.json" 2>/dev/null || printf 'no result')"
+  done | table
+  printf 'verification probe:\n'
+  reprobe "$run" "$@"
+  # A failed convergence must stop the caller before it seals anything.
+  for host in "$@"; do
+    jq -e '.ok == true' "$run/plugins/$host.json" >/dev/null 2>&1 ||
+      die "plugin convergence failed on $host; see $run/plugins/$host.json" 70
+  done
+}
+
+evidence_command() {
+  # evidence RUN HOST [TARGET...] — the evidence table for a review host; the
+  # default targets are its classified conflicts.
+  local run=$1 host=$2 out
+  shift 2
+  valid_host "$host" || die "invalid host name"
+  if [ "$#" -eq 0 ]; then
+    while IFS= read -r target; do set -- "$@" "$target"; done < <(
+      jq -r --arg h "$host" '.[] | select(.host == $h) | .conflicts[]' "$run/classes.json")
+  fi
+  [ "$#" -gt 0 ] || die "no targets: $host has no classified conflicts"
+  mkdir -p "$run/evidence"
+  out=$run/evidence/$host.json
+  # A commit subject can hold anything; one that looks like a secret is never
+  # stored or shown.
+  run_on "$(host_meta "$host")" "$script_dir/evidence.sh" "$@" 2>"$run/logs/$host.evidence.err" |
+    last_json fleet-chezmoi.evidence |
+    jq -c --arg re "$secret_pattern" '(.targets[]?.history[]?.subject) |=
+      (if (. // "" | test($re; "i")) then "[redacted: looks like a secret]" else . end)' \
+      >"$out.tmp" || die "evidence collection failed; see logs" 70
+  [ "$(jq '.targets | length' "$out.tmp")" -eq "$#" ] || {
+    rm -f "$out.tmp"
+    die "evidence refused a target; see $run/logs/$host.evidence.err" 64
+  }
+  mv "$out.tmp" "$out"
+  jq -r '.targets[] | [.target, (.status | .[0:2]), .kind, .source,
+      (if .rendered_sha256 == .live_sha256 then "same" elif .canonical_json_equal then "json-equal" else "differs" end),
+      (.history[0] // {} | "\(.commit // "-") \(.date // "") \(.subject // "")")] | @tsv' "$out" |
+    table
+  printf 'evidence: %s\n' "$out"
+}
+
+show_command() {
+  jq --arg h "$2" '.[] | select(.host == $h)' "$1/classes.json"
+}
+
+command=${1:-}
+[ -n "$command" ] || usage
+shift
+command -v jq >/dev/null 2>&1 || die "jq is required" 69
+case $command in
+  probe) probe_command "$@" ;;
+  classify) [ "$#" -eq 1 ] || usage; classify_run "$1" ;;
+  show) [ "$#" -eq 2 ] || usage; show_command "$1" "$2" ;;
+  evidence) [ "$#" -ge 2 ] || usage; evidence_command "$@" ;;
+  plugins) [ "$#" -ge 1 ] || usage; plugins_command "$@" ;;
+  seal) [ "$#" -ge 2 ] || usage; seal_command "$@" ;;
+  apply) [ "$#" -eq 2 ] || usage; apply_command "$1" "$2" ;;
+  *) usage ;;
+esac
