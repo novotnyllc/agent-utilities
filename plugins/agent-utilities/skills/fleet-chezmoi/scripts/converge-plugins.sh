@@ -35,11 +35,14 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-chezmoi-plugins.XXXXXX") || exit 70
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-rc=0
+rc=0 skipped=''
 case $(uname -s) in
-  # Roundhouse's fleet-run is a POSIX maintenance pass; native Windows has no
-  # scheduled run, so only the settings-driven installs below apply there.
-  MINGW*|MSYS*|CYGWIN*) ;;
+  # Roundhouse's fleet-run is a POSIX maintenance pass, and it is what
+  # converges Codex plugins; native Windows has neither here, so only the
+  # Claude installs below run, and Codex is reported as not converged.
+  MINGW*|MSYS*|CYGWIN*)
+    ! command -v codex >/dev/null 2>&1 ||
+      skipped="codex: native Windows Codex plugins follow Roundhouse's native refresh (fleet-agents), not this step" ;;
   *)
     if command -v roundhouse >/dev/null 2>&1; then
       roundhouse fleet-run --fast >/dev/null 2>&1 </dev/null || rc=$?
@@ -80,9 +83,9 @@ if command -v claude >/dev/null 2>&1 && [ -f "$settings" ]; then
     done
 fi
 
-jq -cn --argjson rc "$rc" --rawfile installed "$work/installed" --rawfile failed "$work/failed" '
+jq -cn --argjson rc "$rc" --rawfile installed "$work/installed" --rawfile failed "$work/failed" --arg skipped "$skipped" '
   ($installed | split("\n") | map(select(length > 0))) as $i
   | ($failed | split("\n") | map(select(length > 0))) as $f
   | {schema:"fleet-chezmoi.plugins",version:1,ok:($rc == 0 and ($f | length) == 0),exit:$rc,
-     installed:$i,failed:$f,
+     installed:$i,failed:$f,skipped:(if $skipped == "" then [] else [$skipped] end),
      error:(if $rc == 127 then "roundhouse is not on PATH" elif ($f | length) > 0 then "could not install: " + ($f | join(", ")) else null end)}'

@@ -480,7 +480,10 @@ for plist in "$HOME"/Library/LaunchAgents/*.plist; do
 done
 for unit in "$HOME"/.config/systemd/user/*.service; do
   [ -f "$unit" ] || continue
-  grep -E '^[[:space:]]*Exec' "$unit" >"$work/job" 2>/dev/null || : >"$work/job"
+  # Join backslash-continued lines first: a flag can sit on a later line.
+  awk '{ if (sub(/\\$/, "")) { line = line $0 " "; next } print line $0; line = "" }
+    END { if (line != "") print line }' "$unit" 2>/dev/null |
+    grep -E '^[[:space:]]*Exec' >"$work/job" 2>/dev/null || : >"$work/job"
   scan_writer systemd "$(basename -- "$unit")" "$work/job"
 done
 if crontab -l >"$work/crontab" 2>/dev/null; then scan_writer cron crontab "$work/crontab"; fi

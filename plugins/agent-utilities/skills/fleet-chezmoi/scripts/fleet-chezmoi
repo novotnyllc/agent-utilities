@@ -783,7 +783,8 @@ plugins_command() {
   await_workers plugin_failed
   for host in "$@"; do
     printf '%s\t%s\n' "$host" "$(jq -r '(if .ok then "converged" else "failed: " + (.error // "roundhouse fleet-run exited \(.exit)") end)
-      + (if (.installed // []) | length > 0 then "; installed " + (.installed | join(", ")) else "" end)' \
+      + (if (.installed // []) | length > 0 then "; installed " + (.installed | join(", ")) else "" end)
+      + (if (.skipped // []) | length > 0 then "; not converged: " + (.skipped | join("; ")) else "" end)' \
       "$run/plugins/$host.json" 2>/dev/null || printf 'no result')"
   done | table
   printf 'verification probe:\n'

@@ -313,6 +313,9 @@ printf 'ok\n' >"$hosts/h2/.winfetch"
 ok_digest=$(printf 'ok\n' | (sha256sum 2>/dev/null || shasum -a 256) | cut -d ' ' -f 1)
 check "a Windows fetch accepts its identity in any case" \
   [ "$(win_payload "$here/fetch.sh" .winfetch "$ok_digest" HW-PC CLAIRE | jq -r .ok)" = true ]
+printf '#!/bin/sh\nexit 0\n' >"$T/winbin/codex" && chmod +x "$T/winbin/codex"
+check "Windows plugin convergence says Codex was not converged" \
+  grep -q '"skipped":\["codex: ' <<<"$(win_payload "$here/converge-plugins.sh" HW-PC claire)"
 check "a Windows fetch refuses another machine" \
   [ "$(win_payload "$here/fetch.sh" .winfetch "$ok_digest" OTHER-PC claire | jq -r .error)" = "identity does not match the verified host" ]
 printf 'b-win\n' >"$hosts/h2/.b"
@@ -663,6 +666,14 @@ check "a spaced, quoted target reaches the host intact" \
 probe h1
 "$fc" seal "$run" targets h1 "space dir/it's.txt" >"$T/seal.out" 2>&1 || { cat "$T/seal.out"; fail "targeted seal failed"; }
 check "the approval table shows a spaced argument as one argument" grep -qF "/space dir/it's.txt\"]" "$T/seal.out"
+
+# A systemd Exec directive continued with a backslash is scanned whole.
+mkdir -p "$HOME/.config/systemd/user"
+printf 'ExecStart=/usr/bin/env dotfiles sync \\\n  --commit\n' >"$HOME/.config/systemd/user/sync.service"
+probe h1
+check "a continued Exec line still reveals a source writer" \
+  [ "$(jq -r '.probe.scheduled_source_writers[] | select(.label == "sync.service") | .flags | join(",")' "$run/probes/h1.json")" = --commit ]
+rm -f "$HOME/.config/systemd/user/sync.service"
 
 # 13. plugin registration against the rest of the fleet (classifier only)
 jq -n '[
