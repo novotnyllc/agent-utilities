@@ -53,7 +53,7 @@ if command -v claude >/dev/null 2>&1 && [ -f "$settings" ]; then
     done
 fi
 
-jq -n --argjson rc "$rc" --rawfile installed "$work/installed" --rawfile failed "$work/failed" '
+jq -cn --argjson rc "$rc" --rawfile installed "$work/installed" --rawfile failed "$work/failed" '
   ($installed | split("\n") | map(select(length > 0))) as $i
   | ($failed | split("\n") | map(select(length > 0))) as $f
   | {schema:"fleet-chezmoi.plugins",version:1,ok:($rc == 0 and ($f | length) == 0),exit:$rc,

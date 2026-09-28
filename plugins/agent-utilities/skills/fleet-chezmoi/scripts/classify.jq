@@ -122,6 +122,9 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
          value: {
            decision: (
              if $newest.upstream_path_time > $newest.live_mtime then "source-newer"
+             # The file's mtime covers every key, so it cannot date one entry:
+             # the origin's source must contain the entry's last upstream change.
+             elif ($newest.upstream_change_in_head // false) | not then "stale-base"
              elif any(.[]; .review) then "capture-manual"
              # A value older than the retained history, or removing a whole
              # fleet-wide key, is a decision for a person.

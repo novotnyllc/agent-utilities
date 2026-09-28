@@ -236,7 +236,7 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
     git -C "$src" log --format='%H %ct' -n 500 "$ref" -- "$m_managed" 2>/dev/null |
       while read -r commit ctime; do
         git -C "$src" show "$commit:$m_managed" 2>/dev/null |
-          jq -c --argjson t "$ctime" 'select(type == "object") | {time:$t,doc:.}' >>"$work/versions" 2>/dev/null || :
+          jq -c --argjson t "$ctime" --arg c "$commit" 'select(type == "object") | {time:$t,commit:$c,doc:.}' >>"$work/versions" 2>/dev/null || :
       done
     [ -s "$work/versions" ] || continue
     m_truncated=false
@@ -257,14 +257,19 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
       | select($lv != ($uf[$p] // "#absent"))
       | select(($hist | map(.[$p] // "#absent") | index($lv)) == null)
       | ([range(0; ($hist | length) - 1) | select(($hist[.][$p] // "#absent") != ($hist[. + 1][$p] // "#absent"))]
-          | if length > 0 then $vs[.[0]].time else $vs[-1].time end) as $pt
-      | [$p, (if $lv == "#absent" then "removed" else "set" end), ($lv | @base64), ($pt | tostring),
-         (($p | fromjson)[0] as $k | $review | index($k) != null | tostring)] | @tsv
+          | if length > 0 then $vs[.[0]] else $vs[-1] end) as $pv
+      | [$p, (if $lv == "#absent" then "removed" else "set" end), ($lv | @base64), ($pv.time | tostring),
+         (($p | fromjson)[0] as $k | $review | index($k) != null | tostring), $pv.commit] | @tsv
     ' >"$work/managed-edits" 2>/dev/null || : >"$work/managed-edits"
     # An analyzed file is recorded even with no edits: its pending change is
     # then source-driven.
     : >"$work/managed-rows"
-    while IFS="$(printf '\t')" read -r m_path m_state m_value m_ptime m_isreview; do
+    while IFS="$(printf '\t')" read -r m_path m_state m_value m_ptime m_isreview m_pcommit; do
+      # Ancestry, not file mtimes (an app rewrites the whole file): the edit
+      # can only be current if this host's source already has the commit that
+      # last changed this entry upstream.
+      m_in_head=false
+      git -C "$src" merge-base --is-ancestor "$m_pcommit" HEAD 2>/dev/null && m_in_head=true
       if [ "$m_state" = removed ]; then
         m_sha=absent
       else
@@ -273,8 +278,9 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
         rm -f "$work/value"
       fi
       jq -cn --argjson path "$m_path" --arg state "$m_state" --arg sha "$m_sha" \
-        --argjson ptime "$m_ptime" --argjson review "$m_isreview" \
-        '{path:$path,state:$state,value_sha256:$sha,upstream_path_time:$ptime,review:$review}' >>"$work/managed-rows"
+        --argjson ptime "$m_ptime" --argjson review "$m_isreview" --argjson in_head "$m_in_head" \
+        '{path:$path,state:$state,value_sha256:$sha,upstream_path_time:$ptime,review:$review,
+          upstream_change_in_head:$in_head}' >>"$work/managed-rows"
     done <"$work/managed-edits"
     jq -cn --arg target "$m_target" --arg managed "$m_managed" --argjson mtime "$m_mtime" \
       --slurpfile edits "$work/managed-rows" --argjson truncated "$m_truncated" \

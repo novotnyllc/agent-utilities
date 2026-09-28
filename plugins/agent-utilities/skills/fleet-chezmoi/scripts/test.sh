@@ -575,6 +575,15 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   live_sha256:"u",base_sha256:"u",upstream_sha256:"u",live_mtime:300,source:"dot_f",kind:"plain",
   source_upstream_time:10,source_head_time:10}]}}}]' |
   jq -f "$here/classify.jq" >"$T/mode-only.json"
+# A managed entry whose last upstream change the origin's source lacks is
+# stale, however recently the app rewrote the file.
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},managed_json:[{target:".s.json",managed:"t.json",
+  live_mtime:900,history_truncated:false,edits:[{path:["theme"],state:"set",value_sha256:"v",upstream_path_time:10,
+  review:false,upstream_change_in_head:false}]}]}}]' |
+  jq -f "$here/classify.jq" >"$T/managed-stale.json"
+check "a managed edit over an unpulled upstream change is stale" \
+  [ "$(jq -r '.[0].decisions[0].decision' "$T/managed-stale.json")" = stale-base ]
 check "a mode-only change goes to a person" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 
@@ -589,7 +598,7 @@ jq -n '[
     live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u",base_sha256:"u"}]}}},
   {host:"m",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
     managed_json:[{target:".s.json",managed:"t.json",live_mtime:300,history_truncated:false,
-      edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false}]}]}}]' |
+      edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false,upstream_change_in_head:true}]}]}}]' |
   jq -f "$here/classify.jq" >"$T/identity.json"
 check "a mismatched host is excluded from origin decisions" \
   [ "$(jq -r '.[0] | [.class, .identity_verified] | join(",")' "$T/identity.json")" = capture,true ]
@@ -631,6 +640,7 @@ STUB
 printf '#!/bin/sh\nexit 0\n' >"$pc/bin/roundhouse"
 chmod +x "$pc/bin/claude" "$pc/bin/roundhouse"
 PC=$pc HOME=$pc/home PATH="$pc/bin:$PATH" sh "$here/converge-plugins.sh" >"$pc/out.json"
+check "the plugin result is one JSON line for last_json" [ "$(awk 'END {print NR}' "$pc/out.json")" = 1 ]
 check "enabled but missing plugins are installed" [ "$(jq -c '.installed | sort' "$pc/out.json")" = '["new@nm","want@mk"]' ]
 check "a disabled plugin is not installed" ! grep -q off@mk "$pc/install.log"
 check "a missing marketplace is registered from its declared source" [ "$(cat "$pc/add.log")" = owner/nm ]
