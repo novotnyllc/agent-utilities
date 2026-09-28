@@ -80,6 +80,10 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
          value: {
            decision: (
              if $source_time > $newest.live_mtime then "source-newer"
+             # The origin must have edited the upstream revision of the source:
+             # its HEAD blob must equal upstream's (commit times are only a
+             # fallback for records without blobs).
+             elif ($newest.source_head_blob // "") != ($newest.source_upstream_blob // "") then "stale-base"
              elif ($newest.source_head_time // 0) < ($newest.source_upstream_time // 0) then "stale-base"
              # Templates and modify_ scripts render per host, so their live
              # contents differ by design; compare digests only for plain files.

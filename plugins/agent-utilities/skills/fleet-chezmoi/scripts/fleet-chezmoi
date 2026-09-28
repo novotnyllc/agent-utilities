@@ -563,7 +563,9 @@ capture_apply() {
   if [ -z "$(git -C "$src" status --porcelain -- "${paths[@]}")" ]; then
     die "the captured files already match the source (a mode-only change needs a private_/executable_ rename)" 65
   fi
-  if git -C "$src" diff -U0 -- "${paths[@]}" | grep -E '^\+' | grep -Eiq -- "$secret_pattern"; then
+  # --text: a file with a NUL byte would otherwise diff as "Binary files
+  # differ" and hide its added lines from the scan.
+  if git -C "$src" diff --text -U0 -- "${paths[@]}" | grep -aE '^\+' | grep -aEiq -- "$secret_pattern"; then
     capture_restore
     die "a captured change looks like a secret; nothing was committed. Move it to a secret-manager template" 65
   fi
@@ -624,6 +626,16 @@ capture_json_item() {
   done < <(jq -c '.entries[]' <<<"$fetched")
   fetched=$(jq -c --argjson keep "$keep" '.entries = $keep' <<<"$fetched")
   [ "$(jq '.entries | length' <<<"$fetched")" -gt 0 ] || return 0
+  # A removal reaches other hosts only through the retired list: their modify_
+  # merge keeps any live key the template no longer names.
+  spec=$(jq -c --arg t "$path" '.managed_json[]? | select(.target == $t)' "$src/.fleet-chezmoi.json" 2>/dev/null || true)
+  retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
+  case $retired_rel in /*|*..*) retired_rel='' ;; esac
+  if jq -e 'any(.entries[]; .state == "removed")' <<<"$fetched" >/dev/null &&
+    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ]; }; then
+    printf 'fleet-chezmoi: %s removes entries but declares no existing retired file; nothing was captured\n' "$path" >&2
+    return 1
+  fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
   jq --indent 2 --argjson f "$fetched" 'reduce $f.entries[] as $e (.;
       if $e.state == "removed" then delpaths([$e.path])
@@ -631,10 +643,7 @@ capture_json_item() {
   cat "$tmp" >"$template"
   rm -f "$tmp"
   paths+=("$source")
-  spec=$(jq -c --arg t "$path" '.managed_json[]? | select(.target == $t)' "$src/.fleet-chezmoi.json" 2>/dev/null || true)
-  retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
   if [ -n "$retired_rel" ] && [ -f "$src/$retired_rel" ]; then
-    case $retired_rel in /*|*..*) return 1 ;; esac
     tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
     jq --indent 2 --argjson f "$fetched" 'reduce ($f.entries[] | select(.path | length == 2)) as $e (.;
         if $e.state == "removed" then .[$e.path[0]] = (((.[$e.path[0]] // []) + [$e.path[1]]) | unique)

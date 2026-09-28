@@ -51,7 +51,7 @@ Across all hosts, per file:
 | `capture` | The newest edit is newer than any upstream change to the source, every host that edited it holds the same content, the origin had pulled the latest change to that file, and the source is a plain file. | The origin host is `capture`; hosts that already hold the same content are `awaiting-capture`. `seal RUN capture` publishes it. |
 | published | The edit already equals the upstream file. | A pull resolves it. |
 | `source-newer` | Upstream changed the source after the edit. | The edit is stale. Overwriting it needs the owner (below). |
-| `stale-base` | The origin edited the file without the newer upstream change to its source. | Capturing would discard that change: pull there, then reconcile by hand. |
+| `stale-base` | The origin's source revision of the file differs from upstream's (compared by blob, not commit date), so it edited an older version. | Capturing would discard that change: pull there, then reconcile by hand. |
 | `competing` | Hosts hold different content. | The newest is proposed; a person decides. |
 | `capture-manual` | The origin's source is a template, `modify_` script, encrypted, or a sensitive path. | Edit the source by hand (below). |
 
@@ -87,7 +87,8 @@ review.
 Edits to different entries on different hosts are all captured in one set.
 The capture fetches only the approved entries, merges them into the template,
 and records a removed entry in the `retired` file, which the `modify_` script
-applies on every host.
+applies on every host. A removal from a file that declares no existing
+`retired` file is refused, since no other host could apply it.
 
 ## Decide per path
 

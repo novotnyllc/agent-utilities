@@ -180,13 +180,17 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
       symlink_*) kind=symlink ;;
       '') kind=unmapped ;;
     esac
-    upstream_time=0 head_time=0 upstream_sha=''
+    upstream_time=0 head_time=0 upstream_sha='' head_blob='' upstream_blob=''
     if [ -n "$source_file" ]; then
       head_time=$(git -C "$src" log -1 --format=%ct HEAD -- "$source_rel" 2>/dev/null || true)
       head_time=${head_time:-0}
+      # Revisions, not commit times, say whether this host edited the current
+      # upstream version of the source: rebases and skewed clocks reorder %ct.
+      head_blob=$(git -C "$src" rev-parse -q --verify "HEAD:$source_rel" 2>/dev/null || true)
       if [ -n "$upstream" ]; then
         upstream_time=$(git -C "$src" log -1 --format=%ct '@{u}' -- "$source_rel" 2>/dev/null || true)
         upstream_time=${upstream_time:-0}
+        upstream_blob=$(git -C "$src" rev-parse -q --verify "@{u}:$source_rel" 2>/dev/null || true)
         # For a plain source the upstream file is the target itself: an edit that
         # already equals it has been published and only needs a pull.
         if [ "$kind" = plain ] && git -C "$src" show "@{u}:$source_rel" >"$work/upstream-file" 2>/dev/null; then
@@ -197,9 +201,10 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
     fi
     jq -cn --arg path "$rel" --arg sha "$live_sha" --argjson mtime "$live_mtime" --arg source "$source_rel" \
       --arg kind "$kind" --argjson upstream_time "$upstream_time" --argjson head_time "$head_time" \
-      --arg upstream_sha "$upstream_sha" \
+      --arg upstream_sha "$upstream_sha" --arg head_blob "$head_blob" --arg upstream_blob "$upstream_blob" \
       '{path:$path,live_sha256:$sha,live_mtime:$mtime,source:$source,kind:$kind,
-        source_upstream_time:$upstream_time,source_head_time:$head_time,upstream_sha256:$upstream_sha}' >>"$work/edits"
+        source_upstream_time:$upstream_time,source_head_time:$head_time,upstream_sha256:$upstream_sha,
+        source_head_blob:$head_blob,source_upstream_blob:$upstream_blob}' >>"$work/edits"
   done
 edits_json=$(jq -sc '.' "$work/edits")
 

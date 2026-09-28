@@ -315,6 +315,16 @@ check "secret refusal is explained" grep -q "looks like a secret" "$T/apply.out"
 check "nothing was published" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
 check "the controller source was restored" [ -z "$(git -C "$src" status --porcelain)" ]
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
+# A NUL byte does not hide a secret: git would call the file binary.
+printf 'bin\000\nkey=AKIAABCDEFGHIJKLMNOP\n' >"$hosts/h2/.b"
+probe h1 h2
+"$fc" seal "$run" capture >"$T/seal.out"
+if "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1; then
+  fail "a secret in a binary capture was committed"
+fi
+check "a binary capture is scanned too" grep -q "looks like a secret" "$T/apply.out"
+check "nothing binary was published" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
 # 7j. managed JSON settings: fleet-wide keys of an app-written file
 mkdir -p "$T/pub/.chezmoitemplates"
 printf '%s\n' '{"theme":"dark","plugins":{"a@m":true},"env":{"X":"1"}}' | jq --indent 2 . >"$T/pub/.chezmoitemplates/app.json"
@@ -374,6 +384,24 @@ capture_now
 check "the removal is retired" [ "$(published app.retired.json '.plugins')" = '["a@m"]' ]
 sync_all
 check "the removal reached the other host" [ "$(jq -r '.plugins | has("a@m")' "$HOME/.app.json")" = false ]
+
+# Without a retired file a removal could not reach other hosts: refused.
+jq 'del(.managed_json[0].retired)' "$T/pub/.fleet-chezmoi.json" >"$T/fc.json" && mv "$T/fc.json" "$T/pub/.fleet-chezmoi.json"
+git -C "$T/pub" commit -qam "no retired file" && git -C "$T/pub" push -q origin main
+sync_all
+setjson "$hosts/h2/.app.json" 'del(.env.X)'
+probe h1 h2
+"$fc" seal "$run" capture >"$T/seal.out"
+before=$(git -C "$T/origin.git" rev-parse main)
+if "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1; then
+  fail "a removal was published with no retired file"
+fi
+check "a removal needs a retired file" grep -q "declares no existing retired file" "$T/apply.out"
+check "nothing was published without one" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+git -C "$T/pub" revert --no-edit HEAD >/dev/null && git -C "$T/pub" push -q origin main
+check "the retired file is declared again" jq -e '.managed_json[0].retired' "$T/pub/.fleet-chezmoi.json" >/dev/null
+sync_all
 
 # Different entries changed on different hosts are both captured in one set.
 setjson "$HOME/.app.json" '.theme = "blue"'
@@ -528,6 +556,15 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   jq -f "$here/classify.jq" >"$T/stale-base.json"
 check "capturing over an unpulled upstream change is refused" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/stale-base.json")" = review,stale-base ]
+# Revisions decide, not commit times: a rebased upstream commit can carry an
+# older date than the host's.
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"b",behind:1},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
+  live_sha256:"d1",live_mtime:300,source:"dot_f",kind:"plain",source_upstream_time:100,source_head_time:200,
+  source_head_blob:"old",source_upstream_blob:"new"}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/stale-blob.json"
+check "an older source revision is stale whatever the dates say" \
+  [ "$(jq -r '.[0].decisions[0].decision' "$T/stale-blob.json")" = stale-base ]
 
 # 17. a mismatched host never steers another host's decision; removing a whole
 # fleet-wide key is a decision for a person
