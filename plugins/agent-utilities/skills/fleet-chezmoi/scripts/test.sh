@@ -337,6 +337,30 @@ probe h1 h2
 check "a template edit needs a hand edit of the source" [ "$(jq -r '.[] | select(.host == "h2") | .decisions[0].decision' "$run/classes.json")" = capture-manual ]
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.greeting"
 
+# An unexpected failure mid-staging leaves the controller source clean.
+printf 'a-mid\n' >"$hosts/h2/.a"; printf 'b-mid\n' >"$hosts/h2/.b"
+probe h1 h2
+"$fc" seal "$run" capture >"$T/seal.out"
+mkdir -p "$T/failbin"
+cat >"$T/failbin/mktemp" <<'MKTEMP'
+#!/bin/sh
+case "$*" in
+  *fleet-chezmoi-capture*)
+    n=$(($(cat "$FAIL_COUNT" 2>/dev/null || echo 0) + 1)); echo "$n" >"$FAIL_COUNT"
+    [ "$n" -lt 2 ] || exit 1 ;;
+esac
+exec /usr/bin/mktemp "$@"
+MKTEMP
+chmod +x "$T/failbin/mktemp"
+before=$(git -C "$T/origin.git" rev-parse main)
+if FAIL_COUNT=$T/failcount PATH="$T/failbin:$PATH" "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1; then
+  fail "a capture that failed mid-staging succeeded"
+fi
+check "the second item really failed after the first was staged" [ "$(cat "$T/failcount")" = 2 ]
+check "a failed staging leaves the controller source clean" [ -z "$(git -C "$src" status --porcelain)" ]
+check "a failed staging publishes nothing" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.a" "$hosts/h2/.b"
+
 # A change that looks like a secret is never committed.
 printf 'key=AKIAABCDEFGHIJKLMNOP\n' >"$hosts/h2/.b"
 probe h1 h2
@@ -379,6 +403,8 @@ sync_all() {
   chezmoi git -- pull -q --ff-only; chezmoi apply --no-tty
   h2 chezmoi git -- pull -q --ff-only; h2 chezmoi apply --no-tty
   git -C "$T/pub" pull -q --ff-only
+  # A pull and an edit in the same second cannot be ordered (and are refused).
+  sleep 1
 }
 capture_now() {
   "$fc" seal "$run" capture >"$T/seal.out" || { cat "$T/seal.out"; fail "capture seal failed"; return; }

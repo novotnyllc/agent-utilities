@@ -562,8 +562,14 @@ capture_apply() {
   [ -z "$(git -C "$src" status --porcelain)" ] || die "the local source changed since the capture was sealed" 65
   [ "$(git -C "$src" rev-parse HEAD)" = "$(jq -r '.controller_head' "$set_dir/set.json")" ] ||
     die "the local source moved since the capture was sealed; re-probe" 65
-  # Only files this run wrote are ever restored, and the tree was clean.
-  capture_restore() { [ "${#paths[@]}" -eq 0 ] || git -C "$src" checkout -q -- "${paths[@]}"; }
+  # The tree was clean when staging began, so restoring every tracked change
+  # (captures only write tracked files) undoes exactly this run's staging, even
+  # a half-written file. An exit trap covers failures that skip the explicit
+  # restores below; it is cleared once the commit exists.
+  capture_restore() { git -C "$src" checkout -q -- . 2>/dev/null || :; }
+  # The path is baked in: an errexit unwinds this function's locals first.
+  # shellcheck disable=SC2064
+  trap "git -C $(printf '%q' "$src") checkout -q -- . 2>/dev/null || :" EXIT
   while IFS= read -r item; do
     host=$(jq -r '.host' <<<"$item")
     path=$(jq -r '.path' <<<"$item")
@@ -615,6 +621,7 @@ capture_apply() {
   git -C "$src" commit -q -m "chore: capture ${#paths[@]} change(s) from $hosts" \
     -m "$(jq -r '.items[] | "- \(.path) from \(.host), edited \(.mtime | todate)"' "$set_dir/set.json")" \
     -- "${paths[@]}" || { capture_restore; die "commit failed" 70; }
+  trap - EXIT
   git -C "$src" push -q ||
     die "committed $(git -C "$src" rev-parse --short HEAD) locally but the push failed; push it by hand" 70
   printf 'published %s: %s\n' "$(git -C "$src" rev-parse --short HEAD)" "${paths[*]}"
