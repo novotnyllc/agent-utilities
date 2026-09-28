@@ -554,6 +554,23 @@ check "the nested credential was not published" [ "$(published app.json '.env | 
 check "the secret never appears in run records" ! grep -rq sk-abcdefghijklmnopqrstuvwxyz0123 "$run"
 sync_all
 check "no secret in managed-settings records" no_secret "$run"
+# An app that rewrites an object value with its keys in another order changed
+# nothing; a real change to an object value still captures, digest intact.
+# (The held-back secret entries above never left h2; clear them first.)
+setjson "$hosts/h2/.app.json" 'del(.env.OPENAI_API_KEY, .env.token)'
+setjson "$T/pub/.chezmoitemplates/app.json" '.markets = {"m": {"source": "x", "auto": true}}'
+jq --indent 2 . "$T/pub/.chezmoitemplates/app.json" >"$T/app.fmt" && mv "$T/app.fmt" "$T/pub/.chezmoitemplates/app.json"
+git -C "$T/pub" commit -qam "object value" && git -C "$T/pub" push -q origin main
+sync_all
+setjson "$hosts/h2/.app.json" '.markets.m = {"auto": true, "source": "x"}'
+probe h1 h2
+check "a key-order-only rewrite of an object value is in sync" [ "$(class_of "$run" h2)" = in-sync ]
+setjson "$hosts/h2/.app.json" '.markets.m = {"auto": false, "source": "x"}'
+probe h1 h2
+check "a changed object value makes its host the origin" [ "$(class_of "$run" h2)" = capture ]
+capture_now
+check "the changed object value was published" [ "$(published app.json '.markets.m.auto')" = false ]
+sync_all
 # An upstream commit dated before its parent is still the newest: revision
 # order, not dates, says which change a host has.
 setjson "$T/pub/.chezmoitemplates/app.json" '.theme = "tip"'

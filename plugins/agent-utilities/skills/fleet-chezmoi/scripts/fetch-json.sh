@@ -69,7 +69,10 @@ while IFS= read -r entry; do
       if ($p | length) == 1 then has($p[0])
       else (.[$p[0]] | type) == "object" and (.[$p[0]] | has($p[1])) end' "$live" >/dev/null 2>&1 ||
       fail "an approved entry is no longer present"
-    jq -c --argjson p "$path" 'getpath($p) | tojson' "$live" | jq -r . >"$work/value" ||
+    # The same canonical form (keys sorted) the probe digested.
+    jq -c --argjson p "$path" 'def canon: if type == "object" then to_entries | sort_by(.key) | map(.value |= canon) | from_entries
+        elif type == "array" then map(canon) else . end;
+      getpath($p) | canon | tojson' "$live" | jq -r . >"$work/value" ||
       fail "cannot read an approved entry"
     printf '%s' "$(cat "$work/value")" >"$work/value.raw"
     [ "$(sha_file "$work/value.raw")" = "$(printf '%s' "$entry" | jq -r '.digest')" ] ||
