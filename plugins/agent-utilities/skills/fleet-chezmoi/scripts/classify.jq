@@ -85,6 +85,25 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
            source: $newest.source, kind: $newest.kind, source_time: $source_time,
            hosts: map(.host)}})
   | from_entries) as $decisions
+# Managed JSON settings: per (file, entry) across hosts. Only entries a host
+# changed (its value matches no published version) take part.
+| ($records | map(.host as $h | (.probe.managed_json // [])[] | . as $m
+    | .edits[] | . + {host: $h, target: $m.target, managed: $m.managed, live_mtime: $m.live_mtime}) | flatten
+  | group_by([.target, (.path | tojson)])
+  | map(
+      (max_by(.live_mtime)) as $newest
+      | (map(.value_sha256) | unique) as $values
+      | {key: ([.[0].target, (.[0].path | tojson)] | tojson),
+         value: {
+           decision: (
+             if $newest.upstream_path_time > $newest.live_mtime then "source-newer"
+             elif any(.[]; .review) then "capture-manual"
+             elif ($values | length) > 1 then "competing"
+             else "capture" end),
+           origin: $newest.host, mtime: $newest.live_mtime, source: $newest.managed, kind: "managed-json",
+           source_time: $newest.upstream_path_time, target: $newest.target, entry: $newest.path,
+           state: $newest.state, digest: $newest.value_sha256, hosts: map(.host)}})
+  | from_entries) as $mdecisions
 # Plugin baselines: what any host has installed from the marketplaces the fleet
 # declares for that harness, and the newest version seen.
 | ([$records[] | .probe.plugins // {} | keys[]] | unique) as $harnesses
@@ -101,6 +120,15 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   . as $r
   | ($r.probe // {}) as $p
   | ($p.status.json_key_order_only // []) as $keyorder
+  # This host's managed-settings edits, each with its fleet decision.
+  | [ ($p.managed_json // [])[] | . as $m | .edits[]
+      | $mdecisions[([$m.target, (.path | tojson)] | tojson)] + {mine: .} ] as $medits
+  | ($medits | map(.target) | unique) as $mtargets
+  | ( [ $medits[] | if .decision != "capture" then "conflict"
+        elif .origin == $r.host then "capture" else "captured-elsewhere" end ]
+      | if index("conflict") != null then "managed-conflict"
+        elif index("capture") != null then "capture"
+        elif length > 0 then "captured-elsewhere" else null end ) as $mkind
   | [ ($p.status.lines // [])[]
       | . as $l
       | ($decisions[$l.path] // null) as $d
@@ -110,6 +138,9 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
           elif $l.live == " " then
             (if ($l.path | sensitive_path) then "sensitive"
              elif $l.target == "R" then "run-script" else "source-driven" end)
+          elif ($mtargets | index($l.path)) != null then
+            (if $mkind == "managed-conflict" then "managed-review" else $mkind end)
+          elif ([($p.managed_json // [])[].target] | index($l.path)) != null then "stale-live-edit"
           elif ($keyorder | index($l.path)) != null then "json-key-order"
           elif ($published | index("\($r.host)\t\($l.path)")) != null then "published"
           elif $d == null then "live-edit"
@@ -178,7 +209,12 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
         | reason("external-local-changes"; "\(.path): \(.state); stop, do not reset"))
     ] as $blockers
   | ($lines | map(select(.kind | IN("live-edit","json-key-order","deletion","sensitive",
-      "stale-live-edit","competing-edit","capture-manual","stale-base")))) as $conflicts
+      "stale-live-edit","competing-edit","capture-manual","stale-base","managed-review")))) as $conflicts
+  # A managed-settings edit can exist with no status line at all (an added map
+  # entry survives the merge), so the host's own edits decide too.
+  | ([ $medits[] | select(.decision != "capture") | .target ] | unique) as $mconflict_targets
+  | (($conflicts | map(.path)) + $mconflict_targets | unique) as $conflict_paths
+  | ([ $medits[] | select(.decision == "capture" and .origin == $r.host) ]) as $mcaptures
   | {
       host: $r.host,
       transport: $r.transport,
@@ -186,10 +222,11 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
         if $r.transport == "codex-remote-control" or $r.transport == "windows" then "unsupported"
         elif $r.probe == null or ($p.error // null) != null then "unreachable"
         elif $r.expected != null and ($r.expected.hostname != $p.identity.hostname or $r.expected.user != $p.identity.user) then "identity-mismatch"
-        elif ($blockers | length) > 0 or ($conflicts | length) > 0 then "review"
-        elif any($lines[]; .kind == "capture") then "capture"
+        elif ($blockers | length) > 0 or ($conflict_paths | length) > 0 then "review"
+        elif any($lines[]; .kind == "capture") or ($mcaptures | length) > 0 then "capture"
         elif ($p.source.behind // 0) > 0 then "pull"
-        elif any($lines[]; .kind == "captured-elsewhere" or .kind == "published") then "awaiting-capture"
+        elif any($lines[]; .kind == "captured-elsewhere" or .kind == "published")
+          or any($medits[]; .decision == "capture") then "awaiting-capture"
         elif ($lines | map(select(.kind != "benign")) | length) == 0 then "in-sync"
         else "apply" end),
       error: ($r.error // $p.error // null),
@@ -198,17 +235,24 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       status_digest: ($p.status.digest // null),
       diff_digest: ($p.status.diff_digest // null),
       pending: ($lines | group_by(.kind) | map({key:.[0].kind,value:(map(.path))}) | from_entries),
-      captures: [ $lines[] | select(.kind == "capture") | .path as $path | $decisions[$path]
-        | {path: $path, source, digest, mtime} ],
-      decisions: [ $lines[] | select(.kind | IN("stale-live-edit","competing-edit","capture-manual","stale-base","captured-elsewhere"))
-        | .path as $path | $decisions[$path] + {path: $path}
+      captures: ([ $lines[] | select(.kind == "capture" and (.path as $pp | $mtargets | index($pp)) == null)
+        | .path as $path | $decisions[$path]
+        | {type: "file", path: $path, source, digest, mtime} ]
+        + ($mcaptures | group_by(.target) | map({type: "json", path: .[0].target, source: .[0].source,
+            mtime: .[0].mtime, entries: map({path: .entry, state, digest})}))),
+      decisions: ([ $lines[] | select(.kind | IN("stale-live-edit","competing-edit","capture-manual","stale-base","captured-elsewhere"))
+        | select((.path as $pp | $mtargets | index($pp)) == null)
+        | .path as $path | $decisions[$path] + {path: $path} ]
+        + [ $medits[] | . + {path: "\(.target) \(.entry | join("."))"} ])
+        | map(.
         | . + {summary: (
             if .decision == "source-newer" then "upstream changed \(.source) at \(when(.source_time)), after this edit at \(when(.mtime)); overwriting it needs the owner"
             elif .decision == "competing" then "different edits on \(.hosts | join(", ")); newest is \(.origin) at \(when(.mtime)); a person decides"
+            elif .decision == "capture-manual" and .kind == "managed-json" then "\(.origin) changed it at \(when(.mtime)); this key is reviewed by hand before it is published"
             elif .decision == "capture-manual" then "\(.origin) changed it at \(when(.mtime)); \(.source) is a \(.kind) source, so edit it by hand"
             elif .decision == "stale-base" then "\(.origin) changed it at \(when(.mtime)) without the newer upstream change to \(.source); pull there, then reconcile"
-            else "\(.origin) publishes this change (edited at \(when(.mtime)))" end)} ],
-      conflicts: ($conflicts | map(.path)),
+            else "\(.origin) publishes this change (edited at \(when(.mtime)))" end)}),
+      conflicts: $conflict_paths,
       blockers: $blockers,
       findings: $findings
     }

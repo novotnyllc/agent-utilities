@@ -203,6 +203,74 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
   done
 edits_json=$(jq -sc '.' "$work/edits")
 
+# --- managed JSON settings (fleet-wide keys of app-written files) --------------
+# A source repository can declare, in .fleet-chezmoi.json, app-written JSON
+# files whose modify_ script merges a plain JSON template of fleet-wide keys.
+# For each such file, compare this host's values for those keys (one level into
+# objects) with every recent published version of the template. A value that
+# matches some published version is just behind; one that matches none was
+# edited here. Only paths, states, times, and value digests leave this host.
+: >"$work/managed"
+if [ -f "$src/.fleet-chezmoi.json" ]; then
+  ref=HEAD
+  [ -z "$upstream" ] || ref='@{u}'
+  jq -c '.managed_json[]?' "$src/.fleet-chezmoi.json" 2>/dev/null >"$work/managed-specs" || : >"$work/managed-specs"
+  while IFS= read -r spec; do
+    m_target=$(printf '%s' "$spec" | jq -r '.target // empty')
+    m_managed=$(printf '%s' "$spec" | jq -r '.managed // empty')
+    m_review=$(printf '%s' "$spec" | jq -c '.review_keys // []')
+    case $m_target$m_managed in *..*|/*) continue ;; esac
+    m_live=$dest/$m_target
+    [ -n "$m_target" ] && [ -n "$m_managed" ] && [ -f "$m_live" ] && [ ! -L "$m_live" ] || continue
+    jq -e 'type == "object"' "$m_live" >/dev/null 2>&1 || continue
+    : >"$work/versions"
+    git -C "$src" log --format='%H %ct' -n 20 "$ref" -- "$m_managed" 2>/dev/null |
+      while read -r commit ctime; do
+        git -C "$src" show "$commit:$m_managed" 2>/dev/null |
+          jq -c --argjson t "$ctime" 'select(type == "object") | {time:$t,doc:.}' >>"$work/versions" 2>/dev/null || :
+      done
+    [ -s "$work/versions" ] || continue
+    m_mtime=$(stat -c %Y "$m_live" 2>/dev/null || stat -f %m "$m_live" 2>/dev/null || printf '0')
+    jq -rn --slurpfile v "$work/versions" --slurpfile l "$m_live" --argjson review "$m_review" '
+      def flat: to_entries | map(
+        if (.value | type) == "object" then
+          (.key as $k | .value | to_entries | map({key: ([$k, .key] | tojson), value: (.value | tojson)}))
+        else [{key: ([.key] | tojson), value: (.value | tojson)}] end) | add // [] | from_entries;
+      ($v | sort_by(-.time)) as $vs
+      | ($vs | map(.doc | flat)) as $hist
+      | ($vs[0].doc | keys) as $keys
+      | ($l[0] | with_entries(select(.key as $k | $keys | index($k) != null)) | flat) as $lf
+      | ($hist[0]) as $uf
+      | ([$lf, $uf] | map(keys) | add | unique)[] as $p
+      | ($lf[$p] // "#absent") as $lv
+      | select($lv != ($uf[$p] // "#absent"))
+      | select(($hist | map(.[$p] // "#absent") | index($lv)) == null)
+      | ([range(0; ($hist | length) - 1) | select(($hist[.][$p] // "#absent") != ($hist[. + 1][$p] // "#absent"))]
+          | if length > 0 then $vs[.[0]].time else $vs[-1].time end) as $pt
+      | [$p, (if $lv == "#absent" then "removed" else "set" end), ($lv | @base64), ($pt | tostring),
+         (($p | fromjson)[0] as $k | $review | index($k) != null | tostring)] | @tsv
+    ' >"$work/managed-edits" 2>/dev/null || : >"$work/managed-edits"
+    [ -s "$work/managed-edits" ] || continue
+    : >"$work/managed-rows"
+    while IFS="$(printf '\t')" read -r m_path m_state m_value m_ptime m_isreview; do
+      if [ "$m_state" = removed ]; then
+        m_sha=absent
+      else
+        printf '%s' "$m_value" | base64 --decode >"$work/value" 2>/dev/null
+        m_sha=$(sha_file "$work/value")
+        rm -f "$work/value"
+      fi
+      jq -cn --argjson path "$m_path" --arg state "$m_state" --arg sha "$m_sha" \
+        --argjson ptime "$m_ptime" --argjson review "$m_isreview" \
+        '{path:$path,state:$state,value_sha256:$sha,upstream_path_time:$ptime,review:$review}' >>"$work/managed-rows"
+    done <"$work/managed-edits"
+    jq -cn --arg target "$m_target" --arg managed "$m_managed" --argjson mtime "$m_mtime" \
+      --slurpfile edits "$work/managed-rows" \
+      '{target:$target,managed:$managed,live_mtime:$mtime,edits:$edits}' >>"$work/managed"
+  done <"$work/managed-specs"
+fi
+managed_json=$(jq -sc '.' "$work/managed")
+
 # --- git-repo externals ------------------------------------------------------
 : >"$work/externals"
 chezmoi managed --include=externals --path-style=absolute 2>/dev/null |
@@ -408,9 +476,9 @@ status_json=$(jq -cn --argjson ok "$status_ok" --arg digest "$status_digest" \
     diff_digest:$diff_digest,json_key_order_only:$keyorder,edits:$edits}')
 
 jq -cn --argjson identity "$identity" --argjson login_shell "$login_shell" \
-  --arg dest "$dest" --argjson source "$source_json" --argjson status "$status_json" \
+  --arg dest "$dest" --argjson source "$source_json" --argjson status "$status_json" --argjson managed "$managed_json" \
   --argjson externals "$externals_json" --argjson umask "$umask_json" \
   --argjson sensitive "$sensitive_json" --argjson writers "$writers_json" --argjson plugins "$plugins_json" \
   '{schema:"fleet-chezmoi.probe",version:1,identity:$identity,login_shell:$login_shell,
-    dest:$dest,source:$source,status:$status,externals:$externals,umask:$umask,
+    dest:$dest,source:$source,status:$status,managed_json:$managed,externals:$externals,umask:$umask,
     sensitive_without_private:$sensitive,scheduled_source_writers:$writers,plugins:$plugins}'

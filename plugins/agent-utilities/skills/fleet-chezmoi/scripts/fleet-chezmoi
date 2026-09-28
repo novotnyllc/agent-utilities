@@ -499,7 +499,8 @@ capture_seal() {
   chmod 700 "$run/sets" "$set_dir"
   jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     {schema:"fleet-chezmoi.set",version:1,stage:"capture",created_at:$created,controller_head:$head,
-     items:([.[] | .host as $h | .captures[] | {host:$h,path,source,digest,mtime}] | sort_by(.path))}' \
+     items:([.[] | .host as $h | .captures[] | {host:$h,type:(.type // "file"),path,source,digest,mtime,entries}]
+       | sort_by(.path))}' \
     "$run/classes.json" >"$set_dir/set.json"
   chmod 600 "$set_dir/set.json"
   [ "$(jq '.items | length' "$set_dir/set.json")" -gt 0 ] || die "no host is the origin of a change to capture" 65
@@ -507,7 +508,8 @@ capture_seal() {
     case $source in ''|/*|-*|..|../*|*/../*|*/..) die "unsafe source path in capture: $source" 65 ;; esac
     [ -f "$src/$source" ] && [ ! -L "$src/$source" ] || die "capture source is not a plain file here: $source" 65
   done < <(jq -r '.items[].source' "$set_dir/set.json")
-  jq -r '.items[] | ["capture", .path, "from " + .host, "edited " + (.mtime | todate), "into " + .source] | @tsv' \
+  jq -r '.items[] | ["capture", .path + (if .type == "json" then " (" + (.entries | map((.path | join(".")) + (if .state == "removed" then " removed" else "" end)) | join(", ")) + ")" else "" end),
+      "from " + .host, "edited " + (.mtime | todate), "into " + .source] | @tsv' \
     "$set_dir/set.json" | table
   printf '%s %s\n' "$(set_id_of "$set_dir/set.json")" "$set_dir"
 }
@@ -527,6 +529,10 @@ capture_apply() {
     source=$(jq -r '.source' <<<"$item")
     digest=$(jq -r '.digest' <<<"$item")
     target=$src/$source
+    if [ "$(jq -r '.type' <<<"$item")" = json ]; then
+      capture_json_item "$item" || { capture_restore; exit 70; }
+      continue
+    fi
     fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch.sh" "$path" "$digest" \
       2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch) || fetched=''
     if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
@@ -567,6 +573,53 @@ capture_apply() {
   reprobe "$run"
 }
 
+capture_json_item() {
+  # Merge an origin host's changed entries into the managed JSON template and
+  # keep the retired list in step, so a removal reaches every host.
+  local item=$1 host path source template spec retired_rel entries fetched entry value_sha tmp
+  host=$(jq -r '.host' <<<"$item")
+  path=$(jq -r '.path' <<<"$item")
+  source=$(jq -r '.source' <<<"$item")
+  template=$src/$source
+  entries=$(jq -c '[.entries[] | {path, state, digest}]' <<<"$item")
+  fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch-json.sh" "$path" "$entries" \
+    2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch-json) || fetched=''
+  if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
+    printf 'fleet-chezmoi: could not fetch %s entries from %s: %s\n' "$path" "$host" \
+      "$(jq -r '.error // "no response"' <<<"${fetched:-null}" 2>/dev/null)" >&2
+    return 1
+  fi
+  # Every set value must still match the digest that was approved.
+  while IFS= read -r entry; do
+    value_sha=$(jq -r '.b64' <<<"$entry" | base64 --decode | sha256_stream)
+    [ "$value_sha" = "$(jq -r --argjson p "$(jq -c '.path' <<<"$entry")" \
+      '.entries[] | select(.path == $p) | .digest' <<<"$item")" ] || {
+      printf 'fleet-chezmoi: an entry of %s from %s did not match its approved digest\n' "$path" "$host" >&2
+      return 1
+    }
+  done < <(jq -c '.entries[] | select(.state == "set")' <<<"$fetched")
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
+  jq --indent 2 --argjson f "$fetched" 'reduce $f.entries[] as $e (.;
+      if $e.state == "removed" then delpaths([$e.path])
+      else setpath($e.path; ($e.b64 | @base64d | fromjson)) end)' "$template" >"$tmp" || { rm -f "$tmp"; return 1; }
+  cat "$tmp" >"$template"
+  rm -f "$tmp"
+  paths+=("$source")
+  spec=$(jq -c --arg t "$path" '.managed_json[]? | select(.target == $t)' "$src/.fleet-chezmoi.json" 2>/dev/null || true)
+  retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
+  if [ -n "$retired_rel" ] && [ -f "$src/$retired_rel" ]; then
+    case $retired_rel in /*|*..*) return 1 ;; esac
+    tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
+    jq --indent 2 --argjson f "$fetched" 'reduce ($f.entries[] | select(.path | length == 2)) as $e (.;
+        if $e.state == "removed" then .[$e.path[0]] = (((.[$e.path[0]] // []) + [$e.path[1]]) | unique)
+        else .[$e.path[0]] = ((.[$e.path[0]] // []) - [$e.path[1]]) end)' "$src/$retired_rel" >"$tmp" ||
+      { rm -f "$tmp"; return 1; }
+    cat "$tmp" >"$src/$retired_rel"
+    rm -f "$tmp"
+    paths+=("$retired_rel")
+  fi
+}
+
 plugins_command() {
   # plugins RUN [HOST...] — run Roundhouse's plugin convergence on the hosts
   # with plugin findings (or the named ones), then re-probe them.
@@ -591,7 +644,8 @@ plugins_command() {
   done
   await_workers plugin_failed
   for host in "$@"; do
-    printf '%s\t%s\n' "$host" "$(jq -r 'if .ok then "converged" else "failed: " + (.error // "roundhouse fleet-run exited \(.exit)") end' \
+    printf '%s\t%s\n' "$host" "$(jq -r '(if .ok then "converged" else "failed: " + (.error // "roundhouse fleet-run exited \(.exit)") end)
+      + (if (.installed // []) | length > 0 then "; installed " + (.installed | join(", ")) else "" end)' \
       "$run/plugins/$host.json" 2>/dev/null || printf 'no result')"
   done | table
   printf 'verification probe:\n'

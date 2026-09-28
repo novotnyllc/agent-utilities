@@ -297,6 +297,88 @@ check "secret refusal is explained" grep -q "looks like a secret" "$T/apply.out"
 check "nothing was published" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
 check "the controller source was restored" [ -z "$(git -C "$src" status --porcelain)" ]
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
+# 7j. managed JSON settings: fleet-wide keys of an app-written file
+mkdir -p "$T/pub/.chezmoitemplates"
+printf '%s\n' '{"theme":"dark","plugins":{"a@m":true},"env":{"X":"1"}}' | jq --indent 2 . >"$T/pub/.chezmoitemplates/app.json"
+printf '{}\n' >"$T/pub/.chezmoitemplates/app.retired.json"
+printf '%s\n' '{"version":1,"managed_json":[{"target":".app.json","managed":".chezmoitemplates/app.json","retired":".chezmoitemplates/app.retired.json","review_keys":["env"]}]}' \
+  >"$T/pub/.fleet-chezmoi.json"
+cat >"$T/pub/modify_dot_app.json" <<'TMPL'
+{{- /* chezmoi:modify-template */ -}}
+{{- $current := dict -}}
+{{- if .chezmoi.stdin -}}{{- $current = fromJson .chezmoi.stdin -}}{{- end -}}
+{{- $managed := includeTemplate "app.json" . | fromJson -}}
+{{- $retired := includeTemplate "app.retired.json" . | fromJson -}}
+{{- range $key, $names := $retired -}}{{- if kindIs "map" (get $current $key) -}}{{- $section := get $current $key -}}{{- range $name := $names -}}{{- $_ := unset $section $name -}}{{- end -}}{{- end -}}{{- end -}}
+{{- $merged := mergeOverwrite $current $managed -}}
+{{- if and .chezmoi.stdin (eq (toJson (fromJson .chezmoi.stdin)) (toJson $merged)) -}}{{- .chezmoi.stdin -}}{{- else -}}{{- toPrettyJson $merged -}}{{- end -}}
+TMPL
+git -C "$T/pub" add -A && git -C "$T/pub" commit -qm "managed app settings" && git -C "$T/pub" push -q origin main
+sync_all() {
+  chezmoi git -- pull -q --ff-only; chezmoi apply --no-tty
+  h2 chezmoi git -- pull -q --ff-only; h2 chezmoi apply --no-tty
+  git -C "$T/pub" pull -q --ff-only
+}
+capture_now() {
+  "$fc" seal "$run" capture >"$T/seal.out" || { cat "$T/seal.out"; fail "capture seal failed"; return; }
+  "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1 ||
+    { cat "$T/apply.out"; fail "capture apply failed"; }
+}
+published() { git -C "$T/origin.git" show "main:.chezmoitemplates/$1" | jq -c "$2"; }
+setjson() { jq -c "$2" "$1" >"$1.new" && mv "$1.new" "$1"; }
+sync_all
+probe h1 h2
+check "managed settings start in sync" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = in-sync,in-sync ]
+
+# A changed value on h2 is captured from h2 into the template.
+setjson "$hosts/h2/.app.json" '.theme = "light"'
+probe h1 h2
+check "a changed managed value makes its host the origin" [ "$(class_of "$run" h2)" = capture ]
+capture_now
+check "the changed value was published" [ "$(published app.json .theme)" = '"light"' ]
+sync_all
+check "the other host took the change" [ "$(jq -r .theme "$HOME/.app.json")" = light ]
+
+# An entry added on h2 survives chezmoi's merge silently; it is still found.
+setjson "$hosts/h2/.app.json" '.plugins["b@m"] = true'
+check "chezmoi itself reports nothing" [ -z "$(h2 chezmoi status)" ]
+probe h1 h2
+check "an added entry is found anyway" [ "$(class_of "$run" h2)" = capture ]
+capture_now
+sync_all
+check "the added entry reached the other host" [ "$(jq -r '.plugins["b@m"]' "$HOME/.app.json")" = true ]
+
+# An entry removed on h2 is removed from the template and retired everywhere.
+setjson "$hosts/h2/.app.json" 'del(.plugins["a@m"])'
+probe h1 h2
+check "a removed entry makes its host the origin" [ "$(class_of "$run" h2)" = capture ]
+capture_now
+check "the removal is retired" [ "$(published app.retired.json '.plugins')" = '["a@m"]' ]
+sync_all
+check "the removal reached the other host" [ "$(jq -r '.plugins | has("a@m")' "$HOME/.app.json")" = false ]
+
+# Different entries changed on different hosts are both captured in one set.
+setjson "$HOME/.app.json" '.theme = "blue"'
+setjson "$hosts/h2/.app.json" '.plugins["c@m"] = true'
+probe h1 h2
+check "both hosts are origins of their own entries" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = capture,capture ]
+capture_now
+check "both changes were published together" [ "$(published app.json '[.theme, .plugins["c@m"]]')" = '["blue",true]' ]
+sync_all
+
+# The same entry changed differently on two hosts is a decision for a person.
+setjson "$HOME/.app.json" '.theme = "one"'
+setjson "$hosts/h2/.app.json" '.theme = "two"'
+probe h1 h2
+check "competing managed values need review" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = review,review ]
+chezmoi apply --no-tty --force -- "$HOME/.app.json"; h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+
+# A hand-reviewed key (env) is never captured automatically.
+setjson "$hosts/h2/.app.json" '.env.X = "2"'
+probe h1 h2
+check "a review key needs a person" [ "$(jq -r '.[] | select(.host == "h2") | .decisions[0].decision' "$run/classes.json")" = capture-manual ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+check "no secret in managed-settings records" no_secret "$run"
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1
 
@@ -422,6 +504,33 @@ jq -n '[{host:"x",transport:"ssh",expected:null,error:null,probe:{identity:{},so
   jq -f "$here/classify.jq" >"$T/stale-base.json"
 check "capturing over an unpulled upstream change is refused" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/stale-base.json")" = review,stale-base ]
+
+# 16. plugin convergence installs what the synced settings enable, and only that
+pc=$T/plugin-host
+mkdir -p "$pc/bin" "$pc/home/.claude"
+printf '%s\n' '{"enabledPlugins":{"have@mk":true,"want@mk":true,"new@nm":true,"off@mk":false},
+  "extraKnownMarketplaces":{"nm":{"source":{"source":"github","repo":"owner/nm"}}}}' >"$pc/home/.claude/settings.json"
+printf '[{"id":"have@mk"}]\n' >"$pc/installed.json"
+printf '[{"name":"mk"}]\n' >"$pc/markets.json"
+cat >"$pc/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$1 $2 ${3:-}" in
+  "plugin list --json") cat "$PC/installed.json" ;;
+  "plugin marketplace list") cat "$PC/markets.json" ;;
+  "plugin marketplace add") printf '%s\n' "$4" >>"$PC/add.log"
+    jq -c '. + [{name:"nm"}]' "$PC/markets.json" >"$PC/m.new" && mv "$PC/m.new" "$PC/markets.json" ;;
+  plugin\ install\ *) printf '%s\n' "$3" >>"$PC/install.log"
+    jq -c --arg id "$3" '. + [{id:$id}]' "$PC/installed.json" >"$PC/i.new" && mv "$PC/i.new" "$PC/installed.json" ;;
+  *) exit 64 ;;
+esac
+STUB
+printf '#!/bin/sh\nexit 0\n' >"$pc/bin/roundhouse"
+chmod +x "$pc/bin/claude" "$pc/bin/roundhouse"
+PC=$pc HOME=$pc/home PATH="$pc/bin:$PATH" sh "$here/converge-plugins.sh" >"$pc/out.json"
+check "enabled but missing plugins are installed" [ "$(jq -c '.installed | sort' "$pc/out.json")" = '["new@nm","want@mk"]' ]
+check "a disabled plugin is not installed" ! grep -q off@mk "$pc/install.log"
+check "a missing marketplace is registered from its declared source" [ "$(cat "$pc/add.log")" = owner/nm ]
+check "convergence reports success" [ "$(jq -r .ok "$pc/out.json")" = true ]
 
 check "no secret anywhere in run records" no_secret "$run"
 

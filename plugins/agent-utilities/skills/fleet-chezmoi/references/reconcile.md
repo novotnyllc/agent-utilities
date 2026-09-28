@@ -59,6 +59,32 @@ Timestamps choose between edits only after content, upstream history, and the
 source kind agree; they never override a newer upstream change or a
 disagreement between hosts.
 
+### Managed settings files
+
+A file an app rewrites (Claude Code's `settings.json`) is managed by a
+`modify_` script that merges a plain JSON template of fleet-wide keys into the
+host's file. Declare it in the source's `.fleet-chezmoi.json`:
+
+```json
+{"version": 1, "managed_json": [{"target": ".claude/settings.json",
+  "managed": ".chezmoitemplates/claude-code-settings.json",
+  "retired": ".chezmoitemplates/claude-code-settings.retired.json",
+  "review_keys": ["env"]}]}
+```
+
+The probe compares each host's values for the template's keys, one level into
+objects (so each plugin or marketplace entry counts separately), with the last
+20 published versions of the template. A value that matches a published
+version means the host is behind; the apply fixes it. A value that matches
+none is an edit, even when chezmoi reports nothing (an added entry survives
+the merge). Per entry, across hosts, the same rules apply: newest edit newer
+than upstream and agreed by every host is captured; different values are a
+decision; `review_keys` (secrets can live in `env`) are always hand-reviewed.
+Edits to different entries on different hosts are all captured in one set.
+The capture fetches only the approved entries, merges them into the template,
+and records a removed entry in the `retired` file, which the `modify_` script
+applies on every host.
+
 ## Decide per path
 
 - **Capture (automatic)**: `"$FC" seal RUN capture` lists each file, its

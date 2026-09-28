@@ -44,6 +44,10 @@ source, and the classifier works out per file where each change came from.
      `"$FC" seal RUN capture`, show the user what is captured from where, get
      one approval, then `"$FC" apply RUN SET-ID`. It copies each file from its
      origin into the local source, secret-scans, commits, pushes, and re-probes.
+     App-written settings declared in the source's `.fleet-chezmoi.json` (for
+     example Claude's `settings.json`) are captured per entry: a changed,
+     added, or removed entry is merged into the template from the host that
+     changed it, and removals reach every host through the retired list.
    - `pull`: clean source strictly behind upstream. `"$FC" seal RUN pull`,
      then `"$FC" apply RUN SET-ID`; no live file changes, so the sync request
      covers it.
@@ -56,18 +60,13 @@ source, and the classifier works out per file where each change came from.
      blockers, follow [reconcile](references/reconcile.md).
    - `in-sync`: nothing to do. `identity-mismatch`, `unreachable`: stop for
      that host and report. `unsupported`: see Windows below.
-3. Plugin findings: `"$FC" plugins RUN` runs Roundhouse's own plugin
-   convergence on those hosts now (it also runs every 20 minutes).
+3. Plugin findings: `"$FC" plugins RUN` runs Roundhouse's plugin convergence
+   on those hosts now (it also runs every 20 minutes) and installs any Claude
+   plugin the synced settings enable but the host lacks.
 4. Report the final table, every `decide` line, and every finding.
 
-The classifier allows `apply` only when every `chezmoi status` line shows no
-live edit since chezmoi last wrote it (first column blank), and none is a
-deletion or sensitive path. Seal requires Roundhouse's own inventory to match
-the probed HEAD and status digest; the backup step and the executor each
-recheck that digest before mutating. A capture copies only plain source files
-whose content still matches the approved digest, and never commits anything
-that looks like a secret. See
-[reconcile](references/reconcile.md#why-the-fast-path-is-safe).
+Why each step is safe, and how origins are decided:
+[reconcile](references/reconcile.md).
 
 ## Blockers and findings
 
