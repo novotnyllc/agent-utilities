@@ -445,7 +445,13 @@ setjson "$hosts/h2/.app.json" '.theme = "mine"'
 probe h1 h2
 check "an edit that lacks a backdated upstream change is stale" \
   [ "$(jq -r '.[] | select(.host == "h2") | .decisions[] | select(.entry == ["theme"]) | .decision' "$run/classes.json")" = stale-base ]
-h2 chezmoi git -- pull -q --ff-only; h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+# Pulling it without applying does not make the older edit current.
+sleep 1
+h2 chezmoi git -- pull -q --ff-only
+probe h1 h2
+check "an edit that predates an unapplied pull is stale" \
+  [ "$(jq -r '.[] | select(.host == "h2") | .decisions[] | select(.entry == ["theme"]) | .decision' "$run/classes.json")" = stale-base ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
 sync_all
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1
@@ -602,6 +608,14 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   jq -f "$here/classify.jq" >"$T/managed-stale.json"
 check "a managed edit over an unpulled upstream change is stale" \
   [ "$(jq -r '.[0].decisions[0].decision' "$T/managed-stale.json")" = stale-base ]
+# A verified content base outranks a skewed upstream commit date.
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
+  live_sha256:"d1",base_sha256:"u",upstream_sha256:"u",live_mtime:100,source:"dot_f",kind:"plain",
+  source_upstream_time:999999,source_head_time:999999,source_head_blob:"b",source_upstream_blob:"b"}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/skewed.json"
+check "a future-dated upstream commit does not block a verified base" \
+  [ "$(jq -r '.[0].class' "$T/skewed.json")" = capture ]
 check "a mode-only change goes to a person" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 

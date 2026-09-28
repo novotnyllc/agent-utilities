@@ -270,8 +270,19 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
       # Ancestry, not file mtimes (an app rewrites the whole file): the edit
       # can only be current if this host's source already has the commit that
       # last changed this entry upstream.
-      m_in_head=false
-      git -C "$src" merge-base --is-ancestor "$m_pcommit" HEAD 2>/dev/null && m_in_head=true
+      m_in_head=false m_arrived=0
+      if git -C "$src" merge-base --is-ancestor "$m_pcommit" HEAD 2>/dev/null; then
+        m_in_head=true
+        # When that change reached this checkout, on this host's own clock:
+        # the oldest reflog position (newest first) that already contains it.
+        # A pull after the file was last written was never applied to it.
+        m_arrived=$(git -C "$src" reflog --date=unix --format='%H %gd' -n 200 HEAD 2>/dev/null |
+          while read -r m_rh m_gd; do
+            git -C "$src" merge-base --is-ancestor "$m_pcommit" "$m_rh" 2>/dev/null || break
+            m_t=${m_gd#*@\{}; printf '%s\n' "${m_t%\}}"
+          done | tail -n 1)
+        case $m_arrived in ''|*[!0-9]*) m_arrived=0 ;; esac
+      fi
       if [ "$m_state" = removed ]; then
         m_sha=absent
       else
@@ -280,9 +291,9 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
         rm -f "$work/value"
       fi
       jq -cn --argjson path "$m_path" --arg state "$m_state" --arg sha "$m_sha" \
-        --argjson ptime "$m_ptime" --argjson review "$m_isreview" --argjson in_head "$m_in_head" \
+        --argjson ptime "$m_ptime" --argjson review "$m_isreview" --argjson in_head "$m_in_head" --argjson arrived "$m_arrived" \
         '{path:$path,state:$state,value_sha256:$sha,upstream_path_time:$ptime,review:$review,
-          upstream_change_in_head:$in_head}' >>"$work/managed-rows"
+          upstream_change_in_head:$in_head,upstream_change_arrived:$arrived}' >>"$work/managed-rows"
     done <"$work/managed-edits"
     jq -cn --arg target "$m_target" --arg managed "$m_managed" --argjson mtime "$m_mtime" \
       --slurpfile edits "$work/managed-rows" --argjson truncated "$m_truncated" \

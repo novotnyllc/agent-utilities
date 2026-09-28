@@ -86,7 +86,11 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       | {key: .[0].path,
          value: {
            decision: (
-             if $source_time > $newest.live_mtime then "source-newer"
+             # A verified content base outranks any commit date: the edit
+             # started from the current upstream bytes.
+             if ($newest.kind == "plain" and ($newest.upstream_sha256 // "") != ""
+                 and ($newest.base_sha256 // "") == $newest.upstream_sha256) | not
+               and $source_time > $newest.live_mtime then "source-newer"
              # The origin must have edited the upstream revision of the source:
              # its HEAD blob must equal upstream's (commit times are only a
              # fallback for records without blobs).
@@ -125,6 +129,9 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
              # The file's mtime covers every key, so it cannot date one entry:
              # the origin's source must contain the entry's last upstream change.
              elif ($newest.upstream_change_in_head // false) | not then "stale-base"
+             # The change reached the checkout after the file was last written
+             # (one host clock): it was pulled but never applied to this file.
+             elif ($newest.upstream_change_arrived // 0) > $newest.live_mtime then "stale-base"
              elif any(.[]; .review) then "capture-manual"
              # A value older than the retained history, or removing a whole
              # fleet-wide key, is a decision for a person.
