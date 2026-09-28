@@ -25,7 +25,8 @@ another host needs the Roundhouse CLI (`ROUNDHOUSE_CLI`, default
 - Targeted applies name 1-16 absolute paths under the target's home, with no
   flags or traversal.
 - Never ask for or relay a sudo or Administrator password.
-- Native Windows uses Codex remote control only; never fall back to WSL.
+- Native Windows work runs as native Windows processes only: over the WSL
+  interop lane or Codex remote control, never as WSL-side execution.
 
 ## Fast path
 
@@ -78,11 +79,19 @@ in [failure modes](references/failure-modes.md).
 
 ## Windows and privileged lanes
 
-Load these only when such a target is in scope. A native Windows target on
-`codex-remote-control` follows
-[Codex remote control](references/codex-remote-control.md); Claude reports it
-unsupported. Protected broker, SFTP, S4U profile-bundle, and privilege
-lifecycle work follows [privileged lanes](references/privileged-lanes.md).
+A native Windows machine with a `wsl_interop_via` sibling is on the fast path
+like any host (transport `interop`): the controller SSHes to the WSL sibling,
+which only launches Git for Windows `sh` by full path from `/mnt/c`, so every
+payload runs as a native process in the logged-in session, with its Entra
+token. It needs Git for Windows and a logged-in user (logoff stops WSL; the
+host then reads `unreachable`). Names compare case-insensitively, as
+Roundhouse's Windows executor does; mode and umask checks do not apply;
+`seal ... targets` and `reset` are refused there, and `apply` runs through
+Roundhouse's `apply-interop-plan` (Roundhouse 0.9.25 or later). Without a WSL
+sibling, a `codex-remote-control` target follows
+[Codex remote control](references/codex-remote-control.md), and Claude
+reports it `unsupported`. Protected broker, SFTP, S4U profile-bundle, and
+privilege lifecycle work follows [privileged lanes](references/privileged-lanes.md).
 
 ## Verify
 

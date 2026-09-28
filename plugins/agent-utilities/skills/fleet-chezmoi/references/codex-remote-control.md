@@ -1,8 +1,10 @@
 # Codex Desktop remote control
 
-Use this only for a machine whose configured transport is
-`codex-remote-control`, and use that transport for every operation here.
-Never substitute WSL, SSH, or another execution context.
+Use this only for a `codex-remote-control` machine that has no reachable
+`wsl_interop_via` sibling (that machine takes the fast path's interop lane),
+or for work that needs the Codex Desktop app surface. Use that transport for
+every operation here. Never substitute WSL-side execution, SSH, or another
+execution context.
 
 ## Task-control capability check
 

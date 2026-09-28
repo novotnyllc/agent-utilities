@@ -181,7 +181,8 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
       live_sha=$(sha_file "$live")
       live_mtime=$(stat -c %Y "$live" 2>/dev/null || stat -f %m "$live" 2>/dev/null || printf '0')
       live_size=$(wc -c <"$live" | tr -d ' ')
-      live_mode=$(stat -c %a "$live" 2>/dev/null || stat -f %Lp "$live" 2>/dev/null || true)
+      # Windows files have no POSIX mode; Git for Windows' stat invents one.
+      [ "$windows" = true ] || live_mode=$(stat -c %a "$live" 2>/dev/null || stat -f %Lp "$live" 2>/dev/null || true)
     else
       kind=not-a-file
     fi
