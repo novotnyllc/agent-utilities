@@ -21,7 +21,7 @@ readiness, machine administration, and UniFi in
 | --- | --- |
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
-| `fleet-chezmoi` | Reconcile chezmoi source and live-state drift with roundhouse when present. |
+| `fleet-chezmoi` | Probe a chezmoi fleet in one read-only batch, fast-path safe pulls and applies through roundhouse sealed plans, and reconcile only the paths that conflict. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
 | `fusion-parametric-design` | Design real parametric CAD in Autodesk Fusion as an expert operator over MCP. |
 | `instruments-profiling` | Profile macOS and iOS software with Instruments and `xctrace`. |

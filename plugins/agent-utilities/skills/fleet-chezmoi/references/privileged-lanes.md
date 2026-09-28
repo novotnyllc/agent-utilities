@@ -1,7 +1,26 @@
-# Protected enrollment and Windows SFTP operations
+# Privileged lanes
 
-This reference covers the owner-operated path from node identity preparation
-through enrollment, recovery, upgrade, and revocation. Agent commands prepare,
+Load this only for protected broker, Windows SFTP, S4U profile-bundle, or
+privilege-lifecycle work. Ordinary chezmoi sync never needs it.
+
+Use `roundhouse privilege-status HOST SNAPSHOT` and the shared protected
+vocabulary `prepare-privilege-identity`, `prepare-privilege-enrollment`,
+`verify-privilege-plan`, `submit-privilege-plan`, `lookup-privilege-result`,
+`preview-privilege-upgrade`, and `preview-privilege-revocation`; Codex and
+Claude use the same commands. Preserve every readiness/result state and never
+fall back through WSL, a shell, or a visible Codex task.
+
+For a readiness-advertised Windows profile action, render only the already
+authorized target-specific managed files into a private source root and build
+the payload with `roundhouse profile-bundle SPEC SOURCE-ROOT OUTPUT`. Codex
+and Claude must produce the same bundle bytes. Never include chezmoi secrets,
+secret-backed templates, credentials, installed plugin caches, arbitrary
+paths, or content outside the protected entry map. S4U runs logged off, with
+no network or encrypted-file access; use ordinary user-session reconciliation
+when those are required.
+
+The rest of this reference covers the owner-operated path from node identity
+preparation through enrollment, recovery, upgrade, and revocation. Agent commands prepare,
 inspect, submit closed requests, and retrieve public results. They never obtain
 or relay a sudo or Administrator password, accept a UAC prompt, activate a
 policy, or perform a real enrollment ceremony.
@@ -300,3 +319,45 @@ public trust, renew nodes, distribute the new KRL/trust generation, prove at
 least one owner-authorized path throughout, and only then remove the old CA.
 Losing or compromising the CA requires full-fleet replacement; it cannot be
 repaired by a plugin update.
+
+## Profile bundles and broker dispatch
+
+Build logged-off profile payloads with `roundhouse profile-bundle`.
+The builder compiles each destination's handler, artifact, manager, and logical
+identity; sorts destinations ordinally; binds the expected live presence,
+digest, and manager; and emits an uncompressed length-prefixed manifest and
+payload. It rejects case collisions, traversal, links, target-local overlays,
+credentials, caches, internal state, startup/task paths, and secret-backed
+templates. Caller identity is not serialized, so Codex and Claude callers
+produce identical bytes from identical inputs.
+
+The dedicated SFTP request SID and the non-elevated S4U profile target SID are
+different identities. Before staging a profile request, the controller
+revalidates the active protected token and its target SID, profile-root ID,
+entry-map digest, marketplace-set digest, deletion mode, entry cap, and byte
+cap from fresh readiness. It then validates every canonical manifest field,
+payload offset/length/digest, compiled destination/handler/artifact/manager
+association, and expected live state. The request SID is never accepted as the
+S4U target or as authority to widen the entry map.
+
+Protected POSIX automation uses the root-owned forced command
+`/usr/local/libexec/roundhouse/posix-dispatcher`, which executes only
+`/usr/local/libexec/roundhouse/current/scripts/roundhouse
+dispatch-posix-request`. The bounded stdin protocol contains either one sealed
+ordinary schema-2 plan plus worker configuration or one signed broker envelope;
+it has no caller-selected command, executable, shell option, or workspace path.
+Linux broker envelopes reach only
+`sudo -n /usr/libexec/roundhouse/posix-broker`. macOS supports the
+ordinary bounded lane and rejects protected root actions.
+
+Standalone schema-3 plans for each closed APT, WinGet, and profile action are
+executed by the same fixed broker path as mixed schema-4 plans. The internal
+projection adds only freshly verified UID/SID, certificate source-address,
+Windows platform-context evidence, and the matching action/token precondition.
+On Windows those fields come from fresh signed SFTP readiness, so logged-off
+submission never requires ordinary Codex collection. The projection does not
+add an executable, argv, package/source/dependency control, environment, or
+fallback context. POSIX
+result queries are freshly signed with the current node overlay certificate,
+including after renewal or from another enrolled node, while terminal evidence
+continues to match the original mutation's journaled identity and certificate.
