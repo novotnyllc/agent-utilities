@@ -37,50 +37,59 @@ Each row gives the status code, the mapped source file and kind (`plain`,
 comparison for `.json`), live mode, live and source mtimes, and the last
 commits that touched the source file. Compare the same target on other hosts
 by running evidence there too: cross-host agreement on a live digest is strong
-evidence the edit is intended. Timestamps are evidence, never precedence.
+evidence the edit is intended.
+
+## How a change's origin is decided
+
+Changes happen one at a time, on one machine. For each live-edited file the
+probe records the live digest and mtime, the mapped source file and its kind,
+and when upstream (and the host's own checkout) last changed that source file.
+Across all hosts, per file:
+
+| Decision | When | What happens |
+| --- | --- | --- |
+| `capture` | The newest edit is newer than any upstream change to the source, every host that edited it holds the same content, the origin had pulled the latest change to that file, and the source is a plain file. | The origin host is `capture`; hosts that already hold the same content are `awaiting-capture`. `seal RUN capture` publishes it. |
+| published | The edit already equals the upstream file. | A pull resolves it. |
+| `source-newer` | Upstream changed the source after the edit. | The edit is stale. Overwriting it needs the owner (below). |
+| `stale-base` | The origin edited the file without the newer upstream change to its source. | Capturing would discard that change: pull there, then reconcile by hand. |
+| `competing` | Hosts hold different content. | The newest is proposed; a person decides. |
+| `capture-manual` | The origin's source is a template, `modify_` script, encrypted, or a sensitive path. | Edit the source by hand (below). |
+
+Timestamps choose between edits only after content, upstream history, and the
+source kind agree; they never override a newer upstream change or a
+disagreement between hosts.
 
 ## Decide per path
 
+- **Capture (automatic)**: `"$FC" seal RUN capture` lists each file, its
+  origin host, and when it was edited. After one approval, `apply` fetches each
+  file from its origin only if its digest still matches, writes it into the
+  local source's mapped plain file, refuses and restores anything that looks
+  like a secret (built-in patterns plus the repository's `scripts/scan-secrets`
+  when present), commits once, pushes, and re-probes. The local source must be
+  clean and at upstream. Nothing is captured into a template, a `modify_`
+  script, or a sensitive path.
 - **Source wins, live unchanged since the last write** (`X` blank):
   `"$FC" seal RUN targets HOST [TARGET...]`, show the user the exact argv,
   then `"$FC" apply RUN SET-ID`. The plan is
   `chezmoi --no-tty apply -- ABSOLUTE-TARGET...` (1-16 paths under the
   target's home) with the evidenced `chezmoi status -- TARGET...` digest
   sealed; Roundhouse 0.9.24+ refuses if it changed.
-- **Source wins over a live edit** (`X` set): chezmoi will not overwrite it
-  without an interactive answer, and a sealed plan never adds `--force`, so
+- **Source wins over a live edit** (`source-newer`, or a `competing` edit that
+  lost): chezmoi will not overwrite a file edited since its last write without
+  an interactive answer, and a sealed plan never adds `--force`, so
   `seal targets` refuses. The host's owner runs `chezmoi apply -- TARGET` in an
-  interactive session on that host and confirms each file. Take a backup first
-  (`apply` does this for sealed stages; otherwise copy the file into a private
-  directory on that host).
-- **Live wins**: see below.
-- **Both changed in disjoint regions**: merge deliberately in the gold's
-  source (template or modify_ script), publish, then fast-path every host.
-- **Same semantic region, or intent is unclear**: stop and ask the user.
+  interactive session on that host and confirms. Take a backup first.
+- **`capture-manual`**: on the local source, edit the template or `modify_`
+  script so it renders the origin's content. Compare with `evidence` digests,
+  never by printing rendered files; never paste a rendered secret into the
+  source. A new target: `chezmoi add -- TARGET` for that exact file only, with a
+  `private_` name and a secret-manager template for anything sensitive. Show the
+  user the non-secret diff; the user approves the commit and push.
+- **`competing` or `stale-base`**: show the user the `decide` line and the
+  `evidence` rows from each host, and ask. Merge disjoint edits in the source.
 - **Deletion or sensitive path**: name each path to the user and get an
   explicit decision; keep sensitive directories `private_`.
-
-## Live wins
-
-Live wins only by capturing into the gold host's source and publishing; never
-run `chezmoi add` or `re-add` on another host, and never add a directory
-recursively.
-
-1. If the edit lives on another host, copy just that file to the gold into a
-   private temporary directory (`mktemp -d`; `scp HOST:PATH "$tmp/"`). Never
-   print it. Compare digests with the evidence row.
-2. On the gold, update the source for that one target:
-   - a plain file: `chezmoi re-add -- TARGET` when the gold's live copy is the
-     desired content, otherwise copy the captured file into the mapped source
-     path;
-   - a template or modify_ script: edit the source by hand so it renders the
-     desired content; never paste a rendered secret into the source;
-   - a new target: `chezmoi add -- TARGET` for that exact file only; use a
-     `private_` name and a secret-manager template for anything sensitive.
-3. Run the source repository's secret scan if it has one, show the user
-   `git diff --stat` and the non-secret diff, and let the user approve the
-   commit and push. Never commit or push on your own.
-4. Delete the temporary copy, re-probe, and fast-path the fleet.
 
 ## Blockers
 

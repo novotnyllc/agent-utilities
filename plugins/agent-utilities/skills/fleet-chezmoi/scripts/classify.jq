@@ -1,16 +1,36 @@
 # fleet-chezmoi classifier. Input: an array of probe records
-#   {host, transport, gold, expected:{hostname,user}|null, probe:{...}|null, error:string|null}
+#   {host, transport, expected:{hostname,user}|null, probe:{...}|null, error:string|null}
 # Output: an array of per-host decisions, one per input record, in input order.
+#
+# No host is special. A change can start on any machine, one at a time, so each
+# live-edited path is resolved across the whole fleet:
+#
+#   capture          the newest live edit is newer than any upstream change to
+#                    that source file, and every host that edited it holds the
+#                    same content: that host is the origin; capture its file
+#                    into the source and publish it
+#   source-newer     upstream changed the source after this live edit: the edit
+#                    is stale; overwriting it needs the host owner's confirmation
+#   competing        hosts hold different live content for the path: propose the
+#                    newest, but a person decides
+#   capture-manual   the origin's source is a template, modify_ script, or
+#                    sensitive path: edit the source by hand
+#   stale-base       the origin edited the file without having pulled a newer
+#                    upstream change to its source; capturing would discard
+#                    that change, so pull and reconcile first
 #
 # Classes:
 #   unreachable        probe did not return a usable record
 #   unsupported        transport has no fast path (native Windows uses remote control)
 #   identity-mismatch  hostname/user differ from the configured expectation: stop
-#   in-sync            source equals upstream and chezmoi status is empty
+#   review             blockers or conflicts; reconcile the listed paths only
+#   capture            this host is the origin of changes to publish
 #   pull               clean source strictly behind upstream: seal a ff-only pull
+#   awaiting-capture   this host holds a change that is (or is about to be)
+#                      published from elsewhere
+#   in-sync            nothing to do
 #   apply              every pending entry is source-driven: seal a full apply
 #                      bound to the exact status digest
-#   review             anything else: reconcile the listed paths/reasons only
 #
 # A status line is `XY path`. X compares chezmoi's last-written state with the
 # live file (X != " " means the live file changed since chezmoi last wrote it).
@@ -22,72 +42,120 @@ def sensitive_path:
   or test("(^|/)(id_[A-Za-z0-9_-]+|[^/]*\\.(pem|key|p12|pfx))$")
   or test("(?i)(^|/)[^/]*(credential|secret|token|auth)[^/]*$");
 
-def line_kind($keyorder):
-  if .target == " " then "benign"
-  elif .target == "D" then "deletion"
-  elif (.path | sensitive_path) then "sensitive"
-  elif .live == " " then (if .target == "R" then "run-script" else "source-driven" end)
-  elif (.path as $p | $keyorder | index($p)) != null then "json-key-order"
-  else "live-edit"
-  end;
-
 def reason($code; $detail): {code:$code,detail:$detail};
+
+def when($t): if ($t // 0) > 0 then ($t | todate) else "unknown time" end;
+
+# Version order for plugin versions: numeric where numeric.
+def vkey: tostring | split(".") | map(tonumber? // .);
 
 # Keep plugin IDs (NAME@MARKETPLACE) whose marketplace is in $scope.
 def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) != null));
 
+. as $records
+# --- fleet-wide facts --------------------------------------------------------
 # Source trees that carry the same uncommitted paths on several hosts point at a
-# scheduled writer (for example a drift-adoption agent), not at a person.
-(map(select((.probe.source.dirty_count // 0) > 0) | .probe.source.dirty | sort)
+# scheduled writer, not at a person.
+| ($records | map(select((.probe.source.dirty_count // 0) > 0) | .probe.source.dirty | sort)
   | group_by(.) | map(select(length > 1) | .[0])) as $repeated_dirty
-| (map(select(.gold and .probe != null) | .probe.source.head) | first // null) as $gold_head
-| (map(select(.gold and .probe != null) | .probe.plugins // {}) | first // {}) as $gold_plugins
-# Compare only plugins from marketplaces the gold host declares for that same
-# harness; account-synced and runtime-bundled plugins differ by host on purpose.
+| ($records | map(.probe.source.upstream_head // empty | select(. != "")) | unique) as $upstream_views
+# Per-path origin decisions from every host's live edits.
+# An edit whose content already equals upstream has been published: a pull
+# resolves it, so it takes no part in deciding anything.
+| ($records | map(.host as $h | (.probe.status.edits // [])[]
+    | select((.upstream_sha256 // "") != "" and .live_sha256 == .upstream_sha256) | "\($h)\t\(.path)")) as $published
+| ($records | map(.host as $h | (.probe.status.edits // [])[]
+    | select((.upstream_sha256 // "") == "" or .live_sha256 != .upstream_sha256) | . + {host:$h}) | flatten
+  | group_by(.path)
+  | map(
+      (max_by(.live_mtime)) as $newest
+      | (map(.source_upstream_time) | max) as $source_time
+      | (map(.live_sha256) | unique) as $digests
+      | {key: .[0].path,
+         value: {
+           decision: (
+             if $source_time > $newest.live_mtime then "source-newer"
+             elif ($newest.source_head_time // 0) < ($newest.source_upstream_time // 0) then "stale-base"
+             # Templates and modify_ scripts render per host, so their live
+             # contents differ by design; compare digests only for plain files.
+             elif $newest.kind != "plain" or ($newest.path | sensitive_path) then "capture-manual"
+             elif ($digests | length) > 1 then "competing"
+             else "capture" end),
+           origin: $newest.host, mtime: $newest.live_mtime, digest: $newest.live_sha256,
+           source: $newest.source, kind: $newest.kind, source_time: $source_time,
+           hosts: map(.host)}})
+  | from_entries) as $decisions
+# Plugin baselines: what any host has installed from the marketplaces the fleet
+# declares for that harness, and the newest version seen.
+| ([$records[] | .probe.plugins // {} | keys[]] | unique) as $harnesses
+| (reduce $harnesses[] as $hn ({};
+    .[$hn] = {
+      scope: ([$records[] | .probe.plugins[$hn].declared_marketplaces // [] | .[]] | unique),
+      installed: ([$records[] | .host as $h | (.probe.plugins[$hn].installed // {}) | to_entries[]
+        | select(.value.enabled == true) | {id: .key, version: .value.version, host: $h}]
+        | group_by(.id) | map({key: .[0].id, value: {hosts: map(.host), newest: (max_by(.version | vkey))}})
+        | from_entries)
+    })) as $plugin_baseline
 
-| map(
+| $records | map(
   . as $r
   | ($r.probe // {}) as $p
   | ($p.status.json_key_order_only // []) as $keyorder
-  | [($p.status.lines // [])[] | . + {kind:line_kind($keyorder)}] as $lines
+  | [ ($p.status.lines // [])[]
+      | . as $l
+      | ($decisions[$l.path] // null) as $d
+      | . + {kind: (
+          if $l.target == " " then "benign"
+          elif $l.target == "D" then "deletion"
+          elif $l.live == " " then
+            (if ($l.path | sensitive_path) then "sensitive"
+             elif $l.target == "R" then "run-script" else "source-driven" end)
+          elif ($keyorder | index($l.path)) != null then "json-key-order"
+          elif ($published | index("\($r.host)\t\($l.path)")) != null then "published"
+          elif $d == null then "live-edit"
+          elif $d.decision == "capture" then
+            (if $d.origin == $r.host then "capture" else "captured-elsewhere" end)
+          elif $d.decision == "source-newer" then "stale-live-edit"
+          elif $d.decision == "competing" then "competing-edit"
+          elif $d.decision == "stale-base" then "stale-base"
+          else "capture-manual" end)}
+    ] as $lines
   | [
       ( $p.umask.allows_group_or_other_write // false | select(.)
         | reason("umask"; "effective chezmoi umask \($p.umask.chezmoi_octal) permits group/other write; set `umask = 0o022` in this host's chezmoi config")),
       ( $p.sensitive_without_private // [] | .[]
         | reason("sensitive-permissions"; "\(.target): source \(.source_name), live mode \(.live_mode); use a private_ source name")),
       ( $p.scheduled_source_writers // [] | .[]
-        | reason("scheduled-source-writer"; "\(.kind) \(.label) edits the source tree (\(.flags | join(", "))); keep non-gold hosts report-only")),
+        | reason("scheduled-source-writer"; "\(.kind) \(.label) edits the source tree (\(.flags | join(", "))); scheduled jobs should only report")),
       ( $keyorder[] | reason("json-key-order"; "\(.): only key order differs; manage it with a modify_ template that returns .chezmoi.stdin unchanged when nothing managed changed")),
       ( $p.externals // [] | .[] | select(.fetch == "failed")
         | reason("external-fetch-failed"; .path)),
       ( $p.externals // [] | .[] | select(.state == "behind")
         | reason("external-behind"; "\(.path): \(.behind) upstream commit(s) not pulled; the next sealed apply fast-forwards it once its refreshPeriod elapses")),
-      ( if (($p.source.dirty // []) | sort) as $d | ($d | length) > 0 and any($repeated_dirty[]; . == $d) then
+      ( if (($p.source.dirty // []) | sort) as $dd | ($dd | length) > 0 and any($repeated_dirty[]; . == $dd) then
           reason("repeated-source-drift"; "same uncommitted paths on several hosts: \($p.source.dirty | join(", "))")
         else empty end ),
+      ( if ($upstream_views | length) > 1 and ($p.source.upstream_head // "") != "" then
+          reason("upstream-views-differ"; "hosts see different upstream commits (this one: \($p.source.upstream_head[0:12])); probe with fetch")
+        else empty end ),
       ( ($p.plugins // {}) | to_entries[] | .key as $harness | .value as $h
-        | ($gold_plugins[$harness].declared_marketplaces // []) as $scope
+        | ($plugin_baseline[$harness]) as $base
         | ( ($h.declared_marketplaces - ($h.registered_marketplaces // [])) | select(length > 0 and $h.registered_marketplaces != null)
-            | reason("plugin-marketplace-unregistered"; "\($harness): declared but not registered: \(join(", ")); register and update before applying (plugin commands rewrite the harness settings)") ),
+            | reason("plugin-marketplace-unregistered"; "\($harness): declared but not registered: \(join(", ")); Roundhouse fleet-run registers it from the declared source") ),
           # Claude's enabledPlugins is the synced declaration; Codex config also
-          # carries stale stanzas, so Codex is judged against the gold instead.
-          ( select($harness == "claude") | ($h.enabled - (($h.installed // {}) | keys) | scoped($scope))
+          # carries stale stanzas, so Codex is judged against the rest of the fleet.
+          ( select($harness == "claude") | ($h.enabled - (($h.installed // {}) | keys) | scoped($base.scope))
             | select(length > 0 and $h.installed != null)
             | reason("plugin-not-installed"; "\($harness): enabled but not installed: \(join(", "))") ),
-          ( [ ($gold_plugins[$harness].installed // {}) | to_entries[] | select(.value.enabled == true) | .key ]
-            - (($h.installed // {}) | keys) | scoped($scope)
-            | select(length > 0 and $h.installed != null and ($r.gold | not))
-            | reason("plugin-missing-vs-gold"; "\($harness): installed on the gold host, missing here: \(join(", "))") ),
+          ( [ $base.installed | keys[] ] - (($h.installed // {}) | keys) | scoped($base.scope)
+            | select(length > 0 and $h.installed != null)
+            | reason("plugin-missing"; "\($harness): installed elsewhere in the fleet, missing here: \(map(. + " (" + ($base.installed[.].hosts | join(", ")) + ")") | join(", "))") ),
           ( [ ($h.installed // {}) | to_entries[] | .key as $id | .value.version as $v
-              | ($gold_plugins[$harness].installed[$id].version // null) as $g
-              | select($g != null and $v != null and $g != $v and ([$id] | scoped($scope) | length) > 0)
-              | "\($id) \($v) (gold \($g))" ]
-            | select(length > 0 and ($r.gold | not))
-            | reason("plugin-version-drift"; "\($harness): \(join(", "))") ) ),
-      ( if $gold_head != null and ($r.gold | not) and $p.source.upstream_head != null
-          and $p.source.upstream_head != "" and $p.source.upstream_head != $gold_head then
-          reason("upstream-differs-from-gold"; "this host sees upstream at \($p.source.upstream_head[0:12]) but gold HEAD is \($gold_head[0:12]): publish from the gold host, or probe with fetch")
-        else empty end )
+              | ($base.installed[$id].newest // null) as $n
+              | select($n != null and $v != null and ($v | vkey) < ($n.version | vkey) and ([$id] | scoped($base.scope) | length) > 0)
+              | "\($id) \($v) (newest \($n.version) on \($n.host))" ]
+            | select(length > 0)
+            | reason("plugin-version-drift"; "\($harness): \(join(", "))") ) )
     ] as $findings
   | [
       ( if ($p.login_shell.missing_tools // []) | length > 0 then
@@ -97,45 +165,49 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       ( if ($p.source.upstream // "") == "" and $p.source.state == "git" then reason("source-no-upstream"; $p.source.path) else empty end ),
       ( if $p.source.fetch == "failed" then reason("source-fetch-failed"; "upstream state unknown") else empty end ),
       ( if ($p.source.dirty_count // 0) > 0 then
-          reason(if $r.gold then "gold-source-dirty" else "source-dirty" end;
-            "\($p.source.dirty_count) uncommitted: \($p.source.dirty | join(", "))")
+          reason("source-dirty"; "\($p.source.dirty_count) uncommitted: \($p.source.dirty | join(", "))")
         else empty end ),
       ( if ($p.source.ahead // 0) > 0 then
-          reason(if $r.gold then "gold-unpublished" else "source-ahead" end;
-            "\($p.source.ahead) local commit(s) not on \($p.source.upstream)")
+          reason("source-ahead"; "\($p.source.ahead) local commit(s) not on \($p.source.upstream); push them")
         else empty end ),
       ( if $p.status.ok == false then reason("status-failed"; "chezmoi status failed") else empty end ),
       ( if $p.status.truncated // false then reason("status-too-large"; "\($p.status.count) entries") else empty end ),
       ( $p.externals // [] | .[] | select(.state == "rewritten-resettable")
-        | reason("external-rewritten"; "\(.path): upstream rewrote history; clone is clean and every local commit came from upstream, so a sealed reset to \(.upstream_head[0:12]) is safe")),
+        | reason("external-rewritten"; "\(.path): upstream rewrote history; clone has no local files and every commit came from upstream, so a sealed reset to \(.upstream_head[0:12]) is safe")),
       ( $p.externals // [] | .[] | select(.state == "rewritten-local-changes" or .state == "dirty")
-        | reason("external-local-changes"; "\(.path): \(.state); stop, do not reset")),
-      ( if $r.gold and ($lines | map(select(.kind != "benign")) | length) > 0 then
-          reason("gold-pending-apply"; "the gold host's live state is authoritative; recapture or review before applying: \($lines | map(select(.kind != "benign") | .path) | join(", "))")
-        else empty end )
+        | reason("external-local-changes"; "\(.path): \(.state); stop, do not reset"))
     ] as $blockers
-  # chezmoi prompts before overwriting any file edited since its last write, so
-  # semantically equal JSON with a live edit cannot take a non-interactive apply.
-  | ($lines | map(select(.kind | IN("live-edit","json-key-order","deletion","sensitive")))) as $conflicts
+  | ($lines | map(select(.kind | IN("live-edit","json-key-order","deletion","sensitive",
+      "stale-live-edit","competing-edit","capture-manual","stale-base")))) as $conflicts
   | {
       host: $r.host,
       transport: $r.transport,
-      gold: ($r.gold // false),
       class: (
         if $r.transport == "codex-remote-control" or $r.transport == "windows" then "unsupported"
         elif $r.probe == null or ($p.error // null) != null then "unreachable"
         elif $r.expected != null and ($r.expected.hostname != $p.identity.hostname or $r.expected.user != $p.identity.user) then "identity-mismatch"
-        elif ($blockers | length) > 0 then "review"
+        elif ($blockers | length) > 0 or ($conflicts | length) > 0 then "review"
+        elif any($lines[]; .kind == "capture") then "capture"
         elif ($p.source.behind // 0) > 0 then "pull"
-        elif ($lines | length) == 0 then "in-sync"
-        elif ($conflicts | length) == 0 then "apply"
-        else "review" end),
+        elif any($lines[]; .kind == "captured-elsewhere" or .kind == "published") then "awaiting-capture"
+        elif ($lines | map(select(.kind != "benign")) | length) == 0 then "in-sync"
+        else "apply" end),
       error: ($r.error // $p.error // null),
       identity: ($p.identity // null),
       source: (if $p.source then $p.source | {head,upstream_head,ahead,behind,dirty_count} else null end),
       status_digest: ($p.status.digest // null),
       diff_digest: ($p.status.diff_digest // null),
       pending: ($lines | group_by(.kind) | map({key:.[0].kind,value:(map(.path))}) | from_entries),
+      captures: [ $lines[] | select(.kind == "capture") | .path as $path | $decisions[$path]
+        | {path: $path, source, digest, mtime} ],
+      decisions: [ $lines[] | select(.kind | IN("stale-live-edit","competing-edit","capture-manual","stale-base","captured-elsewhere"))
+        | .path as $path | $decisions[$path] + {path: $path}
+        | . + {summary: (
+            if .decision == "source-newer" then "upstream changed \(.source) at \(when(.source_time)), after this edit at \(when(.mtime)); overwriting it needs the owner"
+            elif .decision == "competing" then "different edits on \(.hosts | join(", ")); newest is \(.origin) at \(when(.mtime)); a person decides"
+            elif .decision == "capture-manual" then "\(.origin) changed it at \(when(.mtime)); \(.source) is a \(.kind) source, so edit it by hand"
+            elif .decision == "stale-base" then "\(.origin) changed it at \(when(.mtime)) without the newer upstream change to \(.source); pull there, then reconcile"
+            else "\(.origin) publishes this change (edited at \(when(.mtime)))" end)} ],
       conflicts: ($conflicts | map(.path)),
       blockers: $blockers,
       findings: $findings

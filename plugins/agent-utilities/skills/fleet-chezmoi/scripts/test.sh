@@ -35,15 +35,15 @@ class_of() { jq -r --arg h "$2" '.[] | select(.host == $h) | .class' "$1/classes
 field() { jq -r --arg h "$2" ".[] | select(.host == \$h) | $3" "$1/classes.json"; }
 no_secret() { ! grep -rq -- "$SECRET" "$1"; }
 
-# --- origin, gold working copy, and the host's source -------------------------
+# --- origin, a publisher working copy, and the host's source -------------------------
 git init -q --bare "$T/origin.git"
-git clone -q "$T/origin.git" "$T/gold" 2>/dev/null
-printf 'a\n' >"$T/gold/dot_a"
-printf 'b\n' >"$T/gold/dot_b"
-printf '{"x":1,"y":2}\n' >"$T/gold/dot_j.json"
-printf 'secret = "%s"\n' "$SECRET" >"$T/gold/.chezmoidata.toml"
-printf 'token={{ .secret }}\nv1\n' >"$T/gold/dot_greeting.tmpl"
-git -C "$T/gold" add -A && git -C "$T/gold" commit -qm init && git -C "$T/gold" push -q origin main
+git clone -q "$T/origin.git" "$T/pub" 2>/dev/null
+printf 'a\n' >"$T/pub/dot_a"
+printf 'b\n' >"$T/pub/dot_b"
+printf '{"x":1,"y":2}\n' >"$T/pub/dot_j.json"
+printf 'secret = "%s"\n' "$SECRET" >"$T/pub/.chezmoidata.toml"
+printf 'token={{ .secret }}\nv1\n' >"$T/pub/dot_greeting.tmpl"
+git -C "$T/pub" add -A && git -C "$T/pub" commit -qm init && git -C "$T/pub" push -q origin main
 git clone -q "$T/origin.git" "$src"
 chezmoi apply --no-tty
 
@@ -69,9 +69,9 @@ check "wrong hostname is identity-mismatch" [ "$(class_of "$run" h3)" = identity
 check "native Windows has no fast path" [ "$(class_of "$run" win)" = unsupported ]
 
 # 3. upstream advanced: pull
-printf 'b2\n' >"$T/gold/dot_b"
-printf 'token={{ .secret }}\nv2\n' >"$T/gold/dot_greeting.tmpl"
-git -C "$T/gold" commit -qam change && git -C "$T/gold" push -q origin main
+printf 'b2\n' >"$T/pub/dot_b"
+printf 'token={{ .secret }}\nv2\n' >"$T/pub/dot_greeting.tmpl"
+git -C "$T/pub" commit -qam change && git -C "$T/pub" push -q origin main
 probe h1
 check "behind clean source is pull" [ "$(class_of "$run" h1)" = pull ]
 check "pull reports one commit behind" [ "$(field "$run" h1 .source.behind)" = 1 ]
@@ -177,8 +177,8 @@ if "$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1; then fail "apply exited 0 
 check "changed live state is skipped" grep -q 'skipped' "$T/apply.out"
 check "live edit survived" grep -q edited-after-seal "$HOME/.b"
 check "skipped host never reached the executor" [ "$(grep -c '^apply' "$STUB_LOG")" = 1 ]
-check "live edit is now a review conflict" [ "$(field "$run" h1 '.conflicts | join(",")')" = .b ]
-"$fc" evidence "$run" h1 >"$T/evidence.out"
+check "a lone live edit makes its host the origin" [ "$(class_of "$run" h1)" = capture ]
+"$fc" evidence "$run" h1 .b >"$T/evidence.out"
 check "evidence covers the conflict" [ "$(jq -r '.targets[0] | [.target, .kind, (.rendered_sha256 != .live_sha256)] | join(",")' "$run/evidence/h1.json")" = ".b,plain,true" ]
 check "evidence records source history" [ "$(jq -r '.targets[0].history[0].subject' "$run/evidence/h1.json")" = change ]
 if "$fc" evidence "$run" h1 ../etc/passwd >/dev/null 2>&1; then fail "evidence accepted a traversal target"; fi
@@ -205,8 +205,8 @@ check "no secret in apply output or run records" no_secret "$run"
 check "no secret on stdout" no_secret "$T/apply.out"
 
 # 6b. targeted source-driven apply of an evidenced path, backed up first
-printf 'a2\n' >"$T/gold/dot_a"
-git -C "$T/gold" commit -qam a2 && git -C "$T/gold" push -q origin main
+printf 'a2\n' >"$T/pub/dot_a"
+git -C "$T/pub" commit -qam a2 && git -C "$T/pub" push -q origin main
 chezmoi git -- pull -q --ff-only
 probe h1
 "$fc" evidence "$run" h1 .a >/dev/null
@@ -221,6 +221,84 @@ check "targeted apply updated the path" [ "$(cat "$HOME/.a")" = a2 ]
 tb=$(jq -r '.backup_dir' "$run/sets/targets-h1/results/h1.backup.json")
 check "targeted backup kept the prior content" [ "$(cd "$tb" && tar -xOf files.tar ./.a)" = a ]
 check "host converged after targeted apply" [ "$(class_of "$run" h1)" = in-sync ]
+
+# 7m. several hosts, no gold: resolve each change from where and when it was made
+hosts=$T/hosts
+mkdir -p "$T/sshbin" "$hosts/h2/.config/chezmoi"
+cat >"$T/sshbin/ssh" <<'SSH'
+#!/usr/bin/env bash
+# Fake ssh: each alias is a separate HOME on this machine.
+while [ $# -gt 0 ]; do case $1 in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+alias=$1; shift
+exec env HOME="$FAKE_HOSTS/$alias" XDG_CONFIG_HOME="$FAKE_HOSTS/$alias/.config" \
+  XDG_STATE_HOME="$FAKE_HOSTS/$alias/.local/state" SHELL=/bin/sh sh -c "$*"
+SSH
+chmod +x "$T/sshbin/ssh"
+export PATH="$T/sshbin:$PATH" FAKE_HOSTS=$hosts
+: >"$hosts/h2/.config/chezmoi/chezmoi.toml"
+git clone -q "$T/origin.git" "$hosts/h2/.local/share/chezmoi"
+h2() { env HOME="$hosts/h2" XDG_CONFIG_HOME="$hosts/h2/.config" XDG_STATE_HOME="$hosts/h2/.local/state" "$@"; }
+h2 chezmoi apply --no-tty
+jq --arg host "$host" --arg user "$user" \
+  '.machines.h2 = {platform:"linux",transport:"ssh",ssh_alias:"h2",expected_hostname:$host,expected_user:$user}' \
+  "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+probe h1 h2
+check "two fresh hosts are in sync" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = in-sync,in-sync ]
+
+# A change made on h2 is captured from h2 and published; h1 takes it.
+printf 'b-from-h2\n' >"$hosts/h2/.b"
+probe h1 h2
+check "the host that changed a file is its origin" [ "$(class_of "$run" h2)" = capture ]
+check "the other host has nothing to do yet" [ "$(class_of "$run" h1)" = in-sync ]
+"$fc" seal "$run" capture >"$T/seal.out"
+set_id=$(awk 'END {print $1}' "$T/seal.out")
+check "capture set names the origin" grep -q 'from h2' "$T/seal.out"
+"$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1 || { cat "$T/apply.out"; fail "capture apply failed"; }
+check "the change was published" [ "$(git -C "$T/origin.git" show main:dot_b)" = b-from-h2 ]
+git -C "$T/pub" pull -q --ff-only
+check "the controller takes it as a source change" [ "$(class_of "$run" h1)" = apply ]
+check "the origin only needs to pull" [ "$(class_of "$run" h2)" = pull ]
+h2 chezmoi git -- pull -q --ff-only
+chezmoi apply --no-tty
+probe h1 h2
+check "both hosts converge on the change" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = in-sync,in-sync ]
+check "no secret in capture records" no_secret "$run"
+
+# Different edits of one file on two hosts: propose the newest, a person decides.
+printf 'a-h1\n' >"$HOME/.a" && touch -t 202601010000 "$HOME/.a"
+printf 'a-h2\n' >"$hosts/h2/.a"
+probe h1 h2
+check "competing edits need review on both hosts" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = review,review ]
+check "the newest edit is the proposal" [ "$(jq -r '.[] | select(.host == "h1") | .decisions[0] | [.decision, .origin] | join(",")' "$run/classes.json")" = competing,h2 ]
+chezmoi apply --no-tty --force -- "$HOME/.a"; h2 chezmoi apply --no-tty --force -- "$hosts/h2/.a"
+
+# An edit older than the upstream change to its source is stale, not captured.
+printf 'a-old\n' >"$hosts/h2/.a" && touch -t 202601010000 "$hosts/h2/.a"
+printf 'a3\n' >"$T/pub/dot_a" && git -C "$T/pub" commit -qam a3 && git -C "$T/pub" push -q origin main
+chezmoi git -- pull -q --ff-only && chezmoi apply --no-tty
+probe h1 h2
+check "an edit older than upstream is stale" [ "$(jq -r '.[] | select(.host == "h2") | .decisions[0].decision' "$run/classes.json")" = source-newer ]
+h2 chezmoi git -- pull -q --ff-only && h2 chezmoi apply --no-tty --force
+
+# A templated target is captured by hand, not by copying the rendered file.
+printf 'rendered-edit\n' >"$hosts/h2/.greeting"
+probe h1 h2
+check "a template edit needs a hand edit of the source" [ "$(jq -r '.[] | select(.host == "h2") | .decisions[0].decision' "$run/classes.json")" = capture-manual ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.greeting"
+
+# A change that looks like a secret is never committed.
+printf 'key=AKIAABCDEFGHIJKLMNOP\n' >"$hosts/h2/.b"
+probe h1 h2
+"$fc" seal "$run" capture >"$T/seal.out"
+set_id=$(awk 'END {print $1}' "$T/seal.out")
+before=$(git -C "$T/origin.git" rev-parse main)
+if "$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1; then fail "a secret-looking capture was committed"; fi
+check "secret refusal is explained" grep -q "looks like a secret" "$T/apply.out"
+check "nothing was published" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
+check "the controller source was restored" [ -z "$(git -C "$src" status --porcelain)" ]
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
+jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+probe h1
 
 # 7. JSON key order only is semantically equal: apply with a finding
 printf '{"y":2,"x":1}\n' >"$HOME/.j.json"
@@ -248,8 +326,8 @@ check "group-writable umask is reported" [ "$(field "$run" h1 '[.findings[].code
 # 10. git-repo external whose upstream rewrote history
 git init -q "$T/up" && printf 'v1\n' >"$T/up/f" && git -C "$T/up" add f && git -C "$T/up" commit -qm one
 printf '[".ext"]\n  type = "git-repo"\n  url = "file://%s/up"\n  [".ext".pull]\n    args = ["--ff-only"]\n' "$T" \
-  >"$T/gold/.chezmoiexternal.toml"
-git -C "$T/gold" add -A && git -C "$T/gold" commit -qm ext && git -C "$T/gold" push -q origin main
+  >"$T/pub/.chezmoiexternal.toml"
+git -C "$T/pub" add -A && git -C "$T/pub" commit -qm ext && git -C "$T/pub" push -q origin main
 chezmoi git -- pull -q --ff-only && chezmoi apply --no-tty >/dev/null 2>&1
 git -C "$T/up" commit -q --amend -m rewritten
 probe h1
@@ -283,9 +361,9 @@ check "rewritten external with local changes is not resettable" \
 git -C "$HOME/.ext" checkout -q -- f && git -C "$HOME/.ext" reset -q --hard '@{u}'
 
 # 11. deletions and sensitive targets need review; loose sensitive dirs are reported
-printf '.b\n' >"$T/gold/.chezmoiremove" && git -C "$T/gold" rm -q dot_b
-mkdir -p "$T/gold/dot_ssh" && printf 'Host x\n' >"$T/gold/dot_ssh/config"
-git -C "$T/gold" add -A && git -C "$T/gold" commit -qm remove && git -C "$T/gold" push -q origin main
+printf '.b\n' >"$T/pub/.chezmoiremove" && git -C "$T/pub" rm -q dot_b
+mkdir -p "$T/pub/dot_ssh" && printf 'Host x\n' >"$T/pub/dot_ssh/config"
+git -C "$T/pub" add -A && git -C "$T/pub" commit -qm remove && git -C "$T/pub" push -q origin main
 chezmoi git -- pull -q --ff-only
 probe h1
 [ -z "${DEBUG:-}" ] || { jq '.[0] | {class,blockers,conflicts,pending}' "$run/classes.json"; chezmoi status; }
@@ -297,50 +375,53 @@ probe h1
 check "failed chezmoi status is never in-sync" [ "$(field "$run" h1 '[.blockers[].code] | index("status-failed") != null')" = true ]
 rm -f "$src/dot_broken.tmpl"
 
-# 12. gold host: pending changes on the gold are never fast-pathed
-"$fc" probe --run "$run" --gold h1 h1 >/dev/null
-check "gold pending apply is review" \
-  [ "$(field "$run" h1 '[.blockers[].code] | index("gold-pending-apply") != null')" = true ]
-
 # 12b. arguments survive the payload framing: spaces and quotes in a target
-mkdir -p "$T/gold/space dir" && printf 'x\n' >"$T/gold/space dir/it's.txt"
-git -C "$T/gold" add -A && git -C "$T/gold" commit -qm spaced && git -C "$T/gold" push -q origin main
+mkdir -p "$T/pub/space dir" && printf 'x\n' >"$T/pub/space dir/it's.txt"
+git -C "$T/pub" add -A && git -C "$T/pub" commit -qm spaced && git -C "$T/pub" push -q origin main
 chezmoi git -- pull -q --ff-only
 "$fc" evidence "$run" h1 "space dir/it's.txt" >/dev/null
 check "a spaced, quoted target reaches the host intact" \
   [ "$(jq -r '.targets[0] | [.target, .source] | join("|")' "$run/evidence/h1.json")" = "space dir/it's.txt|space dir/it's.txt" ]
 
-# 13. plugin registration against the gold host (classifier only)
+# 13. plugin registration against the rest of the fleet (classifier only)
 jq -n '[
-  {host:"gold",transport:"ssh",gold:true,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"a",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:["p@mk","q@mk"],
       registered_marketplaces:["mk"],installed:{"p@mk":{version:"2",enabled:true},"q@mk":{version:"1",enabled:true},
       "s@synced":{version:"1",enabled:true}}}}}},
-  {host:"h",transport:"ssh",gold:false,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"h",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:["p@mk","q@mk"],
       registered_marketplaces:[],installed:{"p@mk":{version:"1",enabled:true}}}}}}]' |
   jq -f "$here/classify.jq" >"$T/plugins.json"
 check "unregistered declared marketplace" [ "$(jq -r '.[1].findings | map(select(.code == "plugin-marketplace-unregistered")) | length' "$T/plugins.json")" = 1 ]
 check "enabled but not installed" [ "$(jq -r '.[1].findings[] | select(.code == "plugin-not-installed") | .detail' "$T/plugins.json")" = "claude: enabled but not installed: q@mk" ]
-check "version drift against gold, scoped to declared marketplaces" \
-  [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/plugins.json")" = "claude: p@mk 1 (gold 2)" ]
+check "version drift against the newest in the fleet, scoped to declared marketplaces" \
+  [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/plugins.json")" = "claude: p@mk 1 (newest 2 on a)" ]
 check "account-synced plugins are out of scope" ! grep -q 's@synced' <(jq -r '.[1].findings[].detail' "$T/plugins.json")
 check "plugin findings do not block" [ "$(jq -r '.[1].class' "$T/plugins.json")" = in-sync ]
 
 # 14. review fixes: .docker subtree, per-harness plugin scope, behind externals
 jq -n '[
-  {host:"gold",transport:"ssh",gold:true,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"a",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:[],registered_marketplaces:["mk"],installed:{}},
       codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"2",enabled:true}}}}}},
-  {host:"h",transport:"ssh",gold:false,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"h",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[{live:" ",target:"M",path:".docker/contexts/meta.json"}]},
     externals:[{path:"/x",state:"behind",behind:2,fetch:"ok"}],
     plugins:{codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"1",enabled:true}}}}}}]' |
   jq -f "$here/classify.jq" >"$T/review-fixes.json"
 check "any .docker path is sensitive" [ "$(jq -r '.[1].conflicts | join(",")' "$T/review-fixes.json")" = .docker/contexts/meta.json ]
-check "Codex drift is scoped by the gold's Codex marketplaces" \
-  [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/review-fixes.json")" = "codex: p@cx 1 (gold 2)" ]
+check "Codex drift is scoped by the fleet's Codex marketplaces" \
+  [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/review-fixes.json")" = "codex: p@cx 1 (newest 2 on a)" ]
 check "a behind external is reported" [ "$(jq -r '[.[1].findings[].code] | index("external-behind") != null' "$T/review-fixes.json")" = true ]
+
+# 15. stale base: the origin never pulled a newer upstream change to that source
+jq -n '[{host:"x",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"b",behind:1},
+  status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",live_sha256:"d1",live_mtime:300,
+  source:"dot_f",kind:"plain",source_upstream_time:200,source_head_time:100}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/stale-base.json"
+check "capturing over an unpulled upstream change is refused" \
+  [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/stale-base.json")" = review,stale-base ]
 
 check "no secret anywhere in run records" no_secret "$run"
 

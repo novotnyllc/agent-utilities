@@ -29,40 +29,45 @@ another host needs the Roundhouse CLI (`ROUNDHOUSE_CLI`, default
 
 ## Fast path
 
-1. `"$FC" probe --gold GOLD HOST...` — one read-only batch per host, in
-   parallel, in the environment its executor uses: the login shell for SSH
-   hosts, the controller's own environment for a local host. Add `--plugins` to compare Claude/Codex
-   plugin registration and versions against the gold; `--require TOOL` for
-   tools run scripts need.
-2. Act on each host's class:
-   - `in-sync`: nothing to do.
+No host is special: a change can start on any machine. The probe records, for
+every live-edited file, when it changed and what upstream last did to its
+source, and the classifier works out per file where each change came from.
+
+1. `"$FC" probe HOST...` — probe every host you sync, in one call: one
+   read-only batch per host, in parallel, in the environment its executor uses
+   (the login shell for SSH hosts, the controller's own environment for a local
+   host). Add `--plugins` to compare Claude/Codex plugin registration and
+   versions across the fleet; `--require TOOL` for tools run scripts need.
+2. Act on each host's class, in this order:
+   - `capture`: this host is where a change was made (its edit is the newest,
+     newer than upstream, and every host that has it agrees). Run
+     `"$FC" seal RUN capture`, show the user what is captured from where, get
+     one approval, then `"$FC" apply RUN SET-ID`. It copies each file from its
+     origin into the local source, secret-scans, commits, pushes, and re-probes.
    - `pull`: clean source strictly behind upstream. `"$FC" seal RUN pull`,
      then `"$FC" apply RUN SET-ID`; no live file changes, so the sync request
-     covers it. Apply re-probes those hosts.
+     covers it.
    - `apply`: every pending entry is source-driven. `"$FC" seal RUN apply`,
      show the user the per-host list and set ID, get one approval, then
      `"$FC" apply RUN SET-ID`.
-   - `review`: only these hosts, and only their listed paths and blockers,
-     follow [reconcile](references/reconcile.md).
-   - `identity-mismatch`, `unreachable`: stop for that host and report.
-   - `unsupported`: see Windows below.
-3. Report the final table and every finding. `in-sync`, `pull`, and `apply`
-   hosts need no evidence table.
+   - `awaiting-capture`: the host already has a change that is being
+     published; it converges after the capture and a pull.
+   - `review`: only these hosts, and only their listed paths, decisions, and
+     blockers, follow [reconcile](references/reconcile.md).
+   - `in-sync`: nothing to do. `identity-mismatch`, `unreachable`: stop for
+     that host and report. `unsupported`: see Windows below.
+3. Plugin findings: `"$FC" plugins RUN` runs Roundhouse's own plugin
+   convergence on those hosts now (it also runs every 20 minutes).
+4. Report the final table, every `decide` line, and every finding.
 
 The classifier allows `apply` only when every `chezmoi status` line shows no
 live edit since chezmoi last wrote it (first column blank), and none is a
-deletion or sensitive path. Seal requires
-Roundhouse's own inventory to match the probed HEAD and status digest; the
-backup step and the executor each recheck that digest before mutating. See
+deletion or sensitive path. Seal requires Roundhouse's own inventory to match
+the probed HEAD and status digest; the backup step and the executor each
+recheck that digest before mutating. A capture copies only plain source files
+whose content still matches the approved digest, and never commits anything
+that looks like a secret. See
 [reconcile](references/reconcile.md#why-the-fast-path-is-safe).
-
-## Gold host
-
-The gold host's live state is authoritative. `gold-pending-apply` means its
-source disagrees with its live files (a stale capture or a foreign commit):
-recapture or review, never apply over it. Publishing from the gold is the
-user's reviewed commit and push. Live wins elsewhere only by capturing into the
-gold's source first ([live wins](references/reconcile.md#live-wins)).
 
 ## Blockers and findings
 

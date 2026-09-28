@@ -8,31 +8,33 @@ host to `review`; findings only report.
 | Code | Cause | Fix |
 | --- | --- | --- |
 | `login-shell-tools-missing` | A tool is not on PATH in the environment the executor uses. For an SSH host that is the login shell (`$SHELL -lc`), where the Roundhouse worker and chezmoi run scripts execute; on macOS, fnm-managed tools such as `ocx` exist only once the zsh login profile initializes fnm. For a local host it is the controller's own environment, where a local `apply-plan` runs chezmoi. | SSH host: initialize the tool's PATH in its login profile (`.zprofile`, or a declarative path entry), not only in `.zshrc`, and never switch automation to `-i` interactive shells or hard-code `bash -lc`. Local host: fix the PATH of the session running the controller (or start it from a login shell). Re-probe with `--require TOOL`. |
-| `source-dirty` | Uncommitted changes in a non-gold host's source tree. | Find the writer (see `scheduled-source-writer`). Carry wanted changes to the gold's source and publish; discard the rest only with the user's explicit decision. Never auto-commit or reset. |
-| `gold-source-dirty` | Uncommitted work on the gold. | The user reviews and commits it, or it is set aside; then publish. |
-| `source-ahead`, `gold-unpublished` | Local commits not on upstream. | On the gold: the user pushes. Elsewhere: move the commits to the gold deliberately; never force-push or reset. |
+| `source-dirty` | Uncommitted changes in a host's source tree. | Find the writer (see `scheduled-source-writer`). Commit and push wanted changes from that host (they are source edits, not live ones); discard the rest only with the user's explicit decision. Never auto-commit or reset. |
+| `source-ahead` | Local commits not on upstream. | The user pushes them from that host (after a pull if needed); never force-push or reset. |
 | `source-fetch-failed`, `source-no-upstream`, `source-not-git` | Upstream state is unknown. | Fix the remote, credentials, or checkout, then re-probe. |
 | `status-failed` | `chezmoi status` failed, usually a template error or a secret manager that needs a signed-in session. | Fix the template or sign in interactively on that host; never paste secrets to work around it. |
 | `status-too-large` | More than 200 pending entries. | Too much to classify safely; reconcile in batches. |
 | `external-rewritten` | A `.chezmoiexternal` `git-repo` (for example oh-my-tmux) whose upstream rewrote history. chezmoi's `pull --ff-only` fails and aborts the whole apply. The clone has no local, untracked, or ignored files, and every commit it holds came from upstream. | `"$FC" seal RUN reset HOST`, then `apply` ([reconcile](reconcile.md#blockers)). |
 | `external-local-changes` | The same, but the clone has local changes or local commits. | Stop. Never reset; ask the user. |
-| `gold-pending-apply` | The gold's source would change its live files. Its live state is authoritative, so this is a stale capture or a commit from elsewhere. | See stale captures below. Never apply over the gold. |
+
+Per-file decisions (`source-newer`, `stale-base`, `competing`,
+`capture-manual`) appear as `decide` lines; see
+[reconcile](reconcile.md#how-a-changes-origin-is-decided).
 
 ## Findings
 
 | Code | Cause | Fix |
 | --- | --- | --- |
-| `scheduled-source-writer` | A launchd agent, systemd unit, or cron entry edits the source tree (for example a scheduled drift-adoption script with `--commit`, or a job running `apply --force`). Several hosts then collect the same uncommitted drift, and local commits diverge. | Make it report-only on non-gold hosts; on the gold, let it propose changes for the user to review and publish. It must not commit, push, or force-apply unattended. |
+| `scheduled-source-writer` | A launchd agent, systemd unit, or cron entry edits the source tree (for example a scheduled drift-adoption script with `--commit`, or a job running `apply --force`). Several hosts then collect the same uncommitted drift, and local commits diverge. | Make scheduled jobs report-only on every host; the fleet sync captures a change from the host where it was made. Nothing unattended commits, pushes, or force-applies. |
 | `repeated-source-drift` | Several hosts share the same uncommitted source paths. | Almost always a scheduled writer; fix that, not each host. |
 | `json-key-order` | An app rewrote a managed JSON file (for example Claude settings) with only key-order changes. chezmoi still counts it as a live edit and will not overwrite it non-interactively. | Fix the source, not the host: manage the file with the modify-template passthrough below, publish, and the drift disappears on every host. |
 | `umask` | The effective chezmoi umask allows group/other write (WSL defaults to 002), causing permission-only drift and loosened files. | Set `umask = 0o022` in that host's chezmoi config and have bootstrap write it. |
 | `sensitive-permissions` | A sensitive target (`.ssh`, `.gnupg`, `.aws`, `.docker`, …) has a source name without `private_`, or live group/other access. | Rename the source to `private_…` so apply keeps it 0700/0600. |
-| `upstream-differs-from-gold` | This host's upstream ref is not the gold's HEAD. | Publish from the gold, or probe with fetch (the default). |
+| `upstream-views-differ` | Hosts see different upstream commits. | Probe with fetch (the default) so every host judges against the same upstream. |
 | `external-fetch-failed` | An external's upstream was unreachable. | Retry later; the external is left as is. |
 | `external-behind` | A git-repo external has upstream commits chezmoi has not pulled yet. | Report only. The next sealed apply fast-forwards it once its `refreshPeriod` has elapsed. Do not run an unsealed `chezmoi apply --refresh-externals`: without targets it applies every pending entry, bypassing the plan, backup, and rechecks. |
-| `plugin-marketplace-unregistered` | A marketplace declared in the synced harness settings is not registered. Claude Code registers `extraKnownMarketplaces` only on an interactive trusted start; headless runs never do. | Register and update it (`claude plugin marketplace add SOURCE`, `… update`; `codex plugin marketplace add`/`upgrade`) through the Roundhouse agents lane or the user's session. Do it before the chezmoi apply: plugin commands rewrite the settings file. |
-| `plugin-not-installed` | A Claude plugin is enabled in the synced settings but not installed. | Install it, then re-probe; same ordering. |
-| `plugin-missing-vs-gold`, `plugin-version-drift` | Installed plugins or versions differ from the gold for marketplaces the user declares. | Update through the Roundhouse agents lane (`roundhouse:fleet-update`). |
+| `plugin-marketplace-unregistered` | A marketplace declared in the synced harness settings is not registered. Claude Code registers `extraKnownMarketplaces` only on an interactive trusted start; headless runs never do. | Roundhouse `fleet-run` (0.9.24+) registers it from the declared source; `"$FC" plugins RUN` runs that now. Run plugin work before the chezmoi apply, because plugin commands rewrite the settings file. |
+| `plugin-not-installed` | A Claude plugin is enabled in the synced settings but not installed. | `"$FC" plugins RUN`; if the fleet store does not declare the plugin, add it there or stop enabling it in the settings. |
+| `plugin-missing`, `plugin-version-drift` | A plugin installed elsewhere in the fleet (from a marketplace the fleet declares) is missing here, or is older than the newest installed copy. | `"$FC" plugins RUN` runs Roundhouse `fleet-run` on those hosts now; it also runs every 20 minutes and registers any declared marketplace that is missing. |
 
 ## Modify-template passthrough
 
@@ -53,12 +55,14 @@ managed keys and returns the file byte-for-byte when nothing managed changed:
 
 ## Stale captures
 
-A template produced by a capture script (a portable manifest exported from the
-gold's live config) goes stale when the gold changes afterwards; applying it
-rolls the gold, then every host, back. Before applying anything that comes
-from a capture, run the capture on the gold and require no diff against the
-committed template. Capture only the allowlisted portable keys; auth,
-accounts, caches, and host-specific profiles stay per host.
+A template produced by a capture script (a portable manifest exported from one
+host's live config) goes stale when that host changes afterwards; applying it
+rolls every host back. The origin logic catches the direct case: the host's
+newer live edit becomes a `capture`, not an apply. For generated manifests,
+also rerun the capture script on the host where the config was last changed
+and require no diff against the committed template before applying anywhere.
+Capture only the allowlisted portable keys; auth, accounts, caches, and
+host-specific profiles stay per host.
 
 ## Pipe truncation
 

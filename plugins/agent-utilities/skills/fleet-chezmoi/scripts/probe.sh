@@ -14,13 +14,11 @@
 # digest match against the Roundhouse collector. mktemp creates private files.
 set -u
 
-gold=false
 fetch=true
 plugins=false
 required="chezmoi git jq"
 while [ "$#" -gt 0 ]; do
   case $1 in
-    --gold) gold=true ;;
     --no-fetch) fetch=false ;;
     --plugins) plugins=true ;;
     --require)
@@ -78,8 +76,8 @@ login_shell=$(jq -cn --arg shell "${SHELL:-}" --argjson missing "$missing_json" 
 emit() {
   # emit ERROR [SOURCE-JSON]
   jq -cn --argjson identity "$identity" --argjson login_shell "$login_shell" \
-    --argjson gold "$gold" --arg error "$1" \
-    '{schema:"fleet-chezmoi.probe",version:1,gold:$gold,identity:$identity,
+    --arg error "$1" \
+    '{schema:"fleet-chezmoi.probe",version:1,identity:$identity,
       login_shell:$login_shell,error:$error}'
 }
 
@@ -159,6 +157,51 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.target == "M" and (.path | en
     rm -f "$work/rendered" "$work/a" "$work/b"
   done
 keyorder_json=$(jq -Rsc 'split("\n") | map(select(length > 0))' "$work/keyorder")
+
+# Live edits: what changed, when, and where it maps in the source. The fleet
+# classifier compares these across hosts to find where each change came from.
+: >"$work/edits"
+printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " ") | .path' |
+  head -n 50 | while IFS= read -r rel; do
+    live=$dest/$rel
+    live_sha='' live_mtime=0 kind=plain
+    if [ -f "$live" ] && [ ! -L "$live" ]; then
+      live_sha=$(sha_file "$live")
+      live_mtime=$(stat -c %Y "$live" 2>/dev/null || stat -f %m "$live" 2>/dev/null || printf '0')
+    else
+      kind=not-a-file
+    fi
+    source_file=$(chezmoi source-path -- "$live" 2>/dev/null </dev/null || true)
+    source_rel=${source_file#"$src"/}
+    case $(basename -- "$source_file") in
+      modify_*) kind=modify ;;
+      *.tmpl) kind=template ;;
+      encrypted_*|*.age|*.asc) kind=encrypted ;;
+      symlink_*) kind=symlink ;;
+      '') kind=unmapped ;;
+    esac
+    upstream_time=0 head_time=0 upstream_sha=''
+    if [ -n "$source_file" ]; then
+      head_time=$(git -C "$src" log -1 --format=%ct HEAD -- "$source_rel" 2>/dev/null || true)
+      head_time=${head_time:-0}
+      if [ -n "$upstream" ]; then
+        upstream_time=$(git -C "$src" log -1 --format=%ct '@{u}' -- "$source_rel" 2>/dev/null || true)
+        upstream_time=${upstream_time:-0}
+        # For a plain source the upstream file is the target itself: an edit that
+        # already equals it has been published and only needs a pull.
+        if [ "$kind" = plain ] && git -C "$src" show "@{u}:$source_rel" >"$work/upstream-file" 2>/dev/null; then
+          upstream_sha=$(sha_file "$work/upstream-file")
+        fi
+        rm -f "$work/upstream-file"
+      fi
+    fi
+    jq -cn --arg path "$rel" --arg sha "$live_sha" --argjson mtime "$live_mtime" --arg source "$source_rel" \
+      --arg kind "$kind" --argjson upstream_time "$upstream_time" --argjson head_time "$head_time" \
+      --arg upstream_sha "$upstream_sha" \
+      '{path:$path,live_sha256:$sha,live_mtime:$mtime,source:$source,kind:$kind,
+        source_upstream_time:$upstream_time,source_head_time:$head_time,upstream_sha256:$upstream_sha}' >>"$work/edits"
+  done
+edits_json=$(jq -sc '.' "$work/edits")
 
 # --- git-repo externals ------------------------------------------------------
 : >"$work/externals"
@@ -341,10 +384,18 @@ if [ "$plugins" = true ] && command -v codex >/dev/null 2>&1; then
       id != "" && /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true/ { print id; id = "" }
     ' "$HOME/.codex/config.toml" | jq -Rsc 'split("\n") | map(select(length > 0))')
   fi
-  registered=$(codex plugin marketplace list --json 2>/dev/null </dev/null |
-    jq -c '.marketplaces | map(.name)' 2>/dev/null || printf 'null')
-  installed=$(codex plugin list --json 2>/dev/null </dev/null |
-    jq -c '.installed | map({key:.pluginId,value:{version,enabled}}) | from_entries' 2>/dev/null || printf 'null')
+  # Marketplaces the Codex app itself ships (bundled, runtime, curated) differ by
+  # app version and platform on purpose; only user-declared ones are compared.
+  codex_markets=$(codex plugin marketplace list --json 2>/dev/null </dev/null || true)
+  runtime=$(printf '%s' "$codex_markets" | jq -c '[.marketplaces[]? |
+    select(.marketplaceSource.sourceType == null or ((.root // "") | test("/codex-runtimes/|/bundled-marketplaces/"))) | .name]' \
+    2>/dev/null || printf '[]')
+  registered=$(printf '%s' "$codex_markets" | jq -c --argjson rt "$runtime" \
+    '.marketplaces | map(.name) - $rt' 2>/dev/null || printf 'null')
+  declared_mp=$(jq -cn --argjson d "$declared_mp" --argjson rt "$runtime" '$d - $rt')
+  installed=$(codex plugin list --json 2>/dev/null </dev/null | jq -c --argjson rt "$runtime" '
+    .installed | map(select((.marketplaceName // (.pluginId | split("@") | last)) as $m | $rt | index($m) | not))
+    | map({key:.pluginId,value:{version,enabled}}) | from_entries' 2>/dev/null || printf 'null')
   plugins_json=$(jq -cn --argjson p "$plugins_json" --argjson d "$declared_mp" --argjson e "$enabled" \
     --argjson r "$registered" --argjson i "$installed" \
     '$p + {codex:{declared_marketplaces:$d,enabled:$e,registered_marketplaces:$r,installed:$i}}')
@@ -352,14 +403,14 @@ fi
 
 status_json=$(jq -cn --argjson ok "$status_ok" --arg digest "$status_digest" \
   --argjson count "$status_count" --argjson lines "$status_lines" --arg diff_digest "$diff_digest" \
-  --argjson keyorder "$keyorder_json" \
+  --argjson keyorder "$keyorder_json" --argjson edits "$edits_json" \
   '{ok:$ok,digest:$digest,count:$count,truncated:($count > ($lines | length)),lines:$lines,
-    diff_digest:$diff_digest,json_key_order_only:$keyorder}')
+    diff_digest:$diff_digest,json_key_order_only:$keyorder,edits:$edits}')
 
-jq -cn --argjson identity "$identity" --argjson login_shell "$login_shell" --argjson gold "$gold" \
+jq -cn --argjson identity "$identity" --argjson login_shell "$login_shell" \
   --arg dest "$dest" --argjson source "$source_json" --argjson status "$status_json" \
   --argjson externals "$externals_json" --argjson umask "$umask_json" \
   --argjson sensitive "$sensitive_json" --argjson writers "$writers_json" --argjson plugins "$plugins_json" \
-  '{schema:"fleet-chezmoi.probe",version:1,gold:$gold,identity:$identity,login_shell:$login_shell,
+  '{schema:"fleet-chezmoi.probe",version:1,identity:$identity,login_shell:$login_shell,
     dest:$dest,source:$source,status:$status,externals:$externals,umask:$umask,
     sensitive_without_private:$sensitive,scheduled_source_writers:$writers,plugins:$plugins}'
