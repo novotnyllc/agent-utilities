@@ -333,7 +333,9 @@ seal_command() {
           extra=$(jq -c '{targets:.operations[0].targets,status_digest:.operations[0].status_digest}' "$draft") ;;
         reset)
           jq -c --arg h "$host" '{domain:"chezmoi",target:$h,operations:[
-            .probe.externals[] | select(.state == "rewritten-resettable") |
+            # Only against a remote-tracking ref this probe just fetched: a
+            # stale ref would reset to an obsolete commit.
+            .probe.externals[] | select(.state == "rewritten-resettable" and .fetch == "ok") |
             {type:"chezmoi-external-reset",kind:"chezmoi_external",id:.path,head:.head,upstream_head:.upstream_head,
              argv:["git","-C",.path,"reset","--hard","--quiet",.upstream_head]}]}' \
             "$run/probes/$host.json" >"$draft"
@@ -684,7 +686,11 @@ plugins_command() {
   }
   for host in "$@"; do
     valid_host "$host" || die "invalid host name"
-    ( run_on "$(host_meta "$host")" "$script_dir/converge-plugins.sh" 2>"$run/logs/$host.plugins.err" |
+    # The payload rechecks the configured identity on the host itself, right
+    # before it changes anything: the alias may resolve elsewhere by now.
+    ( run_on "$(host_meta "$host")" "$script_dir/converge-plugins.sh" \
+        "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
+        2>"$run/logs/$host.plugins.err" |
         last_json fleet-chezmoi.plugins >"$run/plugins/$host.json" ) &
     workers+=("$! $host")
   done

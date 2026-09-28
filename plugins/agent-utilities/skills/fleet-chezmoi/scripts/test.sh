@@ -480,6 +480,11 @@ check "external is current after reset" [ "$(jq -r '.probe.externals[0].state' "
 git -C "$T/up" commit -q --amend -m rewritten-again
 probe h1
 check "rewritten again is resettable" [ "$(field "$run" h1 '[.blockers[].code] | join(",")')" = external-rewritten ]
+# Without a fetch in this probe, the remote-tracking ref may be stale: no reset.
+"$fc" probe --run "$run" --no-fetch h1 >"$T/probe.out" 2>&1 || true
+"$fc" seal "$run" reset h1 >"$T/seal.out" 2>&1 || true
+check "an unfetched external is never reset" grep -q "no resettable external" "$T/seal.out"
+probe h1
 [ -z "${DEBUG:-}" ] || jq ".[0].blockers" "$run/classes.json"
 printf 'kept\n' >"$HOME/.ext/local-only" && printf 'local-only\n' >>"$HOME/.ext/.git/info/exclude"
 probe h1
@@ -644,7 +649,12 @@ esac
 STUB
 printf '#!/bin/sh\nexit 0\n' >"$pc/bin/roundhouse"
 chmod +x "$pc/bin/claude" "$pc/bin/roundhouse"
-PC=$pc HOME=$pc/home PATH="$pc/bin:$PATH" sh "$here/converge-plugins.sh" >"$pc/out.json"
+if [ "$(PC=$pc HOME=$pc/home PATH="$pc/bin:$PATH" sh "$here/converge-plugins.sh" someone-else "$(id -un)" | jq -r .ok)" != false ]; then
+  fail "plugin convergence ran on a host whose identity did not match"
+fi
+check "nothing was installed on the wrong host" [ ! -e "$pc/install.log" ]
+check "no marketplace was added on the wrong host" [ ! -e "$pc/add.log" ]
+PC=$pc HOME=$pc/home PATH="$pc/bin:$PATH" sh "$here/converge-plugins.sh" "$(hostname 2>/dev/null || uname -n)" "$(id -un)" >"$pc/out.json"
 check "the plugin result is one JSON line for last_json" [ "$(awk 'END {print NR}' "$pc/out.json")" = 1 ]
 check "enabled but missing plugins are installed" [ "$(jq -c '.installed | sort' "$pc/out.json")" = '["new@nm","want@mk"]' ]
 check "a disabled plugin is not installed" ! grep -q off@mk "$pc/install.log"

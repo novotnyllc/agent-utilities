@@ -10,7 +10,21 @@
 #    from whichever host enabled them) but this host lacks are installed, after
 #    registering their marketplace from the synced extraKnownMarketplaces.
 #    Nothing is installed that the user's own settings do not enable.
+#
+#   converge-plugins.sh EXPECTED-HOSTNAME EXPECTED-USER
+#
+# Nothing changes unless this host is the one the controller verified.
 set -u
+expected_host=${1:-}
+expected_user=${2:-}
+actual_host=$(hostname 2>/dev/null || uname -n)
+actual_user=$(id -un)
+if [ -z "$expected_host" ] || [ -z "$expected_user" ] || [ "$expected_host" = null ] ||
+  [ "$actual_host" != "$expected_host" ] || [ "$actual_user" != "$expected_user" ]; then
+  jq -cn '{schema:"fleet-chezmoi.plugins",version:1,ok:false,exit:65,installed:[],failed:[],
+    error:"identity does not match the verified host; nothing was changed"}'
+  exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-chezmoi-plugins.XXXXXX") || exit 70
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
