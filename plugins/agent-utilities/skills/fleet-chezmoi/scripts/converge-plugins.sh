@@ -33,11 +33,14 @@ if command -v claude >/dev/null 2>&1 && [ -f "$settings" ]; then
       market=${id##*@}
       if ! claude plugin marketplace list --json 2>/dev/null </dev/null |
         jq -e --arg m "$market" 'any(.[]; .name == $m)' >/dev/null 2>&1; then
+        # A declared ref (branch or tag) is kept with #ref.
         source=$(jq -r --arg m "$market" '.extraKnownMarketplaces[$m].source // empty |
-          if .source == "github" then .repo elif .source == "directory" then .path
-          elif .source == "git" or .source == "url" then .url else empty end' "$settings" 2>/dev/null)
+          ((.ref // "") | if . == "" then "" else "#" + . end) as $ref |
+          if .source == "github" then .repo + $ref elif .source == "git" then .url + $ref
+          elif .source == "directory" then .path elif .source == "url" then .url else empty end' "$settings" 2>/dev/null)
         case $source in
           ''|-*|*[[:space:]]*) printf '%s\n' "$id" >>"$work/failed"; continue ;;
+          *'#'*) case ${source##*#} in ''|*[!A-Za-z0-9._/-]*) printf '%s\n' "$id" >>"$work/failed"; continue ;; esac ;;
         esac
         claude plugin marketplace add "$source" >/dev/null 2>&1 </dev/null || { printf '%s\n' "$id" >>"$work/failed"; continue; }
       fi

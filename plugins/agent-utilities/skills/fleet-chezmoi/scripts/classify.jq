@@ -53,18 +53,23 @@ def vkey: tostring | split(".") | map(tonumber? // .);
 def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) != null));
 
 . as $records
+# Only records whose identity matched (or that have no expectation) inform
+# fleet-wide decisions; a wrong host's data never steers another host.
+| ($records | map(select(.probe != null and (.probe.error // null) == null and
+    (.expected == null or (.expected.hostname == .probe.identity.hostname and
+      .expected.user == .probe.identity.user))))) as $eligible
 # --- fleet-wide facts --------------------------------------------------------
 # Source trees that carry the same uncommitted paths on several hosts point at a
 # scheduled writer, not at a person.
 | ($records | map(select((.probe.source.dirty_count // 0) > 0) | .probe.source.dirty | sort)
   | group_by(.) | map(select(length > 1) | .[0])) as $repeated_dirty
-| ($records | map(.probe.source.upstream_head // empty | select(. != "")) | unique) as $upstream_views
+| ($eligible | map(.probe.source.upstream_head // empty | select(. != "")) | unique) as $upstream_views
 # Per-path origin decisions from every host's live edits.
 # An edit whose content already equals upstream has been published: a pull
 # resolves it, so it takes no part in deciding anything.
-| ($records | map(.host as $h | (.probe.status.edits // [])[]
+| ($eligible | map(.host as $h | (.probe.status.edits // [])[]
     | select((.upstream_sha256 // "") != "" and .live_sha256 == .upstream_sha256) | "\($h)\t\(.path)")) as $published
-| ($records | map(.host as $h | (.probe.status.edits // [])[]
+| ($eligible | map(.host as $h | (.probe.status.edits // [])[]
     | select((.upstream_sha256 // "") == "" or .live_sha256 != .upstream_sha256) | . + {host:$h}) | flatten
   | group_by(.path)
   | map(
@@ -87,8 +92,9 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   | from_entries) as $decisions
 # Managed JSON settings: per (file, entry) across hosts. Only entries a host
 # changed (its value matches no published version) take part.
-| ($records | map(.host as $h | (.probe.managed_json // [])[] | . as $m
-    | .edits[] | . + {host: $h, target: $m.target, managed: $m.managed, live_mtime: $m.live_mtime}) | flatten
+| ($eligible | map(.host as $h | (.probe.managed_json // [])[] | . as $m
+    | .edits[] | . + {host: $h, target: $m.target, managed: $m.managed, live_mtime: $m.live_mtime,
+        history_truncated: ($m.history_truncated // false)}) | flatten
   | group_by([.target, (.path | tojson)])
   | map(
       (max_by(.live_mtime)) as $newest
@@ -98,6 +104,10 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
            decision: (
              if $newest.upstream_path_time > $newest.live_mtime then "source-newer"
              elif any(.[]; .review) then "capture-manual"
+             # A value older than the retained history, or removing a whole
+             # fleet-wide key, is a decision for a person.
+             elif any(.[]; .history_truncated) then "capture-manual"
+             elif any(.[]; .state == "removed" and (.path | length) == 1) then "capture-manual"
              elif ($values | length) > 1 then "competing"
              else "capture" end),
            origin: $newest.host, mtime: $newest.live_mtime, source: $newest.managed, kind: "managed-json",
@@ -106,11 +116,11 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   | from_entries) as $mdecisions
 # Plugin baselines: what any host has installed from the marketplaces the fleet
 # declares for that harness, and the newest version seen.
-| ([$records[] | .probe.plugins // {} | keys[]] | unique) as $harnesses
+| ([$eligible[] | .probe.plugins // {} | keys[]] | unique) as $harnesses
 | (reduce $harnesses[] as $hn ({};
     .[$hn] = {
-      scope: ([$records[] | .probe.plugins[$hn].declared_marketplaces // [] | .[]] | unique),
-      installed: ([$records[] | .host as $h | (.probe.plugins[$hn].installed // {}) | to_entries[]
+      scope: ([$eligible[] | .probe.plugins[$hn].declared_marketplaces // [] | .[]] | unique),
+      installed: ([$eligible[] | .host as $h | (.probe.plugins[$hn].installed // {}) | to_entries[]
         | select(.value.enabled == true) | {id: .key, version: .value.version, host: $h}]
         | group_by(.id) | map({key: .[0].id, value: {hosts: map(.host), newest: (max_by(.version | vkey))}})
         | from_entries)
@@ -140,7 +150,7 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
              elif $l.target == "R" then "run-script" else "source-driven" end)
           elif ($mtargets | index($l.path)) != null then
             (if $mkind == "managed-conflict" then "managed-review" else $mkind end)
-          elif ([($p.managed_json // [])[].target] | index($l.path)) != null then "stale-live-edit"
+          elif ([($p.managed_json // [])[].target] | index($l.path)) != null then "source-driven"
           elif ($keyorder | index($l.path)) != null then "json-key-order"
           elif ($published | index("\($r.host)\t\($l.path)")) != null then "published"
           elif $d == null then "live-edit"
@@ -218,6 +228,8 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   | {
       host: $r.host,
       transport: $r.transport,
+      identity_verified: ($r.expected != null and $r.probe != null and
+        $r.expected.hostname == ($p.identity.hostname // null) and $r.expected.user == ($p.identity.user // null)),
       class: (
         if $r.transport == "codex-remote-control" or $r.transport == "windows" then "unsupported"
         elif $r.probe == null or ($p.error // null) != null then "unreachable"

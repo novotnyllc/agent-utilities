@@ -61,9 +61,11 @@ source, and the classifier works out per file where each change came from.
      blockers, follow [reconcile](references/reconcile.md).
    - `in-sync`: nothing to do. `identity-mismatch`, `unreachable`: stop for
      that host and report. `unsupported`: see Windows below.
-3. Plugin findings: `"$FC" plugins RUN` runs Roundhouse's plugin convergence
-   on those hosts now (it also runs every 20 minutes) and installs any Claude
-   plugin the synced settings enable but the host lacks.
+3. Plugin findings: before sealing `apply`, run `"$FC" plugins RUN`
+   (identity-verified hosts only), because plugin commands rewrite settings. It
+   runs Roundhouse's plugin convergence now (it also runs every 20 minutes),
+   installs any Claude plugin the synced settings enable but the host lacks,
+   and re-probes.
 4. Report the final table, every `decide` line, and every finding.
 
 Why each step is safe, and how origins are decided:

@@ -41,7 +41,10 @@ while IFS= read -r entry; do
   path=$(printf '%s' "$entry" | jq -c '.path')
   state=$(printf '%s' "$entry" | jq -r '.state')
   if [ "$state" = removed ]; then
-    jq -e --argjson p "$path" 'getpath($p) == null' "$live" >/dev/null 2>&1 ||
+    # Absent, not merely null: a recreated null value is a change.
+    jq -e --argjson p "$path" '
+      if ($p | length) == 1 then has($p[0]) | not
+      else (.[$p[0]] | type) != "object" or (.[$p[0]] | has($p[1]) | not) end' "$live" >/dev/null 2>&1 ||
       fail "an approved removal is no longer absent"
     jq -cn --argjson p "$path" '{path:$p,state:"removed",b64:""}' >>"$work/out"
   else

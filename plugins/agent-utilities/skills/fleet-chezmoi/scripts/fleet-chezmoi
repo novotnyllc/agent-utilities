@@ -178,7 +178,7 @@ classify_run() {
       elif .class == "apply" then
         (.pending | to_entries | map("\(.value | length) \(.key)") | join(", "))
       elif .class == "capture" then "origin of: " + (.captures | map(.path) | join(", "))
-      elif .class == "awaiting-capture" then "published from elsewhere: " + (.pending["captured-elsewhere"] | join(", "))
+      elif .class == "awaiting-capture" then "published from elsewhere: " + (((.pending["captured-elsewhere"] // []) + (.pending.published // [])) | join(", "))
       elif .class == "review" then
         ((.blockers | map(.code)) + (if (.conflicts | length) > 0 then ["conflicts: " + (.conflicts | join(", "))] else [] end) | join("; "))
       elif .class == "identity-mismatch" then "saw \(.identity.user)@\(.identity.hostname)"
@@ -478,7 +478,7 @@ apply_command() {
 # Patterns that must never reach the source: private keys and common token
 # shapes. The source repository's own scanner (scripts/scan-secrets) also runs
 # when it has one.
-secret_pattern='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|(api[_-]?key|secret|token|passw(or)?d)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"'[:space:]]{12,}'
+secret_pattern='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|(api[_-]?key|secret|token|passw(or)?d)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:]]{12,}'
 
 local_source() {
   chezmoi source-path 2>/dev/null </dev/null || die "no local chezmoi source" 69
@@ -493,13 +493,19 @@ capture_seal() {
   head=$(git -C "$src" rev-parse HEAD)
   [ "$head" = "$(git -C "$src" rev-parse '@{u}')" ] ||
     die "the local source is not at its upstream; pull it first" 65
+  # The decisions were made against the upstream the hosts saw; if it moved
+  # since, a capture could overwrite a newer upstream change.
+  jq -e --arg head "$head" '[.[] | select(.identity_verified) | .source.upstream_head // empty
+    | select(. != "")] | all(. == $head)' "$run/classes.json" >/dev/null ||
+    die "upstream moved since the probe; re-probe before capturing" 65
   set_dir=$run/sets/capture
   rm -rf "$set_dir"
   mkdir -p "$set_dir"
   chmod 700 "$run/sets" "$set_dir"
   jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     {schema:"fleet-chezmoi.set",version:1,stage:"capture",created_at:$created,controller_head:$head,
-     items:([.[] | .host as $h | .captures[] | {host:$h,type:(.type // "file"),path,source,digest,mtime,entries}]
+     items:([.[] | select(.identity_verified) | .host as $h | .captures[]
+       | {host:$h,type:(.type // "file"),path,source,digest,mtime,entries}]
        | sort_by(.path))}' \
     "$run/classes.json" >"$set_dir/set.json"
   chmod 600 "$set_dir/set.json"
@@ -648,9 +654,14 @@ plugins_command() {
   shift
   [ -f "$run/classes.json" ] || die "no classification in $run; run probe first"
   if [ "$#" -eq 0 ]; then
-    while IFS= read -r host; do set -- "$@" "$host"; done < <(jq -r '.[] |
+    while IFS= read -r host; do set -- "$@" "$host"; done < <(jq -r '.[] | select(.identity_verified) |
       select(any(.findings[]; .code | startswith("plugin-"))) | .host' "$run/classes.json")
   fi
+  # Plugins change only on hosts whose identity the probe just verified.
+  for host in "$@"; do
+    jq -e --arg h "$host" 'any(.[]; .host == $h and .identity_verified)' "$run/classes.json" >/dev/null ||
+      die "$host is not an identity-verified host in this run; probe it first" 65
+  done
   [ "$#" -gt 0 ] || { printf 'no host has plugin findings\n'; return 0; }
   mkdir -p "$run/plugins"
   plugin_failed() {

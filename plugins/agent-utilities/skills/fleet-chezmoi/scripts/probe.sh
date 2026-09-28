@@ -224,12 +224,14 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
     [ -n "$m_target" ] && [ -n "$m_managed" ] && [ -f "$m_live" ] && [ ! -L "$m_live" ] || continue
     jq -e 'type == "object"' "$m_live" >/dev/null 2>&1 || continue
     : >"$work/versions"
-    git -C "$src" log --format='%H %ct' -n 20 "$ref" -- "$m_managed" 2>/dev/null |
+    git -C "$src" log --format='%H %ct' -n 500 "$ref" -- "$m_managed" 2>/dev/null |
       while read -r commit ctime; do
         git -C "$src" show "$commit:$m_managed" 2>/dev/null |
           jq -c --argjson t "$ctime" 'select(type == "object") | {time:$t,doc:.}' >>"$work/versions" 2>/dev/null || :
       done
     [ -s "$work/versions" ] || continue
+    m_truncated=false
+    [ "$(awk 'END {print NR}' "$work/versions")" -lt 500 ] || m_truncated=true
     m_mtime=$(stat -c %Y "$m_live" 2>/dev/null || stat -f %m "$m_live" 2>/dev/null || printf '0')
     jq -rn --slurpfile v "$work/versions" --slurpfile l "$m_live" --argjson review "$m_review" '
       def flat: to_entries | map(
@@ -250,7 +252,8 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
       | [$p, (if $lv == "#absent" then "removed" else "set" end), ($lv | @base64), ($pt | tostring),
          (($p | fromjson)[0] as $k | $review | index($k) != null | tostring)] | @tsv
     ' >"$work/managed-edits" 2>/dev/null || : >"$work/managed-edits"
-    [ -s "$work/managed-edits" ] || continue
+    # An analyzed file is recorded even with no edits: its pending change is
+    # then source-driven.
     : >"$work/managed-rows"
     while IFS="$(printf '\t')" read -r m_path m_state m_value m_ptime m_isreview; do
       if [ "$m_state" = removed ]; then
@@ -265,8 +268,8 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
         '{path:$path,state:$state,value_sha256:$sha,upstream_path_time:$ptime,review:$review}' >>"$work/managed-rows"
     done <"$work/managed-edits"
     jq -cn --arg target "$m_target" --arg managed "$m_managed" --argjson mtime "$m_mtime" \
-      --slurpfile edits "$work/managed-rows" \
-      '{target:$target,managed:$managed,live_mtime:$mtime,edits:$edits}' >>"$work/managed"
+      --slurpfile edits "$work/managed-rows" --argjson truncated "$m_truncated" \
+      '{target:$target,managed:$managed,live_mtime:$mtime,history_truncated:$truncated,edits:$edits}' >>"$work/managed"
   done <"$work/managed-specs"
 fi
 managed_json=$(jq -sc '.' "$work/managed")

@@ -245,10 +245,28 @@ jq --arg host "$host" --arg user "$user" \
 probe h1 h2
 check "two fresh hosts are in sync" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = in-sync,in-sync ]
 
+# An unconfigured host can be probed, but nothing is captured from it.
+jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+printf 'b-unverified\n' >"$hosts/h2/.b"
+probe h1 h2
+if "$fc" seal "$run" capture >"$T/seal.out" 2>&1; then fail "a capture was sealed from an unconfigured host"; fi
+check "unconfigured origins are refused" grep -q "no host is the origin" "$T/seal.out"
+jq --arg host "$host" --arg user "$user" \
+  '.machines.h2 = {platform:"linux",transport:"ssh",ssh_alias:"h2",expected_hostname:$host,expected_user:$user}' \
+  "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
+h2 chezmoi apply --no-tty --force -- "$hosts/h2/.b"
+
 # A change made on h2 is captured from h2 and published; h1 takes it.
 printf 'b-from-h2\n' >"$hosts/h2/.b"
 probe h1 h2
 check "the host that changed a file is its origin" [ "$(class_of "$run" h2)" = capture ]
+# Upstream moving after the probe invalidates the decisions.
+printf 'other\n' >"$T/pub/dot_other" && git -C "$T/pub" add -A && git -C "$T/pub" commit -qm other && git -C "$T/pub" push -q origin main
+chezmoi git -- pull -q --ff-only
+if "$fc" seal "$run" capture >"$T/seal.out" 2>&1; then fail "a capture was sealed against a moved upstream"; fi
+check "a moved upstream blocks the capture" grep -q "upstream moved since the probe" "$T/seal.out"
+chezmoi apply --no-tty; h2 chezmoi git -- pull -q --ff-only; h2 chezmoi apply --no-tty -- "$hosts/h2/.other"
+probe h1 h2
 check "the other host has nothing to do yet" [ "$(class_of "$run" h1)" = in-sync ]
 "$fc" seal "$run" capture >"$T/seal.out"
 set_id=$(awk 'END {print $1}' "$T/seal.out")
@@ -510,6 +528,25 @@ jq -n '[{host:"x",transport:"ssh",expected:null,error:null,probe:{identity:{},so
   jq -f "$here/classify.jq" >"$T/stale-base.json"
 check "capturing over an unpulled upstream change is refused" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/stale-base.json")" = review,stale-base ]
+
+# 17. a mismatched host never steers another host's decision; removing a whole
+# fleet-wide key is a decision for a person
+jq -n '[
+  {host:"good",transport:"ssh",expected:{hostname:"g",user:"u"},error:null,probe:{identity:{hostname:"g",user:"u"},
+    source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
+    live_sha256:"d1",live_mtime:100,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u"}]}}},
+  {host:"wrong",transport:"ssh",expected:{hostname:"w",user:"u"},error:null,probe:{identity:{hostname:"imposter",user:"u"},
+    source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
+    live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u"}]}}},
+  {host:"m",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
+    managed_json:[{target:".s.json",managed:"t.json",live_mtime:300,history_truncated:false,
+      edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false}]}]}}]' |
+  jq -f "$here/classify.jq" >"$T/identity.json"
+check "a mismatched host is excluded from origin decisions" \
+  [ "$(jq -r '.[0] | [.class, .identity_verified] | join(",")' "$T/identity.json")" = capture,true ]
+check "the mismatched host itself stops" [ "$(jq -r '.[1].class' "$T/identity.json")" = identity-mismatch ]
+check "removing a whole fleet-wide key needs a person" \
+  [ "$(jq -r '.[2] | [.class, .decisions[0].decision] | join(",")' "$T/identity.json")" = review,capture-manual ]
 
 # 16. plugin convergence installs what the synced settings enable, and only that
 pc=$T/plugin-host
