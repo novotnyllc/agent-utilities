@@ -512,12 +512,18 @@ capture_seal() {
   rm -rf "$set_dir"
   mkdir -p "$set_dir"
   chmod 700 "$run/sets" "$set_dir"
-  jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+  # Each item carries the identity its host's probe verified; apply checks the
+  # host against that sealed identity, never against config edited since.
+  jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson ids "$(jq -s 'map({(.host): (.probe.identity // null)}) | add // {}' "$run"/probes/*.json)" '
     {schema:"fleet-chezmoi.set",version:1,stage:"capture",created_at:$created,controller_head:$head,
      items:([.[] | select(.identity_verified and .class == "capture") | .host as $h | .captures[]
-       | {host:$h,type:(.type // "file"),path,source,digest,mtime,entries}]
+       | {host:$h,identity:{hostname:$ids[$h].hostname,user:$ids[$h].user},
+          type:(.type // "file"),path,source,digest,mtime,entries}]
        | sort_by(.path))}' \
     "$run/classes.json" >"$set_dir/set.json"
+  jq -e 'all(.items[]; (.identity.hostname // "") != "" and (.identity.user // "") != "")' "$set_dir/set.json" >/dev/null ||
+    die "a capture origin has no verified identity in this run; re-probe" 65
   chmod 600 "$set_dir/set.json"
   [ "$(jq '.items | length' "$set_dir/set.json")" -gt 0 ] || die "no host is the origin of a change to capture" 65
   while IFS= read -r source; do
@@ -555,7 +561,7 @@ capture_apply() {
       continue
     fi
     fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch.sh" "$path" "$digest" \
-      "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
+      "$(jq -r '.identity.hostname' <<<"$item")" "$(jq -r '.identity.user' <<<"$item")" \
       2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch) || fetched=''
     if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
       capture_restore
@@ -612,7 +618,7 @@ capture_json_item() {
   template=$src/$source
   entries=$(jq -c '[.entries[] | {path, state, digest}]' <<<"$item")
   fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch-json.sh" "$path" "$entries" \
-    "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
+    "$(jq -r '.identity.hostname' <<<"$item")" "$(jq -r '.identity.user' <<<"$item")" \
     2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch-json) || fetched=''
   if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
     printf 'fleet-chezmoi: could not fetch %s entries from %s: %s\n' "$path" "$host" \

@@ -286,7 +286,14 @@ check "the other host has nothing to do yet" [ "$(class_of "$run" h1)" = in-sync
 "$fc" seal "$run" capture >"$T/seal.out"
 set_id=$(awk 'END {print $1}' "$T/seal.out")
 check "capture set names the origin" grep -q 'from h2' "$T/seal.out"
+check "each capture item seals its probe-verified identity" \
+  [ "$(jq -r '.items[0].identity | [.hostname, .user] | join("|")' "$run/sets/capture/set.json")" = "$host|$user" ]
+# A config edit after sealing does not change whom the fetch trusts.
+cp "$T/rh.json" "$T/rh.json.sealed"
+jq '.machines.h2.expected_hostname = "edited-after-seal"' "$T/rh.json.sealed" >"$T/rh.json" && chmod 600 "$T/rh.json"
 "$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1 || { cat "$T/apply.out"; fail "capture apply failed"; }
+mv "$T/rh.json.sealed" "$T/rh.json"
+probe h1 h2   # the apply's own re-probe ran under the edited config
 check "the change was published" [ "$(git -C "$T/origin.git" show main:dot_b)" = b-from-h2 ]
 git -C "$T/pub" pull -q --ff-only
 check "the controller takes it as a source change" [ "$(class_of "$run" h1)" = apply ]
