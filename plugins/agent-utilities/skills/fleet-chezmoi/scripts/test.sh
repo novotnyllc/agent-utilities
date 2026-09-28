@@ -234,7 +234,7 @@ cat >"$T/sshbin/ssh" <<'SSH'
 while [ $# -gt 0 ]; do case $1 in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
 alias=$1; shift
 exec env HOME="$FAKE_HOSTS/$alias" XDG_CONFIG_HOME="$FAKE_HOSTS/$alias/.config" \
-  XDG_STATE_HOME="$FAKE_HOSTS/$alias/.local/state" SHELL=/bin/sh sh -c "$*"
+  XDG_STATE_HOME="$FAKE_HOSTS/$alias/.local/state" SHELL="${FAKE_LOGIN_SHELL:-/bin/sh}" sh -c "$*"
 SSH
 chmod +x "$T/sshbin/ssh"
 export PATH="$T/sshbin:$PATH" FAKE_HOSTS=$hosts
@@ -247,6 +247,18 @@ jq --arg host "$host" --arg user "$user" \
   "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1 h2
 check "two fresh hosts are in sync" [ "$(class_of "$run" h1),$(class_of "$run" h2)" = in-sync,in-sync ]
+# A login shell that parses only a plain `sh FILE` command (like fish would a
+# POSIX script) still runs the payload in its environment.
+cat >"$T/sshbin/fakefish" <<'FISH'
+#!/bin/sh
+[ "$1" = -lc ] || exit 99
+case $2 in "sh /"*) ;; *) echo "fakefish: cannot parse: $2" >&2; exit 98 ;; esac
+set -- $2
+exec sh "$2"
+FISH
+chmod +x "$T/sshbin/fakefish"
+FAKE_LOGIN_SHELL=$T/sshbin/fakefish probe h1 h2
+check "a non-POSIX login shell still runs the probe" [ "$(class_of "$run" h2)" = in-sync ]
 
 # An unconfigured host can be probed, but nothing is captured from it.
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
@@ -630,7 +642,7 @@ jq -n '[
     live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u",base_sha256:"u"}]}}},
   {host:"m",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
     managed_json:[{target:".s.json",managed:"t.json",live_mtime:300,history_truncated:false,
-      edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false,upstream_change_in_head:true}]}]}}]' |
+      edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false,upstream_change_in_head:true,upstream_change_arrived:0}]}]}}]' |
   jq -f "$here/classify.jq" >"$T/identity.json"
 check "a mismatched host is excluded from origin decisions" \
   [ "$(jq -r '.[0] | [.class, .identity_verified] | join(",")' "$T/identity.json")" = capture,true ]
@@ -642,12 +654,16 @@ check "removing a whole fleet-wide key needs a person" \
 printf '{"a":{"x":1}}\n' >"$HOME/.fj.json"
 null_digest=$(printf 'null' | shasum -a 256 | cut -d ' ' -f 1)
 one_digest=$(printf '1' | shasum -a 256 | cut -d ' ' -f 1)
-fj() { sh "$here/fetch-json.sh" .fj.json "$1" | jq -r '[.ok, (.error // "")] | join(",")'; }
+fj() { sh "$here/fetch-json.sh" .fj.json "$1" "$(hostname 2>/dev/null || uname -n)" "$(id -un)" | jq -r '[.ok, (.error // "")] | join(",")'; }
 check "a present entry is fetched" [ "$(fj '[{"path":["a","x"],"state":"set","digest":"'"$one_digest"'"}]')" = "true," ]
 check "a deleted entry is not fetched as null" \
   [ "$(fj '[{"path":["a","y"],"state":"set","digest":"'"$null_digest"'"}]')" = "false,an approved entry is no longer present" ]
 check "a deleted top-level entry is not fetched as null" \
   [ "$(fj '[{"path":["b"],"state":"set","digest":"'"$null_digest"'"}]')" = "false,an approved entry is no longer present" ]
+check "a fetch on an unverified host reads nothing" \
+  [ "$(sh "$here/fetch-json.sh" .fj.json '[{"path":["a","x"],"state":"set","digest":"'"$one_digest"'"}]' elsewhere "$(id -un)" | jq -r .error)" = "identity does not match the verified host" ]
+check "a file fetch on an unverified host reads nothing" \
+  [ "$(sh "$here/fetch.sh" .fj.json "$one_digest" elsewhere "$(id -un)" | jq -r .error)" = "identity does not match the verified host" ]
 rm -f "$HOME/.fj.json"
 
 # A failed plugin convergence fails the command, so nothing is sealed after it

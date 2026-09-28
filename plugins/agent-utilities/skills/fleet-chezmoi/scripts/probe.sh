@@ -270,7 +270,8 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
       # Ancestry, not file mtimes (an app rewrites the whole file): the edit
       # can only be current if this host's source already has the commit that
       # last changed this entry upstream.
-      m_in_head=false m_arrived=0
+      # -1: arrival unknown (no usable reflog); that goes to review.
+      m_in_head=false m_arrived=-1
       if git -C "$src" merge-base --is-ancestor "$m_pcommit" HEAD 2>/dev/null; then
         m_in_head=true
         # When that change reached this checkout, on this host's own clock:
@@ -281,7 +282,7 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
             git -C "$src" merge-base --is-ancestor "$m_pcommit" "$m_rh" 2>/dev/null || break
             m_t=${m_gd#*@\{}; printf '%s\n' "${m_t%\}}"
           done | tail -n 1)
-        case $m_arrived in ''|*[!0-9]*) m_arrived=0 ;; esac
+        case $m_arrived in ''|*[!0-9]*) m_arrived=-1 ;; esac
       fi
       if [ "$m_state" = removed ]; then
         m_sha=absent

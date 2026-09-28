@@ -1,7 +1,7 @@
 #!/bin/sh
 # fleet-chezmoi fetch: hand one live file to the controller for a capture.
 #
-#   fetch.sh RELATIVE-TARGET EXPECTED-SHA256
+#   fetch.sh RELATIVE-TARGET EXPECTED-SHA256 EXPECTED-HOSTNAME EXPECTED-USER
 #
 # Emits the file base64-encoded inside one JSON line, only if it is a regular
 # file of at most 1 MiB whose digest still equals the one that was approved.
@@ -18,6 +18,12 @@ sha_file() {
   fi
 }
 
+# Nothing is read unless this host is the one the controller verified: the
+# SSH alias may resolve elsewhere since the probe.
+case "$(hostname 2>/dev/null || uname -n)|$(id -un)" in
+  "${3:-}|${4:-}") [ -n "${3:-}" ] && [ "${3:-}" != null ] || fail "identity does not match the verified host" ;;
+  *) fail "identity does not match the verified host" ;;
+esac
 rel=${1:-}
 expected=${2:-}
 case $rel in ''|/*|-*|..|../*|*/../*|*/..) fail "unsafe target" ;; esac

@@ -2,7 +2,7 @@
 # fleet-chezmoi fetch-json: hand the changed entries of a managed JSON settings
 # file to the controller for a capture.
 #
-#   fetch-json.sh RELATIVE-TARGET ENTRIES-JSON
+#   fetch-json.sh RELATIVE-TARGET ENTRIES-JSON EXPECTED-HOSTNAME EXPECTED-USER
 #
 # ENTRIES-JSON is [{path:[KEY] or [KEY,SUBKEY], state:"set"|"removed", digest}].
 # Each value is emitted (canonical JSON, base64) only if its digest still equals
@@ -21,6 +21,12 @@ sha_file() {
   fi
 }
 
+# Nothing is read unless this host is the one the controller verified: the
+# SSH alias may resolve elsewhere since the probe.
+case "$(hostname 2>/dev/null || uname -n)|$(id -un)" in
+  "${3:-}|${4:-}") [ -n "${3:-}" ] && [ "${3:-}" != null ] || fail "identity does not match the verified host" ;;
+  *) fail "identity does not match the verified host" ;;
+esac
 rel=${1:-}
 entries=${2:-}
 case $rel in ''|/*|-*|..|../*|*/../*|*/..) fail "unsafe target" ;; esac

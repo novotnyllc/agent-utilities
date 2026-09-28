@@ -125,13 +125,15 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       | {key: ([.[0].target, (.[0].path | tojson)] | tojson),
          value: {
            decision: (
-             if $newest.upstream_path_time > $newest.live_mtime then "source-newer"
-             # The file's mtime covers every key, so it cannot date one entry:
-             # the origin's source must contain the entry's last upstream change.
-             elif ($newest.upstream_change_in_head // false) | not then "stale-base"
+             # No commit date is compared with a file time (two clocks). The
+             # file's mtime covers every key, so it cannot date one entry: the
+             # origin's source must contain the entry's last upstream change.
+             if ($newest.upstream_change_in_head // false) | not then "stale-base"
              # The change reached the checkout after the file was last written
              # (one host clock): it was pulled but never applied to this file.
-             elif ($newest.upstream_change_arrived // 0) > $newest.live_mtime then "stale-base"
+             # An unknown arrival (-1) is refused too.
+             elif ($newest.upstream_change_arrived // -1) < 0
+               or $newest.upstream_change_arrived > $newest.live_mtime then "stale-base"
              elif any(.[]; .review) then "capture-manual"
              # A value older than the retained history, or removing a whole
              # fleet-wide key, is a decision for a person.

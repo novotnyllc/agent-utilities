@@ -85,6 +85,9 @@ run_on() {
   done
   framed=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-payload.XXXXXX")
   {
+    # The payload file removes itself first: on an SSH host it is a mktemp file.
+    # shellcheck disable=SC2016 # $0 is expanded by the payload, not here.
+    printf 'rm -f -- "$0"\n'
     printf 'set --'
     for arg in "$@"; do printf " '%s'" "${arg//\'/\'\\\'\'}"; done
     printf '\n'
@@ -94,9 +97,14 @@ run_on() {
   case $transport in
     local) sh "$framed" </dev/null || rc=$? ;;
     ssh)
+      # The login shell only ever parses two plain commands, `/bin/sh -c '...'`
+      # and `sh FILE`, which bash, zsh, and fish read alike; the bootstrap holds
+      # no single quote or backslash (fish treats those specially in quotes).
+      # So the payload never depends on the login shell's syntax, and still runs
+      # in its environment.
       ssh -o BatchMode=yes -o RequestTTY=no -o RemoteCommand=none -o ConnectTimeout=10 \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$alias" \
-        "if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo 'fleet-chezmoi: login shell unavailable' >&2; exit 69; fi; exec \"\$SHELL\" -lc 'f=\$(mktemp) && cat >\"\$f\" && sh \"\$f\"; rc=\$?; rm -f \"\$f\"; exit \$rc'" \
+        "/bin/sh -c 'if [ -z \"\${SHELL:-}\" ] || [ ! -x \"\$SHELL\" ]; then echo \"fleet-chezmoi: login shell unavailable\" >&2; exit 69; fi; f=\$(mktemp) || exit 70; cat >\"\$f\" || exit 70; exec \"\$SHELL\" -lc \"sh \$f\"'" \
         <"$framed" || rc=$?
       ;;
     *) rc=69 ;;
@@ -547,6 +555,7 @@ capture_apply() {
       continue
     fi
     fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch.sh" "$path" "$digest" \
+      "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
       2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch) || fetched=''
     if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
       capture_restore
@@ -603,6 +612,7 @@ capture_json_item() {
   template=$src/$source
   entries=$(jq -c '[.entries[] | {path, state, digest}]' <<<"$item")
   fetched=$(run_on "$(host_meta "$host")" "$script_dir/fetch-json.sh" "$path" "$entries" \
+    "$(host_meta "$host" | jq -r '.expected.hostname')" "$(host_meta "$host" | jq -r '.expected.user')" \
     2>"$run/logs/$host.fetch.err" | last_json fleet-chezmoi.fetch-json) || fetched=''
   if [ -z "$fetched" ] || ! jq -e '.ok' <<<"$fetched" >/dev/null; then
     printf 'fleet-chezmoi: could not fetch %s entries from %s: %s\n' "$path" "$host" \
