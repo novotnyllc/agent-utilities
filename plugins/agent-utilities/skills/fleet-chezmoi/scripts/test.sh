@@ -399,7 +399,7 @@ before=$(git -C "$T/origin.git" rev-parse main)
 if "$fc" apply "$run" "$(awk 'END {print $1}' "$T/seal.out")" >"$T/apply.out" 2>&1; then
   fail "a removal was published with no retired file"
 fi
-check "a removal needs a retired file" grep -q "declares no existing, non-symlinked retired file" "$T/apply.out"
+check "a removal needs a retired file" grep -q "declares no existing, tracked, non-symlinked retired file" "$T/apply.out"
 check "nothing was published without one" [ "$(git -C "$T/origin.git" rev-parse main)" = "$before" ]
 h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
 git -C "$T/pub" revert --no-edit HEAD >/dev/null && git -C "$T/pub" push -q origin main
@@ -617,6 +617,11 @@ check "a deleted entry is not fetched as null" \
 check "a deleted top-level entry is not fetched as null" \
   [ "$(fj '[{"path":["b"],"state":"set","digest":"'"$null_digest"'"}]')" = "false,an approved entry is no longer present" ]
 rm -f "$HOME/.fj.json"
+
+# A failed plugin convergence fails the command, so nothing is sealed after it
+# (the stub roundhouse has no fleet-run).
+if "$fc" plugins "$run" h1 >"$T/plugins.out" 2>&1; then fail "a failed plugin convergence exited 0"; fi
+check "the failed host is named" grep -q "plugin convergence failed on h1" "$T/plugins.out"
 
 # 16. plugin convergence installs what the synced settings enable, and only that
 pc=$T/plugin-host

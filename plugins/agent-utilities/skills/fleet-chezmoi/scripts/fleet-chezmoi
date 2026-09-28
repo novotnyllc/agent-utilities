@@ -513,6 +513,9 @@ capture_seal() {
   while IFS= read -r source; do
     case $source in ''|/*|-*|..|../*|*/../*|*/..) die "unsafe source path in capture: $source" 65 ;; esac
     [ -f "$src/$source" ] && [ ! -L "$src/$source" ] || die "capture source is not a plain file here: $source" 65
+    # An ignored or untracked file would be written but never published.
+    git -C "$src" ls-files --error-unmatch -- "$source" >/dev/null 2>&1 ||
+      die "capture source is not tracked in the source repository: $source" 65
   done < <(jq -r '.items[].source' "$set_dir/set.json")
   jq -r '.items[] | ["capture", .path + (if .type == "json" then " (" + (.entries | map((.path | join(".")) + (if .state == "removed" then " removed" else "" end)) | join(", ")) + ")" else "" end),
       "from " + .host, "edited " + (.mtime | todate), "into " + .source] | @tsv' \
@@ -535,6 +538,8 @@ capture_apply() {
     source=$(jq -r '.source' <<<"$item")
     digest=$(jq -r '.digest' <<<"$item")
     target=$src/$source
+    git -C "$src" ls-files --error-unmatch -- "$source" >/dev/null 2>&1 ||
+      { capture_restore; die "capture source is not tracked in the source repository: $source" 65; }
     if [ "$(jq -r '.type' <<<"$item")" = json ]; then
       capture_json_item "$item" || { capture_restore; exit 70; }
       continue
@@ -632,8 +637,9 @@ capture_json_item() {
   retired_rel=$(jq -r '.retired // empty' <<<"${spec:-null}" 2>/dev/null || true)
   case $retired_rel in /*|*..*) retired_rel='' ;; esac
   if jq -e 'any(.entries[]; .state == "removed")' <<<"$fetched" >/dev/null &&
-    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ] || [ -L "$src/$retired_rel" ]; }; then
-    printf 'fleet-chezmoi: %s removes entries but declares no existing, non-symlinked retired file; nothing was captured\n' "$path" >&2
+    { [ -z "$retired_rel" ] || [ ! -f "$src/$retired_rel" ] || [ -L "$src/$retired_rel" ] ||
+      ! git -C "$src" ls-files --error-unmatch -- "$retired_rel" >/dev/null 2>&1; }; then
+    printf 'fleet-chezmoi: %s removes entries but declares no existing, tracked, non-symlinked retired file; nothing was captured\n' "$path" >&2
     return 1
   fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-chezmoi-capture.XXXXXX")
@@ -690,6 +696,11 @@ plugins_command() {
   done | table
   printf 'verification probe:\n'
   reprobe "$run" "$@"
+  # A failed convergence must stop the caller before it seals anything.
+  for host in "$@"; do
+    jq -e '.ok == true' "$run/plugins/$host.json" >/dev/null 2>&1 ||
+      die "plugin convergence failed on $host; see $run/plugins/$host.json" 70
+  done
 }
 
 evidence_command() {
