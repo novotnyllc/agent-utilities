@@ -745,6 +745,22 @@ check "a disabled plugin is not installed" ! grep -q off@mk "$pc/install.log"
 check "a missing marketplace is registered from its declared source" [ "$(cat "$pc/add.log")" = owner/nm ]
 check "convergence reports success" [ "$(jq -r .ok "$pc/out.json")" = true ]
 
+# A commit subject that looks like a secret never reaches evidence records.
+git -C "$T/pub" pull -q --ff-only
+printf 'r1\n' >"$T/pub/dot_redact" && git -C "$T/pub" add dot_redact && git -C "$T/pub" commit -qm "add redact" &&
+  git -C "$T/pub" push -q origin main
+chezmoi git -- pull -q --ff-only && chezmoi apply --no-tty -- "$HOME/.redact"
+printf 'r2\n' >"$T/pub/dot_redact" && git -C "$T/pub" commit -qam "rotate AKIAABCDEFGHIJKLMNOP" &&
+  git -C "$T/pub" push -q origin main
+chezmoi git -- pull -q --ff-only
+printf 'live-edit\n' >"$HOME/.redact"
+probe h1
+"$fc" evidence "$run" h1 .redact >"$T/evidence.out"
+check "a secret-looking commit subject is redacted" \
+  [ "$(jq -r '.targets[0].history[0].subject' "$run/evidence/h1.json")" = "[redacted: looks like a secret]" ]
+check "nor is it printed" ! grep -q AKIAABCDEFGHIJKLMNOP "$T/evidence.out"
+chezmoi apply --no-tty --force -- "$HOME/.redact"
+
 check "no secret anywhere in run records" no_secret "$run"
 
 if [ "$fails" -eq 0 ]; then echo PASS; else echo "FAILED: $fails"; exit 1; fi

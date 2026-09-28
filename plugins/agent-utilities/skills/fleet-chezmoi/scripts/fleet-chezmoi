@@ -247,7 +247,8 @@ reprobe() {
 }
 
 set_id_of() {
-  jq -cS '[.stage, (.hosts // [] | map({host,plan_id,plan_digest})), (.items // []), (.controller_head // null)]' "$1" | sha256_stream | cut -c 1-16 |
+  # Every sealed field is approved: plans, identities, status digests, targets.
+  jq -cS '[.stage, (.hosts // []), (.items // []), (.controller_head // null)]' "$1" | sha256_stream | cut -c 1-16 |
     sed 's/^/set-/'
 }
 
@@ -762,8 +763,13 @@ evidence_command() {
   [ "$#" -gt 0 ] || die "no targets: $host has no classified conflicts"
   mkdir -p "$run/evidence"
   out=$run/evidence/$host.json
+  # A commit subject can hold anything; one that looks like a secret is never
+  # stored or shown.
   run_on "$(host_meta "$host")" "$script_dir/evidence.sh" "$@" 2>"$run/logs/$host.evidence.err" |
-    last_json fleet-chezmoi.evidence >"$out.tmp" || die "evidence collection failed; see logs" 70
+    last_json fleet-chezmoi.evidence |
+    jq -c --arg re "$secret_pattern" '(.targets[]?.history[]?.subject) |=
+      (if (. // "" | test($re; "i")) then "[redacted: looks like a secret]" else . end)' \
+      >"$out.tmp" || die "evidence collection failed; see logs" 70
   [ "$(jq '.targets | length' "$out.tmp")" -eq "$#" ] || {
     rm -f "$out.tmp"
     die "evidence refused a target; see $run/logs/$host.evidence.err" 64
