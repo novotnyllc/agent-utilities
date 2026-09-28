@@ -233,7 +233,9 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
     [ -n "$m_target" ] && [ -n "$m_managed" ] && [ -f "$m_live" ] && [ ! -L "$m_live" ] || continue
     jq -e 'type == "object"' "$m_live" >/dev/null 2>&1 || continue
     : >"$work/versions"
-    git -C "$src" log --format='%H %ct' -n 500 "$ref" -- "$m_managed" 2>/dev/null |
+    # Topological order, newest first: a child always precedes its parent, so
+    # the first document is the tip's, whatever the commit dates say.
+    git -C "$src" log --topo-order --format='%H %ct' -n 500 "$ref" -- "$m_managed" 2>/dev/null |
       while read -r commit ctime; do
         git -C "$src" show "$commit:$m_managed" 2>/dev/null |
           jq -c --argjson t "$ctime" --arg c "$commit" 'select(type == "object") | {time:$t,commit:$c,doc:.}' >>"$work/versions" 2>/dev/null || :
@@ -247,7 +249,7 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
         if (.value | type) == "object" then
           (.key as $k | .value | to_entries | map({key: ([$k, .key] | tojson), value: (.value | tojson)}))
         else [{key: ([.key] | tojson), value: (.value | tojson)}] end) | add // [] | from_entries;
-      ($v | sort_by(-.time)) as $vs
+      $v as $vs
       | ($vs | map(.doc | flat)) as $hist
       | ($vs[0].doc | keys) as $keys
       | ($l[0] | with_entries(select(.key as $k | $keys | index($k) != null)) | flat) as $lf

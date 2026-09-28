@@ -434,6 +434,19 @@ check "the held entry is reported" grep -q "held back.*env.OPENAI_API_KEY" "$T/a
 check "the secret never appears in run records" ! grep -rq sk-abcdefghijklmnopqrstuvwxyz0123 "$run"
 sync_all
 check "no secret in managed-settings records" no_secret "$run"
+# An upstream commit dated before its parent is still the newest: revision
+# order, not dates, says which change a host has.
+setjson "$T/pub/.chezmoitemplates/app.json" '.theme = "tip"'
+jq --indent 2 . "$T/pub/.chezmoitemplates/app.json" >"$T/app.fmt" && mv "$T/app.fmt" "$T/pub/.chezmoitemplates/app.json"
+git -C "$T/pub" add -A
+GIT_COMMITTER_DATE="2001-01-01T00:00:00Z" GIT_AUTHOR_DATE="2001-01-01T00:00:00Z" git -C "$T/pub" commit -qm backdated
+git -C "$T/pub" push -q origin main
+setjson "$hosts/h2/.app.json" '.theme = "mine"'
+probe h1 h2
+check "an edit that lacks a backdated upstream change is stale" \
+  [ "$(jq -r '.[] | select(.host == "h2") | .decisions[] | select(.entry == ["theme"]) | .decision' "$run/classes.json")" = stale-base ]
+h2 chezmoi git -- pull -q --ff-only; h2 chezmoi apply --no-tty --force -- "$hosts/h2/.app.json"
+sync_all
 jq 'del(.machines.h2)' "$T/rh.json" >"$T/rh.json.new" && mv "$T/rh.json.new" "$T/rh.json" && chmod 600 "$T/rh.json"
 probe h1
 
