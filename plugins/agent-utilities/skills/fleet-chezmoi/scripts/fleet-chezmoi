@@ -653,7 +653,15 @@ capture_json_item() {
   local keep='[]' entry_text
   while IFS= read -r entry; do
     if [ "$(jq -r '.state' <<<"$entry")" = set ]; then
-      entry_text="\"$(jq -r '.path[-1]' <<<"$entry")\": $(jq -r '.b64' <<<"$entry" | base64 --decode)"
+      # Scan every leaf with each key above it, so a credential under a
+      # secret-named parent ({"token":{"primary":...}}) is still caught.
+      entry_text=$(jq -r '.b64' <<<"$entry" | base64 --decode |
+        jq -r --argjson p "$(jq -c '.path' <<<"$entry")" '
+          . as $v | [paths(scalars)] as $leaves
+          | (if ($leaves | length) == 0 then [[]] else $leaves end)[] as $lp
+          | ($v | getpath($lp) | tostring) as $leaf
+          | ($p + ($lp | map(tostring)))[] | "\"\(.)\": \($leaf)"' 2>/dev/null) ||
+        entry_text=$(jq -r '.b64' <<<"$entry" | base64 --decode)
       if printf '%s\n' "$entry_text" | grep -Eiq -- "$secret_pattern"; then
         held+=("$path $(jq -r '.path | join(".")' <<<"$entry") (from $host)")
         continue

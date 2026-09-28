@@ -50,7 +50,9 @@ def when($t): if ($t // 0) > 0 then ($t | todate) else "unknown time" end;
 # A live edit whose bytes equal upstream and differ from what chezmoi last
 # wrote: another host's change, already published.
 def published_edit: (.upstream_sha256 // "") != "" and .live_sha256 == .upstream_sha256
-  and (.base_sha256 // "") != .live_sha256;
+  and (.base_sha256 // "") != .live_sha256
+  # A mode change rides along with the bytes; it is not published by them.
+  and ((.base_mode // "") == "" or (.live_mode // "") == "" or .base_mode == .live_mode);
 
 def vkey: tostring | split(".") | map(tonumber? // .);
 

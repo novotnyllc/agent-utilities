@@ -454,13 +454,16 @@ chezmoi apply --no-tty --force -- "$HOME/.app.json"; h2 chezmoi apply --no-tty -
 
 # env syncs like any other key; only a value that looks like a secret is held
 # back, per entry, while the rest of the capture still publishes.
-setjson "$hosts/h2/.app.json" '.env.X = "2" | .env.OPENAI_API_KEY = "sk-abcdefghijklmnopqrstuvwxyz0123"'
+setjson "$hosts/h2/.app.json" '.env.X = "2" | .env.OPENAI_API_KEY = "sk-abcdefghijklmnopqrstuvwxyz0123"
+  | .env.token = {"primary":"qwertyuiopasdfghjklz"}'
 probe h1 h2
 check "env changes are captured automatically" [ "$(class_of "$run" h2)" = capture ]
 capture_now
 check "the ordinary env change was published" [ "$(published app.json .env.X)" = '"2"' ]
 check "the secret-looking env value was not" [ "$(published app.json '.env | has("OPENAI_API_KEY")')" = false ]
 check "the held entry is reported" grep -q "held back.*env.OPENAI_API_KEY" "$T/apply.out"
+check "a credential under a secret-named parent is held" grep -q "held back.*env.token" "$T/apply.out"
+check "the nested credential was not published" [ "$(published app.json '.env | has("token")')" = false ]
 check "the secret never appears in run records" ! grep -rq sk-abcdefghijklmnopqrstuvwxyz0123 "$run"
 sync_all
 check "no secret in managed-settings records" no_secret "$run"
@@ -658,6 +661,14 @@ check "a content and mode change goes to a person" \
   [ "$(jq -r '.[0].decisions[] | select(.path == ".f") | .decision' "$T/mixed.json")" = capture-manual ]
 check "a file over the fetch limit goes to a person" \
   [ "$(jq -r '.[0].decisions[] | select(.path == ".g") | .decision' "$T/mixed.json")" = capture-manual ]
+# Bytes already published elsewhere do not publish a mode change with them.
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".h"}],
+  edits:[{path:".h",live_sha256:"up",base_sha256:"old",upstream_sha256:"up",base_mode:"644",live_mode:"755",
+    live_mtime:300,live_size:10,source:"dot_h",kind:"plain",source_upstream_time:10,source_head_time:10}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/pubmode.json"
+check "a published edit with a mode change goes to a person" \
+  [ "$(jq -r '.[0].decisions[] | select(.path == ".h") | .decision' "$T/pubmode.json")" = capture-manual ]
 check "a mode-only change goes to a person" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 
