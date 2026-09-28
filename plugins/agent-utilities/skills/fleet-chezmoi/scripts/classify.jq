@@ -97,6 +97,12 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
              # Bytes unchanged since chezmoi wrote them: a mode-only change,
              # which needs a private_/executable_ rename by hand.
              elif $newest.kind == "plain" and ($newest.base_sha256 // "") == $newest.live_sha256 then "capture-manual"
+             # Contents and mode both changed: a capture publishes only bytes,
+             # so the mode half needs a private_/executable_ rename by hand.
+             elif $newest.kind == "plain" and ($newest.base_mode // "") != "" and ($newest.live_mode // "") != ""
+               and $newest.base_mode != $newest.live_mode then "capture-manual"
+             # The fetch carries at most 1 MiB; a larger file is captured by hand.
+             elif ($newest.live_size // 0) > 1048576 then "capture-manual"
              # The edit must start from the current upstream content: what
              # chezmoi last wrote there equals the upstream file. Unknown or
              # older bases are refused, whatever the dates say.

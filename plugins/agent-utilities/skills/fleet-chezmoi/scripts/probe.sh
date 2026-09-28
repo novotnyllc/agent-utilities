@@ -164,10 +164,12 @@ keyorder_json=$(jq -Rsc 'split("\n") | map(select(length > 0))' "$work/keyorder"
 printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " ") | .path' |
   head -n 50 | while IFS= read -r rel; do
     live=$dest/$rel
-    live_sha='' live_mtime=0 kind=plain
+    live_sha='' live_mtime=0 live_size=0 live_mode='' kind=plain
     if [ -f "$live" ] && [ ! -L "$live" ]; then
       live_sha=$(sha_file "$live")
       live_mtime=$(stat -c %Y "$live" 2>/dev/null || stat -f %m "$live" 2>/dev/null || printf '0')
+      live_size=$(wc -c <"$live" | tr -d ' ')
+      live_mode=$(stat -c %a "$live" 2>/dev/null || stat -f %Lp "$live" 2>/dev/null || true)
     else
       kind=not-a-file
     fi
@@ -182,8 +184,12 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
     esac
     upstream_time=0 head_time=0 upstream_sha='' head_blob='' upstream_blob=''
     # What chezmoi last wrote here is the version this edit started from.
-    base_sha=$(chezmoi state get --bucket=entryState --key="$live" 2>/dev/null </dev/null |
-      jq -r '.contentsSHA256 // empty' 2>/dev/null || true)
+    base_state=$(chezmoi state get --bucket=entryState --key="$live" 2>/dev/null </dev/null || true)
+    base_sha=$(printf '%s' "$base_state" | jq -r '.contentsSHA256 // empty' 2>/dev/null || true)
+    # The mode chezmoi last wrote (decimal in its state), as octal like stat's.
+    base_mode=$(printf '%s' "$base_state" | jq -r '.mode // empty | tonumber % 4096
+      | [(. / 512 | floor) % 8, (. / 64 | floor) % 8, (. / 8 | floor) % 8, . % 8]
+      | map(tostring) | join("") | ltrimstr("0")' 2>/dev/null || true)
     if [ -n "$source_file" ]; then
       head_time=$(git -C "$src" log -1 --format=%ct HEAD -- "$source_rel" 2>/dev/null || true)
       head_time=${head_time:-0}
@@ -205,8 +211,10 @@ printf '%s' "$status_lines" | jq -r '.[] | select(.live != " " and .target != " 
     jq -cn --arg path "$rel" --arg sha "$live_sha" --argjson mtime "$live_mtime" --arg source "$source_rel" \
       --arg kind "$kind" --argjson upstream_time "$upstream_time" --argjson head_time "$head_time" \
       --arg upstream_sha "$upstream_sha" --arg head_blob "$head_blob" --arg upstream_blob "$upstream_blob" \
-      --arg base_sha "$base_sha" \
-      '{path:$path,live_sha256:$sha,live_mtime:$mtime,source:$source,kind:$kind,base_sha256:$base_sha,
+      --arg base_sha "$base_sha" --arg base_mode "$base_mode" --arg live_mode "$live_mode" \
+      --argjson size "${live_size:-0}" \
+      '{path:$path,live_sha256:$sha,live_mtime:$mtime,live_size:$size,source:$source,kind:$kind,
+        base_sha256:$base_sha,base_mode:$base_mode,live_mode:$live_mode,
         source_upstream_time:$upstream_time,source_head_time:$head_time,upstream_sha256:$upstream_sha,
         source_head_blob:$head_blob,source_upstream_blob:$upstream_blob}' >>"$work/edits"
   done

@@ -646,6 +646,18 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   jq -f "$here/classify.jq" >"$T/skewed.json"
 check "a future-dated upstream commit does not block a verified base" \
   [ "$(jq -r '.[0].class' "$T/skewed.json")" = capture ]
+# Contents and mode changed together, or a file too large to fetch: by hand.
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},
+  source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"},{live:"M",target:"M",path:".g"}],
+  edits:[{path:".f",live_sha256:"d1",base_sha256:"u",upstream_sha256:"u",base_mode:"644",live_mode:"755",
+    live_mtime:300,live_size:10,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10},
+    {path:".g",live_sha256:"d2",base_sha256:"v",upstream_sha256:"v",base_mode:"644",live_mode:"644",
+    live_mtime:300,live_size:2000000,source:"dot_g",kind:"plain",source_upstream_time:10,source_head_time:10}]}}}]' |
+  jq -f "$here/classify.jq" >"$T/mixed.json"
+check "a content and mode change goes to a person" \
+  [ "$(jq -r '.[0].decisions[] | select(.path == ".f") | .decision' "$T/mixed.json")" = capture-manual ]
+check "a file over the fetch limit goes to a person" \
+  [ "$(jq -r '.[0].decisions[] | select(.path == ".g") | .decision' "$T/mixed.json")" = capture-manual ]
 check "a mode-only change goes to a person" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 
