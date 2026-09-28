@@ -91,7 +91,7 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
     ] as $findings
   | [
       ( if ($p.login_shell.missing_tools // []) | length > 0 then
-          reason("login-shell-tools-missing"; "not on PATH under the login shell: \($p.login_shell.missing_tools | join(", "))")
+          reason("login-shell-tools-missing"; "not on PATH \(if $r.transport == "local" then "in the controller's environment" else "under the host's login shell" end): \($p.login_shell.missing_tools | join(", "))")
         else empty end ),
       ( if $p.source.state == "not_git" then reason("source-not-git"; $p.source.path) else empty end ),
       ( if ($p.source.upstream // "") == "" and $p.source.state == "git" then reason("source-no-upstream"; $p.source.path) else empty end ),
