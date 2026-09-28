@@ -38,6 +38,15 @@ config_path() {
 
 valid_host() { [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]; }
 
+# table — align tab-separated stdin; `column` is not installed everywhere.
+table() {
+  if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"
+  else awk -F '\t' '{ rows[NR] = $0; for (i = 1; i <= NF; i++) if (length($i) > w[i]) w[i] = length($i) }
+    END { for (r = 1; r <= NR; r++) { n = split(rows[r], f, "\t"); line = ""
+      for (i = 1; i <= n; i++) line = line (i < n ? sprintf("%-" w[i] "s  ", f[i]) : f[i]); print line } }'
+  fi
+}
+
 # host_meta HOST -> {host,transport,alias,expected}
 host_meta() {
   local config
@@ -133,7 +142,7 @@ classify_run() {
       elif .class == "review" then
         ((.blockers | map(.code)) + (if (.conflicts | length) > 0 then ["conflicts: " + (.conflicts | join(", "))] else [] end) | join("; "))
       elif .class == "identity-mismatch" then "saw \(.identity.user)@\(.identity.hostname)"
-      else (.error // "") end)] | @tsv' "$run/classes.json" | column -t -s "$(printf '\t')"
+      else (.error // "") end)] | @tsv' "$run/classes.json" | table
   jq -r '.[] | .host as $h | .findings[] | "  finding \($h): \(.code): \(.detail)"' "$run/classes.json"
   printf 'run: %s\n' "$run"
 }
@@ -330,7 +339,7 @@ seal_command() {
     (if $stage == "pull" then "ff-only pull \(.source_head[0:12])..\(.upstream_head[0:12])"
      elif $stage == "apply" then "apply " + (.pending | to_entries | map("\(.key): \(.value | join(" "))") | join("; "))
      else (.operations | map(.argv | join(" ")) | join("; ")) end)] | @tsv' \
-    "$set_dir/set.json" | column -t -s "$(printf '\t')"
+    "$set_dir/set.json" | table
   printf '%s %s\n' "$(set_id_of "$set_dir/set.json")" "$set_dir"
 }
 
@@ -399,11 +408,14 @@ apply_command() {
   done < <(jq -r '.hosts[].host' "$set_file")
   wait
   jq -r '"\(.host)\t\(.outcome)\(if .backup_dir then "\tbackup " + .backup_dir else "" end)\(if .reason then "\t" + .reason else "" end)"' \
-    "$set_dir"/results/*.outcome.json | column -t -s "$(printf '\t')"
+    "$set_dir"/results/*.outcome.json | table
   local applied=()
   while IFS= read -r host; do applied+=("$host"); done < <(jq -r '.host' "$set_dir"/results/*.outcome.json)
   printf 'verification probe:\n'
   reprobe "$run" "${applied[@]}"
+  # Any host that was skipped, refused, or partial makes the whole apply fail.
+  jq -e -s 'all(.[]; .outcome == "completed")' "$set_dir"/results/*.outcome.json >/dev/null ||
+    die "not every host completed; see the outcomes above" 70
 }
 
 evidence_command() {
@@ -429,7 +441,7 @@ evidence_command() {
   jq -r '.targets[] | [.target, (.status | .[0:2]), .kind, .source,
       (if .rendered_sha256 == .live_sha256 then "same" elif .canonical_json_equal then "json-equal" else "differs" end),
       (.history[0] // {} | "\(.commit // "-") \(.date // "") \(.subject // "")")] | @tsv' "$out" |
-    column -t -s "$(printf '\t')"
+    table
   printf 'evidence: %s\n' "$out"
 }
 

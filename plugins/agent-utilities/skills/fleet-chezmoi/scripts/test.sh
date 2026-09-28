@@ -169,7 +169,7 @@ check "no secret in probe output or run records" no_secret "$run"
 set_id=$(awk 'END {print $1}' "$T/seal.out")
 [ -z "${DEBUG:-}" ] || { cat "$T/seal.out"; cat "$run"/logs/*.seal.log 2>/dev/null; }
 printf 'edited-after-seal\n' >"$HOME/.b"
-"$fc" apply "$run" "$set_id" >"$T/apply.out"
+if "$fc" apply "$run" "$set_id" >"$T/apply.out" 2>&1; then fail "apply exited 0 with a skipped host"; fi
 check "changed live state is skipped" grep -q 'skipped' "$T/apply.out"
 check "live edit survived" grep -q edited-after-seal "$HOME/.b"
 check "skipped host never reached the executor" [ "$(grep -c '^apply' "$STUB_LOG")" = 1 ]
@@ -196,7 +196,7 @@ check "apply ran after exactly one backup" grep -q '^apply h1 plan-[0-9a-f]* bac
 check "host converged" [ "$(class_of "$run" h1)" = in-sync ]
 backup_dir=$(jq -r '.backup_dir' "$run/sets/apply/results/h1.backup.json")
 check "backup is private" [ "$(stat -c %a "$backup_dir" 2>/dev/null || stat -f %Lp "$backup_dir")" = 700 ]
-check "backup archived the pending file" grep -qx .greeting <(tar -tf "$backup_dir/files.tar")
+check "backup archived the pending file" grep -qx ./.greeting <(tar -tf "$backup_dir/files.tar")
 check "no secret in apply output or run records" no_secret "$run"
 check "no secret on stdout" no_secret "$T/apply.out"
 
@@ -215,7 +215,7 @@ check "targeted plan names the exact absolute path" \
 "$fc" apply "$run" "$set_id" >"$T/apply.out"
 check "targeted apply updated the path" [ "$(cat "$HOME/.a")" = a2 ]
 tb=$(jq -r '.backup_dir' "$run/sets/targets-h1/results/h1.backup.json")
-check "targeted backup kept the prior content" [ "$(cd "$tb" && tar -xOf files.tar .a)" = a ]
+check "targeted backup kept the prior content" [ "$(cd "$tb" && tar -xOf files.tar ./.a)" = a ]
 check "host converged after targeted apply" [ "$(class_of "$run" h1)" = in-sync ]
 
 # 7. JSON key order only is semantically equal: apply with a finding
@@ -302,6 +302,21 @@ check "version drift against gold, scoped to declared marketplaces" \
   [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/plugins.json")" = "claude: p@mk 1 (gold 2)" ]
 check "account-synced plugins are out of scope" ! grep -q 's@synced' <(jq -r '.[1].findings[].detail' "$T/plugins.json")
 check "plugin findings do not block" [ "$(jq -r '.[1].class' "$T/plugins.json")" = in-sync ]
+
+# 14. review fixes: .docker subtree, per-harness plugin scope, behind externals
+jq -n '[
+  {host:"gold",transport:"ssh",gold:true,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+    status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:[],registered_marketplaces:["mk"],installed:{}},
+      codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"2",enabled:true}}}}}},
+  {host:"h",transport:"ssh",gold:false,expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+    status:{ok:true,lines:[{live:" ",target:"M",path:".docker/contexts/meta.json"}]},
+    externals:[{path:"/x",state:"behind",behind:2,fetch:"ok"}],
+    plugins:{codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"1",enabled:true}}}}}}]' |
+  jq -f "$here/classify.jq" >"$T/review-fixes.json"
+check "any .docker path is sensitive" [ "$(jq -r '.[1].conflicts | join(",")' "$T/review-fixes.json")" = .docker/contexts/meta.json ]
+check "Codex drift is scoped by the gold's Codex marketplaces" \
+  [ "$(jq -r '.[1].findings[] | select(.code == "plugin-version-drift") | .detail' "$T/review-fixes.json")" = "codex: p@cx 1 (gold 2)" ]
+check "a behind external is reported" [ "$(jq -r '[.[1].findings[].code] | index("external-behind") != null' "$T/review-fixes.json")" = true ]
 
 check "no secret anywhere in run records" no_secret "$run"
 

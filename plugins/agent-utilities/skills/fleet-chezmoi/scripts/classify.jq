@@ -17,8 +17,8 @@
 # Y compares live with the target (what apply would do: A, M, D, R).
 
 def sensitive_path:
-  test("^(\\.ssh|\\.gnupg|\\.aws|\\.kube|\\.config/gh|\\.config/op|\\.password-store)(/|$)")
-  or test("^(\\.netrc|\\.pgpass|\\.docker/config\\.json)$")
+  test("^(\\.ssh|\\.gnupg|\\.aws|\\.kube|\\.docker|\\.config/gh|\\.config/op|\\.password-store)(/|$)")
+  or test("^(\\.netrc|\\.pgpass)$")
   or test("(^|/)(id_[A-Za-z0-9_-]+|[^/]*\\.(pem|key|p12|pfx))$")
   or test("(?i)(^|/)[^/]*(credential|secret|token|auth)[^/]*$");
 
@@ -42,10 +42,8 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
   | group_by(.) | map(select(length > 1) | .[0])) as $repeated_dirty
 | (map(select(.gold and .probe != null) | .probe.source.head) | first // null) as $gold_head
 | (map(select(.gold and .probe != null) | .probe.plugins // {}) | first // {}) as $gold_plugins
-# Compare only plugins from marketplaces the user declares (the synced Claude
-# extraKnownMarketplaces); account-synced and runtime-bundled plugins differ by
-# host on purpose.
-| ($gold_plugins.claude.declared_marketplaces // $gold_plugins.codex.declared_marketplaces // []) as $scope
+# Compare only plugins from marketplaces the gold host declares for that same
+# harness; account-synced and runtime-bundled plugins differ by host on purpose.
 
 | map(
   . as $r
@@ -62,10 +60,13 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
       ( $keyorder[] | reason("json-key-order"; "\(.): only key order differs; manage it with a modify_ template that returns .chezmoi.stdin unchanged when nothing managed changed")),
       ( $p.externals // [] | .[] | select(.fetch == "failed")
         | reason("external-fetch-failed"; .path)),
+      ( $p.externals // [] | .[] | select(.state == "behind")
+        | reason("external-behind"; "\(.path): \(.behind) upstream commit(s) not pulled; chezmoi fast-forwards it when its refreshPeriod elapses, or run `chezmoi apply --refresh-externals` on that host")),
       ( if (($p.source.dirty // []) | sort) as $d | ($d | length) > 0 and any($repeated_dirty[]; . == $d) then
           reason("repeated-source-drift"; "same uncommitted paths on several hosts: \($p.source.dirty | join(", "))")
         else empty end ),
       ( ($p.plugins // {}) | to_entries[] | .key as $harness | .value as $h
+        | ($gold_plugins[$harness].declared_marketplaces // []) as $scope
         | ( ($h.declared_marketplaces - ($h.registered_marketplaces // [])) | select(length > 0 and $h.registered_marketplaces != null)
             | reason("plugin-marketplace-unregistered"; "\($harness): declared but not registered: \(join(", ")); register and update before applying (plugin commands rewrite the harness settings)") ),
           # Claude's enabledPlugins is the synced declaration; Codex config also

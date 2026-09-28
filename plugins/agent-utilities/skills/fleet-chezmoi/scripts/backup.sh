@@ -53,7 +53,8 @@ chezmoi --no-pager diff "$@" >"$dir/diff.patch" 2>/dev/null </dev/null || fail "
 : >"$dir/paths"
 cut -c 4- "$dir/status" | while IFS= read -r rel; do
   [ -n "$rel" ] || continue
-  if [ -e "$dest/$rel" ] || [ -L "$dest/$rel" ]; then printf '%s\n' "$rel" >>"$dir/paths"; fi
+  # "./" keeps a name that starts with "-" from being read as a tar option.
+  if [ -e "$dest/$rel" ] || [ -L "$dest/$rel" ]; then printf './%s\n' "$rel" >>"$dir/paths"; fi
 done
 entries=$(awk 'NF {n++} END {print n+0}' "$dir/paths")
 if [ "$entries" -gt 0 ]; then
