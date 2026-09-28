@@ -266,10 +266,14 @@ if [ -f "$src/.fleet-chezmoi.json" ]; then
     [ "$(awk 'END {print NR}' "$work/versions")" -lt 500 ] || m_truncated=true
     m_mtime=$(stat -c %Y "$m_live" 2>/dev/null || stat -f %m "$m_live" 2>/dev/null || printf '0')
     jq -rn --slurpfile v "$work/versions" --slurpfile l "$m_live" --argjson review "$m_review" '
+      # Values compare in canonical form (object keys sorted): an app that
+      # rewrites the file with keys in another order has changed nothing.
+      def canon: if type == "object" then to_entries | sort_by(.key) | map(.value |= canon) | from_entries
+        elif type == "array" then map(canon) else . end;
       def flat: to_entries | map(
         if (.value | type) == "object" then
-          (.key as $k | .value | to_entries | map({key: ([$k, .key] | tojson), value: (.value | tojson)}))
-        else [{key: ([.key] | tojson), value: (.value | tojson)}] end) | add // [] | from_entries;
+          (.key as $k | .value | to_entries | map({key: ([$k, .key] | tojson), value: (.value | canon | tojson)}))
+        else [{key: ([.key] | tojson), value: (.value | canon | tojson)}] end) | add // [] | from_entries;
       $v as $vs
       | ($vs | map(.doc | flat)) as $hist
       | ($vs[0].doc | keys) as $keys
