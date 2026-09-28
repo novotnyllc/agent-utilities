@@ -705,6 +705,14 @@ jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,pr
   jq -f "$here/classify.jq" >"$T/pubmode.json"
 check "a published edit with a mode change goes to a person" \
   [ "$(jq -r '.[0].decisions[] | select(.path == ".h") | .decision' "$T/pubmode.json")" = capture-manual ]
+# An unverified host's dirty list never makes a verified host's drift "repeated".
+jq -n '[{host:"g",transport:"ssh",expected:{hostname:"g",user:"u"},error:null,probe:{identity:{hostname:"g",user:"u"},
+  source:{head:"a",upstream_head:"a",dirty_count:1,dirty:["x"]},status:{ok:true,lines:[]}}},
+  {host:"w",transport:"ssh",expected:{hostname:"w",user:"u"},error:null,probe:{identity:{hostname:"imposter",user:"u"},
+  source:{head:"a",upstream_head:"a",dirty_count:1,dirty:["x"]},status:{ok:true,lines:[]}}}]' |
+  jq -f "$here/classify.jq" >"$T/repeat.json"
+check "repeated drift counts verified hosts only" \
+  [ "$(jq -r '.[0] | [.findings[]?.code, .blockers[]?.code] | index("repeated-source-drift") == null' "$T/repeat.json")" = true ]
 check "a mode-only change goes to a person" \
   [ "$(jq -r '.[0] | [.class, .decisions[0].decision] | join(",")' "$T/mode-only.json")" = review,capture-manual ]
 

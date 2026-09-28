@@ -68,7 +68,7 @@ def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) !=
 # --- fleet-wide facts --------------------------------------------------------
 # Source trees that carry the same uncommitted paths on several hosts point at a
 # scheduled writer, not at a person.
-| ($records | map(select((.probe.source.dirty_count // 0) > 0) | .probe.source.dirty | sort)
+| ($eligible | map(select((.probe.source.dirty_count // 0) > 0) | .probe.source.dirty | sort)
   | group_by(.) | map(select(length > 1) | .[0])) as $repeated_dirty
 | ($eligible | map(.probe.source.upstream_head // empty | select(. != "")) | unique) as $upstream_views
 # Per-path origin decisions from every host's live edits.
