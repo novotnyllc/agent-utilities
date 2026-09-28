@@ -491,11 +491,11 @@ check "a spaced, quoted target reaches the host intact" \
 
 # 13. plugin registration against the rest of the fleet (classifier only)
 jq -n '[
-  {host:"a",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"a",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:["p@mk","q@mk"],
       registered_marketplaces:["mk"],installed:{"p@mk":{version:"2",enabled:true},"q@mk":{version:"1",enabled:true},
       "s@synced":{version:"1",enabled:true}}}}}},
-  {host:"h",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"h",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:["p@mk","q@mk"],
       registered_marketplaces:[],installed:{"p@mk":{version:"1",enabled:true}}}}}}]' |
   jq -f "$here/classify.jq" >"$T/plugins.json"
@@ -508,10 +508,10 @@ check "plugin findings do not block" [ "$(jq -r '.[1].class' "$T/plugins.json")"
 
 # 14. review fixes: .docker subtree, per-harness plugin scope, behind externals
 jq -n '[
-  {host:"a",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"a",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[]},plugins:{claude:{declared_marketplaces:["mk"],enabled:[],registered_marketplaces:["mk"],installed:{}},
       codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"2",enabled:true}}}}}},
-  {host:"h",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},
+  {host:"h",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},
     status:{ok:true,lines:[{live:" ",target:"M",path:".docker/contexts/meta.json"}]},
     externals:[{path:"/x",state:"behind",behind:2,fetch:"ok"}],
     plugins:{codex:{declared_marketplaces:["cx"],enabled:[],registered_marketplaces:["cx"],installed:{"p@cx":{version:"1",enabled:true}}}}}}]' |
@@ -522,7 +522,7 @@ check "Codex drift is scoped by the fleet's Codex marketplaces" \
 check "a behind external is reported" [ "$(jq -r '[.[1].findings[].code] | index("external-behind") != null' "$T/review-fixes.json")" = true ]
 
 # 15. stale base: the origin never pulled a newer upstream change to that source
-jq -n '[{host:"x",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"b",behind:1},
+jq -n '[{host:"x",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"b",behind:1},
   status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",live_sha256:"d1",live_mtime:300,
   source:"dot_f",kind:"plain",source_upstream_time:200,source_head_time:100}]}}}]' |
   jq -f "$here/classify.jq" >"$T/stale-base.json"
@@ -538,7 +538,7 @@ jq -n '[
   {host:"wrong",transport:"ssh",expected:{hostname:"w",user:"u"},error:null,probe:{identity:{hostname:"imposter",user:"u"},
     source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[{live:"M",target:"M",path:".f"}],edits:[{path:".f",
     live_sha256:"d2",live_mtime:200,source:"dot_f",kind:"plain",source_upstream_time:10,source_head_time:10,upstream_sha256:"u"}]}}},
-  {host:"m",transport:"ssh",expected:null,error:null,probe:{identity:{},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
+  {host:"m",transport:"ssh",expected:{hostname:"n",user:"u"},error:null,probe:{identity:{hostname:"n",user:"u"},source:{head:"a",upstream_head:"a"},status:{ok:true,lines:[]},
     managed_json:[{target:".s.json",managed:"t.json",live_mtime:300,history_truncated:false,
       edits:[{path:["theme"],state:"removed",value_sha256:"absent",upstream_path_time:10,review:false}]}]}}]' |
   jq -f "$here/classify.jq" >"$T/identity.json"
@@ -547,6 +547,18 @@ check "a mismatched host is excluded from origin decisions" \
 check "the mismatched host itself stops" [ "$(jq -r '.[1].class' "$T/identity.json")" = identity-mismatch ]
 check "removing a whole fleet-wide key needs a person" \
   [ "$(jq -r '.[2] | [.class, .decisions[0].decision] | join(",")' "$T/identity.json")" = review,capture-manual ]
+
+# 18. an approved set entry that was deleted since approval is not captured
+printf '{"a":{"x":1}}\n' >"$HOME/.fj.json"
+null_digest=$(printf 'null' | shasum -a 256 | cut -d ' ' -f 1)
+one_digest=$(printf '1' | shasum -a 256 | cut -d ' ' -f 1)
+fj() { sh "$here/fetch-json.sh" .fj.json "$1" | jq -r '[.ok, (.error // "")] | join(",")'; }
+check "a present entry is fetched" [ "$(fj '[{"path":["a","x"],"state":"set","digest":"'"$one_digest"'"}]')" = "true," ]
+check "a deleted entry is not fetched as null" \
+  [ "$(fj '[{"path":["a","y"],"state":"set","digest":"'"$null_digest"'"}]')" = "false,an approved entry is no longer present" ]
+check "a deleted top-level entry is not fetched as null" \
+  [ "$(fj '[{"path":["b"],"state":"set","digest":"'"$null_digest"'"}]')" = "false,an approved entry is no longer present" ]
+rm -f "$HOME/.fj.json"
 
 # 16. plugin convergence installs what the synced settings enable, and only that
 pc=$T/plugin-host

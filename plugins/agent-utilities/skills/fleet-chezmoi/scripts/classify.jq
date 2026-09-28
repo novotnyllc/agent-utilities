@@ -53,11 +53,11 @@ def vkey: tostring | split(".") | map(tonumber? // .);
 def scoped($scope): map(select((split("@") | last) as $m | $scope | index($m) != null));
 
 . as $records
-# Only records whose identity matched (or that have no expectation) inform
-# fleet-wide decisions; a wrong host's data never steers another host.
+# Only records with a configured identity that matched inform fleet-wide
+# decisions; an unconfigured or wrong host's data never steers another host.
 | ($records | map(select(.probe != null and (.probe.error // null) == null and
-    (.expected == null or (.expected.hostname == .probe.identity.hostname and
-      .expected.user == .probe.identity.user))))) as $eligible
+    .expected != null and .expected.hostname == .probe.identity.hostname and
+      .expected.user == .probe.identity.user))) as $eligible
 # --- fleet-wide facts --------------------------------------------------------
 # Source trees that carry the same uncommitted paths on several hosts point at a
 # scheduled writer, not at a person.

@@ -504,7 +504,7 @@ capture_seal() {
   chmod 700 "$run/sets" "$set_dir"
   jq --arg head "$head" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     {schema:"fleet-chezmoi.set",version:1,stage:"capture",created_at:$created,controller_head:$head,
-     items:([.[] | select(.identity_verified) | .host as $h | .captures[]
+     items:([.[] | select(.identity_verified and .class == "capture") | .host as $h | .captures[]
        | {host:$h,type:(.type // "file"),path,source,digest,mtime,entries}]
        | sort_by(.path))}' \
     "$run/classes.json" >"$set_dir/set.json"

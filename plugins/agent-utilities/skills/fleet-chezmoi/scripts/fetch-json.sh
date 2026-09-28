@@ -6,8 +6,9 @@
 #
 # ENTRIES-JSON is [{path:[KEY] or [KEY,SUBKEY], state:"set"|"removed", digest}].
 # Each value is emitted (canonical JSON, base64) only if its digest still equals
-# the approved one, and a removed entry only if it is still absent. Nothing
-# else in the file leaves this host, and nothing prints the values.
+# the approved one and the entry still exists, and a removed entry only if it
+# is still absent. Nothing else in the file leaves this host, and nothing
+# prints the values.
 set -u
 
 fail() {
@@ -48,6 +49,11 @@ while IFS= read -r entry; do
       fail "an approved removal is no longer absent"
     jq -cn --argjson p "$path" '{path:$p,state:"removed",b64:""}' >>"$work/out"
   else
+    # Present, not merely null: a deleted entry is a change.
+    jq -e --argjson p "$path" '
+      if ($p | length) == 1 then has($p[0])
+      else (.[$p[0]] | type) == "object" and (.[$p[0]] | has($p[1])) end' "$live" >/dev/null 2>&1 ||
+      fail "an approved entry is no longer present"
     jq -c --argjson p "$path" 'getpath($p) | tojson' "$live" | jq -r . >"$work/value" ||
       fail "cannot read an approved entry"
     printf '%s' "$(cat "$work/value")" >"$work/value.raw"
