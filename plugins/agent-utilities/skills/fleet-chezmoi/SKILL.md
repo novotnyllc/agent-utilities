@@ -72,6 +72,33 @@ source, and the classifier works out per file where each change came from.
 Why each step is safe, and how origins are decided:
 [reconcile](references/reconcile.md).
 
+## Propagating settings
+
+When settings must reach every host, they already exist on one of them. That
+host is the origin: usually the machine the user is working on, otherwise the
+one that saved them most recently. It is never a fixed host, and not
+necessarily the source repository.
+
+- **Chezmoi-managed files.** Each probe decision names its origin, the host
+  with the newest edit. Publish `capture` decisions with `seal RUN capture`
+  (it commits and pushes directly; no PR is needed). For `capture-manual`
+  (for example templates, `modify_` scripts, and sensitive paths), edit the
+  source to render the origin's values and confirm with `evidence` digests.
+  Every other decision goes to `review`. Only fleet-wide values come from the
+  origin;
+  machine-specific values, such as absolute paths or per-OS settings, stay
+  templated per host.
+- **Settings a source-repository helper applies** rather than a chezmoi
+  target (for example OpenCodex portable settings, which a hook imports).
+  The probe does not see them. Run the repository's capture helper on the
+  origin, then push. If the origin is another host, report which host holds
+  the settings instead of reconstructing them, and never run the helper there
+  as a direct remote command.
+- Never rebuild settings that already exist on a host, and never write new
+  scripts to reproduce them.
+- Other hosts receive only source that is pushed upstream, through sealed
+  plans. Never stage ad-hoc payloads and run them on hosts.
+
 ## Blockers and findings
 
 Blockers force `review`; findings only report. Every code's cause and fix is
