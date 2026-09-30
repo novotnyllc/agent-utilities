@@ -90,12 +90,11 @@ host, and not necessarily the source repository.
   scripts to reproduce them.
 - For a managed app config whose source repository ships a capture helper
   (for example an OpenCodex portable-settings capture command), run that
-  helper on the origin host instead of editing the template by hand.
+  helper instead of editing the template by hand, but only when the origin is
+  the machine you are on. A remote origin goes through `seal RUN capture`
+  like any other file; never run a helper there as a direct remote command.
 - Other hosts receive only source that is pushed upstream, through sealed
   plans. Never stage ad-hoc payloads and run them on hosts.
-- Once Roundhouse's sync loop publishes a `released-agent-keys` list in its
-  config directory for a host, the keys it lists are the loop's to propagate,
-  not fleet-chezmoi's.
 
 ## Blockers and findings
 
