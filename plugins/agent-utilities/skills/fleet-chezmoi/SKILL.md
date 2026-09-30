@@ -72,6 +72,25 @@ source, and the classifier works out per file where each change came from.
 Why each step is safe, and how origins are decided:
 [reconcile](references/reconcile.md).
 
+## Propagating settings
+
+When chezmoi-managed settings must reach every host, they already exist on
+some host. The origin is the machine the user is working on; failing that, the
+newest saved copy, which the probe reports as the `capture` host. It is never
+a fixed host, and not necessarily the source repository.
+
+- Probe, capture from the origin, push, then pull and apply everywhere else
+  through the fast path.
+- Never rebuild settings that already exist on a host, and never write new
+  scripts to reproduce them.
+- For a managed app config whose source repository ships a capture helper
+  (for example an OpenCodex portable-settings capture command), run that
+  helper on the origin host instead of editing the template by hand.
+- Only merged source reaches other hosts, and only through sealed plans.
+  Never stage ad-hoc payloads and run them on hosts.
+- Once a host has `~/.config/roundhouse/released-agent-keys`, anything it
+  lists is Roundhouse's sync loop to propagate, not fleet-chezmoi's.
+
 ## Blockers and findings
 
 Blockers force `review`; findings only report. Every code's cause and fix is

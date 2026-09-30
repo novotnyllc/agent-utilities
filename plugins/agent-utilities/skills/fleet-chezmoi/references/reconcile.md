@@ -57,7 +57,9 @@ Across all hosts, per file:
 
 Timestamps choose between edits only after content, upstream history, and the
 source kind agree; they never override a newer upstream change or a
-disagreement between hosts.
+disagreement between hosts. When the user asks to propagate settings, the
+machine they are working on is the origin; in a `competing` decision, propose
+its content.
 
 ### Managed settings files
 
