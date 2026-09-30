@@ -82,9 +82,10 @@ necessarily the source repository.
 - **Chezmoi-managed files.** Each probe decision names its origin, the host
   with the newest edit. Publish `capture` decisions with `seal RUN capture`
   (it commits and pushes directly; no PR is needed). For `capture-manual`
-  (templates, `modify_` scripts, sensitive paths), edit the source to render
-  the origin's values and confirm with `evidence` digests. `stale-base` and
-  `competing` go to `review`. Only fleet-wide values come from the origin;
+  (for example templates, `modify_` scripts, and sensitive paths), edit the
+  source to render the origin's values and confirm with `evidence` digests.
+  Every other decision goes to `review`. Only fleet-wide values come from the
+  origin;
   machine-specific values, such as absolute paths or per-OS settings, stay
   templated per host.
 - **Settings a source-repository helper applies** rather than a chezmoi
