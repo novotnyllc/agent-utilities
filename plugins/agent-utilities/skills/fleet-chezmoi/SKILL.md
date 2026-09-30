@@ -91,8 +91,10 @@ host, and not necessarily the source repository.
 - For a managed app config whose source repository ships a capture helper
   (for example an OpenCodex portable-settings capture command), run that
   helper instead of editing the template by hand, but only when the origin is
-  the machine you are on. A remote origin goes through `seal RUN capture`
-  like any other file; never run a helper there as a direct remote command.
+  the machine you are on. Such a config's source is a template or `modify_`
+  script, so a remote origin is `capture-manual`: edit the source to render
+  the origin's values and confirm with `evidence` digests. Never run a helper
+  there as a direct remote command.
 - Other hosts receive only source that is pushed upstream, through sealed
   plans. Never stage ad-hoc payloads and run them on hosts.
 
