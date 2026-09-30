@@ -74,27 +74,27 @@ Why each step is safe, and how origins are decided:
 
 ## Propagating settings
 
-When chezmoi-managed settings must reach every host, they already exist on
-some host. Prefer the machine the user is working on as the origin, but only
-when the probe classifies it `capture` (its edit starts from current
-upstream). Otherwise the origin is whichever host the probe classifies
-`capture`, and a disagreement goes to `review`. The origin is never a fixed
-host, and not necessarily the source repository.
+When settings must reach every host, they already exist on one of them. That
+host is the origin: usually the machine the user is working on, otherwise the
+one that saved them most recently. It is never a fixed host, and not
+necessarily the source repository.
 
-- Probe, capture from the origin (capture commits and pushes directly; no PR
-  is needed), then pull and apply everywhere else through the fast path.
-- Only fleet-wide values come from the origin. Machine-specific values, such
-  as absolute paths or per-OS settings, stay templated per host; a file that
-  mixes both is `capture-manual` or a disjoint merge.
+- **Chezmoi-managed files.** Each probe decision names its origin, the host
+  with the newest edit. Publish `capture` decisions with `seal RUN capture`
+  (it commits and pushes directly; no PR is needed). For `capture-manual`
+  (templates, `modify_` scripts, sensitive paths), edit the source to render
+  the origin's values and confirm with `evidence` digests. `stale-base` and
+  `competing` go to `review`. Only fleet-wide values come from the origin;
+  machine-specific values, such as absolute paths or per-OS settings, stay
+  templated per host.
+- **Settings a source-repository helper applies** rather than a chezmoi
+  target (for example OpenCodex portable settings, which a hook imports).
+  The probe does not see them. Run the repository's capture helper on the
+  origin, then push. If the origin is another host, report which host holds
+  the settings instead of reconstructing them, and never run the helper there
+  as a direct remote command.
 - Never rebuild settings that already exist on a host, and never write new
   scripts to reproduce them.
-- For a managed app config whose source repository ships a capture helper
-  (for example an OpenCodex portable-settings capture command), run that
-  helper instead of editing the template by hand, but only when the origin is
-  the machine you are on. Such a config's source is a template or `modify_`
-  script, so a remote origin is `capture-manual`: edit the source to render
-  the origin's values and confirm with `evidence` digests. Never run a helper
-  there as a direct remote command.
 - Other hosts receive only source that is pushed upstream, through sealed
   plans. Never stage ad-hoc payloads and run them on hosts.
 
