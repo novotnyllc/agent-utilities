@@ -5,3 +5,6 @@ reverse-engineer-anything skills. Tag every claim observation / inference /
 unknown with Evidence IDs. The only output that leaves this room is SPEC.md,
 and it crosses via the skill's cross-wall.sh. Add every original name you see
 to ../wall/denylist.txt. End each session by updating NOTES.md and committing.
+
+Don't start planning, delivery or PR workflows here; this file and the
+clean-room-rebuild skill are the whole process.

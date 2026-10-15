@@ -9,7 +9,7 @@ Study the original. Ship your own. The model proposes and the **test oracle**
 decides, and the oracle gets tested too.
 
 "Oracle" in this skill always means a verification check: tests, a byte
-comparison, or the real app's output. It never means a model-consult skill.
+comparison, or the real app's output.
 
 ## The line (check first, every time)
 
@@ -80,25 +80,17 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
 
 "Unknown" is a valid answer. Evidence decides what you claim.
 
-## With Railyard and Compound Engineering installed
+## No planning or delivery workflows
 
-Both plugins coexist with this workflow; keep them inside the room they run in.
+This skill is the whole workflow: SPEC.md is the plan, and the tests plus
+planted mutants are the review. Don't start planning, delivery or PR workflows
+(for example Compound Engineering or Railyard) in either room. Room A produces a
+spec, not a change, and Room B is a local build with no remote. If startup
+routing suggests them, ignore it here. They apply only if `builder/` later
+becomes a project you publish.
 
-- **Oracle naming.** Railyard's Oracle (a GPT-Pro consult) is unrelated; never
-  invoke it for this workflow's oracle steps.
-- **Room B planning and build.** Compound Engineering planning, work and review
-  skills are fine in `builder/`. Their research must use SPEC.md and the builder
-  folder only: no web or repo research about the original app, and nothing from
-  `reader/`.
-- **Room A.** No delivery workflow is needed; it produces SPEC.md, not a PR.
-  Learnings captured there stay in `reader/`.
-- **Routing and gates.** Railyard's routing suggestions apply as usual inside each
-  room. Its push and merge gates apply only if you later publish `builder/` to a
-  remote. A fleet orchestrator is not needed: two sessions and a copied file are
-  the whole topology.
-- **Reviewers.** Review agents, including cross-model ones, may see builder code
-  and SPEC.md. Keep reader evidence and decompiled output local unless the user
-  asks otherwise.
+Railyard's "Oracle" is a model consult and unrelated to this skill's test
+oracle; never invoke it for these steps.
 
 ## Sources
 
