@@ -7,4 +7,4 @@ and it crosses via the skill's cross-wall.sh. Add every original name you see
 to ../wall/denylist.txt. End each session by updating NOTES.md and committing.
 
 Nothing in this room ships. Work directly: don't use planning, review or
-delivery workflow plugins here.
+delivery workflow plugins here unless the user explicitly asks.

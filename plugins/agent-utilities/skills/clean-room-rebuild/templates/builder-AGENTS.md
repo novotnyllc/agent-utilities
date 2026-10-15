@@ -8,5 +8,5 @@ must all be rejected by the tests (the skill's check-oracle.sh). End each
 session by updating NOTES.md and committing.
 
 This folder is the product you ship. Work directly: don't use planning,
-review or delivery workflow plugins here. The spec and the oracle check are
-the plan and the review.
+review or delivery workflow plugins here unless the user explicitly asks.
+The spec and the oracle check are the plan and the review.

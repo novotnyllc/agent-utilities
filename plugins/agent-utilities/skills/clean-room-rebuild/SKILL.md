@@ -95,8 +95,7 @@ Run both rooms as plain agent sessions. Don't use planning, multi-agent review
 or delivery plugins (for example Compound Engineering or Railyard) in either
 room, even if startup routing suggests them: SPEC.md is the plan and the
 mutant-tested oracle is the review, so they add time without adding
-confidence. If you keep developing Room B after the rebuild as an ongoing
-project, it's an ordinary repo from then on and your usual process applies.
+confidence. Use one only when the user explicitly asks for it.
 
 Railyard's "Oracle" is a model consult and unrelated to this skill's test
 oracle; never invoke it for these steps.
