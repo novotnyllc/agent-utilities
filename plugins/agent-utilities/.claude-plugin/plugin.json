@@ -27,6 +27,7 @@
   ],
   "skills": [
     "./skills/browser-use",
+    "./skills/clean-room-rebuild",
     "./skills/create-cli",
     "./skills/frontend-design",
     "./skills/instruments-profiling",

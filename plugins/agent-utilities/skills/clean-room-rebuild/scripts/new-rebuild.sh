@@ -8,9 +8,16 @@ if [ $# -lt 2 ]; then
 fi
 
 skill_dir="$(cd "$(dirname "$0")/.." && pwd)"
+slug="$2"
+
+case "$slug" in
+  ""|-*|*[!a-z0-9-]*)
+    echo "feature-slug must be lowercase letters, digits and hyphens (got: $slug)" >&2
+    exit 2 ;;
+esac
+
 mkdir -p "$1"
 root="$(cd "$1" && pwd -P)"
-slug="$2"
 
 if [ -e "$root/reader" ] || [ -e "$root/builder" ]; then
   echo "refusing: $root already has reader/ or builder/" >&2
@@ -31,7 +38,7 @@ EOF
 
 for room in reader builder; do
   sed "s/__SLUG__/$slug/g" "$skill_dir/templates/$room-AGENTS.md" > "$root/$room/AGENTS.md"
-  ln -s AGENTS.md "$root/$room/CLAUDE.md"
+  ln -s AGENTS.md "$root/$room/CLAUDE.md" 2>/dev/null || cp "$root/$room/AGENTS.md" "$root/$room/CLAUDE.md"
 done
 
 for room in reader builder; do

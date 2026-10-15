@@ -25,8 +25,8 @@ if grep -nE '\b(FUN|LAB|DAT|PTR|sub|loc|off|unk|byte|dword|qword)_[0-9a-fA-F]{4,
   report "decompiler symbol names found"
 fi
 
-# Code fences in source/assembly languages.
-if grep -niE '^```[[:space:]]*(c|cpp|c\+\+|asm|nasm|x86|arm|js|javascript|ts|typescript|cs|csharp|java|kotlin|smali|il|cil|rust|go|swift|objc)[[:space:]]*$' "$spec" >&2; then
+# Code blocks of any kind: SPEC.md is tables and prose only.
+if grep -nE '^[[:space:]]*(```|~~~)' "$spec" >&2; then
   report "code blocks found (SPEC.md describes behaviour; tables and prose only)"
 fi
 
@@ -40,7 +40,7 @@ if [ -f "$deny" ]; then
     term="${term%%#*}"
     term="$(printf '%s' "$term" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -z "$term" ] && continue
-    if grep -nF -- "$term" "$spec" >&2; then
+    if grep -niF -- "$term" "$spec" >&2; then
       report "denylisted term: $term"
     fi
   done < "$deny"

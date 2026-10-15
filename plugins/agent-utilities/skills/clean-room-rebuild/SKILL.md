@@ -1,6 +1,6 @@
 ---
 name: clean-room-rebuild
-description: Two-room clean-room rebuild of a feature from an app you don't have source for. Room A investigates with REA and writes SPEC.md (behaviour only), Room B builds from SPEC.md alone, and a test oracle that has itself been proven with planted failures decides what's true. Use when the user wants to understand a feature in a shipped app and build their own version, recover rules into a spec, or verify a reconstruction. For investigation only, with no rebuild, use reverse-engineer-anything.
+description: Clean-room rebuild of a feature from a shipped app without its source. REA investigation writes a behaviour-only spec, a fresh session builds from it, and mutation-tested checks verify the result. For investigation only, use reverse-engineer-anything.
 ---
 
 # Clean-room rebuild
@@ -8,9 +8,8 @@ description: Two-room clean-room rebuild of a feature from an app you don't have
 Study the original. Ship your own. The model proposes and the **test oracle**
 decides, and the oracle gets tested too.
 
-> Naming: "oracle" here means a *verification check*. It is not
-> `railyard:oracle` (the GPT-6 Pro consult). Never invoke that skill for this
-> workflow.
+"Oracle" in this skill always means a verification check: tests, a byte
+comparison, or the real app's output. It never means a model-consult skill.
 
 ## The line (check first, every time)
 
@@ -20,75 +19,81 @@ security research. Stop and say so if the goal is to bypass DRM, license checks,
 anti-cheat, authentication or access controls, to cheat in or tamper with online
 services, or to ship the original's code, assets, names or icons. Output carries
 no rights to the original. Server-side code was never shipped and can't be read.
-Opus 5.5 may re-route or refuse protection-adjacent targets. That is expected,
+The model may refuse or re-route protection-adjacent targets; that is expected,
 not a setup failure.
+
+## Prerequisite
+
+Room A needs the REA MCP server and REA's own `reverse-engineer-anything` skill,
+both installed by REA setup (see Setup in [prompts.md](prompts.md)). Room B needs
+neither.
 
 ## Layout
 
-Scaffold with `scripts/new-rebuild.sh <root> <feature-slug>`:
+Scaffold with `bash scripts/new-rebuild.sh <root> <feature-slug>` (scripts live in
+this skill's directory):
 
 ```
 <root>/
-  reader/    Room A cwd: git repo, NOTES.md, evidence/, SPEC.md (draft)
-  builder/   Room B cwd: git repo, SPEC.md (copied across the wall), src/, tests/,
-             oracle/mutants/*.patch, NOTES.md, AGENTS.md (CLAUDE.md links to it)
+  reader/    Room A: git repo, AGENTS.md, NOTES.md, evidence/, SPEC.md (draft)
+  builder/   Room B: git repo, AGENTS.md, SPEC.md (copied across the wall), src/,
+             tests/, oracle/mutants/*.patch, NOTES.md
   wall/      denylist.txt: original names, symbols, strings that must not cross
 ```
 
-The wall is a process, not a sandbox: separate folders, a fresh session, and
-only SPEC.md crosses. Each room's AGENTS.md (with CLAUDE.md linked to it) states
-its rules, so no agent settings are needed. Separate folders also keep agent
-memory and any repo-local learnings stores apart. Proof against a determined
-agent would need a VM, not hardened folders; this workflow doesn't call for it.
+Each room's AGENTS.md states its rules (CLAUDE.md links to it). The wall is a
+process, not a sandbox: separate folders, a fresh session, and only SPEC.md
+crosses. Separate folders also keep agent memory and repo-local learnings apart.
 
 ## The loop
 
-1. **Room A, the reader** (REA session in `reader/`, effort medium; high for the spec).
-   Load `reverse-engineer-anything` for tool routing. Use the reader prompt in
-   [prompts.md](prompts.md). Every claim is tagged observation / inference /
-   unknown and cites Evidence IDs. Output: `reader/SPEC.md` from
-   [templates/SPEC.md](templates/SPEC.md). Behaviour, inputs, outputs, edge
-   cases, worked examples, open unknowns. No code, addresses, symbol names or assets.
-2. **The wall.** `scripts/cross-wall.sh <root>` lints SPEC.md (hex addresses,
-   denylisted names, code fences that look like decompiled code), then copies it
-   to `builder/SPEC.md`. Fix the spec in Room A if the lint fails. SPEC.md is the
-   only thing that crosses.
-3. **Room B, the builder**: a *fresh* session in `builder/`. It is never a fork
-   and never a subagent that inherits Room A's context. It gets SPEC.md and nothing else.
-   Use the builder prompt, then the `/goal` prompt (effort xhigh for verification
-   or heavy arithmetic).
+1. **Room A, the reader.** A session in `reader/` using REA, routed by
+   `reverse-engineer-anything`. Run the reader prompt. Every claim is tagged
+   observation / inference / unknown and cites Evidence IDs. Output:
+   `reader/SPEC.md` from [templates/SPEC.md](templates/SPEC.md). Use a higher
+   reasoning setting for the spec: every gap in it becomes a bug in the build.
+2. **The wall.** `bash scripts/cross-wall.sh <root>` blocks addresses, decompiler
+   names, code blocks and denylisted terms, then copies SPEC.md to `builder/`.
+   Fix the spec in Room A if it fails. SPEC.md is the only thing that crosses.
+3. **Room B, the builder.** A *fresh* session in `builder/`: never a fork, resume
+   or subagent of Room A. In the Claude desktop app, that means a new session
+   with fresh context and `builder/` as its folder. Run the builder prompt, then
+   the goal prompt.
 4. **Test the oracle.** Before trusting any green run, plant three wrong variants
    as patches in `builder/oracle/mutants/`: one changed constant, one swapped
-   branch, one boundary shifted by one. Run `scripts/check-oracle.sh <builder> "<test cmd>"`.
-   Every mutant must fail. If any passes, fix the tests first; every earlier
-   green result is suspect. (The TH08 lesson: a byte-matching check passed
-   `0.0` where the original used `128.0`.)
-5. **Outside oracle, when possible.** Behaviour oracle: run the same inputs
-   through the real app and compare. Byte oracle: compare compiled output.
-   Runtime oracle: use it. Record which oracles ran in NOTES.md.
+   branch, one boundary shifted by one. Run
+   `bash scripts/check-oracle.sh <builder> "<test cmd>"`. Every mutant must fail.
+   If any passes, fix the tests first; every earlier green result is suspect.
+   A real case: a byte-matching check passed `0.0` where the original used `128.0`.
+5. **Outside oracle, when possible.** Behaviour: run the same inputs through the
+   real app and compare. Bytes: compare compiled output. Runtime: use it. Record
+   which oracles ran in NOTES.md.
 6. **Factory memory.** End each session by updating NOTES.md from
-   [templates/NOTES.md](templates/NOTES.md) (confirmed, unknown, checks that
-   exist, next experiment) and committing. The repo is the memory, not the chat.
+   [templates/NOTES.md](templates/NOTES.md) and committing. The repo is the
+   memory, not the chat.
 
 "Unknown" is a valid answer. Evidence decides what you claim.
 
-## Launching the rooms
+## With Railyard and Compound Engineering installed
 
-Open each room as its own session with that folder as the working directory,
-in Claude Code or Codex. Room B must start fresh: never a fork, resume or
-subagent of Room A. In the Claude desktop app that means `start_session` with
-`context: "fresh"` and `cwd: <root>/builder`.
+Both plugins coexist with this workflow; keep them inside the room they run in.
 
-Scripts live in this skill's `scripts/` directory; run them with `bash`.
-
-## Alongside other workflow tools
-
-- Two sessions and a copied file are the whole topology; a fleet orchestrator is
-  only worth it for many parallel feature rebuilds.
-- Planning, build and review skills are fine in Room B as long as they work from
-  SPEC.md and the builder folder. Never point them at `reader/`.
-- Reviewers, including cross-model ones, may see builder code and SPEC.md. Keep
-  reader evidence and decompiled output local unless the user asks otherwise.
+- **Oracle naming.** If an Oracle or GPT-Pro consult skill is installed (Railyard
+  has one), do not invoke it for this workflow's oracle steps. They mean
+  `check-oracle.sh` and the tests.
+- **Room B planning and build.** Compound Engineering planning, work and review
+  skills are fine in `builder/`. Their research must use SPEC.md and the builder
+  folder only: no web or repo research about the original app, and nothing from
+  `reader/`.
+- **Room A.** No delivery workflow is needed; it produces SPEC.md, not a PR.
+  Learnings captured there stay in `reader/`.
+- **Routing and gates.** Railyard's routing suggestions apply as usual inside each
+  room. Its push and merge gates apply only if you later publish `builder/` to a
+  remote. A fleet orchestrator is not needed: two sessions and a copied file are
+  the whole topology.
+- **Reviewers.** Review agents, including cross-model ones, may see builder code
+  and SPEC.md. Keep reader evidence and decompiled output local unless the user
+  asks otherwise.
 
 ## Sources
 
