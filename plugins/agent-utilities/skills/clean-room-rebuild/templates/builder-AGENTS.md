@@ -7,6 +7,6 @@ failures live in oracle/mutants/*.patch, change behaviour in src/ only, and
 must all be rejected by the tests (the skill's check-oracle.sh). End each
 session by updating NOTES.md and committing.
 
-This folder is the product you ship. When you publish it, use your normal
-workflow, but plans, research and reviews must work only from this folder and
-SPEC.md.
+This folder is the product you ship. Work directly: don't use planning,
+review or delivery workflow plugins here unless the user explicitly asks.
+The spec and the oracle check are the plan and the review.
