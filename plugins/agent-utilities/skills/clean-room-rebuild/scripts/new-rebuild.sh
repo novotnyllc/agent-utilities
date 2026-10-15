@@ -11,7 +11,7 @@ skill_dir="$(cd "$(dirname "$0")/.." && pwd)"
 slug="$2"
 
 case "$slug" in
-  ""|-*|*[!a-z0-9-]*)
+  ""|-*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
     echo "feature-slug must be lowercase letters, digits and hyphens (got: $slug)" >&2
     exit 2 ;;
 esac
@@ -33,7 +33,8 @@ cp "$skill_dir/templates/NOTES.md" "$root/builder/NOTES.md"
 
 cat > "$root/wall/denylist.txt" <<'EOF'
 # One entry per line: original symbol names, product names, strings, file names
-# that must never appear in SPEC.md or the builder. Lines starting with # are ignored.
+# that must never appear in SPEC.md or the builder. Lines whose first non-space
+# character is # are comments; matching ignores case.
 EOF
 
 for room in reader builder; do

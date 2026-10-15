@@ -55,6 +55,8 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
 2. **The wall.** `bash scripts/cross-wall.sh <root>` blocks addresses, decompiler
    names, code blocks and denylisted terms, then copies SPEC.md to `builder/`.
    Fix the spec in Room A if it fails. SPEC.md is the only thing that crosses.
+   The lint catches common leaks, not all of them: read the spec before it
+   crosses. `--force` copies anyway and prints `WALL FORCED`.
 3. **Room B, the builder.** A *fresh* session in `builder/`: never a fork, resume
    or subagent of Room A. In the Claude desktop app, that means a new session
    with fresh context and `builder/` as its folder. Run the builder prompt, then
@@ -63,6 +65,8 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
    as patches in `builder/oracle/mutants/`: one changed constant, one swapped
    branch, one boundary shifted by one. Run
    `bash scripts/check-oracle.sh <builder> "<test cmd>"`. Every mutant must fail.
+   A mutant only counts if it modifies existing implementation code (not tests,
+   not new or deleted files) and still runs: a syntax error proves nothing.
    If any passes, fix the tests first; every earlier green result is suspect.
    A real case: a byte-matching check passed `0.0` where the original used `128.0`.
 5. **Outside oracle, when possible.** Behaviour: run the same inputs through the
