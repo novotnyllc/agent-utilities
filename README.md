@@ -20,6 +20,7 @@ readiness, machine administration, and UniFi in
 | Skill | Purpose |
 | --- | --- |
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
+| `clean-room-rebuild` | Rebuild a feature from a shipped app via a behaviour-only spec and mutation-tested checks. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
 | `fleet-chezmoi` | Probe a chezmoi fleet in one read-only batch, fast-path safe pulls and applies through roundhouse sealed plans, and reconcile only the paths that conflict. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
