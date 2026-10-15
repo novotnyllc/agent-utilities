@@ -80,14 +80,23 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
 
 "Unknown" is a valid answer. Evidence decides what you claim.
 
-## No planning or delivery workflows
+## What ships
 
-This skill is the whole workflow: SPEC.md is the plan, and the tests plus
-planted mutants are the review. Don't start planning, delivery or PR workflows
-(for example Compound Engineering or Railyard) in either room. Room A produces a
-spec, not a change, and Room B is a local build with no remote. If startup
-routing suggests them, ignore it here. They apply only if `builder/` later
-becomes a project you publish.
+- **Room A never ships.** Evidence, decompiled detail and notes about the
+  original stay private and local. Its only export is SPEC.md.
+- **Room B is the product.** Your implementation, tests, planted mutants,
+  NOTES.md and the copied SPEC.md. SPEC.md and the builder's history are the
+  clean-room record: they show the code came from a description of behaviour.
+  It starts as a local repo; add a remote when you're ready to publish.
+
+## Other workflow tools
+
+The loop above needs no planning or delivery plugin: SPEC.md is the plan, and
+the tests plus planted mutants are the verification. Don't start them in
+Room A; nothing there ships. In Room B, use your normal workflow when you
+publish (for example Compound Engineering or Railyard, if you use them), as
+long as everything it reads or researches stays within `builder/` and SPEC.md:
+no web or repo research about the original app, and nothing from `reader/`.
 
 Railyard's "Oracle" is a model consult and unrelated to this skill's test
 oracle; never invoke it for these steps.

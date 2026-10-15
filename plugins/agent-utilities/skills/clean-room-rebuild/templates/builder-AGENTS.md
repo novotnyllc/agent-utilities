@@ -7,5 +7,6 @@ failures live in oracle/mutants/*.patch, change behaviour in src/ only, and
 must all be rejected by the tests (the skill's check-oracle.sh). End each
 session by updating NOTES.md and committing.
 
-Don't start planning, delivery or PR workflows here; this file and the
-clean-room-rebuild skill are the whole process.
+This folder is the product you ship. When you publish it, use your normal
+workflow, but plans, research and reviews must work only from this folder and
+SPEC.md.
