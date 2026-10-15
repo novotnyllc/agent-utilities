@@ -48,13 +48,13 @@ bash <skill-dir>/scripts/cross-wall.sh [root]
 ## Room B: the builder (fresh session, cwd: builder/)
 
 ```
-Build [feature] from SPEC.md in ./src. You have only SPEC.md: do not look outside this folder and do not use REA. Write tests from the behaviour and worked examples in the spec, and run them. Where SPEC.md lists an unknown, do not guess silently: pick the simplest behaviour, mark it in NOTES.md, and add a test that pins it.
+Build [feature] from SPEC.md: implementation in ./src, tests in ./tests. You have only SPEC.md: do not look outside this folder and do not use REA. Write tests from the behaviour and worked examples in the spec, and run them. Where SPEC.md lists an unknown, do not guess silently: pick the simplest behaviour, mark it in NOTES.md, and add a test that pins it.
 ```
 
 ## The test-oracle check (Room B)
 
 ```
-Add three deliberately wrong variants of the implementation as patches in ./oracle/mutants/: constant.patch (change one constant), branch.patch (swap one branch), boundary.patch (shift one boundary by one). Run bash <skill-dir>/scripts/check-oracle.sh . "[test command]" and confirm all three are rejected. If any passes, fix the tests first.
+Add three deliberately wrong variants of the implementation as patches in ./oracle/mutants/: constant.patch (change one constant), branch.patch (swap one branch), boundary.patch (shift one boundary by one). Each mutant changes behaviour in ./src and still builds. Run ORACLE_BUILD="[build or parse command]" bash <skill-dir>/scripts/check-oracle.sh . "[test command]" and confirm all three are rejected. If any passes, fix the tests first; if any is invalid, fix the mutant.
 ```
 
 ## The goal (Room B)

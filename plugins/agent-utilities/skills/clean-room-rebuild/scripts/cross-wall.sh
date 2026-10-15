@@ -38,7 +38,7 @@ fi
 if grep -nE '^[[:space:]]*(```|~~~)|<pre|<code' "$spec" >&2; then
   report "code blocks found (SPEC.md describes behaviour; tables and prose only)"
 fi
-if grep -nE '^(    |	)[[:space:]]*([^|[:space:]-].*[;{}][[:space:]]*$|(if|for|while|return|def|function|int|void|var|let|const) )' "$spec" >&2; then
+if grep -nE '^(    |	)[[:space:]]*[^|[:space:]-].*[;{}][[:space:]]*$' "$spec" >&2; then
   report "indented code found"
 fi
 

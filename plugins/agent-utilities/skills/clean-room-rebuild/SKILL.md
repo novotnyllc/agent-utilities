@@ -65,8 +65,10 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
    as patches in `builder/oracle/mutants/`: one changed constant, one swapped
    branch, one boundary shifted by one. Run
    `bash scripts/check-oracle.sh <builder> "<test cmd>"`. Every mutant must fail.
-   A mutant only counts if it modifies existing implementation code (not tests,
-   not new or deleted files) and still runs: a syntax error proves nothing.
+   A mutant only counts if it modifies existing implementation code under `src/`
+   (not tests, not new or deleted files) and still builds: set `ORACLE_BUILD` to
+   the build or parse command so a mutant that merely breaks the build is
+   reported invalid instead of rejected.
    If any passes, fix the tests first; every earlier green result is suspect.
    A real case: a byte-matching check passed `0.0` where the original used `128.0`.
 5. **Outside oracle, when possible.** Behaviour: run the same inputs through the
@@ -82,9 +84,8 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
 
 Both plugins coexist with this workflow; keep them inside the room they run in.
 
-- **Oracle naming.** If an Oracle or GPT-Pro consult skill is installed (Railyard
-  has one), do not invoke it for this workflow's oracle steps. They mean
-  `check-oracle.sh` and the tests.
+- **Oracle naming.** Railyard's Oracle (a GPT-Pro consult) is unrelated; never
+  invoke it for this workflow's oracle steps.
 - **Room B planning and build.** Compound Engineering planning, work and review
   skills are fine in `builder/`. Their research must use SPEC.md and the builder
   folder only: no web or repo research about the original app, and nothing from
