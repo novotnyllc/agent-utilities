@@ -89,14 +89,14 @@ crosses. Separate folders also keep agent memory and repo-local learnings apart.
   clean-room record: they show the code came from a description of behaviour.
   It starts as a local repo; add a remote when you're ready to publish.
 
-## Other workflow tools
+## Work directly
 
-The loop above needs no planning or delivery plugin: SPEC.md is the plan, and
-the tests plus planted mutants are the verification. Don't start them in
-Room A; nothing there ships. In Room B, use your normal workflow when you
-publish (for example Compound Engineering or Railyard, if you use them), as
-long as everything it reads or researches stays within `builder/` and SPEC.md:
-no web or repo research about the original app, and nothing from `reader/`.
+Run both rooms as plain agent sessions. Don't use planning, multi-agent review
+or delivery plugins (for example Compound Engineering or Railyard) in either
+room, even if startup routing suggests them: SPEC.md is the plan and the
+mutant-tested oracle is the review, so they add time without adding
+confidence. If Room B later becomes a long-lived shared project, adopting your
+usual PR workflow for it is a separate decision after the rebuild.
 
 Railyard's "Oracle" is a model consult and unrelated to this skill's test
 oracle; never invoke it for these steps.
