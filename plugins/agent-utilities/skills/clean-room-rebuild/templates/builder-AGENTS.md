@@ -1,0 +1,7 @@
+# Room B: builder (__SLUG__)
+
+Clean-room rebuild, build side. Build only from SPEC.md in this folder.
+Do not read ../reader or ../wall, do not use REA, and do not look for the
+original app. Planted failures live in oracle/mutants/*.patch and must all be
+rejected by the tests (the skill's check-oracle.sh). End each session by
+updating NOTES.md and committing.
