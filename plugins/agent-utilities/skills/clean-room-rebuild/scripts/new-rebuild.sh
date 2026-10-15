@@ -44,6 +44,10 @@ done
 
 for room in reader builder; do
   (cd "$root/$room" && git init -q && git add -A && git commit -qm "Scaffold $room room for $slug")
+  # Plain sessions in both rooms: switch off workflow-plugin hooks that honour
+  # this marker (Railyard). It sits in the git directory, so it never ships.
+  common="$(cd "$root/$room" && git rev-parse --path-format=absolute --git-common-dir)"
+  printf '%s\n' "$common" > "$common/railyard-off"
 done
 
 cat <<EOF
