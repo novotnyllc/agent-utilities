@@ -97,9 +97,10 @@ room, even if startup routing suggests them: SPEC.md is the plan and the
 mutant-tested oracle is the review, so they add time without adding
 confidence. Use one only when the user explicitly asks for it.
 
-The scaffold also writes `.git/railyard-off` in both rooms, which turns
+The scaffold also sets `railyard.off` in both rooms' git config, which turns
 Railyard's startup guide and hooks off there and in any worktree of either
-room. It is never committed; delete it to turn Railyard back on.
+room. It is never committed; `git config --unset railyard.off` turns Railyard
+back on.
 
 Railyard's "Oracle" is a model consult and unrelated to this skill's test
 oracle; never invoke it for these steps.
