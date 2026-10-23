@@ -29,6 +29,7 @@ readiness, machine administration, and UniFi in
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `onedrive-fileprovider-repair` | Diagnose and safely repair macOS OneDrive File Provider churn. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
+| `printed-mesh-garments` | Attach 3D-printed mesh panels to stretch and foil garments, and design panels that sew on easily. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
 
 ### Fusion parametric design
