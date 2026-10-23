@@ -1,0 +1,4 @@
+interface:
+  display_name: "Printed-Mesh Garments"
+  short_description: "Attach printed-mesh panels to stretch garments"
+  default_prompt: "Use $printed-mesh-garments to plan how to attach 3D-printed tulle panels to a foil spandex bodysuit."
