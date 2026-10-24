@@ -37,6 +37,7 @@ What worked on foil spandex (Singer Heavy Duty 6800C class machine):
 | Setting | Value |
 | --- | --- |
 | Stitch | Plain zigzag, width 2.0, length 2.0–2.5 |
+| Bar tacks through folded layers | Zigzag width 4.0, length 2.0–2.5, 4 passes (forward, reverse, forward, reverse); a satin length (0.4–0.8) did not feed |
 | Tension | 4 |
 | Presser foot pressure | Highest the dial allows (a lower setting jammed) |
 | Foot | All-purpose, blue painter's tape on the sole, trimmed clear of the needle hole |
