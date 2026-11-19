@@ -15,12 +15,18 @@ The agent-scripts imports were most recently reviewed against:
 - Commit: `dc4f583a2c1a6f3a93e81a972eee89f59aca32f7`
 - License: MIT
 
-Oracle, the thermos family, and the delivery/orchestration skills moved to
-the [`railyard`](https://github.com/novotnyllc/railyard) plugin; their
-upstream ledger and adaptation notes moved with them. Fleet, transport, and
+The thermos family and delivery/orchestration skills live in
+[`railyard`](https://github.com/novotnyllc/railyard). Fleet, transport, and
 UniFi administration live in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse); the optional personal
 chezmoi integration lives here as `fleet-chezmoi`.
+
+Railyard supplied the `cleanup-codex` implementation and the local Oracle
+adaptations at commit `aa9079f10941526b20627fafebb9a761429cfe76`.
+The Oracle skill text tracks `steipete/oracle` at commit
+`0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851` (MIT). Preserve its skill-local
+installer, explicit binary override, and browser profile preferences when
+refreshing the skill.
 
 ## Copied Skills
 
@@ -32,6 +38,7 @@ chezmoi integration lives here as `fleet-chezmoi`.
 | `instruments-profiling` | `skills/instruments-profiling` |
 | `native-app-performance` | `skills/native-app-performance` |
 | `one-password` | `skills/one-password` |
+| `oracle` | `skills/oracle` in `steipete/oracle` |
 | `skill-cleaner` | `skills/skill-cleaner` |
 
 ## Adaptation Notes

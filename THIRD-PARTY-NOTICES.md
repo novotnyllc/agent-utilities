@@ -37,6 +37,17 @@ which stays under its own license.
 - **Modifications:** none. If this skill is ever edited, Apache-2.0 §4(b)
   requires a prominent modification statement in the changed file.
 
+## Oracle (MIT)
+
+- **What:** `plugins/agent-utilities/skills/oracle/SKILL.md`, adapted.
+- **From:** https://github.com/steipete/oracle, path `skills/oracle`,
+  commit `0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851`, via Railyard.
+- **Copyright:** Copyright (c) 2026 Peter Steinberger.
+- **License:** MIT. See [`LICENSE`](LICENSE).
+- **Modifications:** configuration knobs replace fixed package, repository,
+  and account examples. Skill-local scripts handle CLI setup and browser
+  profile preferences. See [`UPSTREAM.md`](UPSTREAM.md).
+
 ## Generated CI artifact
 
 `.github/workflows/refresh-imported-skills.lock.yml` is compiled output from

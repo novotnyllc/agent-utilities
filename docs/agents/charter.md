@@ -12,9 +12,8 @@ or the fleet.
 
 ## Belongs elsewhere
 
-Everything about delivering work — model routing, delivery, orchestration,
-cross-machine placement, review gates, Oracle, and Codex runtime hygiene —
-lives in [`railyard`](https://github.com/novotnyllc/railyard). Fleet
+Delivery, orchestration, cross-machine placement, and review policy
+live in [`railyard`](https://github.com/novotnyllc/railyard). Fleet
 readiness, machine administration, and UniFi live in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse).
 

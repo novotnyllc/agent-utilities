@@ -1,7 +1,7 @@
 {
   "name": "agent-utilities",
-  "version": "0.21.0",
-  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, clean-room feature rebuilds, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, Fusion parametric CAD, and attaching printed-mesh panels to stretch garments.",
+  "version": "0.22.0",
+  "description": "The toolbox: self-contained craft skills for any single agent session \u2014 browser automation, clean-room feature rebuilds, CLI design, frontend design, native profiling and performance, 1Password, skill auditing, optional chezmoi reconciliation, Fusion parametric CAD, and attaching printed-mesh panels to stretch garments, plus Codex process recovery and Oracle consultations.",
   "author": {
     "name": "Claire Novotny LLC",
     "url": "https://github.com/novotnyllc"
@@ -40,7 +40,9 @@
     "./skills/fleet-chezmoi",
     "./skills/unifi-network-api",
     "./skills/fusion-parametric-design",
-    "./skills/printed-mesh-garments"
+    "./skills/printed-mesh-garments",
+    "./skills/cleanup-codex",
+    "./skills/oracle"
   ],
   "hooks": "./hooks/hooks.json"
 }
