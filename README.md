@@ -9,8 +9,7 @@ and has no coupling to routing, orchestration, or the fleet. Most began as
 adapted copies from `steipete/agent-scripts`; adaptations avoid
 upstream-specific machine names, home paths, vault names, and package paths.
 
-Delivery, model routing, orchestration, review gates, Oracle, and Codex
-runtime hygiene live in the sibling
+Delivery, orchestration, and review policy live in the sibling
 [`railyard`](https://github.com/novotnyllc/railyard) plugin; fleet
 readiness, machine administration, and UniFi in
 [`roundhouse`](https://github.com/novotnyllc/roundhouse).
@@ -21,6 +20,7 @@ readiness, machine administration, and UniFi in
 | --- | --- |
 | `browser-use` | Automate Chrome with the native browser tool or fallback bridge. |
 | `clean-room-rebuild` | Rebuild a feature from a shipped app via a behaviour-only spec and mutation-tested checks. |
+| `cleanup-codex` | Diagnose macOS Codex descriptor pressure and recover a stuck app-server or leftover processes. |
 | `create-cli` | Design predictable command-line arguments, help, output, and errors. |
 | `fleet-chezmoi` | Probe a chezmoi fleet in one read-only batch, fast-path safe pulls and applies through roundhouse sealed plans, and reconcile only the paths that conflict. |
 | `frontend-design` | Build polished, non-generic web interfaces. |
@@ -29,6 +29,7 @@ readiness, machine administration, and UniFi in
 | `native-app-performance` | Diagnose native application performance and hotspots. |
 | `onedrive-fileprovider-repair` | Diagnose and safely repair macOS OneDrive File Provider churn. |
 | `one-password` | Read, store, and inject targeted secrets with the 1Password CLI. |
+| `oracle` | Consult ChatGPT Pro on a scoped question through a signed-in browser. |
 | `printed-mesh-garments` | Attach 3D-printed mesh panels to stretch and foil garments, and design panels that sew on easily. |
 | `skill-cleaner` | Audit installed skills for usage, duplication, and description quality. |
 
@@ -106,6 +107,7 @@ publishing. Focused executable tests:
 
 ```sh
 npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts
+node --test plugins/agent-utilities/skills/{cleanup-codex,oracle}/scripts/*.test.mjs
 ```
 
 ## Upstream Refreshes

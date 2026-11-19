@@ -26,6 +26,7 @@ This repo has no validation CI — the checks below are the gate.
 ```sh
 npx tsx plugins/agent-utilities/skills/skill-cleaner/scripts/skill-cleaner.test.ts
 plugins/agent-utilities/skills/fleet-chezmoi/scripts/test.sh   # needs chezmoi, jq
+node --test plugins/agent-utilities/skills/{cleanup-codex,oracle}/scripts/*.test.mjs  # Node 24+
 ```
 
 Plus: both plugin manifests parse as JSON, and every
