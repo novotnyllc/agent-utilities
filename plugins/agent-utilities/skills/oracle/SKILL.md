@@ -75,7 +75,9 @@ for the session.
 `--file` accepts files, directories, and globs, and can be repeated. A `!`
 prefix excludes. Oracle honors `.gitignore`, skips dotfiles unless the pattern
 names them, and rejects files over 1 MB by default. Choose the fewest files
-that still contain the answer.
+that still contain the answer. Browser uploads keep a single text/source file
+native and bundle multiple text/source files. Add `--browser-no-focus` to keep
+Chrome from taking keyboard focus during a run.
 
 For other flags, including API engines, remote browsers, project sources,
 and multi-model runs, see `"$ORACLE_CLI" --help` and
@@ -116,4 +118,4 @@ See [model compatibility](references/model-compatibility.md) for the checked
 Oracle version and model mapping.
 
 Adapted from `steipete/oracle` `skills/oracle` at
-`0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851` (MIT).
+`370a0a93da640ad08fc1b9f63dc3d74e1979915b` (MIT).

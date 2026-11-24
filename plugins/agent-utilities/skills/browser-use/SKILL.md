@@ -72,9 +72,11 @@ without quoting or control-character errors.
 
 Other call mechanics worth knowing before a login flow:
 
-- The default call timeout is short (about five seconds). Real navigation,
-  snapshots, and consent pages routinely exceed it, and the failure looks
-  identical to a hung page. Pass `--timeout 30000` for anything interactive.
+- Generic client defaults are 60 seconds for calls and 30 seconds for
+  listings. Real navigation, snapshots, and consent pages can still exceed
+  these, and the failure looks identical to a hung page. Pass an explicit
+  `--timeout` (for example `--timeout 300000`) for slow startups or anything
+  interactive.
 - `take_screenshot` with `filePath` is confined to the server's configured
   workspace roots and refuses arbitrary paths. Omit `filePath`, read the
   base64 image from `--output json`, and decode it locally.

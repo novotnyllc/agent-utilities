@@ -63,9 +63,12 @@ mcporter call chrome-devtools.list_pages --args '{}' --output text
 If `DevToolsActivePort` or connection startup fails:
 
 ```bash
-mcporter daemon restart
+mcporter daemon stop
 mcporter call chrome-devtools.list_pages --args '{}' --output text
 ```
+
+`daemon stop` forces a clean process on the next call. `daemon restart` can
+leave a dead child alive on a stale upstream socket, so prefer `stop`.
 
 Retry once. If still broken, ask the user to restart Chrome or the DevTools bridge. Do not switch to AppleScript, Playwright, Puppeteer, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
 

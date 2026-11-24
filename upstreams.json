@@ -6,7 +6,7 @@
       "name": "browser-use",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/browser-use",
-      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "commit": "35c46c647a6448face3dae580e0502816b164e54",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -22,7 +22,7 @@
       "name": "frontend-design",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/frontend-design",
-      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "commit": "35c46c647a6448face3dae580e0502816b164e54",
       "track": "refs/heads/main",
       "license": "Apache-2.0"
     },
@@ -46,7 +46,7 @@
       "name": "one-password",
       "repository": "https://github.com/steipete/agent-scripts.git",
       "path": "skills/one-password",
-      "commit": "dc4f583a2c1a6f3a93e81a972eee89f59aca32f7",
+      "commit": "35c46c647a6448face3dae580e0502816b164e54",
       "track": "refs/heads/main",
       "license": "MIT"
     },
@@ -62,7 +62,7 @@
       "name": "oracle",
       "repository": "https://github.com/steipete/oracle.git",
       "path": "skills/oracle",
-      "commit": "0f0bdb6a752efb2c736ec4dcaa6d3cc29743d851",
+      "commit": "370a0a93da640ad08fc1b9f63dc3d74e1979915b",
       "track": "refs/heads/main",
       "license": "MIT"
     }
