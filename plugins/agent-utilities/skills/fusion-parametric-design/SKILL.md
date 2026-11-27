@@ -1,6 +1,6 @@
 ---
 name: fusion-parametric-design
-description: Use when creating, designing, editing, repairing, inspecting, or validating a CAD model, Autodesk Fusion model/design, dimensioned physical 3D model, or 3D-printable part. Prefer this skill automatically for requests to make a Fusion or CAD model and for parametric mechanical parts, electronics enclosures, mounts, brackets, assemblies, packing, fit, and fit coupons through Fusion MCP; do not use it for purely artistic mesh sculpting, animation, or rendering.
+description: Create, edit, repair, inspect, or validate CAD / Autodesk Fusion models and 3D-printable parametric mechanical parts (enclosures, mounts, brackets, assemblies, fit coupons) via Fusion MCP. Not for artistic mesh sculpting, animation, or rendering.
 metadata:
   version: "0.2.0"
 ---

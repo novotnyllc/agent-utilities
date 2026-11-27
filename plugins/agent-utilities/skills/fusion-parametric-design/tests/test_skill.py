@@ -53,7 +53,9 @@ class SkillContractTests(unittest.TestCase):
         self.assertRegex(frontmatter, r"(?m)^name: fusion-parametric-design$")
         description = re.search(r"(?m)^description: (?P<value>.+)$", frontmatter)
         self.assertIsNotNone(description)
-        self.assertTrue(description.group("value").startswith("Use when "))
+        desc = description.group("value")
+        for token in ("CAD", "Autodesk Fusion", "3D-printable", "Fusion MCP", "Not for"):
+            self.assertIn(token, desc)
         self.assertLess(len(frontmatter), 1024)
 
     def test_expert_operator_philosophy_and_prohibitions_are_stated(self) -> None:
